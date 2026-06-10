@@ -736,6 +736,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
 			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			// environment: — wires the job to a GitHub Environment so that the
+			// environment's protection rules apply when gha_environment is configured
+			// for any env. The target env is resolved at runtime by preflight.
+			if anyEnvHasGHAConfig(g.config) {
+				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
+			}
 			g.writeInlineDeployBody(sb, d,
 				"${{ needs.preflight.outputs.target_env }}",
 				"${{ needs.preflight.outputs.source_sha }}",
@@ -784,6 +790,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
 			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			// environment: — wires the job to a GitHub Environment so that the
+			// environment's protection rules apply when gha_environment is configured
+			// for any env. The target env is resolved at runtime by preflight.
+			if anyEnvHasGHAConfig(g.config) {
+				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
+			}
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
@@ -803,6 +815,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		fmt.Fprintf(sb, "    name: Deploy %s (%s)\n", d.Name, finalEnv)
 		sb.WriteString("    needs: [preflight, promote]\n")
 		sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		// environment: — the prod deploy job always targets a single known env
+		// (the final environment in the pipeline), so we can resolve the GitHub
+		// Environment name statically from gha_environment when configured.
+		if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
+			fmt.Fprintf(sb, "    environment: %s\n", ec.GHAEnvironment)
+		}
 		if d.Run != "" {
 			g.writeInlineDeployBody(sb, d,
 				finalEnv,
