@@ -30,6 +30,7 @@ type Finalizer struct {
 	deployResults   map[string]string // deploy name -> conclusion ("success", "failure", "skipped")
 	promotionResult *PromotionResult
 	actor           string
+	overrideSHA     string // non-empty when an auto-committing callback advanced HEAD
 }
 
 // NewFinalizer creates a new Finalizer instance.
@@ -74,6 +75,18 @@ func (f *Finalizer) SetActor(actor string) {
 	f.actor = actor
 }
 
+// SetHeadSHA overrides the SHA written to state.<env>.sha during finalization.
+// Call this when one or more callbacks declared auto_commits: true, meaning they
+// pushed additional commits after the workflow started. Passing the post-callback
+// HEAD ensures the recorded state matches what was actually built/deployed rather
+// than the triggering commit.
+//
+// When sha is empty (the default) the SHA from the promotion result is used
+// unchanged, preserving existing behavior for runs without auto-committing callbacks.
+func (f *Finalizer) SetHeadSHA(sha string) {
+	f.overrideSHA = sha
+}
+
 // Run executes the finalization logic:
 // 1. Updates environment state for all promoted environments
 // 2. Updates per-deploy state for successful deploys only
@@ -104,7 +117,14 @@ func (f *Finalizer) updateState() {
 				f.cicdFile.State[promo.Environment] = &config.EnvState{}
 			}
 			state := f.cicdFile.State[promo.Environment]
-			state.SHA = promo.SHA
+			// When an auto-committing callback ran, overrideSHA holds the
+			// post-callback HEAD; use it so the recorded state points at the
+			// commit that was actually built/deployed rather than the triggering SHA.
+			if f.overrideSHA != "" {
+				state.SHA = f.overrideSHA
+			} else {
+				state.SHA = promo.SHA
+			}
 			state.Version = promo.Version
 			state.CommittedAt = timestamp
 			state.CommittedBy = f.actor
@@ -152,7 +172,11 @@ func (f *Finalizer) updateState() {
 			}
 
 			ds := f.cicdFile.State[promo.Environment].Deploys[name]
-			ds.SHA = promo.SHA
+			if f.overrideSHA != "" {
+				ds.SHA = f.overrideSHA
+			} else {
+				ds.SHA = promo.SHA
+			}
 			// Record the version this deployable deployed, mirroring the
 			// env-level Version write above. This is what lets state answer
 			// "which version of <name> is live in <env>" per deployable,
