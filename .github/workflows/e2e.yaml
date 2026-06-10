@@ -1,13 +1,21 @@
 # End-to-end test workflow
-# Runs only on release tags and manual dispatch. E2E uses act + gitea
-# testcontainers and is too slow + flaky to run per PR. Run locally
-# (`go test -v ./e2e/...`) before pushing instead.
+# Triggers:
+#   push:tags   — every release tag (existing)
+#   workflow_dispatch — manual run against any ref (existing)
+#   merge_group — runs as a merge-queue gate before merging to main
+#   schedule    — nightly at 07:00 UTC (low-traffic window) against main
+#
+# E2E uses act + gitea testcontainers and is too slow + flaky to run per PR.
+# Run locally (`go test -v ./e2e/...`) before pushing instead.
 name: E2E
 
 on:
   push:
     tags:
       - 'v*'
+  merge_group:
+  schedule:
+    - cron: '0 7 * * *'
   workflow_dispatch:
     inputs:
       ref:
@@ -33,7 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
+          # workflow_dispatch: honour the explicit ref input.
+          # All other triggers (push:tags, merge_group, schedule): use the
+          # exact SHA that triggered the run so we test what GitHub resolved.
+          ref: ${{ github.event.inputs.ref || github.sha }}
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
