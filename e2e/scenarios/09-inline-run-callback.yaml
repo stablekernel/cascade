@@ -36,7 +36,7 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             - "build-app:"
-            - "uses: ./build.yaml"
+            - "uses: build.yaml"
             - "build-smoke:"
             - "shell: bash"
             - 'echo "smoke check"'
