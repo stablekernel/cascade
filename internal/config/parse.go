@@ -290,11 +290,6 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validateJobControlFields("validate", isReusable, v.RunsOn, v.Concurrency)...)
 		errors = append(errors, validatePermissions("validate", v.Permissions)...)
 		errors = append(errors, validateSecrets("validate", v.Secrets)...)
-		for _, dep := range v.OptionalDependsOn {
-			if _, err := cfg.ResolveDependency(dep, CallbackTypeValidate); err != nil {
-				errors = append(errors, fmt.Sprintf("validate.optional_depends_on: %s", err.Error()))
-			}
-		}
 	}
 
 	// Config-level structural validation for v1 reserved fields.
@@ -354,8 +349,18 @@ func Validate(cfg *TrunkConfig) []string {
 					errors = append(errors, fmt.Sprintf("external deploy name '%s' conflicts with local deploy name", d.Name))
 				}
 			}
-			if d.Workflow == "" {
-				errors = append(errors, fmt.Sprintf("external[%d].deploys[%d].workflow is required", i, j))
+			prefix := fmt.Sprintf("external[%d].deploys[%d]", i, j)
+			errors = append(errors, validateWorkflowRunXOR(prefix, d.Workflow, d.Run, d.Shell)...)
+			isReusable := d.Workflow != ""
+			errors = append(errors, validateJobControlFields(prefix, isReusable, d.RunsOn, d.Concurrency)...)
+			errors = append(errors, validatePermissions(prefix, d.Permissions)...)
+			errors = append(errors, validateSecrets(prefix, d.Secrets)...)
+			errors = append(errors, validateRollout(prefix, d.Rollout, cfg.Environments)...)
+			errors = append(errors, validateDeployTarget(prefix, d.DeployTarget)...)
+			for _, dep := range d.OptionalDependsOn {
+				if _, err := cfg.ResolveDependency(dep, CallbackTypeExternal); err != nil {
+					errors = append(errors, fmt.Sprintf("%s.optional_depends_on: %s", prefix, err.Error()))
+				}
 			}
 		}
 	}
@@ -404,28 +409,34 @@ func detectCycles(cfg *TrunkConfig) string {
 	// Build adjacency list using prefixed job IDs
 	deps := make(map[string][]string)
 
-	// Add builds with resolved dependencies
-	for _, b := range cfg.Builds {
-		jobID := JobID(CallbackTypeBuild, b.Name)
+	// resolveEdges resolves a callback's hard and optional dependencies into
+	// prefixed job IDs. optional_depends_on participates in cycle detection
+	// exactly like depends_on (it still adds a needs: edge for ordering).
+	resolveEdges := func(hard, optional []string, fromType string) []string {
 		var resolvedDeps []string
-		for _, dep := range b.DependsOn {
-			if resolved, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err == nil {
+		for _, dep := range hard {
+			if resolved, err := cfg.ResolveDependency(dep, fromType); err == nil {
 				resolvedDeps = append(resolvedDeps, resolved)
 			}
 		}
-		deps[jobID] = resolvedDeps
+		for _, dep := range optional {
+			if resolved, err := cfg.ResolveDependency(dep, fromType); err == nil {
+				resolvedDeps = append(resolvedDeps, resolved)
+			}
+		}
+		return resolvedDeps
+	}
+
+	// Add builds with resolved dependencies
+	for _, b := range cfg.Builds {
+		jobID := JobID(CallbackTypeBuild, b.Name)
+		deps[jobID] = resolveEdges(b.DependsOn, b.OptionalDependsOn, CallbackTypeBuild)
 	}
 
 	// Add deploys with resolved dependencies
 	for _, d := range cfg.Deploys {
 		jobID := JobID(CallbackTypeDeploy, d.Name)
-		var resolvedDeps []string
-		for _, dep := range d.DependsOn {
-			if resolved, err := cfg.ResolveDependency(dep, CallbackTypeDeploy); err == nil {
-				resolvedDeps = append(resolvedDeps, resolved)
-			}
-		}
-		deps[jobID] = resolvedDeps
+		deps[jobID] = resolveEdges(d.DependsOn, d.OptionalDependsOn, CallbackTypeDeploy)
 	}
 
 	// DFS for cycle detection

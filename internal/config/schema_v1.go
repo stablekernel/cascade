@@ -26,6 +26,10 @@ type SecretsConfig struct {
 
 // UnmarshalYAML accepts either the scalar "inherit" or a mapping of secret names.
 func (s *SecretsConfig) UnmarshalYAML(value *yaml.Node) error {
+	// A bare `secrets:` (null node) is treated as unset.
+	if value.Tag == "!!null" {
+		return nil
+	}
 	switch value.Kind {
 	case yaml.ScalarNode:
 		var str string
@@ -84,6 +88,9 @@ func (r *RunsOn) UnmarshalYAML(value *yaml.Node) error {
 		}
 		if err := value.Decode(&obj); err != nil {
 			return err
+		}
+		if obj.Group == "" && len(obj.Labels) == 0 {
+			return fmt.Errorf("runs_on: object form requires at least one of group or labels")
 		}
 		r.Group = obj.Group
 		r.Labels = obj.Labels
@@ -271,7 +278,7 @@ const (
 
 // GetPinMode returns the configured pin mode or the default ("tag").
 func (c *TrunkConfig) GetPinMode() string {
-	if c.PinMode == "" {
+	if c == nil || c.PinMode == "" {
 		return PinModeTag
 	}
 	return c.PinMode

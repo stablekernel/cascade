@@ -316,12 +316,12 @@ type ValidateConfig struct {
 	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
-	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
-	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
-	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
-	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	// The validate gate is a singleton, so the spec scopes optional_depends_on
+	// (§2.11) and auto_commits (§5.5) to builds/deploys only — not here.
+	Secrets     *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn      *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 }
 
 // BuildConfig defines a build target
@@ -419,8 +419,21 @@ type ExternalRepoConfig struct {
 // ExternalDeployConfig defines a deployable from an external repository
 type ExternalDeployConfig struct {
 	Name     string   `yaml:"name" json:"name"`                             // Deploy identifier (e.g., "cdk")
-	Workflow string   `yaml:"workflow" json:"workflow"`                     // Workflow path - local (.github/...) or external (org/repo/.github/...@ref)
+	Workflow string   `yaml:"workflow,omitempty" json:"workflow,omitempty"` // Workflow path - local (.github/...) or external (org/repo/.github/...@ref)
+	Run      string   `yaml:"run,omitempty" json:"run,omitempty"`           // Inline command, XOR with workflow (reserved-shape)
+	Shell    string   `yaml:"shell,omitempty" json:"shell,omitempty"`       // Shell for inline run (default bash; only valid with run)
 	Triggers []string `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns for change detection
+
+	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	// Applied by extension to external deploys per spec §2.
+	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Rollout           *RolloutConfig     `yaml:"rollout,omitempty" json:"rollout,omitempty"`
+	DeployTarget      *DeployTarget      `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
+	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
 }
 
 // NotifyConfig defines how a satellite repo notifies its primary after dev deploys

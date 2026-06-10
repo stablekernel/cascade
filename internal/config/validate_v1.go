@@ -61,7 +61,7 @@ func validateWorkflowRunXOR(prefix, workflow, run, shell string) []string {
 
 // validateJobControlFields rejects job-control fields that GHA does not accept on
 // a reusable-workflow (jobs.<id>.uses) callback. runs_on and concurrency apply
-// cleanly only to inline run: callbacks and cascade-owned jobs (O2/O4).
+// cleanly only to inline run: callbacks and cascade-owned jobs.
 func validateJobControlFields(prefix string, isReusableWorkflow bool, runsOn *RunsOn, concurrency *ConcurrencyConfig) []string {
 	if !isReusableWorkflow {
 		return nil
@@ -115,7 +115,7 @@ func validateRollout(prefix string, r *RolloutConfig, environments []string) []s
 	if !validRolloutTypes[t] {
 		errs = append(errs, fmt.Sprintf("%s.rollout.type must be one of: default, rolling, canary, blue_green", prefix))
 	}
-	// canary / blue_green require environments (C4).
+	// canary / blue_green require environments.
 	if (t == RolloutTypeCanary || t == RolloutTypeBlueGreen) && len(environments) == 0 {
 		errs = append(errs, fmt.Sprintf("%s.rollout.type %q requires environments to be configured", prefix, t))
 	}

@@ -476,3 +476,157 @@ deploys:
 		}
 	})
 }
+
+// --- Review follow-up coverage ----------------------------------------------
+
+func TestValidateValidateCallbackRules(t *testing.T) {
+	t.Run("workflow and run mutually exclusive", func(t *testing.T) {
+		cfg := parseInline(t, `
+validate:
+  workflow: v.yaml
+  run: go vet ./...
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "mutually exclusive") {
+			t.Fatalf("expected XOR rejection, got %v", errs)
+		}
+	})
+	t.Run("runs_on rejected on reusable workflow", func(t *testing.T) {
+		cfg := parseInline(t, `
+validate:
+  workflow: v.yaml
+  runs_on: ubuntu-latest
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "runs_on is not valid on a reusable-workflow callback") {
+			t.Fatalf("expected runs_on rejection, got %v", errs)
+		}
+	})
+	t.Run("concurrency rejected on reusable workflow", func(t *testing.T) {
+		cfg := parseInline(t, `
+validate:
+  workflow: v.yaml
+  concurrency:
+    group: validate
+    cancel_in_progress: false
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "concurrency is not valid on a reusable-workflow callback") {
+			t.Fatalf("expected concurrency rejection, got %v", errs)
+		}
+	})
+	t.Run("runs_on allowed on inline run validate", func(t *testing.T) {
+		cfg := parseInline(t, `
+validate:
+  run: go vet ./...
+  runs_on: ubuntu-latest
+`)
+		for _, e := range Validate(cfg) {
+			if strings.Contains(e, "runs_on") {
+				t.Fatalf("runs_on should be allowed on inline run validate, got %v", e)
+			}
+		}
+	})
+}
+
+func TestSecretsNullTreatedAsUnset(t *testing.T) {
+	cfg := parseInline(t, `
+deploys:
+  - name: app
+    workflow: d.yaml
+    secrets:
+`)
+	if cfg.Deploys[0].Secrets != nil {
+		t.Fatalf("bare secrets: should be nil/unset, got %#v", cfg.Deploys[0].Secrets)
+	}
+	if errs := Validate(cfg); hasErrContaining(errs, "secrets") {
+		t.Fatalf("unset secrets should not error, got %v", errs)
+	}
+}
+
+func TestRunsOnEmptyMappingRejected(t *testing.T) {
+	var cfg TrunkConfig
+	err := yaml.Unmarshal([]byte(`
+builds:
+  - name: app
+    run: go build ./...
+    runs_on:
+      foo: bar
+`), &cfg)
+	if err == nil {
+		t.Fatal("expected error on runs_on mapping with neither group nor labels")
+	}
+}
+
+func TestOptionalDependsOnParticipatesInCycleDetection(t *testing.T) {
+	// build:a --depends_on--> build:b --optional_depends_on--> build:a (cycle)
+	cfg := parseInline(t, `
+builds:
+  - name: a
+    workflow: a.yaml
+    depends_on: [build:b]
+  - name: b
+    workflow: b.yaml
+    optional_depends_on: [build:a]
+`)
+	if errs := Validate(cfg); !hasErrContaining(errs, "circular dependency") {
+		t.Fatalf("expected a cycle through optional_depends_on, got %v", errs)
+	}
+}
+
+func TestGetPinModeNilReceiver(t *testing.T) {
+	var c *TrunkConfig
+	if c.GetPinMode() != PinModeTag {
+		t.Fatalf("nil-receiver GetPinMode should return default tag")
+	}
+}
+
+func TestParseExternalDeployReservedFields(t *testing.T) {
+	var file CICDFile
+	if err := yaml.Unmarshal([]byte(`
+config:
+  trunk_branch: main
+  external:
+    - repo: org/cdk-infra
+      deploys:
+        - name: cdk
+          workflow: org/cdk-infra/.github/workflows/deploy.yaml@main
+          permissions:
+            id-token: write
+          rollout:
+            type: rolling
+          deploy_target:
+            mode: gitops
+            repo: org/gitops
+`), &file); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	d := file.Config.External[0].Deploys[0]
+	if d.Permissions["id-token"] != "write" || d.Rollout.GetType() != "rolling" || d.DeployTarget.GetMode() != "gitops" {
+		t.Fatalf("external deploy reserved fields not parsed: %#v", d)
+	}
+}
+
+func TestValidateExternalDeployRules(t *testing.T) {
+	t.Run("runs_on rejected on reusable external workflow", func(t *testing.T) {
+		cfg := parseInline(t, `
+external:
+  - repo: org/infra
+    deploys:
+      - name: cdk
+        workflow: org/infra/.github/workflows/d.yaml@main
+        runs_on: ubuntu-latest
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "runs_on is not valid on a reusable-workflow callback") {
+			t.Fatalf("expected external runs_on rejection, got %v", errs)
+		}
+	})
+	t.Run("neither workflow nor run rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+external:
+  - repo: org/infra
+    deploys:
+      - name: cdk
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "one of workflow or run is required") {
+			t.Fatalf("expected external missing-callback rejection, got %v", errs)
+		}
+	})
+}
