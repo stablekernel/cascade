@@ -532,12 +532,27 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 }
 
 func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, workflow string) {
+	// For reusable-workflow callbacks that declare passthrough artifact downloads,
+	// emit a cascade-owned pre-job that fetches the artifacts before the callback
+	// runs. The pre-job depends on the same upstream jobs as the callback itself so
+	// it can start as soon as the producers finish.
+	downloadPreJobID := ""
+	if info.Run == "" && info.PassthroughArtifact != nil && len(info.PassthroughArtifact.Downloads) > 0 {
+		downloadPreJobID = fmt.Sprintf("%s-download", info.JobID)
+		g.writePassthroughDownloadJob(sb, info, downloadPreJobID)
+	}
+
 	fmt.Fprintf(sb, "  %s:\n", info.JobID)
 	fmt.Fprintf(sb, "    name: %s\n", info.DisplayName)
 
 	// needs: always includes setup, plus dependencies (already stored as job IDs)
 	needs := []string{"setup"}
 	needs = append(needs, g.graph.GetDirectDependencies(info.JobID)...)
+	// When a pre-download job was emitted, make the callback depend on it so the
+	// downloaded artifacts are available in the runner's workspace.
+	if downloadPreJobID != "" {
+		needs = append(needs, downloadPreJobID)
+	}
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
 
 	// if: condition based on run_policy
@@ -570,12 +585,21 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	for i := 1; i <= info.Retries; i++ {
 		g.writeRetryJob(sb, info, workflow, i)
 	}
+
+	// For reusable-workflow callbacks that declare a passthrough artifact upload,
+	// emit a cascade-owned post-job that uploads the artifact after the callback
+	// completes. Inline-run callbacks handle upload inline (see writeInlineRunBody).
+	if info.Run == "" && info.PassthroughArtifact != nil && info.PassthroughArtifact.Upload != "" {
+		g.writePassthroughUploadJob(sb, info)
+	}
 }
 
 // writeInlineRunBody emits the runs-on / steps body of a cascade-owned inline
 // run: callback job. The standard inputs that a reusable-workflow callback would
 // receive via with: are surfaced to the inline step as env: variables (uppercased,
 // e.g. ENVIRONMENT, SHA, and any dependency outputs the callback declares).
+// When info.PassthroughArtifact is set, download steps are injected before the
+// run step and an upload step is appended after it.
 func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
 	// Per-callback job attributes (inline-run jobs only): runner selection (#12),
 	// permissions incl. id-token: write OIDC (#35/#15), and concurrency (#17). The
@@ -584,6 +608,11 @@ func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
 	writeJobPermissions(sb, "    ", info.Permissions)
 	writeJobConcurrency(sb, "    ", info.Concurrency)
 	sb.WriteString("    steps:\n")
+
+	// Inject download-artifact steps before the run step so the artifacts are
+	// present in the workspace when the inline command executes.
+	g.writePassthroughDownloadSteps(sb, info)
+
 	fmt.Fprintf(sb, "      - name: %s\n", info.DisplayName)
 
 	envVars := g.inlineEnvInputs(info)
@@ -605,6 +634,9 @@ func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
 		fmt.Fprintf(sb, "          %s\n", line)
 	}
 	sb.WriteString("\n")
+
+	// Inject upload-artifact step after the run step.
+	g.writePassthroughUploadStep(sb, info)
 }
 
 // inlineEnvInputs returns the env: lines that surface the standard callback
@@ -1377,4 +1409,99 @@ func (g *Generator) writeArtifactUploadStep(sb *strings.Builder) {
 			sb.WriteString("          \n")
 		}
 	}
+}
+
+// passthroughArtifactName returns the canonical GHA artifact name for a build
+// job's passthrough upload: "build-{name}". Consumers reference the same name.
+func passthroughArtifactName(buildName string) string {
+	return fmt.Sprintf("build-%s", buildName)
+}
+
+// writePassthroughDownloadSteps emits one download-artifact step per entry in
+// info.PassthroughArtifact.Downloads. Each step downloads the artifact produced
+// by the named upstream build job and places it in a directory named after the
+// artifact so multiple downloads do not collide.
+func (g *Generator) writePassthroughDownloadSteps(sb *strings.Builder, info CallbackInfo) {
+	if info.PassthroughArtifact == nil || len(info.PassthroughArtifact.Downloads) == 0 {
+		return
+	}
+	for _, src := range info.PassthroughArtifact.Downloads {
+		name := passthroughArtifactName(src)
+		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
+		sb.WriteString("        uses: actions/download-artifact@v4\n")
+		sb.WriteString("        with:\n")
+		fmt.Fprintf(sb, "          name: %s\n", name)
+		fmt.Fprintf(sb, "          path: %s\n", name)
+		sb.WriteString("\n")
+	}
+}
+
+// writePassthroughUploadStep emits an upload-artifact step for
+// info.PassthroughArtifact.Upload when set. The artifact is named
+// "build-{job-name}" so downstream jobs can reference it by name.
+// Used only for inline-run callbacks where the step is injected inside the
+// cascade-owned job's steps list.
+func (g *Generator) writePassthroughUploadStep(sb *strings.Builder, info CallbackInfo) {
+	if info.PassthroughArtifact == nil || info.PassthroughArtifact.Upload == "" {
+		return
+	}
+	name := passthroughArtifactName(info.Name)
+	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
+	sb.WriteString("        uses: actions/upload-artifact@v4\n")
+	sb.WriteString("        with:\n")
+	fmt.Fprintf(sb, "          name: %s\n", name)
+	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)
+	sb.WriteString("\n")
+}
+
+// writePassthroughDownloadJob emits a cascade-owned job (jobID) that runs
+// actions/download-artifact for each entry in info.PassthroughArtifact.Downloads.
+// Used for reusable-workflow callbacks where steps cannot be injected into the
+// jobs.<id>.uses block. The download job has the same needs/if as the callback
+// so it runs under the same conditions.
+func (g *Generator) writePassthroughDownloadJob(sb *strings.Builder, info CallbackInfo, jobID string) {
+	fmt.Fprintf(sb, "  %s:\n", jobID)
+	fmt.Fprintf(sb, "    name: Download artifacts for %s\n", info.DisplayName)
+
+	needs := []string{"setup"}
+	needs = append(needs, g.graph.GetDirectDependencies(info.JobID)...)
+	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
+
+	// Mirror the callback's if: condition so this job is skipped when the
+	// callback would be skipped (same run_policy).
+	g.writeIfCondition(sb, info, needs)
+
+	sb.WriteString("    runs-on: ubuntu-latest\n")
+	sb.WriteString("    steps:\n")
+	for _, src := range info.PassthroughArtifact.Downloads {
+		name := passthroughArtifactName(src)
+		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
+		sb.WriteString("        uses: actions/download-artifact@v4\n")
+		sb.WriteString("        with:\n")
+		fmt.Fprintf(sb, "          name: %s\n", name)
+		fmt.Fprintf(sb, "          path: %s\n", name)
+		sb.WriteString("\n")
+	}
+}
+
+// writePassthroughUploadJob emits a cascade-owned post-job that runs
+// actions/upload-artifact after info's reusable-workflow callback completes.
+// The artifact is named "build-{job-name}".
+// Used for reusable-workflow callbacks where steps cannot be injected into the
+// jobs.<id>.uses block.
+func (g *Generator) writePassthroughUploadJob(sb *strings.Builder, info CallbackInfo) {
+	postJobID := fmt.Sprintf("%s-upload", info.JobID)
+	name := passthroughArtifactName(info.Name)
+	fmt.Fprintf(sb, "  %s:\n", postJobID)
+	fmt.Fprintf(sb, "    name: Upload artifact %s\n", name)
+	fmt.Fprintf(sb, "    needs: [%s]\n", info.JobID)
+	fmt.Fprintf(sb, "    if: needs.%s.result == 'success'\n", info.JobID)
+	sb.WriteString("    runs-on: ubuntu-latest\n")
+	sb.WriteString("    steps:\n")
+	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
+	sb.WriteString("        uses: actions/upload-artifact@v4\n")
+	sb.WriteString("        with:\n")
+	fmt.Fprintf(sb, "          name: %s\n", name)
+	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)
+	sb.WriteString("\n")
 }

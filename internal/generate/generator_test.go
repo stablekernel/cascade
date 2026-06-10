@@ -1743,3 +1743,291 @@ func TestGenerator_BuildMatrix_NoMatrixNoStrategy(t *testing.T) {
 
 	assert.NotContains(t, result, "strategy:", "no matrix → no strategy block")
 }
+
+// TestGenerator_PassthroughArtifact_InlineUpload asserts that an inline-run
+// build declaring artifact.upload gets an upload-artifact step injected after
+// the run step in the same cascade-owned job.
+func TestGenerator_PassthroughArtifact_InlineUpload(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Run:      "make build",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The job must contain the upload-artifact step.
+	assert.Contains(t, result, "uses: actions/upload-artifact@v4",
+		"inline build with artifact.upload must emit upload-artifact step")
+	// The artifact name must be "build-compile".
+	assert.Contains(t, result, "name: build-compile",
+		"uploaded artifact must be named build-{build-name}")
+	// The path must match the declared upload path.
+	assert.Contains(t, result, "path: dist/",
+		"upload step must set path to artifact.upload value")
+	// No download step — this build has no downloads configured.
+	assert.NotContains(t, result, "uses: actions/download-artifact@v4",
+		"build without artifact.downloads must not emit download-artifact step")
+}
+
+// TestGenerator_PassthroughArtifact_InlineDownload asserts that an inline-run
+// build declaring artifact.downloads gets one download-artifact step per declared
+// source injected before the run step.
+func TestGenerator_PassthroughArtifact_InlineDownload(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Run:      "make build",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+			{
+				Name:      "sign",
+				Run:       "make sign",
+				DependsOn: []string{"compile"},
+				Triggers:  []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Downloads: []string{"compile"},
+					Upload:    "dist-signed/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The sign job must contain a download-artifact step referencing the
+	// compile job's artifact.
+	assert.Contains(t, result, "uses: actions/download-artifact@v4",
+		"build with artifact.downloads must emit download-artifact step")
+	assert.Contains(t, result, "name: build-compile",
+		"download step must reference the producer's artifact name")
+	// And it still uploads its own artifact.
+	assert.Contains(t, result, "name: build-sign",
+		"sign job must upload its own artifact named build-sign")
+}
+
+// TestGenerator_PassthroughArtifact_NoArtifactNoSteps asserts that a build
+// without artifact: produces neither upload-artifact nor download-artifact steps
+// (non-breaking for existing configs).
+func TestGenerator_PassthroughArtifact_NoArtifactNoSteps(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The finalize job uses download-artifact for release assets; ensure we do
+	// not accidentally count that. Check that neither passthrough action appears
+	// outside the finalize/release context by verifying they are absent entirely
+	// (no release config is set, so the finalize job emits no artifact steps either).
+	assert.NotContains(t, result, "actions/upload-artifact@v4",
+		"build without artifact: must not emit upload-artifact")
+	// download-artifact only appears in finalize when HasReleaseArtifacts — it is
+	// absent here because no release artifacts are declared and no passthrough is set.
+	assert.NotContains(t, result, "actions/download-artifact@v4",
+		"build without artifact: must not emit download-artifact")
+}
+
+// TestGenerator_PassthroughArtifact_ReusableWorkflowUploadJob asserts that a
+// reusable-workflow build declaring artifact.upload gets a cascade-owned
+// post-job ({job-id}-upload) that runs upload-artifact after the callback.
+func TestGenerator_PassthroughArtifact_ReusableWorkflowUploadJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Workflow: ".github/workflows/build.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// A post-upload job must be emitted.
+	assert.Contains(t, result, "build-compile-upload:",
+		"reusable-workflow build with artifact.upload must emit a post-upload job")
+	assert.Contains(t, result, "uses: actions/upload-artifact@v4",
+		"post-upload job must use upload-artifact action")
+	assert.Contains(t, result, "name: build-compile",
+		"uploaded artifact must be named build-{build-name}")
+	// The post-upload job must depend on the callback job.
+	assert.Contains(t, result, "needs: [build-compile]",
+		"post-upload job must declare needs: [build-compile]")
+}
+
+// TestGenerator_PassthroughArtifact_ReusableWorkflowDownloadJob asserts that a
+// reusable-workflow build declaring artifact.downloads gets a cascade-owned
+// pre-job ({job-id}-download) that fetches the artifacts, and the callback job
+// depends on it.
+func TestGenerator_PassthroughArtifact_ReusableWorkflowDownloadJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/compile.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/sign.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Workflow: ".github/workflows/compile.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+			{
+				Name:      "sign",
+				Workflow:  ".github/workflows/sign.yaml",
+				DependsOn: []string{"compile"},
+				Triggers:  []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Downloads: []string{"compile"},
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// A pre-download job must be emitted for the sign callback.
+	assert.Contains(t, result, "build-sign-download:",
+		"reusable-workflow build with artifact.downloads must emit a pre-download job")
+	assert.Contains(t, result, "uses: actions/download-artifact@v4",
+		"pre-download job must use download-artifact action")
+	assert.Contains(t, result, "name: build-compile",
+		"pre-download step must reference the producer's artifact name build-compile")
+	// The sign callback job must depend on the pre-download job.
+	assert.Contains(t, result, "build-sign-download",
+		"sign callback job needs must include the pre-download job")
+
+	// The compile callback must also emit its post-upload job.
+	assert.Contains(t, result, "build-compile-upload:",
+		"compile build with artifact.upload must emit its post-upload job")
+}
+
+// TestGenerator_PassthroughArtifact_E2E_OrchestrateYAML exercises the full
+// parse → generate pipeline with a manifest that declares a three-stage inline
+// build pipeline: compile → sign → package. It asserts that the generated
+// orchestrate.yaml carries the correct upload-artifact and download-artifact
+// steps so the artifact flows from compile through sign to package without any
+// external registry workaround.
+func TestGenerator_PassthroughArtifact_E2E_OrchestrateYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write a manifest file that exercises the full artifact-passing path.
+	manifest := `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+    builds:
+      - name: compile
+        run: make build
+        triggers:
+          - "src/**"
+        artifact:
+          upload: dist/
+      - name: sign
+        run: make sign
+        depends_on: [compile]
+        triggers:
+          - "src/**"
+        artifact:
+          downloads: [compile]
+          upload: dist-signed/
+      - name: package
+        run: make package
+        depends_on: [sign]
+        triggers:
+          - "src/**"
+        artifact:
+          downloads: [sign]
+`
+	manifestPath := filepath.Join(tmpDir, "manifest.yaml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifest), 0644))
+
+	cfg, err := config.Parse(manifestPath)
+	require.NoError(t, err)
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// compile: uploads dist/
+	assert.Contains(t, result, "name: build-compile",
+		"compile job must upload artifact named build-compile")
+	assert.Contains(t, result, "path: dist/",
+		"compile upload step must reference dist/")
+
+	// sign: downloads build-compile and uploads dist-signed/
+	assert.Contains(t, result, "name: build-compile",
+		"sign job must download the compile artifact")
+	assert.Contains(t, result, "name: build-sign",
+		"sign job must upload artifact named build-sign")
+	assert.Contains(t, result, "path: dist-signed/",
+		"sign upload step must reference dist-signed/")
+
+	// package: downloads build-sign
+	assert.Contains(t, result, "name: build-sign",
+		"package job must download the sign artifact")
+
+	// The generated workflow must be valid YAML (no stray tabs or bad indentation
+	// introduced by the artifact step injection). Count action references as a
+	// proxy: 3 upload steps (compile, sign) + package has no upload so 2 uploads,
+	// and 2 download steps (sign downloads compile, package downloads sign).
+	uploadCount := strings.Count(result, "uses: actions/upload-artifact@v4")
+	downloadCount := strings.Count(result, "uses: actions/download-artifact@v4")
+	assert.Equal(t, 2, uploadCount,
+		"expected 2 upload-artifact steps (compile and sign)")
+	assert.Equal(t, 2, downloadCount,
+		"expected 2 download-artifact steps (sign and package)")
+}
