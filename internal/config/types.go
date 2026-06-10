@@ -365,13 +365,14 @@ type BuildConfig struct {
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
-	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
-	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
-	Matrix            *MatrixConfig      `yaml:"matrix,omitempty" json:"matrix,omitempty"` // Build fan-out (builds only)
-	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
-	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	Secrets             *SecretsConfig       `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions         map[string]string    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn              *RunsOn              `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency         *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Matrix              *MatrixConfig        `yaml:"matrix,omitempty" json:"matrix,omitempty"` // Build fan-out (builds only)
+	OptionalDependsOn   []string             `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits         bool                 `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	PassthroughArtifact *PassthroughArtifact `yaml:"artifact,omitempty" json:"artifact,omitempty"` // GHA artifact passing within an orchestrate run (#16)
 }
 
 // ArtifactConfig defines a release artifact produced by a build
@@ -380,6 +381,30 @@ type ArtifactConfig struct {
 	Name     string `yaml:"name" json:"name"`                             // Artifact identifier (e.g., "linux-amd64", "checksums")
 	Path     string `yaml:"path" json:"path"`                             // Glob pattern for files to include (e.g., "dist/*.tar.gz")
 	Required bool   `yaml:"required,omitempty" json:"required,omitempty"` // Fail release if artifact missing (default: true)
+}
+
+// PassthroughArtifact declares GHA artifacts passed between jobs within a single
+// orchestrate run via actions/upload-artifact and actions/download-artifact.
+// The uploaded artifact is named "build-{build-name}" so consumers can reference it.
+//
+// Example:
+//
+//	builds:
+//	  - name: compile
+//	    artifact:
+//	      upload: dist/
+//	  - name: sign
+//	    depends_on: [compile]
+//	    artifact:
+//	      downloads: [compile]   # downloads "build-compile" before running
+//	      upload: dist-signed/
+type PassthroughArtifact struct {
+	// Upload is the path glob to upload after this job completes (via upload-artifact).
+	// The artifact is named "build-{this-job-name}".
+	Upload string `yaml:"upload,omitempty" json:"upload,omitempty"`
+	// Downloads lists the names of upstream build jobs whose artifacts to download
+	// before this job runs (each downloads "build-{name}").
+	Downloads []string `yaml:"downloads,omitempty" json:"downloads,omitempty"`
 }
 
 // DeployConfig defines a deployment target
@@ -400,14 +425,15 @@ type DeployConfig struct {
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
-	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
-	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
-	Rollout           *RolloutConfig     `yaml:"rollout,omitempty" json:"rollout,omitempty"` // Deploy rollout strategy (deploys only)
-	DeployTarget      *DeployTarget      `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
-	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
-	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	Secrets             *SecretsConfig       `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions         map[string]string    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn              *RunsOn              `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency         *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Rollout             *RolloutConfig       `yaml:"rollout,omitempty" json:"rollout,omitempty"` // Deploy rollout strategy (deploys only)
+	DeployTarget        *DeployTarget        `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
+	OptionalDependsOn   []string             `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits         bool                 `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	PassthroughArtifact *PassthroughArtifact `yaml:"artifact,omitempty" json:"artifact,omitempty"` // GHA artifact passing within an orchestrate run (#16)
 }
 
 // PublishConfig defines a publish callback invoked after a release is published.

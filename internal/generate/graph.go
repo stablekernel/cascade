@@ -35,6 +35,11 @@ type CallbackInfo struct {
 	RunsOn      *config.RunsOn            // Per-callback runner selection (#12)
 	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15)
 	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17)
+
+	// PassthroughArtifact declares GHA artifact upload/download steps to inject
+	// around this job's callback invocation, enabling inter-job artifact passing
+	// within a single orchestrate run (#16).
+	PassthroughArtifact *config.PassthroughArtifact
 }
 
 // BuildDependencyGraph creates a dependency graph from config
@@ -71,21 +76,22 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 	for _, b := range cfg.Builds {
 		jobID := config.JobID(config.CallbackTypeBuild, b.Name)
 		g.Nodes[jobID] = CallbackInfo{
-			Name:           b.Name,
-			JobID:          jobID,
-			DisplayName:    config.DisplayName(config.CallbackTypeBuild, b.Name),
-			Type:           config.CallbackTypeBuild,
-			Workflow:       b.Workflow,
-			Run:            b.Run,
-			Shell:          b.Shell,
-			RunPolicy:      defaultString(b.RunPolicy, config.RunPolicyDefault),
-			OnFailure:      defaultString(b.OnFailure, config.OnFailureAbort),
-			Retries:        b.Retries,
-			TimeoutMinutes: b.TimeoutMinutes,
-			Matrix:         b.Matrix,
-			RunsOn:         b.RunsOn,
-			Permissions:    b.Permissions,
-			Concurrency:    b.Concurrency,
+			Name:                b.Name,
+			JobID:               jobID,
+			DisplayName:         config.DisplayName(config.CallbackTypeBuild, b.Name),
+			Type:                config.CallbackTypeBuild,
+			Workflow:            b.Workflow,
+			Run:                 b.Run,
+			Shell:               b.Shell,
+			RunPolicy:           defaultString(b.RunPolicy, config.RunPolicyDefault),
+			OnFailure:           defaultString(b.OnFailure, config.OnFailureAbort),
+			Retries:             b.Retries,
+			TimeoutMinutes:      b.TimeoutMinutes,
+			Matrix:              b.Matrix,
+			RunsOn:              b.RunsOn,
+			Permissions:         b.Permissions,
+			Concurrency:         b.Concurrency,
+			PassthroughArtifact: b.PassthroughArtifact,
 		}
 
 		// Resolve dependencies to job IDs
@@ -106,20 +112,21 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 	for _, d := range cfg.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
 		g.Nodes[jobID] = CallbackInfo{
-			Name:           d.Name,
-			JobID:          jobID,
-			DisplayName:    config.DisplayName(config.CallbackTypeDeploy, d.Name),
-			Type:           config.CallbackTypeDeploy,
-			Workflow:       d.Workflow,
-			Run:            d.Run,
-			Shell:          d.Shell,
-			RunPolicy:      defaultString(d.RunPolicy, config.RunPolicyDefault),
-			OnFailure:      defaultString(d.OnFailure, config.OnFailureAbort),
-			Retries:        d.Retries,
-			TimeoutMinutes: d.TimeoutMinutes,
-			RunsOn:         d.RunsOn,
-			Permissions:    d.Permissions,
-			Concurrency:    d.Concurrency,
+			Name:                d.Name,
+			JobID:               jobID,
+			DisplayName:         config.DisplayName(config.CallbackTypeDeploy, d.Name),
+			Type:                config.CallbackTypeDeploy,
+			Workflow:            d.Workflow,
+			Run:                 d.Run,
+			Shell:               d.Shell,
+			RunPolicy:           defaultString(d.RunPolicy, config.RunPolicyDefault),
+			OnFailure:           defaultString(d.OnFailure, config.OnFailureAbort),
+			Retries:             d.Retries,
+			TimeoutMinutes:      d.TimeoutMinutes,
+			RunsOn:              d.RunsOn,
+			Permissions:         d.Permissions,
+			Concurrency:         d.Concurrency,
+			PassthroughArtifact: d.PassthroughArtifact,
 		}
 
 		// Resolve dependencies to job IDs
