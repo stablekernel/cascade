@@ -713,6 +713,25 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	sb.WriteString("          echo \"::notice::Promotion validation completed successfully\"\n\n")
 }
 
+// writeDeployStrategyOptions emits the fail-fast and (when set) max-parallel
+// lines inside a strategy: block. It must be called after the caller writes
+// "    strategy:\n". The fail-fast default is false (preserves historical
+// behaviour for callers that have no rollout config).
+func (g *PromoteGenerator) writeDeployStrategyOptions(sb *strings.Builder, rollout *config.RolloutConfig) {
+	failFast := false
+	if rollout != nil && rollout.FailFast != nil {
+		failFast = *rollout.FailFast
+	}
+	if failFast {
+		sb.WriteString("      fail-fast: true\n")
+	} else {
+		sb.WriteString("      fail-fast: false\n")
+	}
+	if rollout != nil && rollout.MaxParallel > 0 {
+		fmt.Fprintf(sb, "      max-parallel: %d\n", rollout.MaxParallel)
+	}
+}
+
 func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 	// Skip deploy jobs if no environments
 	if len(g.config.Environments) == 0 {
@@ -766,7 +785,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
 			}
 			sb.WriteString("    strategy:\n")
-			sb.WriteString("      fail-fast: false\n")
+			g.writeDeployStrategyOptions(sb, d.Rollout)
 			sb.WriteString("      matrix:\n")
 			fmt.Fprintf(sb, "        include: ${{ fromJSON(needs.preflight.outputs.deploy_%s_matrix) }}\n", outputName)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
