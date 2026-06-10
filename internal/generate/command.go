@@ -107,6 +107,14 @@ func runGenerateWorkflow(opts generateOptions) error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 
+	// Parse the full manifest (including state) so generators can resolve
+	// cascade-owned ${{ state.<env>.<field> }} input references at generation
+	// time. State is optional; absence is not an error.
+	var manifestState map[string]*config.EnvState
+	if full, ferr := config.ParseManifestFile(configPath, opts.manifestKey); ferr == nil {
+		manifestState = full.State
+	}
+
 	// Override action folder if specified on command line
 	if opts.actionFolder != "" && opts.actionFolder != "manage-release" {
 		cfg.ActionFolder = opts.actionFolder
@@ -141,6 +149,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	var orchestrateGen *Generator
 	if generateOrchestrate {
 		orchestrateGen = NewGenerator(cfg, baseDir)
+		orchestrateGen.SetState(manifestState)
 		warnings := orchestrateGen.Validate()
 		for _, w := range warnings {
 			fmt.Fprintf(os.Stderr, "%s\n", w)
@@ -187,6 +196,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 		} else {
 			// Multi-environment projects get the full Promote workflow
 			promoteGen := NewPromoteGenerator(cfg, baseDir)
+			promoteGen.SetState(manifestState)
 			content, err = promoteGen.Generate()
 			workflowName = "promote"
 		}

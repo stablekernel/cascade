@@ -165,6 +165,12 @@ func classifyInputValue(value string) inputKind {
 	if isStateExpression(body) {
 		return inputStateRef
 	}
+	// matrix.* placeholders are cascade-substituted per promotion, not
+	// passthrough. Treat them as literals so the matrix-substitution path
+	// (and any non-matrix substitution) handles them.
+	if strings.HasPrefix(strings.TrimSpace(body), "matrix.") {
+		return inputLiteral
+	}
 	return inputPassthrough
 }
 
