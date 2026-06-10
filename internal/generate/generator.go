@@ -236,6 +236,10 @@ func (g *Generator) validateRequiredInputs() error {
 		"environment": true,
 		"sha":         true,
 	}
+	// Operator dispatch_inputs are available to any callback that declares them.
+	for name := range g.config.DispatchInputs {
+		standardInputs[name] = true
+	}
 
 	var errors []string
 
@@ -397,6 +401,39 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("        description: 'Dry run mode'\n")
 	sb.WriteString("        type: boolean\n")
 	sb.WriteString("        default: false\n")
+
+	// Emit operator-defined dispatch_inputs (sorted for determinism).
+	if len(g.config.DispatchInputs) > 0 {
+		names := make([]string, 0, len(g.config.DispatchInputs))
+		for name := range g.config.DispatchInputs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			di := g.config.DispatchInputs[name]
+			fmt.Fprintf(sb, "      %s:\n", name)
+			if di.Description != "" {
+				fmt.Fprintf(sb, "        description: %q\n", di.Description)
+			}
+			inputType := di.Type
+			if inputType == "" {
+				inputType = config.DispatchInputTypeString
+			}
+			fmt.Fprintf(sb, "        type: %s\n", inputType)
+			if inputType == config.DispatchInputTypeChoice && len(di.Options) > 0 {
+				sb.WriteString("        options:\n")
+				for _, opt := range di.Options {
+					fmt.Fprintf(sb, "          - %s\n", opt)
+				}
+			}
+			if di.Default != nil {
+				fmt.Fprintf(sb, "        default: '%v'\n", di.Default)
+			}
+			if di.Required {
+				sb.WriteString("        required: true\n")
+			}
+		}
+	}
 
 	// Emit extra triggers when configured.
 	if et := g.config.ExtraTriggers; et != nil {
@@ -907,6 +944,20 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		for _, k := range keys {
 			if g.jobHasInput(info.JobID, k) {
 				inputs = append(inputs, fmt.Sprintf("      %s: ${{ matrix.%s }}", k, k))
+			}
+		}
+	}
+
+	// Pass operator dispatch_inputs to callbacks that declare a matching input.
+	if len(g.config.DispatchInputs) > 0 {
+		names := make([]string, 0, len(g.config.DispatchInputs))
+		for name := range g.config.DispatchInputs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if g.jobHasInput(info.JobID, name) {
+				inputs = append(inputs, fmt.Sprintf("      %s: ${{ inputs.%s }}", name, name))
 			}
 		}
 	}

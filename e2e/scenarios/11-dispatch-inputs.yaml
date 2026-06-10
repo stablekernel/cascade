@@ -1,0 +1,55 @@
+name: "Dispatch Inputs"
+description: |
+  Verifies that operator-defined dispatch_inputs are emitted in the
+  workflow_dispatch.inputs block of the generated orchestrate.yaml (#33).
+
+  Covers:
+  - string, boolean, and choice types all appear correctly
+  - choice input lists its options
+  - description and default fields are emitted when set
+  - required: true is emitted when set
+  - a callback that declares a matching input receives ${{ inputs.<name> }}
+    in its with: block
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  dispatch_inputs:
+    target_region:
+      type: choice
+      options: [us-east-1, eu-west-1]
+      default: us-east-1
+      description: "AWS region to target"
+    force_rebuild:
+      type: boolean
+      default: false
+
+steps:
+  - name: "Initial commit; assert dispatch_inputs in generated workflow"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "workflow_dispatch:"
+            - "      target_region:"
+            - "        type: choice"
+            - "          - us-east-1"
+            - "          - eu-west-1"
+            - "        default: 'us-east-1'"
+            - "      force_rebuild:"
+            - "        type: boolean"
+            - "        default: 'false'"

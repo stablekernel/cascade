@@ -2034,3 +2034,262 @@ func TestGenerator_PassthroughArtifact_E2E_OrchestrateYAML(t *testing.T) {
 	assert.Equal(t, 2, downloadCount,
 		"expected 2 download-artifact steps (sign and package)")
 }
+
+// TestGenerator_DispatchInputs_StringType asserts that a string dispatch_input
+// is emitted correctly in the workflow_dispatch.inputs block.
+func TestGenerator_DispatchInputs_StringType(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"deploy_tag": {
+				Type:        config.DispatchInputTypeString,
+				Description: "Override image tag",
+				Required:    false,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      deploy_tag:\n")
+	assert.Contains(t, result, "        type: string\n")
+	assert.Contains(t, result, `        description: "Override image tag"`)
+	// required: omitted when false
+	assert.NotContains(t, result, "        required: true\n")
+}
+
+// TestGenerator_DispatchInputs_BooleanType asserts a boolean dispatch_input is
+// emitted with type: boolean.
+func TestGenerator_DispatchInputs_BooleanType(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"force_rebuild": {
+				Type:    config.DispatchInputTypeBoolean,
+				Default: false,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      force_rebuild:\n")
+	assert.Contains(t, result, "        type: boolean\n")
+	assert.Contains(t, result, "        default: 'false'\n")
+}
+
+// TestGenerator_DispatchInputs_ChoiceType asserts a choice dispatch_input emits
+// type: choice and all options.
+func TestGenerator_DispatchInputs_ChoiceType(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"target_region": {
+				Type:    config.DispatchInputTypeChoice,
+				Options: []string{"us-east-1", "eu-west-1"},
+				Default: "us-east-1",
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      target_region:\n")
+	assert.Contains(t, result, "        type: choice\n")
+	assert.Contains(t, result, "        options:\n")
+	assert.Contains(t, result, "          - us-east-1\n")
+	assert.Contains(t, result, "          - eu-west-1\n")
+	assert.Contains(t, result, "        default: 'us-east-1'\n")
+}
+
+// TestGenerator_DispatchInputs_RequiredFlag asserts required: true is emitted
+// when the DispatchInput has Required: true.
+func TestGenerator_DispatchInputs_RequiredFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"release_notes": {
+				Type:     config.DispatchInputTypeString,
+				Required: true,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      release_notes:\n")
+	assert.Contains(t, result, "        required: true\n")
+}
+
+// TestGenerator_DispatchInputs_OmittedWhenEmpty asserts the dispatch_inputs
+// block produces no extra entries when DispatchInputs is nil.
+func TestGenerator_DispatchInputs_OmittedWhenEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// Only the generator-owned inputs should appear.
+	assert.Contains(t, result, "      environment:\n")
+	assert.Contains(t, result, "      dry_run:\n")
+}
+
+// TestGenerator_DispatchInputs_RoutedToCallback asserts that when a callback
+// workflow declares a dispatch input by name, the generator threads
+// ${{ inputs.<name> }} into the job's with: block.
+func TestGenerator_DispatchInputs_RoutedToCallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+
+	// Build workflow that declares the dispatch input as one of its inputs.
+	buildWorkflow := `
+on:
+  workflow_call:
+    inputs:
+      target_region:
+        type: string
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte(buildWorkflow), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"target_region": {
+				Type:    config.DispatchInputTypeChoice,
+				Options: []string{"us-east-1", "eu-west-1"},
+				Default: "us-east-1",
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The dispatch input must appear in the on: block.
+	assert.Contains(t, result, "      target_region:\n")
+	// The build job must receive ${{ inputs.target_region }} via with:.
+	assert.Contains(t, result, "      target_region: ${{ inputs.target_region }}\n")
+}
+
+// TestGenerator_DispatchInputs_NotRoutedWhenCallbackOmitsIt asserts that
+// dispatch inputs are NOT added to a callback's with: block when the callback
+// workflow does not declare that input.
+func TestGenerator_DispatchInputs_NotRoutedWhenCallbackOmitsIt(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	// Build workflow that does NOT declare target_region.
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"target_region": {
+				Type:    config.DispatchInputTypeChoice,
+				Options: []string{"us-east-1", "eu-west-1"},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The dispatch input must appear in the on: block.
+	assert.Contains(t, result, "      target_region:\n")
+	// But must NOT be threaded into the build job's with: (callback doesn't declare it).
+	assert.NotContains(t, result, "target_region: ${{ inputs.target_region }}")
+}
+
+// TestGenerator_DispatchInputs_SortedDeterministic asserts multiple dispatch
+// inputs are emitted in alphabetical order for stable diffs.
+func TestGenerator_DispatchInputs_SortedDeterministic(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"zzz_last":  {Type: config.DispatchInputTypeString},
+			"aaa_first": {Type: config.DispatchInputTypeString},
+			"mmm_mid":   {Type: config.DispatchInputTypeString},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	idxFirst := strings.Index(result, "      aaa_first:\n")
+	idxMid := strings.Index(result, "      mmm_mid:\n")
+	idxLast := strings.Index(result, "      zzz_last:\n")
+	require.Greater(t, idxFirst, 0)
+	require.Greater(t, idxMid, 0)
+	require.Greater(t, idxLast, 0)
+	assert.Less(t, idxFirst, idxMid, "aaa_first must appear before mmm_mid")
+	assert.Less(t, idxMid, idxLast, "mmm_mid must appear before zzz_last")
+}
