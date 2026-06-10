@@ -33,6 +33,7 @@ type CallbackInfo struct {
 	Retries        int
 	TimeoutMinutes int                  // Job-level timeout-minutes (omitted when 0)
 	Matrix         *config.MatrixConfig // Build fan-out; nil for deploys and validate
+	SupportsDryRun bool                 // When true, dry-run promotes invoke the callback with dry_run: true instead of skipping it
 
 	// Per-callback job attributes for cascade-owned inline run: jobs. These are
 	// emitted only on inline-run jobs (never on reusable-workflow uses: callbacks,
@@ -75,6 +76,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			RunsOn:         cfg.Validate.RunsOn,
 			Permissions:    cfg.Validate.Permissions,
 			Concurrency:    cfg.Validate.Concurrency,
+			SupportsDryRun: cfg.Validate.SupportsDryRun,
 		}
 		g.Edges[jobID] = nil
 	}
@@ -143,6 +145,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Permissions:         d.Permissions,
 			Concurrency:         d.Concurrency,
 			PassthroughArtifact: d.PassthroughArtifact,
+			SupportsDryRun:      d.SupportsDryRun,
 		}
 
 		// Resolve dependencies to job IDs
