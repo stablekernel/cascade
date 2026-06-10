@@ -56,3 +56,64 @@ jobs:
 	assert.Equal(t, "success", result.Conclusion)
 	assert.Contains(t, result.Logs, "Hello from act")
 }
+
+func TestNormalizeWorkflowResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		jobs           map[string]*JobResultExtended
+		workflowPath   string
+		exitCode       int
+		wantConclusion string
+		wantErr        bool
+	}{
+		{
+			name:           "successful run with jobs stays success",
+			jobs:           map[string]*JobResultExtended{"build": {Name: "build", Conclusion: "success"}},
+			workflowPath:   ".github/workflows/orchestrate.yaml",
+			exitCode:       0,
+			wantConclusion: "success",
+			wantErr:        false,
+		},
+		{
+			name:           "targeted workflow with zero jobs is a failure",
+			jobs:           map[string]*JobResultExtended{},
+			workflowPath:   ".github/workflows/orchestrate.yaml",
+			exitCode:       0,
+			wantConclusion: "failure",
+			wantErr:        true,
+		},
+		{
+			name:           "non-zero exit is a failure",
+			jobs:           map[string]*JobResultExtended{"build": {Name: "build"}},
+			workflowPath:   ".github/workflows/orchestrate.yaml",
+			exitCode:       1,
+			wantConclusion: "failure",
+			wantErr:        true,
+		},
+		{
+			name:           "no targeted workflow path tolerates zero jobs",
+			jobs:           map[string]*JobResultExtended{},
+			workflowPath:   "",
+			exitCode:       0,
+			wantConclusion: "success",
+			wantErr:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := &ExtendedWorkflowResult{Conclusion: "success", Jobs: tt.jobs}
+			normalizeWorkflowResult(result, tt.workflowPath, tt.exitCode)
+			assert.Equal(t, tt.wantConclusion, result.Conclusion)
+			if tt.wantErr {
+				assert.NotEmpty(t, result.Error)
+			} else {
+				assert.Empty(t, result.Error)
+			}
+		})
+	}
+}
