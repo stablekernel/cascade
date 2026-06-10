@@ -80,7 +80,7 @@ jobs:
       can_proceed: ${{ steps.preflight.outputs.can_proceed }}
       promotion_result: ${{ steps.preflight.outputs.promotion_result }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Setup CLI
@@ -115,7 +115,7 @@ jobs:
     if: ${{ github.event.inputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
       - name: Setup CLI
         uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
         with:
@@ -135,7 +135,7 @@ jobs:
     if: always() && needs.preflight.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Setup CLI

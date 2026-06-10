@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Branch or commit SHA to test (default: master)'
+        description: 'Branch or commit SHA to test (default: main)'
         required: false
-        default: master
+        default: main
       timeout:
         description: 'Per-package go test timeout (e.g. 60m)'
         required: false
