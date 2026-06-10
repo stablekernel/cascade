@@ -164,6 +164,45 @@ func (c *TrunkConfig) GetSchemaVersion() int {
 	return c.SchemaVersion
 }
 
+// validateSchemaVersion is the testable core of the compatibility check. It
+// evaluates v against the provided min and current bounds and returns a warning
+// string (non-empty means warn-and-accept) or an error (means reject). Callers
+// that need to exercise the full matrix — including branches that are currently
+// unreachable when min == current — should call this directly.
+//
+// Rules:
+//
+//   - v == 0              → warn "omitted; assuming current"
+//   - v < 0              → error "must be a positive integer"
+//   - v > current        → error "upgrade the CLI"
+//   - v < min (and != 0) → error "no longer supported"
+//   - min <= v < current → warn "this CLI supports schema versions up to N and still reads version M"
+//   - v == current       → "" (silent accept)
+func validateSchemaVersion(v, min, current int) (warning string, err error) {
+	switch {
+	case v == 0:
+		return fmt.Sprintf(
+			"manifest has no schema_version; assuming %d. Pin it explicitly (schema_version: %d).",
+			current, current), nil
+	case v < 0:
+		return "", fmt.Errorf("schema_version must be a positive integer, got %d", v)
+	case v > current:
+		return "", fmt.Errorf(
+			"manifest requires schema version %d but this CLI supports schema versions up to %d; "+
+				"upgrade the CLI (cli_version) — see docs/versioning.md", v, current)
+	case v < min:
+		return "", fmt.Errorf(
+			"manifest schema version %d is no longer supported (minimum %d); "+
+				"see the migration table in CHANGELOG.md / docs/versioning.md", v, min)
+	case v < current:
+		return fmt.Sprintf(
+			"this CLI supports schema versions up to %d and still reads version %d; "+
+				"see the migration table in docs/versioning.md.", current, v), nil
+	default: // v == current
+		return "", nil
+	}
+}
+
 // ValidateSchemaVersion checks the manifest's schema_version against the CLI's
 // supported range and returns (warnings, fatalErr). It enforces the
 // compatibility contract documented in docs/versioning.md:
@@ -177,30 +216,14 @@ func (c *TrunkConfig) GetSchemaVersion() int {
 //
 // A non-nil fatalErr means the manifest must not be used for generation.
 func (c *TrunkConfig) ValidateSchemaVersion() (warnings []string, fatalErr error) {
-	v := c.SchemaVersion
-
-	switch {
-	case v == 0:
-		return []string{fmt.Sprintf(
-			"manifest has no schema_version; assuming %d. Pin it explicitly (schema_version: %d).",
-			CurrentSchemaVersion, CurrentSchemaVersion)}, nil
-	case v < 0:
-		return nil, fmt.Errorf("schema_version must be a positive integer, got %d", v)
-	case v > CurrentSchemaVersion:
-		return nil, fmt.Errorf(
-			"manifest requires schema version %d but this cascade CLI only understands up to %d; "+
-				"upgrade the CLI (cli_version) — see docs/versioning.md", v, CurrentSchemaVersion)
-	case v < MinSchemaVersion:
-		return nil, fmt.Errorf(
-			"manifest schema version %d is no longer supported (minimum %d); "+
-				"see the migration table in CHANGELOG.md / docs/versioning.md", v, MinSchemaVersion)
-	case v < CurrentSchemaVersion:
-		return []string{fmt.Sprintf(
-			"manifest targets schema version %d; this cascade CLI is %d and still reads it. "+
-				"See the migration table in docs/versioning.md.", v, CurrentSchemaVersion)}, nil
-	default: // v == CurrentSchemaVersion
-		return nil, nil
+	warn, err := validateSchemaVersion(c.SchemaVersion, MinSchemaVersion, CurrentSchemaVersion)
+	if err != nil {
+		return nil, err
 	}
+	if warn != "" {
+		return []string{warn}, nil
+	}
+	return nil, nil
 }
 
 // GetCLIVersion returns the configured CLI version.

@@ -48,9 +48,9 @@ On load, the CLI applies the following rules:
 | Manifest `schema_version` | CLI behavior |
 | --- | --- |
 | equal to `CurrentSchemaVersion` | Accepted silently. |
-| omitted | Accepted with a warning; assumed to be `CurrentSchemaVersion`. Pin it explicitly. |
+| omitted or `0` | Accepted with a warning; assumed to be `CurrentSchemaVersion`. Pin it explicitly. Because `schema_version` is an `int` field with `omitempty`, an explicit `schema_version: 0` is encoded identically to an absent field and is treated the same way — as omitted. |
 | between `MinSchemaVersion` and `CurrentSchemaVersion - 1` | Accepted with a warning; the CLI still reads it. See the migration table below. |
-| below `MinSchemaVersion` | Rejected. The schema generation is no longer supported; follow the migration table. |
+| below `MinSchemaVersion` (and not `0`) | Rejected. The schema generation is no longer supported; follow the migration table. |
 | above `CurrentSchemaVersion` | Rejected. The manifest needs a newer CLI; upgrade the `cli_version` pin. A newer schema may rely on changed semantics this CLI would mis-handle, so it does not guess. |
 | negative | Rejected as invalid. |
 
