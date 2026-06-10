@@ -80,3 +80,35 @@ Each `schema_version` bump is recorded with a `Migration` section in
 [CHANGELOG.md](../CHANGELOG.md) describing exactly what changed and the steps to
 update a manifest from the previous version. There are no migrations yet: the
 current schema version is the first.
+
+## Supported release line
+
+**0.x (current)** — the active development line. Bug fixes, security patches,
+and new capabilities all land here. No stability guarantee is made for the CLI
+command surface or the manifest schema between 0.x releases; additive changes
+arrive without a `schema_version` bump, but breaking changes (field removals,
+type changes, behaviour changes) increment `schema_version` and carry a
+`Migration` entry in [CHANGELOG.md](../CHANGELOG.md).
+
+**1.0** — when cascade reaches v1.0 the following guarantees apply:
+
+- The CLI command surface (flags, subcommands, exit codes, JSON output shapes)
+  follows semver: breaking changes require a major version bump.
+- The manifest schema follows the integer-major versioning described in this
+  document. An additive change never bumps `schema_version`; only a breaking
+  change does.
+- The N-1 schema deprecation window (described above) is honoured across all
+  1.x releases.
+
+Older tags outside the current release line do not receive backported fixes.
+See [SECURITY.md](../SECURITY.md) for the security-patch policy.
+
+## Version bump reference
+
+| Change type | CLI semver impact | `schema_version` impact |
+| --- | --- | --- |
+| New optional manifest field with a sensible default | patch | none |
+| New CLI subcommand or flag | minor | none |
+| Changed default behaviour of an existing field | major | bump |
+| Field removed or re-typed | major | bump |
+| CLI flag or subcommand removed | major | none |
