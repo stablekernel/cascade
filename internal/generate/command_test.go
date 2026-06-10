@@ -412,3 +412,65 @@ on:
 	require.NoError(t, err)
 	assert.Contains(t, string(output), "regenerate orchestrate.yaml")
 }
+
+// TestRunGenerateWorkflow_ExtraTriggers verifies that a manifest containing
+// extra_triggers produces an orchestrate.yaml with the corresponding on: keys.
+func TestRunGenerateWorkflow_ExtraTriggers(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifestContent := `ci:
+  config:
+    trunk_branch: main
+    environments: [dev]
+    builds:
+      - name: app
+        workflow: .github/workflows/build.yaml
+        triggers: ["src/**"]
+    extra_triggers:
+      schedule:
+        - cron: "0 6 * * 1"
+      repository_dispatch:
+        types: [external-update, redeploy]
+      workflow_run:
+        workflows: ["Upstream CI"]
+        types: [completed]
+      merge_group: {}
+`
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(manifestContent), 0644))
+
+	workflowDir := filepath.Join(tmpDir, ".github/workflows")
+	require.NoError(t, os.MkdirAll(workflowDir, 0755))
+
+	buildWorkflow := "name: Build\non:\n  workflow_call:\n    outputs:\n      image_tag:\n        value: test\n"
+	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "build.yaml"), []byte(buildWorkflow), 0644))
+
+	outputPath := filepath.Join(tmpDir, "orchestrate.yaml")
+	opts := defaultOpts(configPath, outputPath)
+	require.NoError(t, runGenerateWorkflow(opts))
+
+	raw, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	content := string(raw)
+
+	// Baseline triggers must still be present.
+	assert.Contains(t, content, "  push:\n", "push trigger must remain")
+	assert.Contains(t, content, "  workflow_dispatch:\n", "workflow_dispatch trigger must remain")
+
+	// Extra triggers must appear in the on: block.
+	assert.Contains(t, content, "  schedule:\n", "schedule block must be emitted")
+	assert.Contains(t, content, "    - cron: '0 6 * * 1'\n", "cron entry must be emitted")
+	assert.Contains(t, content, "  repository_dispatch:\n", "repository_dispatch block must be emitted")
+	assert.Contains(t, content, "      - external-update\n", "repository_dispatch type external-update must appear")
+	assert.Contains(t, content, "      - redeploy\n", "repository_dispatch type redeploy must appear")
+	assert.Contains(t, content, "  workflow_run:\n", "workflow_run block must be emitted")
+	assert.Contains(t, content, "      - 'Upstream CI'\n", "workflow_run workflow name must appear")
+	assert.Contains(t, content, "      - completed\n", "workflow_run type must appear")
+	assert.Contains(t, content, "  merge_group:\n", "merge_group trigger must be emitted")
+
+	// Lane behavior must not be conflated with raw trigger emission.
+	assert.NotContains(t, content, "merge_queue:", "merge_queue lane config must not appear here")
+
+	// Must still be valid YAML structure with a jobs: section.
+	assert.Contains(t, content, "jobs:\n", "jobs section must be present")
+}

@@ -354,7 +354,54 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("      dry_run:\n")
 	sb.WriteString("        description: 'Dry run mode'\n")
 	sb.WriteString("        type: boolean\n")
-	sb.WriteString("        default: false\n\n")
+	sb.WriteString("        default: false\n")
+
+	// Emit extra triggers when configured.
+	if et := g.config.ExtraTriggers; et != nil {
+		g.writeExtraTriggers(sb, et)
+	}
+
+	sb.WriteString("\n")
+}
+
+// writeExtraTriggers appends non-push trigger entries to the on: block.
+func (g *Generator) writeExtraTriggers(sb *strings.Builder, et *config.ExtraTriggers) {
+	if len(et.Schedule) > 0 {
+		sb.WriteString("  schedule:\n")
+		for _, s := range et.Schedule {
+			fmt.Fprintf(sb, "    - cron: '%s'\n", s.Cron)
+		}
+	}
+
+	if rd := et.RepositoryDispatch; rd != nil {
+		sb.WriteString("  repository_dispatch:\n")
+		if len(rd.Types) > 0 {
+			sb.WriteString("    types:\n")
+			for _, t := range rd.Types {
+				fmt.Fprintf(sb, "      - %s\n", t)
+			}
+		}
+	}
+
+	if wr := et.WorkflowRun; wr != nil {
+		sb.WriteString("  workflow_run:\n")
+		if len(wr.Workflows) > 0 {
+			sb.WriteString("    workflows:\n")
+			for _, w := range wr.Workflows {
+				fmt.Fprintf(sb, "      - '%s'\n", w)
+			}
+		}
+		if len(wr.Types) > 0 {
+			sb.WriteString("    types:\n")
+			for _, t := range wr.Types {
+				fmt.Fprintf(sb, "      - %s\n", t)
+			}
+		}
+	}
+
+	if et.MergeGroup != nil {
+		sb.WriteString("  merge_group:\n")
+	}
 }
 
 // writeConcurrency emits a top-level concurrency: block. Two rapid pushes to

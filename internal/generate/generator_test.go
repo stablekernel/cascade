@@ -1451,3 +1451,191 @@ on:
 	assert.NotContains(t, content, "BUILD_ARTIFACT_APP")
 	assert.NotContains(t, content, "builds.app.artifact_id")
 }
+
+// TestGenerator_ExtraTriggers_None verifies that omitting extra_triggers
+// produces only push and workflow_dispatch in the on: block.
+func TestGenerator_ExtraTriggers_None(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  push:\n", "push trigger must be present")
+	assert.Contains(t, result, "  workflow_dispatch:\n", "workflow_dispatch trigger must be present")
+	assert.NotContains(t, result, "  schedule:\n", "schedule must not appear when not configured")
+	assert.NotContains(t, result, "  repository_dispatch:\n", "repository_dispatch must not appear when not configured")
+	assert.NotContains(t, result, "  workflow_run:\n", "workflow_run must not appear when not configured")
+	assert.NotContains(t, result, "  merge_group:\n", "merge_group must not appear when not configured")
+}
+
+// TestGenerator_ExtraTriggers_Schedule verifies that schedule entries are
+// emitted as cron expressions under on: schedule:.
+func TestGenerator_ExtraTriggers_Schedule(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+		ExtraTriggers: &config.ExtraTriggers{
+			Schedule: []config.ScheduleEntry{
+				{Cron: "0 6 * * 1"},
+				{Cron: "0 12 * * 5"},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  schedule:\n", "schedule block must be present")
+	assert.Contains(t, result, "    - cron: '0 6 * * 1'\n", "first cron entry must appear")
+	assert.Contains(t, result, "    - cron: '0 12 * * 5'\n", "second cron entry must appear")
+}
+
+// TestGenerator_ExtraTriggers_RepositoryDispatch verifies repository_dispatch
+// is emitted with its configured event types.
+func TestGenerator_ExtraTriggers_RepositoryDispatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+		ExtraTriggers: &config.ExtraTriggers{
+			RepositoryDispatch: &config.RepositoryDispatchTrigger{
+				Types: []string{"external-update", "redeploy"},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  repository_dispatch:\n", "repository_dispatch block must be present")
+	assert.Contains(t, result, "      - external-update\n", "first dispatch type must appear")
+	assert.Contains(t, result, "      - redeploy\n", "second dispatch type must appear")
+}
+
+// TestGenerator_ExtraTriggers_RepositoryDispatch_NoTypes verifies that
+// repository_dispatch emits correctly even when no event types are specified.
+func TestGenerator_ExtraTriggers_RepositoryDispatch_NoTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+		ExtraTriggers: &config.ExtraTriggers{
+			RepositoryDispatch: &config.RepositoryDispatchTrigger{},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  repository_dispatch:\n", "repository_dispatch block must appear when pointer is non-nil")
+}
+
+// TestGenerator_ExtraTriggers_WorkflowRun verifies workflow_run is emitted
+// with its workflows and event types.
+func TestGenerator_ExtraTriggers_WorkflowRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+		ExtraTriggers: &config.ExtraTriggers{
+			WorkflowRun: &config.WorkflowRunTrigger{
+				Workflows: []string{"Upstream CI"},
+				Types:     []string{"completed"},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  workflow_run:\n", "workflow_run block must be present")
+	assert.Contains(t, result, "      - 'Upstream CI'\n", "workflow name must appear")
+	assert.Contains(t, result, "      - completed\n", "event type must appear")
+}
+
+// TestGenerator_ExtraTriggers_MergeGroup verifies that a non-nil MergeGroupTrigger
+// emits the bare merge_group: entry (presence is sufficient; no sub-keys needed).
+func TestGenerator_ExtraTriggers_MergeGroup(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+		ExtraTriggers: &config.ExtraTriggers{
+			MergeGroup: &config.MergeGroupTrigger{},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  merge_group:\n", "merge_group trigger must be emitted when MergeGroup is non-nil")
+	// Lane behavior is a separate issue — no merge_queue: config involved here.
+	assert.NotContains(t, result, "merge_queue:", "lane behavior config must not appear from trigger emission alone")
+}
+
+// TestGenerator_ExtraTriggers_AllCombined verifies all four extra trigger
+// types can be emitted together in one config.
+func TestGenerator_ExtraTriggers_AllCombined(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch: "main",
+		Builds:      []config.BuildConfig{{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}}},
+		ExtraTriggers: &config.ExtraTriggers{
+			Schedule: []config.ScheduleEntry{
+				{Cron: "0 2 * * *"},
+			},
+			RepositoryDispatch: &config.RepositoryDispatchTrigger{
+				Types: []string{"deploy-trigger"},
+			},
+			WorkflowRun: &config.WorkflowRunTrigger{
+				Workflows: []string{"Build"},
+				Types:     []string{"completed"},
+			},
+			MergeGroup: &config.MergeGroupTrigger{},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "  schedule:\n")
+	assert.Contains(t, result, "  repository_dispatch:\n")
+	assert.Contains(t, result, "  workflow_run:\n")
+	assert.Contains(t, result, "  merge_group:\n")
+	// Baseline triggers must still be present.
+	assert.Contains(t, result, "  push:\n")
+	assert.Contains(t, result, "  workflow_dispatch:\n")
+}
