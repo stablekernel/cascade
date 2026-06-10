@@ -1,16 +1,40 @@
-# cascade
+<h1 align="center">cascade</h1>
 
-Declarative trunk-based CI/CD for GitHub Actions. Generate your pipelines, environment cascade, and release lifecycle from a single manifest.
+<!-- TODO(image): logo — place at docs/images/logo.png once generated -->
+<!-- ![cascade logo](docs/images/logo.png) -->
 
-> **Status: active development.** cascade is functional and self-hosted (it uses itself to ship itself), but the manifest schema is not yet frozen. Config may change between minor versions before v1.0.0. See [Project status](#project-status).
+<!-- Row 1: CI/quality -->
+<p align="center">
+  <a href="https://github.com/stablekernel/cascade/actions/workflows/validate.yaml"><img src="https://github.com/stablekernel/cascade/actions/workflows/validate.yaml/badge.svg?branch=main" alt="Validate"></a>
+  <a href="https://github.com/stablekernel/cascade/actions/workflows/e2e.yaml"><img src="https://github.com/stablekernel/cascade/actions/workflows/e2e.yaml/badge.svg?branch=main" alt="E2E"></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/stablekernel/cascade"><img src="https://api.securityscorecards.dev/projects/github.com/stablekernel/cascade/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://goreportcard.com/report/github.com/stablekernel/cascade"><img src="https://goreportcard.com/badge/github.com/stablekernel/cascade" alt="Go Report Card"></a>
+</p>
 
-You define *what* to build and *where* to deploy in one manifest file. cascade generates the GitHub Actions wiring, tracks deployment state, manages releases, and cascades promotions through your environments.
+<!-- Row 2: release/project -->
+<p align="center">
+  <a href="https://github.com/stablekernel/cascade/releases/latest"><img src="https://img.shields.io/github/v/release/stablekernel/cascade" alt="Latest release"></a>
+  <a href="https://github.com/stablekernel/cascade/actions/workflows/codeql.yml"><img src="https://github.com/stablekernel/cascade/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL"></a>
+  <a href="https://stablekernel.github.io/cascade/"><img src="https://img.shields.io/badge/docs-cascade-E8702A" alt="Docs"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
+</p>
 
-Licensed under Apache 2.0.
+<p align="center"><strong>Declarative trunk-based CI/CD for GitHub Actions.</strong></p>
+
+<p align="center">
+  Define what to build and where to deploy in one manifest.<br>
+  cascade generates the GitHub Actions wiring, tracks deployment state, manages releases,<br>
+  and cascades promotions through your environments.
+</p>
 
 ---
 
 ## How it works
+
+<!-- TODO(image): hero/architecture diagram — place at docs/images/architecture.png once generated -->
+<!-- ![cascade architecture](docs/images/architecture.png) -->
+
+The **manifest** (`.github/manifest.yaml`) is the single source of truth. It holds both the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once; after that the generated workflows own their own execution.
 
 ```
 Merge to trunk
@@ -40,7 +64,8 @@ Merge to trunk
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The **manifest** (`.github/manifest.yaml`) is the single source of truth. It holds both the pipeline configuration and the deployment state for every environment.
+<!-- TODO(image): promote/cascade flow diagram — place at docs/images/promote-flow.png once generated -->
+<!-- ![cascade promotion flow](docs/images/promote-flow.png) -->
 
 ---
 
@@ -76,7 +101,7 @@ ci:
         triggers: [cdk/**]
       - name: app
         workflow: .github/workflows/deploy-app.yaml
-        depends_on: [app]   # only runs when build-app succeeds
+        depends_on: [app]   # waits for build-app to succeed
 
     changelog:
       contributors: true
@@ -89,6 +114,8 @@ cascade generate-workflow --config .github/manifest.yaml
 # Creates: .github/workflows/orchestrate.yaml
 #          .github/workflows/promote.yaml
 ```
+
+Commit the generated files. cascade re-generates them whenever you update the manifest; the `-f` flag overwrites in place.
 
 ### 4. Write your callbacks
 
@@ -111,130 +138,54 @@ on:
         value: ${{ jobs.build.outputs.artifact_id }}
 ```
 
+cascade is a metadata courier. You construct the registry and deploy operations yourself.
+
 ---
 
-## Configuration reference
+## Capabilities
 
-### Top-level structure
+cascade generates workflows that handle the orchestration layer. Your callback workflows handle the domain logic. The manifest gives you control over:
 
-```yaml
-ci:
-  config:           # Pipeline definition (you write this)
-    ...
-  state:            # Deployment state (managed by cascade, do not edit)
-    ...
-  latest_release:   # Last published release (managed by cascade)
-    ...
-```
+- **Change detection** — builds and deploys only run when their declared `triggers` match changed paths
+- **Dependency ordering** — `depends_on` chains builds and deploys in the right order
+- **Matrix builds** — fan out a single build over a matrix of inputs
+- **Per-job runner selection** — `runs_on` at the config or per-build/deploy level
+- **Concurrency control** — configurable group and cancel-in-progress on orchestrate, promote, release, and external-update workflows
+- **Extra triggers** — attach `schedule`, `repository_dispatch`, `workflow_run`, and `merge_group` events to orchestration
+- **Dispatch inputs** — expose operator-facing manual-run inputs on the generated `workflow_dispatch`
+- **PR plan preview** — a comment on each PR shows which builds and deploys would run
+- **Merge queue lane** — a dedicated gate job runs before merge to protect trunk
+- **Action pinning** — `pin_mode: sha` emits pinned SHA references for all cascade-managed action calls; override individual actions via `action_pins`
+- **Breaking-change gate** — `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless explicitly overridden
+- **Artifact passing** — `artifact_id` output from build callbacks is stored in state and forwarded to deploys and the publish callback
+- **Publish callback** — after a release is published, a separate workflow call lets you retag RC artifacts in your registry
+- **Schema version enforcement** — `schema_version` on the manifest is checked on every CLI invocation; incompatible manifests are rejected with a clear error
 
-### `config` fields
-
-| Field | Type | Description |
-|---|---|---|
-| `trunk_branch` | string | Branch that triggers orchestration |
-| `environments` | list | Promotion chain. Omit for no-env library/CLI projects. |
-| `cli_version` | string | CLI version workflows download (`latest` or `vX.Y.Z`) |
-| `triggers` | list | Global path patterns that activate orchestration |
-| `validate` | object | Optional validation callback run before builds |
-| `builds` | list | Build callbacks |
-| `deploys` | list | Deploy callbacks |
-| `publish` | object | Optional publish callback invoked when a release is published |
-| `changelog` | object | Changelog settings |
-| `release_token` | string | Secret expression for release API calls. Default: `${{ secrets.GITHUB_TOKEN }}` |
-| `git` | object | Git identity for state commits |
-
-### Builds
-
-```yaml
-builds:
-  - name: app
-    workflow: .github/workflows/build-app.yaml
-    triggers: [src/**, go.mod]
-    depends_on: []          # Other build names this depends on
-    run_policy: default     # default | always | force
-    on_failure: abort       # abort | continue
-    retries: 0              # 0–3
-    inputs:
-      dockerfile: ./Dockerfile
-    env_inputs:
-      prod:
-        sign_image: true
-```
-
-### Deploys
-
-```yaml
-deploys:
-  - name: infra
-    workflow: .github/workflows/deploy-infra.yaml
-    triggers: [cdk/**]
-    depends_on: [app]       # Waits for build-app to succeed
-    supports_dry_run: true
-    on_failure: abort
-    retries: 2
-```
-
-### Publish callback
-
-When a release is published (RC to final semver), artifact registries still hold RC-tagged versions. The publish callback lets you retag them.
-
-```yaml
-publish:
-  workflow: .github/workflows/publish.yaml
-```
-
-The publish workflow receives these inputs per configured build:
-
-| Input | Example | Description |
-|---|---|---|
-| `build_name` | `app` | Which build's artifacts to retag |
-| `old_version` | `v1.0.0-rc.2` | RC version currently in the registry |
-| `new_version` | `v1.0.0` | Final semver to apply |
-| `sha` | `abc123` | Git commit SHA |
-| `artifact_id` | `sha256:def456` | Immutable digest (from build job output, if declared) |
-
-cascade is a metadata courier. You construct the registry operations yourself.
-
-### No-environment mode (library/CLI projects)
-
-Omit `environments` for projects that publish releases without environment deployments:
-
-```yaml
-ci:
-  config:
-    trunk_branch: main
-    cli_version: v0.1.0
-    builds:
-      - name: cli
-        workflow: .github/workflows/build-cli.yaml
-        triggers: [cmd/**, internal/**, go.mod]
-    changelog:
-      contributors: true
-```
-
-Commits create RC pre-releases. A `promote` dispatch (default mode) publishes the final release.
+For a no-environment project (library or CLI), omit `environments` entirely. Commits produce RC pre-releases; a `promote` dispatch publishes the final release.
 
 ---
 
 ## Promotion
 
+<!-- Promote flow described textually; see docs/images/promote-flow.png for a visual -->
+
 Promotions are triggered via `workflow_dispatch` on the generated `promote.yaml`.
 
 | Mode | Behavior |
 |---|---|
-| `default` | Advance the chain by one logical step |
+| `default` | Advance the chain one logical step |
 | `dev-to-test` | Promote dev to test |
 | `dev-to-uat` | Cascade: dev → test → uat (all intermediates updated atomically) |
 | `dev-to-prod` | Full cascade through all environments |
 | `uat-to-prod` | Partial cascade from uat onward |
 
-A **breaking-change gate** blocks the prerelease-to-release boundary when `feat!:` or `BREAKING CHANGE:` commits are found in the range. Pass `allow_breaking_changes: true` to proceed.
+The same artifacts built on the first merge are promoted through the chain; nothing is rebuilt.
 
 ---
 
 ## State
 
-The manifest tracks deployment state automatically. Don't edit the `state:` section. The workflows own it.
+The manifest tracks deployment state automatically. The `state:` section is managed by cascade; do not edit it by hand.
 
 ```yaml
 ci:
@@ -263,7 +214,7 @@ ci:
 
 ---
 
-## CLI commands
+## CLI reference
 
 | Command | Description |
 |---|---|
@@ -273,11 +224,13 @@ ci:
 | `promote preflight` | Validate, compute promotions, check breaking changes |
 | `promote finalize` | Update state after promotion deploys complete |
 | `generate-changelog` | Create changelog from conventional commits |
-| `manage-release` | Create / update / publish GitHub releases |
+| `manage-release` | Create, update, or publish GitHub releases |
 | `next-version` | Calculate next semantic version |
 | `detect-changes` | Determine which builds/deploys a file change triggers |
-| `parse-config` | Validate and print parsed manifest |
-| `reset` | Wipe releases and state (for testing / fresh start) |
+| `parse-config` | Validate and print the parsed manifest (with schema warnings) |
+| `reset` | Wipe releases and state (for testing or a fresh start) |
+
+Full flag reference: [docs/cli-reference.md](docs/cli-reference.md).
 
 ---
 
@@ -291,6 +244,32 @@ ci:
 | [CLI Reference](docs/cli-reference.md) | All commands and flags |
 | [Callback Contract](docs/callback-contract.md) | How to write build/deploy/publish workflows |
 | [Architecture](docs/architecture.md) | System design and internals |
+| [Schema Versioning](docs/versioning.md) | Compatibility policy and migration guide |
+
+---
+
+## Roadmap to stable
+
+cascade is functional and self-hosted — the releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas:
+
+**Schema coverage** — a handful of GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These are on the direct path to v1.0.0.
+
+**Hardening** — schema version enforcement (shipped), compatibility docs ([docs/versioning.md](docs/versioning.md)), and further e2e coverage to confirm that the generated workflows behave correctly under edge cases (empty builds, cross-repo coordination, rollback to N-1).
+
+The manifest schema field shapes were frozen in v0.1.0 as the v1 contract baseline. Minor versions between now and v1.0.0 may add new optional fields; no existing fields will be removed or renamed before v1.0.0.
+
+Open work is tracked in [GitHub Issues](https://github.com/stablekernel/cascade/issues).
+
+---
+
+## Conventions
+
+cascade follows these conventions in its own codebase and in the generated workflows it produces:
+
+- **Additive manifest changes** — new fields are always optional with sensible defaults; existing manifest files continue to work across minor version bumps
+- **Conventional commits** — commit messages follow `type: subject` (e.g., `feat:`, `fix:`, `docs:`); the changelog generator reads this format
+- **Callback isolation** — generated workflows call your workflows via `workflow_call`; cascade never reaches into your callback logic
+- **Metadata courier** — cascade passes artifact identifiers and versions between stages; it never touches your container registry, package registry, or deployment target directly
 
 ---
 
@@ -309,7 +288,7 @@ cd e2e && go test -v -timeout 20m ./...
 # Lint
 golangci-lint run ./...
 
-# Regenerate cascade's own workflows
+# Regenerate cascade's own workflows (uses itself)
 go run ./cmd/cascade generate-workflow --config .github/manifest.yaml -f
 ```
 
@@ -317,16 +296,12 @@ go run ./cmd/cascade generate-workflow --config .github/manifest.yaml -f
 
 ## Contributing
 
-Contributions are welcome. cascade uses the [Developer Certificate of Origin](https://developercertificate.org/): sign off your commits with `git commit -s`.
+Contributions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and workflow details.
+
+cascade uses the [Developer Certificate of Origin](https://developercertificate.org/). Sign off each commit with `git commit -s`. By participating you agree to the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ---
 
-## Project status
+## License
 
-cascade is in active development. It is functional and self-hosted (the releases page shows the pipeline working end to end), but a few things are still settling before v1.0.0:
-
-- **Schema stability:** the manifest schema is not yet frozen. Config may change between minor versions until the v1.0.0 contract.
-- **GHA feature coverage:** some native GitHub Actions capabilities (runner selection, concurrency, environment gates, OIDC, matrix builds) are not yet modeled in the manifest. They are on the path to v1.0.0.
-- **Documentation:** some docs lag the current implementation.
-
-Open work is tracked in [GitHub Issues](https://github.com/stablekernel/cascade/issues).
+Apache 2.0. See [LICENSE](./LICENSE).
