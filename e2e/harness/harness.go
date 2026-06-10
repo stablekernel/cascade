@@ -405,12 +405,29 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to execute generate-workflow: %w", err)
 	}
+	// Always drain the generate-workflow output. Previously it was only read on
+	// a non-zero exit, so a run that exited 0 but wrote no workflow (e.g. the
+	// "No changes"/skip path) left no trace and the missing orchestrate.yaml
+	// only surfaced much later as a `cat: ... No such file` in the orchestrate
+	// step — a different scenario per parallel dispatch (#25). Keep the output
+	// for diagnostics.
+	var genOutput bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&genOutput, reader)
+	}
 	if exitCode != 0 {
-		var output bytes.Buffer
-		if reader != nil {
-			_, _ = io.Copy(&output, reader)
-		}
-		return fmt.Errorf("generate-workflow failed (exit %d): %s", exitCode, output.String())
+		return fmt.Errorf("generate-workflow failed (exit %d): %s", exitCode, genOutput.String())
+	}
+
+	// Verify the orchestrate workflow was actually produced. generate-workflow
+	// can exit 0 without emitting .github/workflows/orchestrate.yaml; if we
+	// commit and push that empty set, the downstream orchestrate step runs act
+	// against a non-existent `-W` path and act (with --detect-event) reports no
+	// jobs while still exiting success — the run then masquerades as a passing
+	// scenario with 0 jobs (#25). Fail here, at the source, with the generate
+	// output and a workflow-dir listing so the real cause is obvious.
+	if err := h.assertOrchestrateGenerated(ctx, genOutput.String()); err != nil {
+		return err
 	}
 
 	// Post-process generated workflows to use local paths instead of external
@@ -471,6 +488,37 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// assertOrchestrateGenerated confirms that .github/workflows/orchestrate.yaml
+// exists and is non-empty in the act container's /tmp/repo immediately after
+// generate-workflow. On failure it returns the generate output plus a listing
+// of the workflows directory so the missing-file moment is captured with
+// context rather than surfacing later as an opaque `cat: ... No such file`.
+func (h *Harness) assertOrchestrateGenerated(ctx context.Context, genOutput string) error {
+	const workflowPath = ".github/workflows/orchestrate.yaml"
+	checkCmd := []string{
+		"bash", "-c",
+		"cd /tmp/repo && test -s " + workflowPath,
+	}
+	exitCode, _, err := h.act.Container().Exec(ctx, checkCmd)
+	if err == nil && exitCode == 0 {
+		return nil
+	}
+
+	// Gather diagnostics for the failure path only.
+	lsCmd := []string{
+		"bash", "-c",
+		"cd /tmp/repo && ls -la .github/workflows/ 2>&1 || true",
+	}
+	var listing bytes.Buffer
+	if _, lsReader, lsErr := h.act.Container().Exec(ctx, lsCmd); lsErr == nil && lsReader != nil {
+		_, _ = io.Copy(&listing, lsReader)
+	}
+	return fmt.Errorf(
+		"generate-workflow exited 0 but did not produce %s (exit=%d err=%v)\ngenerate output:\n%s\nworkflows dir:\n%s",
+		workflowPath, exitCode, err, strings.TrimSpace(genOutput), strings.TrimSpace(listing.String()),
+	)
 }
 
 // ensureCLIBinary builds the cascade binary once per test process and
@@ -559,10 +607,16 @@ func (h *Harness) SyncRepoToActContainer(ctx context.Context) error {
 		return nil
 	}
 
-	// Pull latest changes and update master branch
+	// Pull latest changes and update master branch.
+	//
+	// `git fetch` without an explicit refspec can occasionally fail or no-op
+	// under heavy parallel load against the per-scenario gitea; bind the fetch
+	// to origin/main explicitly and chain the reset so a partial sync surfaces
+	// as a non-zero exit instead of silently resetting to a stale tree (which
+	// would drop the just-pushed orchestrate.yaml — #25).
 	syncCmd := []string{
 		"bash", "-c",
-		"cd /tmp/repo && git fetch origin && git reset --hard origin/main && git branch -f master HEAD 2>/dev/null || true",
+		"cd /tmp/repo && git fetch origin main && git reset --hard origin/main && (git branch -f master HEAD 2>/dev/null || true)",
 	}
 
 	exitCode, reader, err := h.act.Container().Exec(ctx, syncCmd)
@@ -575,6 +629,13 @@ func (h *Harness) SyncRepoToActContainer(ctx context.Context) error {
 			_, _ = io.Copy(&output, reader)
 		}
 		return fmt.Errorf("sync repo failed (exit %d): %s", exitCode, output.String())
+	}
+
+	// After syncing, the orchestrate workflow must be present; if the synced
+	// tree lacks it the orchestrate run would otherwise misreport as a passing
+	// 0-job scenario instead of failing here with context.
+	if err := h.assertOrchestrateGenerated(ctx, ""); err != nil {
+		return fmt.Errorf("orchestrate workflow missing after repo sync: %w", err)
 	}
 
 	return nil

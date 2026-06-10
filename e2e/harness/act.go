@@ -272,12 +272,28 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 		}
 	}
 
+	normalizeWorkflowResult(result, opts.WorkflowPath, exitCode)
+
+	return result, nil
+}
+
+// normalizeWorkflowResult reconciles a parsed act result with the exec exit
+// code and the run's expectations. A non-zero exit is always a failure. A run
+// that targeted a specific workflow file but produced zero parsed jobs is also
+// a failure: act emitted no job events because it could not find or load the
+// workflow (e.g. a missing orchestrate.yaml). Without this, such a run
+// masqueraded as Conclusion="success" with 0 jobs — a missing workflow showing
+// up as a green-but-empty scenario (#25).
+func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string, exitCode int) {
 	if exitCode != 0 {
 		result.Conclusion = "failure"
 		result.Error = "workflow execution failed"
 	}
 
-	return result, nil
+	if workflowPath != "" && len(result.Jobs) == 0 && result.Conclusion != "failure" {
+		result.Conclusion = "failure"
+		result.Error = fmt.Sprintf("act produced no jobs for workflow %q (workflow missing or failed to load)", workflowPath)
+	}
 }
 
 // buildActArgs builds additional act command arguments
