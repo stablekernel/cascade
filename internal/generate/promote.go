@@ -646,7 +646,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	}
 
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
@@ -698,7 +698,7 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("      - name: Setup CLI\n")
 	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
 	sb.WriteString("        with:\n")
@@ -1033,7 +1033,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    if: always() && needs.preflight.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 	sb.WriteString("      - name: Setup CLI\n")
