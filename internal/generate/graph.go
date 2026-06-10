@@ -14,7 +14,7 @@ type DependencyGraph struct {
 
 	// OptionalEdges holds optional_depends_on edges (job ID -> dependencies as
 	// job IDs). Optional deps add to a job's needs: for ordering but do NOT
-	// contribute a skip-gate to its if: condition — the job still runs when an
+	// contribute a skip-gate to its if: condition. The job still runs when an
 	// optional dep was skipped because its triggers didn't match (#18).
 	OptionalEdges map[string][]string
 }

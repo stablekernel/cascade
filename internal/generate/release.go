@@ -401,8 +401,8 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	// Same retry-with-rebase pattern as the orchestrate finalize Update
 	// Manifest step (#101). release.yaml is workflow_dispatch-only so the
 	// race window is smaller than orchestrate's, but a concurrent
-	// orchestrate state push can still reject this push as non-fast-forward
-	// — see #102.
+	// orchestrate state push can still reject this push as non-fast-forward.
+	// See #102.
 	sb.WriteString("          echo \"Updating latest_release state\"\n")
 	sb.WriteString("          for attempt in 1 2 3 4 5; do\n")
 	sb.WriteString("            git fetch origin \"$BRANCH\"\n")

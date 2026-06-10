@@ -48,10 +48,10 @@ var defaultActionPins = map[string]actionPin{
 // uniformly and no ref is missed.
 //
 // Resolution order:
-//  1. config.action_pins[action] — explicit per-action override (any ref/sha),
+//  1. config.action_pins[action]: explicit per-action override (any ref/sha),
 //     applied regardless of pin_mode. Use this for forks or org-mirrored actions.
-//  2. pin_mode: sha — emit <action>@<sha> # <version> from the built-in table.
-//  3. pin_mode: tag (default) — emit <action>@<tag>, today's behavior, never
+//  2. pin_mode: sha: emit <action>@<sha> # <version> from the built-in table.
+//  3. pin_mode: tag (default): emit <action>@<tag>, today's behavior, never
 //     @latest for a third-party action.
 //
 // An action not present in the built-in table and not overridden falls back to

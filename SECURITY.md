@@ -4,7 +4,7 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.x (latest) | Yes — security fixes backported promptly |
+| 0.x (latest) | Yes, security fixes backported promptly |
 | Older 0.x tags | No |
 
 The `0.x` line is the active release line. Only the most recent tag receives

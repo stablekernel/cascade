@@ -1,6 +1,6 @@
 site_name: Cascade
 site_description: >-
-  Manifest-driven release orchestration for GitHub Actions — coordinate
+  Manifest-driven release orchestration for GitHub Actions: coordinate
   builds, promotions, and releases across any environment topology.
 site_url: https://stablekernel.github.io/cascade/
 repo_url: https://github.com/stablekernel/cascade
@@ -61,6 +61,7 @@ markdown_extensions:
       permalink: true
 
 nav:
+  - Home: index.md
   - Getting Started: getting-started.md
   - Manifest Reference: configuration.md
   - Callback Contract: callback-contract.md

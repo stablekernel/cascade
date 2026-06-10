@@ -1,8 +1,8 @@
 # Versioning and schema compatibility
 
-The cascade manifest is the public contract between your repository and the
-cascade CLI. This document describes how the manifest schema is versioned and
-how the CLI decides whether it can read a given manifest.
+The cascade manifest is the contract between your repository and the cascade
+CLI. This document describes how the manifest schema is versioned and how the
+CLI decides whether it can read a given manifest.
 
 ## `schema_version`
 
@@ -16,8 +16,8 @@ ci:
     # ...
 ```
 
-`schema_version` is a single monotonic integer — a "schema major" — not a semver
-string. It identifies which breaking-change generation of the schema the
+`schema_version` is a single monotonic integer, the "schema major". It is not a
+semver string. It identifies which breaking-change generation of the schema the
 manifest is written for.
 
 ### Why an integer
@@ -25,8 +25,8 @@ manifest is written for.
 The manifest evolves additively. New capabilities arrive as new optional fields,
 new enum values, or new nested blocks, each with a sensible default. An older
 CLI ignores fields it does not recognize, and a newer CLI fills in defaults for
-fields an older manifest omits. Because of this, **additive changes never change
-`schema_version`**. The integer only moves when a change is genuinely breaking:
+fields an older manifest omits. Because of this, additive changes never change
+`schema_version`. The integer only moves when a change is genuinely breaking:
 
 - a field is removed,
 - a field is re-typed,
@@ -39,16 +39,16 @@ additive-only design, never need to exist.
 
 The CLI knows two bounds:
 
-- `CurrentSchemaVersion` — the highest schema version this CLI understands. A
+- `CurrentSchemaVersion` is the highest schema version this CLI understands. A
   manifest that omits `schema_version` is assumed to target this version.
-- `MinSchemaVersion` — the oldest schema version this CLI still reads.
+- `MinSchemaVersion` is the oldest schema version this CLI still reads.
 
 On load, the CLI applies the following rules:
 
 | Manifest `schema_version` | CLI behavior |
 | --- | --- |
 | equal to `CurrentSchemaVersion` | Accepted silently. |
-| omitted or `0` | Accepted with a warning; assumed to be `CurrentSchemaVersion`. Pin it explicitly. Because `schema_version` is an `int` field with `omitempty`, an explicit `schema_version: 0` is encoded identically to an absent field and is treated the same way — as omitted. |
+| omitted or `0` | Accepted with a warning; assumed to be `CurrentSchemaVersion`. Pin it explicitly. Because `schema_version` is an `int` field with `omitempty`, an explicit `schema_version: 0` is encoded identically to an absent field and is treated the same way, as omitted. |
 | between `MinSchemaVersion` and `CurrentSchemaVersion - 1` | Accepted with a warning; the CLI still reads it. See the migration table below. |
 | below `MinSchemaVersion` (and not `0`) | Rejected. The schema generation is no longer supported; follow the migration table. |
 | above `CurrentSchemaVersion` | Rejected. The manifest needs a newer CLI; upgrade the `cli_version` pin. A newer schema may rely on changed semantics this CLI would mis-handle, so it does not guess. |
@@ -83,14 +83,18 @@ current schema version is the first.
 
 ## Supported release line
 
-**0.x (current)** — the active development line. Bug fixes, security patches,
-and new capabilities all land here. No stability guarantee is made for the CLI
-command surface or the manifest schema between 0.x releases; additive changes
-arrive without a `schema_version` bump, but breaking changes (field removals,
-type changes, behaviour changes) increment `schema_version` and carry a
-`Migration` entry in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md).
+### 0.x (current)
 
-**1.0** — when cascade reaches v1.0 the following guarantees apply:
+This is the active development line. Bug fixes, security patches, and new
+capabilities all land here. No stability guarantee is made for the CLI command
+surface or the manifest schema between 0.x releases. Additive changes arrive
+without a `schema_version` bump. Breaking changes (field removals, type changes,
+behaviour changes) increment `schema_version` and carry a `Migration` entry in
+[CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md).
+
+### 1.0
+
+When cascade reaches v1.0 the following guarantees apply:
 
 - The CLI command surface (flags, subcommands, exit codes, JSON output shapes)
   follows semver: breaking changes require a major version bump.

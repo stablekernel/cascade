@@ -62,7 +62,7 @@ release that bumps `schema_version`.
   `actions/upload-artifact` v7, `goreleaser/goreleaser-action` v7,
   `github.com/spf13/cobra` v1.10.2. (#48, #49, #52, #53, #54)
 
-## [0.1.0] — 2026-06-09
+## [0.1.0] - 2026-06-09
 
 Initial release of cascade: a trunk-based CI/CD orchestrator for GitHub Actions.
 

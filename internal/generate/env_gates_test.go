@@ -67,7 +67,7 @@ func TestEnvGates_Orchestrate_DeployJob_WithoutGHAEnvironment(t *testing.T) {
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
-		// No EnvironmentConfig — no gha_environment.
+		// No EnvironmentConfig; no gha_environment.
 	}
 
 	gen := NewGenerator(cfg, tmpDir)

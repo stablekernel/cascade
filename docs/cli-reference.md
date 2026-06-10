@@ -8,7 +8,7 @@ Complete reference for the `cascade` command-line tool.
 # Latest stable
 go install github.com/stablekernel/cascade/cmd/cascade@latest
 
-# Bleeding edge from master
+# Latest build from master
 go install github.com/stablekernel/cascade/cmd/cascade@master
 
 # Specific version
@@ -35,7 +35,7 @@ These flags are available on all commands:
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--dry-run` | bool | Preview mode — show what would happen without making changes |
+| `--dry-run` | bool | Preview mode: show what would happen without making changes |
 | `--trace` | bool | Enable TRACE-level logging for detailed internals |
 | `--json` | bool | Output structured JSON for workflow consumption |
 
@@ -189,7 +189,7 @@ cascade generate-workflow
 - **Output chaining**: passes outputs from one callback to dependents
 - **Per-callback policies**: respects `run_policy`, `on_failure`, `retries`
 - **Environment overrides**: applies `env_inputs` per environment
-- **Publish step**: when `publish:` is configured, the promote workflow dispatches the callback once per build at the prerelease→release boundary
+- **Publish step**: when `publish:` is configured, the promote workflow dispatches the callback once per build at the boundary where a prerelease becomes a release
 
 ### manage-release
 
@@ -390,9 +390,9 @@ cascade next-version \
 | `--json` | bool | No | Output as JSON |
 
 Bump rules:
-- Breaking change (`feat!`, `BREAKING CHANGE:`) → major bump
-- Feature (`feat`) → minor bump
-- Fix (`fix`) → patch bump
+- Breaking change (`feat!`, `BREAKING CHANGE:`) triggers a major bump
+- Feature (`feat`) triggers a minor bump
+- Fix (`fix`) triggers a patch bump
 - Pre-release environments append an RC suffix (e.g., `v1.3.0-rc.0`)
 
 ### external

@@ -390,7 +390,7 @@ jobs:
           docker push myrepo/${{ inputs.build_name }}:${{ inputs.new_version }}
 ```
 
-The framework only carries metadata. The publish callback is responsible for the registry operation. If `artifact_id` is provided, prefer it over `old_version` for unambiguous identification.
+The framework only carries metadata. The publish callback performs the registry operation. When `artifact_id` is present, use it instead of `old_version` so the target is unambiguous.
 
 ## Custom Inputs
 

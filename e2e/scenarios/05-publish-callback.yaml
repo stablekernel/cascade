@@ -27,7 +27,7 @@ steps:
         src/app.ts: |
           export function main() { console.log("v0.1.0 feature"); }
 
-  - name: "Orchestrate — build runs, state.prerelease created"
+  - name: "Orchestrate: build runs, state.prerelease created"
     action: orchestrate
     expect:
       state:
@@ -37,7 +37,7 @@ steps:
       jobs:
         app: success
 
-  - name: "Promote to release — publish step runs (dispatch no-op in harness)"
+  - name: "Promote to release: publish step runs (dispatch no-op in harness)"
     action: promote
     promote:
       mode: default

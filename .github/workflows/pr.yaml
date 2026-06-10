@@ -1,6 +1,6 @@
 # Pull Request validation workflow
 # Runs unit tests + lint on PRs. E2E runs separately (e2e.yaml) on
-# release tags and manual dispatch — too slow + flaky to run per PR.
+# release tags and manual dispatch. Too slow and flaky to run per PR.
 #
 # This workflow triggers on every PR to main so the PR Gate job always
 # reports a status. The expensive jobs (Unit Tests, Lint) are gated on a

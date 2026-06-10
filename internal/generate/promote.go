@@ -748,7 +748,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		fmt.Fprintf(sb, "  deploy-%s:\n", d.Name)
 
 		if d.Run != "" {
-			// Inline run: deploy callback — cascade-owned job with an inline run:
+			// Inline run: deploy callback. This is a cascade-owned job with an inline run:
 			// step. Inline callbacks declare their inputs via the manifest inputs:
 			// keys (no reusable-workflow with: matrix); the standard environment/
 			// sha/image_tag inputs reach the step as env: vars.
@@ -761,7 +761,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			} else {
 				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
 			}
-			// environment: — wires the job to a GitHub Environment so that the
+			// environment: wires the job to a GitHub Environment so that the
 			// environment's protection rules apply when gha_environment is configured
 			// for any env. The target env is resolved at runtime by preflight.
 			if anyEnvHasGHAConfig(g.config) {
@@ -831,7 +831,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			} else {
 				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
 			}
-			// environment: — wires the job to a GitHub Environment so that the
+			// environment: wires the job to a GitHub Environment so that the
 			// environment's protection rules apply when gha_environment is configured
 			// for any env. The target env is resolved at runtime by preflight.
 			if anyEnvHasGHAConfig(g.config) {
@@ -866,7 +866,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		} else {
 			sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
 		}
-		// environment: — the prod deploy job always targets a single known env
+		// environment: The prod deploy job always targets a single known env
 		// (the final environment in the pipeline), so we can resolve the GitHub
 		// Environment name statically from gha_environment when configured.
 		if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
@@ -1247,7 +1247,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
 	sb.WriteString("          TAG: ${{ steps.release-data.outputs.sem_version }}\n")
 	sb.WriteString("        run: |\n")
-	sb.WriteString("          # Only dispatch on real GitHub — in act/gitea e2e environments\n")
+	sb.WriteString("          # Only dispatch on real GitHub. In act/gitea e2e environments\n")
 	sb.WriteString("          # GITHUB_SERVER_URL is http://gitea:3000 and the Release workflow\n")
 	sb.WriteString("          # doesn't exist, so skip silently.\n")
 	sb.WriteString("          if [[ \"$GITHUB_SERVER_URL\" != \"https://github.com\" ]]; then\n")
@@ -1297,7 +1297,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	//
 	// Each deploy job's conclusion is passed in as DEPLOY_RESULT_<NAME>, derived
 	// from `needs.deploy-<name>.result`. finalize reads these env vars to know
-	// which deploys succeeded — more reliable than the legacy
+	// which deploys succeeded. More reliable than the legacy
 	// `gh api ... /jobs` query, which can't reach the GitHub API in act/Gitea
 	// test environments.
 	sb.WriteString("      - name: Finalize Promotion\n")

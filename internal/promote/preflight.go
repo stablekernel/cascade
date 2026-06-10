@@ -260,9 +260,9 @@ func (p *Preflighter) detectDeployChanges(sourceSHA, targetEnv string) ([]string
 
 		// Get target deploy state. Per-deploy state is the most precise
 		// comparison point ("when was this specific deploy last run for this
-		// env"). When unavailable — typical for first-promotion scenarios
+		// env"). When unavailable (typical for first-promotion scenarios
 		// where the env has been promoted to some SHA but no deploy has run
-		// yet — fall back to the env-level SHA. That captures the semantic
+		// yet), fall back to the env-level SHA. That captures the semantic
 		// "if the env is at SHA X, treat the deploy as having seen X" so
 		// trigger filters still apply rather than unconditionally including.
 		var targetSHA string
@@ -276,7 +276,7 @@ func (p *Preflighter) detectDeployChanges(sourceSHA, targetEnv string) ([]string
 		}
 
 		// If neither per-deploy nor env-level state exists, include
-		// unconditionally — this is a never-deployed env.
+		// unconditionally: this is a never-deployed env.
 		if targetSHA == "" {
 			localDeploys = append(localDeploys, d.Name)
 			continue
@@ -493,7 +493,7 @@ func (p *Preflighter) getEnvCurrentSHA(env string) string {
 // (baseSHA, headSHA] is a breaking change per the conventional-commit spec
 // (`feat!:`, `fix!:`, or any commit body containing `BREAKING CHANGE:`).
 //
-// On any failure to read git history, returns false (fail-open) — the gate
+// On any failure to read git history, returns false (fail-open). The gate
 // is a guardrail, not a hard correctness check, and surfacing parse errors
 // at preflight time would make the CLI brittle in environments with shallow
 // or partially fetched histories.

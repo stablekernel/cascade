@@ -264,7 +264,7 @@ func TestInlineRunOmittedAttributesUnchanged(t *testing.T) {
 
 // TestReusableWorkflowCallbackHasNoJobAttributes asserts that a reusable
 // workflow: callback (jobs.<id>.uses) never carries runs-on / permissions /
-// concurrency on the job — GHA forbids them there and schema validation rejects
+// concurrency on the job. GHA forbids them there and schema validation rejects
 // runs_on/concurrency on reusable callbacks. Only permissions is structurally
 // accepted on the config, but the generator must not emit any of the three on a
 // uses: job.

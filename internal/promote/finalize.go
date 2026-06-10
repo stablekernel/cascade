@@ -155,7 +155,7 @@ func (f *Finalizer) updateState() {
 
 		for _, promo := range f.promotionResult.Promotions {
 			if promo.Environment == "" || promo.Environment == "release" {
-				// Skip the release marker — it tracks publish state, not deploys.
+				// Skip the release marker; it tracks publish state, not deploys.
 				continue
 			}
 			if promo.SHA == "" {

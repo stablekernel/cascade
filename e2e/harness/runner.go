@@ -498,7 +498,7 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	// This ensures deleted tags are properly removed from tracking
 	r.ctx.ClearTags()
 
-	// An RC is a draft only while it's exclusive to the first env (e.g., dev) —
+	// An RC is a draft only while it's exclusive to the first env (e.g., dev).
 	// once it's been promoted into any later env, it's "blessed" and the
 	// workflow's prerelease step would have flipped its draft flag. Collect
 	// the set of RC versions that are present in any non-firstEnv state.
@@ -562,7 +562,7 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	}
 
 	// Clear ctx state so deletions in the manifest (e.g. finalize wiping
-	// state[prerelease] on publish) are reflected — otherwise stale entries
+	// state[prerelease] on publish) are reflected. Otherwise stale entries
 	// from prior steps make wiped: true assertions fail.
 	r.ctx.ClearState()
 
@@ -593,7 +593,7 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 // readPromotedRCVersions reads the manifest and returns the set of RC versions
 // that appear in any state[env] beyond the first env. Once an RC has been
 // promoted past dev (the first env), the workflow's prerelease step would have
-// flipped its draft flag — so the harness should treat it as non-draft.
+// flipped its draft flag, so the harness should treat it as non-draft.
 func (r *Runner) readPromotedRCVersions(ctx context.Context, envs []string) map[string]bool {
 	promoted := make(map[string]bool)
 	if len(envs) < 2 {
@@ -698,7 +698,7 @@ func (r *Runner) assertStep(ctx context.Context, step *Step, preState *Execution
 // Returns errors for missing-substring or unexpected-substring matches.
 func (r *Runner) assertWorkflowFile(ctx context.Context, expect WorkflowFileExpect) []error {
 	if r.harness == nil || r.harness.act == nil {
-		// In unit-test mode there's no act container — skip silently.
+		// In unit-test mode there's no act container; skip silently.
 		return nil
 	}
 	if expect.Path == "" {

@@ -89,7 +89,7 @@ func TestGenerator_OwnedJobTimeoutConfigurable(t *testing.T) {
 }
 
 // TestGenerator_TimeoutNotOnReusableCallback asserts a reusable-workflow
-// callback (jobs.<id>.uses) does NOT receive the owned-job timeout — the called
+// callback (jobs.<id>.uses) does NOT receive the owned-job timeout. The called
 // workflow owns its own timeout. Inline run: callbacks, which are cascade-owned,
 // DO get it.
 func TestGenerator_TimeoutNotOnReusableCallback(t *testing.T) {
@@ -100,9 +100,9 @@ func TestGenerator_TimeoutNotOnReusableCallback(t *testing.T) {
 		TrunkBranch:  "main",
 		Environments: []string{"dev"},
 		Builds: []config.BuildConfig{
-			// Reusable-workflow callback (uses:) — no timeout-minutes.
+			// Reusable-workflow callback (uses:): no timeout-minutes.
 			{Name: "reusable", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
-			// Inline run: callback — cascade-owned, gets the default.
+			// Inline run: callback: cascade-owned, gets the default.
 			{Name: "inline", Run: "go test ./...", Triggers: []string{"src/**"}},
 		},
 	}
@@ -177,7 +177,7 @@ func TestGenerator_OptionalDependsOnAddsNeedsWithoutGating(t *testing.T) {
 	assert.Regexp(t, `needs:.*build-app`, deploy, "hard dep in needs:")
 	assert.Regexp(t, `needs:.*build-migrations`, deploy, "optional dep in needs: for ordering")
 
-	// if: must skip-gate on the HARD dep but NOT on the optional dep — a skipped
+	// if: must skip-gate on the HARD dep but NOT on the optional dep. A skipped
 	// optional dep must not skip this job.
 	assert.Contains(t, deploy, "needs.build-app.result == 'success'",
 		"hard depends_on still contributes a skip-gate")

@@ -1,6 +1,6 @@
 <h1 align="center">cascade</h1>
 
-<!-- TODO(image): logo — place at docs/images/logo.png once generated -->
+<!-- TODO(image): logo. place at docs/images/logo.png once generated -->
 <!-- ![cascade logo](docs/images/logo.png) -->
 
 <!-- Row 1: CI/quality -->
@@ -31,7 +31,7 @@
 
 ## How it works
 
-<!-- TODO(image): hero/architecture diagram — place at docs/images/architecture.png once generated -->
+<!-- TODO(image): hero/architecture diagram. place at docs/images/architecture.png once generated -->
 <!-- ![cascade architecture](docs/images/architecture.png) -->
 
 The **manifest** (`.github/manifest.yaml`) is the single source of truth. It holds both the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once; after that the generated workflows own their own execution.
@@ -64,7 +64,7 @@ Merge to trunk
 └─────────────────────────────────────────────────────────────┘
 ```
 
-<!-- TODO(image): promote/cascade flow diagram — place at docs/images/promote-flow.png once generated -->
+<!-- TODO(image): promote/cascade flow diagram. place at docs/images/promote-flow.png once generated -->
 <!-- ![cascade promotion flow](docs/images/promote-flow.png) -->
 
 ---
@@ -146,20 +146,20 @@ cascade is a metadata courier. You construct the registry and deploy operations 
 
 cascade generates workflows that handle the orchestration layer. Your callback workflows handle the domain logic. The manifest gives you control over:
 
-- **Change detection** — builds and deploys only run when their declared `triggers` match changed paths
-- **Dependency ordering** — `depends_on` chains builds and deploys in the right order
-- **Matrix builds** — fan out a single build over a matrix of inputs
-- **Per-job runner selection** — `runs_on` at the config or per-build/deploy level
-- **Concurrency control** — configurable group and cancel-in-progress on orchestrate, promote, release, and external-update workflows
-- **Extra triggers** — attach `schedule`, `repository_dispatch`, `workflow_run`, and `merge_group` events to orchestration
-- **Dispatch inputs** — expose operator-facing manual-run inputs on the generated `workflow_dispatch`
-- **PR plan preview** — a comment on each PR shows which builds and deploys would run
-- **Merge queue lane** — a dedicated gate job runs before merge to protect trunk
-- **Action pinning** — `pin_mode: sha` emits pinned SHA references for all cascade-managed action calls; override individual actions via `action_pins`
-- **Breaking-change gate** — `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless explicitly overridden
-- **Artifact passing** — `artifact_id` output from build callbacks is stored in state and forwarded to deploys and the publish callback
-- **Publish callback** — after a release is published, a separate workflow call lets you retag RC artifacts in your registry
-- **Schema version enforcement** — `schema_version` on the manifest is checked on every CLI invocation; incompatible manifests are rejected with a clear error
+- **Change detection**: builds and deploys run only when their declared `triggers` match changed paths.
+- **Dependency ordering**: `depends_on` chains builds and deploys in the right order.
+- **Matrix builds**: fan out a single build over a matrix of inputs.
+- **Per-job runner selection**: set `runs_on` at the config or per-build/deploy level.
+- **Concurrency control**: configurable group and cancel-in-progress on orchestrate, promote, release, and external-update workflows.
+- **Extra triggers**: attach `schedule`, `repository_dispatch`, `workflow_run`, and `merge_group` events to orchestration.
+- **Dispatch inputs**: expose operator-facing manual-run inputs on the generated `workflow_dispatch`.
+- **PR plan preview**: a comment on each PR shows which builds and deploys would run.
+- **Merge queue lane**: a dedicated gate job runs before merge to protect trunk.
+- **Action pinning**: `pin_mode: sha` emits pinned SHA references for all cascade-managed action calls. Override individual actions via `action_pins`.
+- **Breaking-change gate**: `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless you override them.
+- **Artifact passing**: the `artifact_id` output from build callbacks is stored in state and forwarded to deploys and the publish callback.
+- **Publish callback**: once a release is published, a separate workflow call lets you retag RC artifacts in your registry.
+- **Schema version enforcement**: every CLI invocation checks `schema_version` on the manifest and rejects incompatible manifests with a clear error.
 
 For a no-environment project (library or CLI), omit `environments` entirely. Commits produce RC pre-releases; a `promote` dispatch publishes the final release.
 
@@ -250,11 +250,11 @@ Full flag reference: [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Roadmap to stable
 
-cascade is functional and self-hosted — the releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas:
+cascade is functional and self-hosted. Its own releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas.
 
-**Schema coverage** — a handful of GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These are on the direct path to v1.0.0.
+**Schema coverage.** A few GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These sit on the direct path to v1.0.0.
 
-**Hardening** — schema version enforcement (shipped), compatibility docs ([docs/versioning.md](docs/versioning.md)), and further e2e coverage to confirm that the generated workflows behave correctly under edge cases (empty builds, cross-repo coordination, rollback to N-1).
+**Hardening.** This covers schema version enforcement (shipped), compatibility docs ([docs/versioning.md](docs/versioning.md)), and more e2e coverage. The added tests confirm that the generated workflows behave correctly under edge cases such as empty builds, cross-repo coordination, and rollback to N-1.
 
 The manifest schema field shapes were frozen in v0.1.0 as the v1 contract baseline. Minor versions between now and v1.0.0 may add new optional fields; no existing fields will be removed or renamed before v1.0.0.
 
@@ -266,10 +266,10 @@ Open work is tracked in [GitHub Issues](https://github.com/stablekernel/cascade/
 
 cascade follows these conventions in its own codebase and in the generated workflows it produces:
 
-- **Additive manifest changes** — new fields are always optional with sensible defaults; existing manifest files continue to work across minor version bumps
-- **Conventional commits** — commit messages follow `type: subject` (e.g., `feat:`, `fix:`, `docs:`); the changelog generator reads this format
-- **Callback isolation** — generated workflows call your workflows via `workflow_call`; cascade never reaches into your callback logic
-- **Metadata courier** — cascade passes artifact identifiers and versions between stages; it never touches your container registry, package registry, or deployment target directly
+- **Additive manifest changes**: new fields are always optional with sensible defaults, so existing manifest files keep working across minor version bumps.
+- **Conventional commits**: commit messages follow `type: subject` (for example `feat:`, `fix:`, `docs:`), and the changelog generator reads this format.
+- **Callback isolation**: generated workflows call your workflows via `workflow_call`, and cascade never reaches into your callback logic.
+- **Metadata courier**: cascade passes artifact identifiers and versions between stages. It never touches your container registry, package registry, or deployment target directly.
 
 ---
 

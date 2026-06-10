@@ -167,8 +167,8 @@ func (c *TrunkConfig) GetSchemaVersion() int {
 // validateSchemaVersion is the testable core of the compatibility check. It
 // evaluates v against the provided min and current bounds and returns a warning
 // string (non-empty means warn-and-accept) or an error (means reject). Callers
-// that need to exercise the full matrix — including branches that are currently
-// unreachable when min == current — should call this directly.
+// that need to exercise the full matrix (including branches that are currently
+// unreachable when min == current) should call this directly.
 //
 // Rules:
 //
@@ -189,7 +189,7 @@ func validateSchemaVersion(v, min, current int) (warning string, err error) {
 	case v > current:
 		return "", fmt.Errorf(
 			"manifest requires schema version %d but this CLI supports schema versions up to %d; "+
-				"upgrade the CLI (cli_version) — see docs/versioning.md", v, current)
+				"upgrade the CLI (cli_version); see docs/versioning.md", v, current)
 	case v < min:
 		return "", fmt.Errorf(
 			"manifest schema version %d is no longer supported (minimum %d); "+
@@ -340,7 +340,7 @@ type ValidateConfig struct {
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
 	// The validate gate is a singleton, so the spec scopes optional_depends_on
-	// (§2.11) and auto_commits (§5.5) to builds/deploys only — not here.
+	// (§2.11) and auto_commits (§5.5) to builds/deploys only; not here.
 	Secrets     *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Permissions map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	RunsOn      *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
