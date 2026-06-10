@@ -260,6 +260,8 @@ func (g *Generator) discoverOutputsAndInputs() error {
 		jobID    string
 		name     string
 		workflow string
+		run      string
+		inputs   map[string]interface{}
 	}{}
 
 	if g.config.Validate != nil {
@@ -267,7 +269,9 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-		}{"validate", "validate", g.config.Validate.Workflow})
+			run      string
+			inputs   map[string]interface{}
+		}{"validate", "validate", g.config.Validate.Workflow, g.config.Validate.Run, g.config.Validate.Inputs})
 	}
 	for _, b := range g.config.Builds {
 		jobID := config.JobID(config.CallbackTypeBuild, b.Name)
@@ -275,7 +279,9 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-		}{jobID, b.Name, b.Workflow})
+			run      string
+			inputs   map[string]interface{}
+		}{jobID, b.Name, b.Workflow, b.Run, b.Inputs})
 	}
 	for _, d := range g.config.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
@@ -283,10 +289,21 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-		}{jobID, d.Name, d.Workflow})
+			run      string
+			inputs   map[string]interface{}
+		}{jobID, d.Name, d.Workflow, d.Run, d.Inputs})
 	}
 
 	for _, cb := range allCallbacks {
+		// Inline run: callbacks have no reusable-workflow file. Their inputs come
+		// from the manifest (declared inputs keys); they emit no outputs.
+		if cb.run != "" {
+			g.outputs[cb.jobID] = nil
+			g.inputs[cb.jobID] = inputKeys(cb.inputs)
+			g.requiredInputs[cb.jobID] = nil
+			continue
+		}
+
 		path := filepath.Join(g.baseDir, cb.workflow)
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -535,17 +552,116 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		g.writeStrategyBlock(sb, info.Matrix)
 	}
 
-	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
+	// Inline run: callback — emit a cascade-owned job with an inline run: step
+	// instead of a jobs.<id>.uses reusable-workflow call. Standard inputs reach
+	// the step as env: variables rather than reusable-workflow with: inputs.
+	if info.Run != "" {
+		g.writeInlineRunBody(sb, info)
+	} else {
+		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 
-	// with: pass outputs from dependencies
-	g.writeWithInputs(sb, info)
+		// with: pass outputs from dependencies
+		g.writeWithInputs(sb, info)
 
-	sb.WriteString("    secrets: inherit\n\n")
+		sb.WriteString("    secrets: inherit\n\n")
+	}
 
 	// Generate retry jobs if retries > 0
 	for i := 1; i <= info.Retries; i++ {
 		g.writeRetryJob(sb, info, workflow, i)
 	}
+}
+
+// writeInlineRunBody emits the runs-on / steps body of a cascade-owned inline
+// run: callback job. The standard inputs that a reusable-workflow callback would
+// receive via with: are surfaced to the inline step as env: variables (uppercased,
+// e.g. ENVIRONMENT, SHA, and any dependency outputs the callback declares).
+func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
+	sb.WriteString("    runs-on: ubuntu-latest\n")
+	sb.WriteString("    steps:\n")
+	fmt.Fprintf(sb, "      - name: %s\n", info.DisplayName)
+
+	envVars := g.inlineEnvInputs(info)
+	if len(envVars) > 0 {
+		sb.WriteString("        env:\n")
+		for _, ev := range envVars {
+			sb.WriteString(ev + "\n")
+		}
+	}
+
+	shell := info.Shell
+	if shell == "" {
+		shell = "bash"
+	}
+	fmt.Fprintf(sb, "        shell: %s\n", shell)
+
+	sb.WriteString("        run: |\n")
+	for _, line := range strings.Split(strings.TrimRight(info.Run, "\n"), "\n") {
+		fmt.Fprintf(sb, "          %s\n", line)
+	}
+	sb.WriteString("\n")
+}
+
+// inlineEnvInputs returns the env: lines that surface the standard callback
+// inputs (environment, sha, and declared dependency outputs) to an inline run:
+// step. It mirrors writeWithInputs but renders to env: rather than with:.
+func (g *Generator) inlineEnvInputs(info CallbackInfo) []string {
+	deps := g.graph.GetDirectDependencies(info.JobID)
+
+	var envVars []string
+	// Track emitted env-var names so a dependency output named "sha" doesn't
+	// emit a second SHA: alongside the standard one (GHA rejects duplicate keys).
+	seen := map[string]bool{}
+	emit := func(name, value string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		envVars = append(envVars, fmt.Sprintf("          %s: %s", name, value))
+	}
+
+	// Only pass environment if there are environments configured
+	if len(g.config.Environments) > 0 {
+		emit("ENVIRONMENT", fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0]))
+	}
+
+	// Optional standard inputs - only passed if callback declares them
+	if g.jobHasInput(info.JobID, "sha") {
+		emit("SHA", "${{ needs.setup.outputs.head_sha }}")
+	}
+
+	// For build callbacks with a matrix, surface each dimension's current value.
+	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
+		keys := make([]string, 0, len(info.Matrix.Dimensions))
+		for k := range info.Matrix.Dimensions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if g.jobHasInput(info.JobID, k) {
+				emit(envVarName(k), fmt.Sprintf("${{ matrix.%s }}", k))
+			}
+		}
+	}
+
+	// Pass outputs from dependencies the callback declares as inputs.
+	for _, depJobID := range deps {
+		depInfo := g.graph.Nodes[depJobID]
+		for _, out := range g.outputs[depInfo.JobID] {
+			if g.jobHasInput(info.JobID, out) {
+				emit(envVarName(out), fmt.Sprintf("${{ needs.%s.outputs.%s }}", depJobID, out))
+			}
+		}
+	}
+
+	return envVars
+}
+
+// envVarName converts an input key to a shell-safe env-var name: uppercased with
+// hyphens translated to underscores (e.g. "image-tag" -> "IMAGE_TAG", reachable
+// in the run step as $IMAGE_TAG).
+func envVarName(key string) string {
+	return strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
 }
 
 // writeStrategyBlock emits the GHA strategy: block for a build matrix.
@@ -662,6 +778,21 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 	}
 }
 
+// inputKeys returns the sorted keys of a manifest inputs map. Used to seed the
+// declared-input set for inline run: callbacks, which have no reusable-workflow
+// file to parse inputs from.
+func inputKeys(m map[string]interface{}) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // jobHasInput checks if a job declares a specific input
 func (g *Generator) jobHasInput(jobID, inputName string) bool {
 	for _, input := range g.inputs[jobID] {
@@ -738,6 +869,10 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	fmt.Fprintf(sb, "    if: needs.%s.result == 'failure'\n", prevJobName)
 	if info.TimeoutMinutes > 0 {
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
+	}
+	if info.Run != "" {
+		g.writeInlineRunBody(sb, info)
+		return
 	}
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 	g.writeWithInputs(sb, info)

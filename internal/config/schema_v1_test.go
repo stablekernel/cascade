@@ -618,15 +618,40 @@ external:
 			t.Fatalf("expected external runs_on rejection, got %v", errs)
 		}
 	})
-	t.Run("neither workflow nor run rejected", func(t *testing.T) {
+	t.Run("missing workflow rejected", func(t *testing.T) {
 		cfg := parseInline(t, `
 external:
   - repo: org/infra
     deploys:
       - name: cdk
 `)
-		if errs := Validate(cfg); !hasErrContaining(errs, "one of workflow or run is required") {
-			t.Fatalf("expected external missing-callback rejection, got %v", errs)
+		if errs := Validate(cfg); !hasErrContaining(errs, "workflow is required") {
+			t.Fatalf("expected external missing-workflow rejection, got %v", errs)
+		}
+	})
+	t.Run("run rejected on external deploy", func(t *testing.T) {
+		cfg := parseInline(t, `
+external:
+  - repo: org/infra
+    deploys:
+      - name: cdk
+        run: echo deploy
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "external deploys are reusable-workflow only; run is not supported") {
+			t.Fatalf("expected external run rejection, got %v", errs)
+		}
+	})
+	t.Run("shell rejected on external deploy", func(t *testing.T) {
+		cfg := parseInline(t, `
+external:
+  - repo: org/infra
+    deploys:
+      - name: cdk
+        workflow: org/infra/.github/workflows/d.yaml@main
+        shell: bash
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "external deploys are reusable-workflow only; shell is not supported") {
+			t.Fatalf("expected external shell rejection, got %v", errs)
 		}
 	})
 }

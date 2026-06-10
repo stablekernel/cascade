@@ -59,6 +59,24 @@ func validateWorkflowRunXOR(prefix, workflow, run, shell string) []string {
 	return errs
 }
 
+// validateExternalDeployWorkflowOnly enforces that external deploys are
+// reusable-workflow only. Inline run: callbacks are emitted as cascade-owned
+// jobs in the primary repo; an external deploy resolves to a workflow in the
+// external repo, so it must declare workflow: and cannot use run:/shell:.
+func validateExternalDeployWorkflowOnly(prefix, workflow, run, shell string) []string {
+	var errs []string
+	if run != "" {
+		errs = append(errs, fmt.Sprintf("%s: external deploys are reusable-workflow only; run is not supported (set workflow instead)", prefix))
+	}
+	if shell != "" {
+		errs = append(errs, fmt.Sprintf("%s: external deploys are reusable-workflow only; shell is not supported", prefix))
+	}
+	if run == "" && workflow == "" {
+		errs = append(errs, fmt.Sprintf("%s: workflow is required", prefix))
+	}
+	return errs
+}
+
 // validateJobControlFields rejects job-control fields that GHA does not accept on
 // a reusable-workflow (jobs.<id>.uses) callback. runs_on and concurrency apply
 // cleanly only to inline run: callbacks and cascade-owned jobs.
