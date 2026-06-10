@@ -1514,3 +1514,45 @@ func TestPromoteGenerator_NoPublishCallbackWhenNotConfigured(t *testing.T) {
 	// No publish step when not configured
 	assert.NotContains(t, content, "Publish Artifacts")
 }
+
+// TestPromoteGenerator_HasConcurrencyBlock asserts the generated promote workflow
+// declares a top-level concurrency: block. Without it, two concurrent promote
+// dispatches targeting the same mode race on state pushes and RC tag writes (#31).
+// Default group is per-mode so promotes targeting different cascade targets do not
+// block each other; cancel-in-progress is false because dropping a mid-flight
+// promote leaves durable env state partially written.
+func TestPromoteGenerator_HasConcurrencyBlock(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "staging", "prod"},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "\nconcurrency:\n", "promote workflow must declare top-level concurrency:")
+	assert.Contains(t, content, "github.workflow", "concurrency group must scope by workflow name")
+	assert.Contains(t, content, "github.event.inputs.mode", "concurrency group must scope by promotion mode")
+	assert.Contains(t, content, "cancel-in-progress: false", "promote default must queue, not cancel")
+}
+
+// TestPromoteGenerator_ConcurrencyOverride asserts that a manifest-level
+// concurrency config is forwarded to the generated promote workflow.
+func TestPromoteGenerator_ConcurrencyOverride(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		Concurrency: &config.ConcurrencyConfig{
+			Group:            "my-custom-promote",
+			CancelInProgress: true,
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "group: my-custom-promote", "custom group must propagate to promote")
+	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to promote")
+}

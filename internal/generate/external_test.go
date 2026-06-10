@@ -522,3 +522,65 @@ func TestExternalUpdateGenerator_NotPrimary(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured as primary")
 }
+
+// TestExternalUpdateGenerator_HasConcurrencyBlock asserts the generated
+// external-update workflow declares a top-level concurrency: block. Without it,
+// two dispatches for the same source repo and environment race on manifest state
+// pushes, producing non-fast-forward failures (#31). Default group is per
+// source_repo+environment so updates for different envs do not block each other;
+// cancel-in-progress is false because a dropped mid-flight write leaves the
+// manifest in an inconsistent state.
+func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "master",
+		Environments: []string{"dev", "test", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "\nconcurrency:\n", "external-update workflow must declare top-level concurrency:")
+	assert.Contains(t, content, "github.workflow", "concurrency group must scope by workflow name")
+	assert.Contains(t, content, "inputs.source_repo", "concurrency group must scope by source repo")
+	assert.Contains(t, content, "inputs.environment", "concurrency group must scope by environment")
+	assert.Contains(t, content, "cancel-in-progress: false", "external-update default must queue, not cancel")
+}
+
+// TestExternalUpdateGenerator_ConcurrencyOverride asserts that a manifest-level
+// concurrency config is forwarded to the generated external-update workflow.
+func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "master",
+		Environments: []string{"dev", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+		Concurrency: &config.ConcurrencyConfig{
+			Group:            "my-custom-external",
+			CancelInProgress: true,
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "group: my-custom-external", "custom group must propagate to external-update")
+	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to external-update")
+}

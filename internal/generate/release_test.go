@@ -248,3 +248,45 @@ func TestReleaseGenerator_WithCLIVersion(t *testing.T) {
 	assert.Contains(t, content, "setup-cli@v1.0.0")
 	assert.Contains(t, content, "version: v1.0.0")
 }
+
+// TestReleaseGenerator_HasConcurrencyBlock asserts the generated release workflow
+// declares a top-level concurrency: block. Without it, two concurrent release
+// dispatches for the same action race on GitHub Release writes and tag pushes (#31).
+// Default group is per-release_action so a create-draft and a release run do not
+// block each other; cancel-in-progress is false because a partially-executed release
+// action may already have pushed a tag that a cancelled run leaves dangling.
+func TestReleaseGenerator_HasConcurrencyBlock(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+	}
+
+	gen := NewReleaseGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "\nconcurrency:\n", "release workflow must declare top-level concurrency:")
+	assert.Contains(t, content, "github.workflow", "concurrency group must scope by workflow name")
+	assert.Contains(t, content, "github.event.inputs.release_action", "concurrency group must scope by release action")
+	assert.Contains(t, content, "cancel-in-progress: false", "release default must queue, not cancel")
+}
+
+// TestReleaseGenerator_ConcurrencyOverride asserts that a manifest-level
+// concurrency config is forwarded to the generated release workflow.
+func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+		Concurrency: &config.ConcurrencyConfig{
+			Group:            "my-custom-release",
+			CancelInProgress: true,
+		},
+	}
+
+	gen := NewReleaseGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "group: my-custom-release", "custom group must propagate to release")
+	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to release")
+}
