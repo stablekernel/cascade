@@ -1,0 +1,111 @@
+name: "Single Environment Happy Path"
+description: |
+  Repository with one environment (e.g. a library or CLI project that publishes
+  directly to prod). Exercises the ReleaseGenerator code path; the generated
+  promote.yaml holds a release workflow rather than a multi-env promote.
+
+  Also asserts that the generated release workflow's Update Latest Release State
+  step contains the fetch+reset+apply retry loop (#102), mirroring the
+  orchestrate.yaml push-retry assertion in 08-state-push-retry.yaml.
+
+config:
+  trunk_branch: main
+  environments: [prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  # Step 1: Push first commit to trunk → orchestrate creates a draft RC at prod
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add initial feature"
+      files:
+        src/app.go: |
+          package main
+          func main() {
+            println("Hello v0.1.0")
+          }
+
+  - name: "Orchestrate after first commit"
+    action: orchestrate
+    expect:
+      state:
+        prod:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]
+      # The harness generates the release workflow via the CLI when
+      # StageRepoFromConfig runs. Assert the generated promote.yaml
+      # (which holds the ReleaseGenerator output for single-env repos)
+      # contains the push-retry loop for the Update Latest Release State step.
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "Update Latest Release State"
+            - "apply_release_state_edits"
+            - "for attempt in 1 2 3 4 5"
+            - "git fetch origin"
+            - "git reset --hard"
+
+  # Step 2: Push second commit → orchestrate updates draft RC
+  - name: "Second feature commit"
+    action: commit
+    commit:
+      message: "feat: add second feature"
+      files:
+        src/feature.go: |
+          package main
+          func Feature() string {
+            return "feature2"
+          }
+
+  - name: "Orchestrate after second commit"
+    action: orchestrate
+    expect:
+      state:
+        prod:
+          sha: commit2
+          version: "v0.1.0-rc.1"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.1"
+          prerelease: true
+          draft: true
+          changelog:
+            - "feat: add second feature"
+            - "feat: add initial feature"
+      tags:
+        exist: ["v0.1.0-rc.0", "v0.1.0-rc.1"]
+
+  # Step 3: Promote prod → published release v0.1.0
+  - name: "Promote to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit2
+          version: "v0.1.0"
+        prod:
+          wiped: true
+      releases:
+        - tag: "v0.1.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0"]
+        deleted: ["v0.1.0-rc.0", "v0.1.0-rc.1"]
