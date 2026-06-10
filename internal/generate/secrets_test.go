@@ -138,6 +138,39 @@ func TestOrchestrateCallbackJob_ExplicitSecretsMap(t *testing.T) {
 	assert.NotContains(t, result, "    secrets: inherit\n")
 }
 
+// TestOrchestrateDeployCallbackJob_InheritSecrets verifies that a reusable-workflow
+// deploy with no explicit secrets config emits "secrets: inherit".
+func TestOrchestrateDeployCallbackJob_InheritSecrets(t *testing.T) {
+	cfg, wfPath := orchestrateCfgWithDeploySecrets(nil)
+	tmpDir := setupWorkflowDir(t, wfPath)
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "    secrets: inherit\n")
+	assert.NotContains(t, result, "    secrets:\n      ")
+}
+
+// TestOrchestrateDeployCallbackJob_ExplicitSecretsMap verifies that a reusable-
+// workflow deploy with an explicit secrets map emits the per-entry block instead
+// of "secrets: inherit".
+func TestOrchestrateDeployCallbackJob_ExplicitSecretsMap(t *testing.T) {
+	cfg, wfPath := orchestrateCfgWithDeploySecrets(&config.SecretsConfig{
+		Map: map[string]string{
+			"DEPLOY_TOKEN": "MY_DEPLOY_TOKEN",
+		},
+	})
+	tmpDir := setupWorkflowDir(t, wfPath)
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "    secrets:\n      DEPLOY_TOKEN: ${{ secrets.MY_DEPLOY_TOKEN }}\n")
+	assert.NotContains(t, result, "    secrets: inherit\n")
+}
+
 // TestOrchestrateCallbackJob_InlineRunUnaffected verifies that an inline-run
 // callback (run: ...) does not emit any secrets: key at all — inline jobs are
 // cascade-owned, not reusable-workflow calls.
