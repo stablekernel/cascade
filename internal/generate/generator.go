@@ -1019,6 +1019,12 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		inputs = append(inputs, "      sha: ${{ needs.setup.outputs.head_sha }}")
 	}
 
+	// When a callback opts in to dry-run emulation, pass the dry_run dispatch
+	// input through so the callback can emulate internally instead of being skipped.
+	if info.SupportsDryRun {
+		inputs = append(inputs, "      dry_run: ${{ inputs.dry_run }}")
+	}
+
 	// For build callbacks with a matrix, pass each dimension's current value to
 	// the reusable workflow via `with:` so the callback can act on it. Dimension
 	// keys are passed through only when the callback workflow declares a matching

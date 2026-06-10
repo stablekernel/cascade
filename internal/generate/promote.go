@@ -735,7 +735,13 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			// sha/image_tag inputs reach the step as env: vars.
 			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
-			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			if d.SupportsDryRun {
+				// Callback handles dry-run internally: run it regardless of dry_run,
+				// and let the inline body surface DRY_RUN so the script can emulate.
+				fmt.Fprintf(sb, "    if: ${{ contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			} else {
+				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			}
 			// environment: — wires the job to a GitHub Environment so that the
 			// environment's protection rules apply when gha_environment is configured
 			// for any env. The target env is resolved at runtime by preflight.
@@ -753,13 +759,24 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			// Matrix-based deploy job
 			fmt.Fprintf(sb, "    name: Deploy %s (${{ matrix.environment }})\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
-			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
+			if d.SupportsDryRun {
+				// Callback handles dry-run internally: run regardless of dry_run input.
+				fmt.Fprintf(sb, "    if: ${{ needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
+			} else {
+				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
+			}
 			sb.WriteString("    strategy:\n")
 			sb.WriteString("      fail-fast: false\n")
 			sb.WriteString("      matrix:\n")
 			fmt.Fprintf(sb, "        include: ${{ fromJSON(needs.preflight.outputs.deploy_%s_matrix) }}\n", outputName)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
+
+			// When the callback opts in to dry-run passthrough, forward the
+			// dispatch input so it can emulate internally.
+			if d.SupportsDryRun {
+				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+			}
 
 			// Passthrough-expression inputs (e.g. ${{ vars.X }}) are excluded
 			// from the matrix JSON and emitted verbatim so GitHub Actions
@@ -789,7 +806,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			// Single deploy job (backwards compatibility)
 			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
-			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			if d.SupportsDryRun {
+				// Callback handles dry-run internally: run regardless of dry_run input.
+				fmt.Fprintf(sb, "    if: ${{ contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			} else {
+				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			}
 			// environment: — wires the job to a GitHub Environment so that the
 			// environment's protection rules apply when gha_environment is configured
 			// for any env. The target env is resolved at runtime by preflight.
@@ -804,6 +826,11 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			if g.deployHasInput(d.Name, "image_tag") {
 				sb.WriteString("      image_tag: ${{ needs.preflight.outputs.source_image_tag }}\n")
 			}
+			// When the callback opts in to dry-run passthrough, forward the
+			// dispatch input so it can emulate internally.
+			if d.SupportsDryRun {
+				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+			}
 		}
 		sb.WriteString("    secrets: inherit\n\n")
 	}
@@ -814,7 +841,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		fmt.Fprintf(sb, "  deploy-%s-prod:\n", d.Name)
 		fmt.Fprintf(sb, "    name: Deploy %s (%s)\n", d.Name, finalEnv)
 		sb.WriteString("    needs: [preflight, promote]\n")
-		sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		if d.SupportsDryRun {
+			// Callback handles dry-run internally: run regardless of dry_run input.
+			sb.WriteString("    if: ${{ needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		} else {
+			sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		}
 		// environment: — the prod deploy job always targets a single known env
 		// (the final environment in the pipeline), so we can resolve the GitHub
 		// Environment name statically from gha_environment when configured.
@@ -835,6 +867,11 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		// Pass image_tag if the deploy workflow accepts it
 		if g.deployHasInput(d.Name, "image_tag") {
 			sb.WriteString("      image_tag: ${{ needs.preflight.outputs.prod_version }}\n")
+		}
+		// When the callback opts in to dry-run passthrough, forward the
+		// dispatch input so it can emulate internally.
+		if d.SupportsDryRun {
+			sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
 		}
 		sb.WriteString("    secrets: inherit\n\n")
 	}
@@ -863,6 +900,11 @@ func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.D
 	fmt.Fprintf(sb, "          SHA: %s\n", sha)
 	if g.deployHasInput(d.Name, "image_tag") {
 		fmt.Fprintf(sb, "          IMAGE_TAG: %s\n", imageTag)
+	}
+	// When the callback opts in to dry-run emulation, surface the dispatch input
+	// as DRY_RUN so the inline script can branch on it.
+	if d.SupportsDryRun {
+		sb.WriteString("          DRY_RUN: ${{ github.event.inputs.dry_run }}\n")
 	}
 
 	shell := d.Shell
