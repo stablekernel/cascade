@@ -215,8 +215,10 @@ func TestGenerator_CallbackTimeoutMinutes(t *testing.T) {
 }
 
 // TestGenerator_CallbackTimeoutOmittedWhenZero asserts no timeout-minutes is
-// emitted when the field is unset/zero — fall back to the GHA default rather
-// than emitting an explicit `timeout-minutes: 0` (which would be invalid).
+// emitted on a reusable-workflow callback (jobs.<id>.uses) when its
+// timeout_minutes is unset — those callers own their own timeout. Cascade-owned
+// jobs (setup/finalize) still receive the owned-job default (#37), so the check
+// is scoped to the callback job block, not the whole workflow.
 func TestGenerator_CallbackTimeoutOmittedWhenZero(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
@@ -234,7 +236,8 @@ func TestGenerator_CallbackTimeoutOmittedWhenZero(t *testing.T) {
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.NotContains(t, result, "timeout-minutes:", "no timeout-minutes when unset")
+	block := jobBlock(t, result, "build-app")
+	assert.NotContains(t, block, "timeout-minutes:", "no timeout-minutes on reusable-workflow callback when unset")
 }
 
 func TestGenerator_GenerateWithRetries(t *testing.T) {

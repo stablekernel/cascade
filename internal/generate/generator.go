@@ -10,6 +10,14 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
+// DefaultJobTimeoutMinutes is the timeout-minutes applied to cascade-owned jobs
+// (setup, finalize, inline run: callbacks, retry shims, and passthrough
+// artifact helper jobs) when config.job_timeout_minutes is not set. GitHub
+// Actions defaults jobs to 360 minutes (6 hours); cascade's orchestration jobs
+// are meant to be fast, so a hung git push, CLI download, or API call should not
+// hold a runner for six hours. Override per manifest via config.job_timeout_minutes.
+const DefaultJobTimeoutMinutes = 30
+
 // normalizeWorkflowPath adds ./ prefix to local workflow paths (required by GitHub Actions)
 func normalizeWorkflowPath(path string) string {
 	if strings.HasPrefix(path, ".github/") {
@@ -65,6 +73,23 @@ func NewGenerator(cfg *config.TrunkConfig, baseDir string) *Generator {
 		inputs:         make(map[string][]string),
 		requiredInputs: make(map[string][]string),
 	}
+}
+
+// ownedJobTimeoutMinutes returns the timeout-minutes to emit on cascade-owned
+// jobs: the manifest's config.job_timeout_minutes when set (>0), otherwise
+// DefaultJobTimeoutMinutes. Reusable-workflow callbacks (jobs.<id>.uses) own
+// their own timeout and are never bounded by this value.
+func (g *Generator) ownedJobTimeoutMinutes() int {
+	if g.config.JobTimeoutMinutes > 0 {
+		return g.config.JobTimeoutMinutes
+	}
+	return DefaultJobTimeoutMinutes
+}
+
+// writeOwnedTimeout emits the timeout-minutes line for a cascade-owned job at
+// the given indent.
+func (g *Generator) writeOwnedTimeout(sb *strings.Builder, indent string) {
+	fmt.Fprintf(sb, "%stimeout-minutes: %d\n", indent, g.ownedJobTimeoutMinutes())
 }
 
 // getCLIRef returns the Git ref to use for the cascade actions.
@@ -476,6 +501,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("  setup:\n")
 	sb.WriteString("    name: Setup\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    outputs:\n")
 
 	// All outputs come from the CLI setup command
@@ -545,9 +571,14 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	fmt.Fprintf(sb, "  %s:\n", info.JobID)
 	fmt.Fprintf(sb, "    name: %s\n", info.DisplayName)
 
-	// needs: always includes setup, plus dependencies (already stored as job IDs)
+	// needs: always includes setup, plus hard dependencies (already stored as job
+	// IDs). optional_depends_on adds ordering-only edges: they go into needs: so
+	// this job waits for them, but they are excluded from the if: skip-gate below
+	// (#18) so a skipped optional dep does not skip this job.
+	hardDeps := g.graph.GetDirectDependencies(info.JobID)
 	needs := []string{"setup"}
-	needs = append(needs, g.graph.GetDirectDependencies(info.JobID)...)
+	needs = append(needs, hardDeps...)
+	needs = append(needs, g.graph.GetOptionalDependencies(info.JobID)...)
 	// When a pre-download job was emitted, make the callback depend on it so the
 	// downloaded artifacts are available in the runner's workspace.
 	if downloadPreJobID != "" {
@@ -555,11 +586,19 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	}
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
 
-	// if: condition based on run_policy
+	// if: condition based on run_policy. Optional deps are intentionally not
+	// passed here — they sequence the job without gating it.
 	g.writeIfCondition(sb, info, needs)
 
-	if info.TimeoutMinutes > 0 {
+	switch {
+	case info.TimeoutMinutes > 0:
+		// Explicit per-callback timeout always wins.
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
+	case info.Run != "":
+		// Inline run: callbacks are cascade-owned jobs, so they inherit the
+		// cascade-owned-job timeout default (#37). Reusable-workflow callbacks
+		// (jobs.<id>.uses) own their own timeout and get nothing here.
+		g.writeOwnedTimeout(sb, "    ")
 	}
 
 	// strategy: emitted only for build callbacks that declare matrix:
@@ -904,8 +943,12 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	fmt.Fprintf(sb, "    name: %s - Retry %d\n", info.DisplayName, retryNum)
 	fmt.Fprintf(sb, "    needs: [setup, %s]\n", prevJobName)
 	fmt.Fprintf(sb, "    if: needs.%s.result == 'failure'\n", prevJobName)
-	if info.TimeoutMinutes > 0 {
+	switch {
+	case info.TimeoutMinutes > 0:
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
+	case info.Run != "":
+		// Inline run: retry shims are cascade-owned (#37).
+		g.writeOwnedTimeout(sb, "    ")
 	}
 	if info.Run != "" {
 		g.writeInlineRunBody(sb, info)
@@ -935,6 +978,7 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	// This allows recording state even when callbacks fail
 	sb.WriteString("    if: always() && needs.setup.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
 
 	// Output all callback outputs (sorted for deterministic output)
 	// g.outputs is keyed by job ID (e.g., "build-app")
@@ -1472,6 +1516,7 @@ func (g *Generator) writePassthroughDownloadJob(sb *strings.Builder, info Callba
 	g.writeIfCondition(sb, info, needs)
 
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    steps:\n")
 	for _, src := range info.PassthroughArtifact.Downloads {
 		name := passthroughArtifactName(src)
@@ -1497,6 +1542,7 @@ func (g *Generator) writePassthroughUploadJob(sb *strings.Builder, info Callback
 	fmt.Fprintf(sb, "    needs: [%s]\n", info.JobID)
 	fmt.Fprintf(sb, "    if: needs.%s.result == 'success'\n", info.JobID)
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    steps:\n")
 	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
 	sb.WriteString("        uses: actions/upload-artifact@v4\n")
