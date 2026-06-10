@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/stablekernel/cascade/internal/log"
 )
 
 // NewCommand creates the parse-config command
@@ -41,6 +43,10 @@ func runParseConfig(configPath, outputFormat string) error {
 	}
 
 	errors := Validate(cfg)
+	warnings, _ := cfg.ValidateSchemaVersion()
+	for _, w := range warnings {
+		log.Warn("%s", w)
+	}
 
 	result := ParseResult{
 		Config:      *cfg,
@@ -48,6 +54,7 @@ func runParseConfig(configPath, outputFormat string) error {
 		DeployNames: GetDeployNames(cfg),
 		Valid:       len(errors) == 0,
 		Errors:      errors,
+		Warnings:    warnings,
 	}
 
 	return outputJSON(result)
