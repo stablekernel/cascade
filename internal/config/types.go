@@ -98,6 +98,7 @@ type TrunkConfig struct {
 	CLIVersion    string               `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
 	TagPrefix     string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
 	ReleaseToken  string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
+	StateToken    string               `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
 	ManifestFile  string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
 	ManifestKey   string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
 	ActionFolder  string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
@@ -253,6 +254,20 @@ func (c *TrunkConfig) GetReleaseToken() string {
 		return "${{ secrets.GITHUB_TOKEN }}"
 	}
 	return c.ReleaseToken
+}
+
+// GetStateToken returns the configured state-write token expression or
+// "${{ secrets.GITHUB_TOKEN }}" if not specified. This token is used to write
+// the manifest state back to the trunk branch. On real GitHub the write goes
+// through the REST API, so a token with permission to bypass branch protection
+// (for example a GitHub App or bot token) can be supplied here to update a
+// protected trunk and produce a verified, signed commit.
+// Users should provide the full GitHub Actions expression, e.g. "${{ secrets.MY_TOKEN }}".
+func (c *TrunkConfig) GetStateToken() string {
+	if c.StateToken == "" {
+		return "${{ secrets.GITHUB_TOKEN }}"
+	}
+	return c.StateToken
 }
 
 // GetManifestFile returns the configured manifest file path or ".github/manifest.yaml" if not specified

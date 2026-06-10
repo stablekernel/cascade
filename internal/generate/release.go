@@ -45,6 +45,14 @@ func (g *ReleaseGenerator) getReleaseTokenRef() string {
 	return g.config.GetReleaseToken()
 }
 
+// getStateTokenRef returns the token expression used to write manifest state to
+// the trunk branch. Users configure the full expression via the state_token
+// config option; it defaults to the release token expression so existing
+// manifests keep using a single token.
+func (g *ReleaseGenerator) getStateTokenRef() string {
+	return g.config.GetStateToken()
+}
+
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 // Converts absolute paths to repo-relative paths since workflows run in checked out repos.
 func (g *ReleaseGenerator) getManifestFilePath() string {
@@ -374,6 +382,7 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Update Latest Release State\n")
 	sb.WriteString("        if: ${{ github.event.inputs.dry_run != 'true' && needs.release.result == 'success' }}\n")
 	sb.WriteString("        env:\n")
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	sb.WriteString("          SEMVER_TAG: ${{ needs.preflight.outputs.semver_tag }}\n")
 	sb.WriteString("          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}\n")
 	sb.WriteString("        run: |\n")
@@ -398,32 +407,20 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          }\n")
 	sb.WriteString("          \n")
 
-	// Same retry-with-rebase pattern as the orchestrate finalize Update
-	// Manifest step (#101). release.yaml is workflow_dispatch-only so the
-	// race window is smaller than orchestrate's, but a concurrent
-	// orchestrate state push can still reject this push as non-fast-forward.
-	// See #102.
+	// Persist latest_release state to the trunk branch. On real GitHub this
+	// writes through the Contents REST API so the commit is signed (Verified)
+	// and can bypass branch protection with a capable token; in act/gitea it
+	// pushes with the existing fetch/reset/reapply/commit/push retry loop.
+	// release.yaml is workflow_dispatch-only so the race window is smaller than
+	// orchestrate's, but a concurrent orchestrate state write can still collide,
+	// so both paths retry on top of the latest tip.
 	sb.WriteString("          echo \"Updating latest_release state\"\n")
-	sb.WriteString("          for attempt in 1 2 3 4 5; do\n")
-	sb.WriteString("            git fetch origin \"$BRANCH\"\n")
-	sb.WriteString("            git reset --hard \"origin/$BRANCH\"\n")
-	sb.WriteString("            apply_release_state_edits\n")
-	sb.WriteString("            if git diff --quiet \"$MANIFEST_FILE\"; then\n")
-	sb.WriteString("              echo \"No latest_release state changes\"\n")
-	sb.WriteString("              exit 0\n")
-	sb.WriteString("            fi\n")
-	sb.WriteString("            git add \"$MANIFEST_FILE\"\n")
-	sb.WriteString("            git commit -m \"chore: update latest_release state\n\n")
-	sb.WriteString("            Version: $SEMVER_TAG\"\n")
-	sb.WriteString("            if git push origin \"HEAD:$BRANCH\"; then\n")
-	sb.WriteString("              echo \"Pushed latest_release state on attempt $attempt\"\n")
-	sb.WriteString("              exit 0\n")
-	sb.WriteString("            fi\n")
-	sb.WriteString("            echo \"Push attempt $attempt rejected (likely concurrent run); retrying...\" >&2\n")
-	sb.WriteString("            sleep $((RANDOM % 5 + 2))\n")
-	sb.WriteString("          done\n")
-	sb.WriteString("          echo \"::error::Failed to push latest_release state after 5 attempts\" >&2\n")
-	sb.WriteString("          exit 1\n")
+	writeStateCommitPush(sb, "          ", stateWriteParams{
+		applyFn:       "apply_release_state_edits",
+		commitMessage: "chore: update latest_release state\n\nVersion: $SEMVER_TAG",
+		noChangeLabel: "No latest_release state changes",
+		successLabel:  "Pushed latest_release state",
+	})
 
 	// Summary
 	sb.WriteString("      - name: Summary\n")

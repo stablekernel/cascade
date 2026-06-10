@@ -1,9 +1,11 @@
 package promote
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -241,14 +243,15 @@ func (f *Finalizer) WriteConfig() error {
 	return nil
 }
 
-// CommitAndPush commits the manifest changes and pushes to the remote repository.
-// This should be called after Run() to persist state changes to git.
+// CommitAndPush persists the manifest changes back to the trunk branch.
 //
-// It performs the following steps:
-// 1. Checks if there are any changes to commit
-// 2. Configures git user (if not external mode)
-// 3. Commits the manifest with [skip ci] to avoid triggering workflows
-// 4. Pushes the commit to the remote
+// On real GitHub the write goes through the Contents REST API (via the gh CLI):
+// API-created commits are signed by GitHub (shown as Verified) and, when made
+// with a bypass-capable token, update the trunk even when a required status
+// check protects the branch. In the act/gitea e2e environment there is no
+// GitHub API, so the change is committed and pushed with plain git. The
+// environment is detected exactly as the generated dispatch steps do, by
+// GITHUB_SERVER_URL != https://github.com.
 //
 // Note: We skip git pull because the workflow just checked out the repo,
 // so it should already be at the latest state. The finalize job runs after
@@ -264,8 +267,69 @@ func (f *Finalizer) CommitAndPush() error {
 		return nil // No changes
 	}
 
+	message := fmt.Sprintf("chore: update state after promotion to %s [skip ci]", f.targetEnv)
+
+	if isRealGitHub() {
+		return f.writeStateViaAPI(message)
+	}
+	return f.commitAndPushGit(message)
+}
+
+// isRealGitHub reports whether the workflow is running on github.com rather than
+// an act/gitea e2e environment. This mirrors the "Only dispatch on real GitHub"
+// detection used by the generated workflows.
+func isRealGitHub() bool {
+	server := os.Getenv("GITHUB_SERVER_URL")
+	return server == "" || server == "https://github.com"
+}
+
+// writeStateViaAPI writes the manifest file to the trunk branch through the
+// GitHub Contents REST API using the gh CLI. This produces a signed (Verified)
+// commit and, with a bypass-capable token, can update a protected branch.
+func (f *Finalizer) writeStateViaAPI(message string) error {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
+	}
+	branch := trunkBranchFromEnv()
+
+	data, err := os.ReadFile(f.configPath)
+	if err != nil {
+		return fmt.Errorf("read manifest failed: %w", err)
+	}
+	contentB64 := base64.StdEncoding.EncodeToString(data)
+
+	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, f.configPath)
+
+	// Fetch the current blob SHA so the API performs an update rather than a
+	// create. An empty result means the file does not yet exist on the branch.
+	shaCmd := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha")
+	shaOut, _ := shaCmd.Output()
+	currentSHA := strings.TrimSpace(string(shaOut))
+
+	args := []string{
+		"api", apiPath, "-X", "PUT",
+		"-f", "message=" + message,
+		"-f", "content=" + contentB64,
+		"-f", "branch=" + branch,
+	}
+	if currentSHA != "" {
+		args = append(args, "-f", "sha="+currentSHA)
+	}
+
+	cmd := exec.Command("gh", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// commitAndPushGit commits the manifest and pushes with plain git. Used in the
+// act/gitea e2e environment, which enforces neither branch protection nor
+// commit signatures.
+func (f *Finalizer) commitAndPushGit(message string) error {
 	// Configure git (use default bot identity)
-	cmd = exec.Command("git", "config", "user.name", "github-actions[bot]")
+	cmd := exec.Command("git", "config", "user.name", "github-actions[bot]")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git config user.name failed: %w", err)
 	}
@@ -281,20 +345,31 @@ func (f *Finalizer) CommitAndPush() error {
 		return fmt.Errorf("git add failed: %w", err)
 	}
 
-	// Commit with [skip ci] to avoid triggering workflows
-	message := fmt.Sprintf("chore: update state after promotion to %s [skip ci]", f.targetEnv)
 	cmd = exec.Command("git", "commit", "-m", message)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git commit failed: %w", err)
 	}
 
-	// Push to remote
 	cmd = exec.Command("git", "push")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git push failed: %w", err)
 	}
 
 	return nil
+}
+
+// trunkBranchFromEnv resolves the branch to write state to. Push events check
+// out in detached HEAD, so the branch is taken from GITHUB_REF when present,
+// falling back to "main".
+func trunkBranchFromEnv() string {
+	ref := os.Getenv("GITHUB_REF")
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return strings.TrimPrefix(ref, "refs/heads/")
+	}
+	if ref != "" {
+		return ref
+	}
+	return "main"
 }
 
 // isExternalDeploy checks if a deploy is an external deploy (from satellite repo)

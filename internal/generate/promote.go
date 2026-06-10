@@ -62,6 +62,13 @@ func (g *PromoteGenerator) getReleaseTokenRef() string {
 	return g.config.GetReleaseToken()
 }
 
+// getStateTokenRef returns the token expression used to write manifest state to
+// the trunk branch. Users configure the full expression via the state_token
+// config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
+func (g *PromoteGenerator) getStateTokenRef() string {
+	return g.config.GetStateToken()
+}
+
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 // Converts absolute paths to repo-relative paths since workflows run in checked out repos.
 func (g *PromoteGenerator) getManifestFilePath() string {
@@ -1303,6 +1310,11 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Finalize Promotion\n")
 	sb.WriteString("        if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("        env:\n")
+	// GH_TOKEN authenticates the Contents REST API write that finalize performs
+	// on real GitHub (signed commit, branch-protection bypass). It defaults to
+	// the same token as the release operations but is independently configurable
+	// via state_token so a bot/App token can be supplied for protected trunks.
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
 	sb.WriteString("          PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}\n")
 	for _, d := range g.config.Deploys {
