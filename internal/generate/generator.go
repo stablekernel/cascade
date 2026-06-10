@@ -124,6 +124,32 @@ func (g *Generator) SetState(state map[string]*config.EnvState) {
 	g.state = state
 }
 
+// anyAutoCommits reports whether any build or deploy callback (including
+// external deploys) has auto_commits: true. When true, the finalize step must
+// re-resolve HEAD after the callbacks complete, because at least one of them
+// may have pushed additional commits (e.g. a formatter/codegen step), meaning
+// the triggering SHA no longer matches what was actually built or deployed.
+func (g *Generator) anyAutoCommits() bool {
+	for _, b := range g.config.Builds {
+		if b.AutoCommits {
+			return true
+		}
+	}
+	for _, d := range g.config.Deploys {
+		if d.AutoCommits {
+			return true
+		}
+	}
+	for _, ext := range g.config.External {
+		for _, d := range ext.Deploys {
+			if d.AutoCommits {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // getCLIRef returns the Git ref to use for the cascade actions.
 // Supported values:
 //   - "latest" → uses the "latest" tag (updated with each stable release)
@@ -1410,6 +1436,17 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	// HEAD by default, so we resolve the branch from $GITHUB_REF.
 	sb.WriteString("          BRANCH=\"${GITHUB_REF##refs/heads/}\"\n")
 	sb.WriteString("          \n")
+
+	// When any callback has auto_commits: true it may have pushed commits after
+	// the workflow started, so HEAD is now ahead of the triggering SHA. Re-resolve
+	// HEAD here so apply_state_edits() writes the post-callback commit to
+	// state.<env>.sha rather than the stale triggering SHA.
+	if g.anyAutoCommits() {
+		sb.WriteString("          # One or more callbacks declared auto_commits: true; re-read HEAD\n")
+		sb.WriteString("          # so state records the post-callback commit, not the triggering SHA.\n")
+		sb.WriteString("          HEAD_SHA=\"$(git rev-parse HEAD)\"\n")
+		sb.WriteString("          \n")
+	}
 
 	// Define apply_state_edits() so the retry loop can re-apply yq edits after
 	// each rebase. This avoids merge conflicts on concurrent runs: the slower

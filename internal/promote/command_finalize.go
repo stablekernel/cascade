@@ -124,6 +124,14 @@ func runFinalize() error {
 	// Set promotion result
 	fin.SetPromotionResult(&promotionResult)
 
+	// When any callback declared auto_commits: true the workflow sets
+	// AUTO_COMMITS_HEAD_SHA to the post-callback HEAD before invoking finalize.
+	// Pass it through so state.<env>.sha records the actual built/deployed commit
+	// rather than the triggering SHA.
+	if autoSHA := os.Getenv("AUTO_COMMITS_HEAD_SHA"); autoSHA != "" {
+		fin.SetHeadSHA(autoSHA)
+	}
+
 	// Run finalization
 	if dryRun {
 		fmt.Println("Dry run - state would be updated but not written to disk")
