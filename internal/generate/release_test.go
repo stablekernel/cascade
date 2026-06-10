@@ -248,3 +248,47 @@ func TestReleaseGenerator_WithCLIVersion(t *testing.T) {
 	assert.Contains(t, content, "setup-cli@v1.0.0")
 	assert.Contains(t, content, "version: v1.0.0")
 }
+
+// TestReleaseGenerator_HasConcurrencyBlock asserts the generated release workflow
+// declares a top-level concurrency: block keyed by the bare workflow name. Release
+// runs write the shared GitHub Releases surface and shared tags, so ALL release runs
+// race regardless of release_action (#31); the group must serialize every release
+// run, not just same-action runs. cancel-in-progress is false because a
+// partially-executed release action may already have pushed a tag that a cancelled
+// run leaves dangling.
+func TestReleaseGenerator_HasConcurrencyBlock(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+	}
+
+	gen := NewReleaseGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "\nconcurrency:\n", "release workflow must declare top-level concurrency:")
+	group := concurrencyGroupLine(t, content)
+	assert.Equal(t, "  group: \"${{ github.workflow }}\"", group, "release concurrency group must be the bare workflow name to serialize all runs")
+	assert.NotContains(t, group, "release_action", "release concurrency group must NOT scope by action: different actions still touch the same releases/tags")
+	assert.Contains(t, content, "cancel-in-progress: false", "release default must queue, not cancel")
+}
+
+// TestReleaseGenerator_ConcurrencyOverride asserts that a manifest-level
+// concurrency config is forwarded to the generated release workflow.
+func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+		Concurrency: &config.ConcurrencyConfig{
+			Group:            "my-custom-release",
+			CancelInProgress: true,
+		},
+	}
+
+	gen := NewReleaseGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "group: my-custom-release", "custom group must propagate to release")
+	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to release")
+}

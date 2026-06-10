@@ -82,6 +82,7 @@ func (g *ReleaseGenerator) Generate() (string, error) {
 
 	g.writeHeader(&sb)
 	g.writeWorkflowTriggers(&sb)
+	g.writeConcurrency(&sb)
 	g.writeJobs(&sb)
 
 	return sb.String(), nil
@@ -444,4 +445,27 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("              echo \"| Mode | **DRY RUN** |\"\n")
 	sb.WriteString("            fi\n")
 	sb.WriteString("          } >> \"$GITHUB_STEP_SUMMARY\"\n")
+}
+
+// writeConcurrency emits a top-level concurrency: block on the release workflow.
+// Release runs write the shared GitHub Releases surface and shared tags, so two
+// concurrent release dispatches race on those writes regardless of release_action
+// (a create-draft and a release run still touch the same release and tags). The
+// group key is therefore the bare workflow name, which serializes all release runs
+// against each other. Queueing (cancel-in-progress: false) is safer than cancelling:
+// a killed mid-flight release action may have already pushed a tag or published a
+// release that the next run would then conflict with.
+func (g *ReleaseGenerator) writeConcurrency(sb *strings.Builder) {
+	sb.WriteString("concurrency:\n")
+	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
+		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
+	} else {
+		sb.WriteString("  group: \"${{ github.workflow }}\"\n")
+	}
+	if g.config.Concurrency != nil {
+		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
+	} else {
+		sb.WriteString("  cancel-in-progress: false\n")
+	}
+	sb.WriteString("\n")
 }

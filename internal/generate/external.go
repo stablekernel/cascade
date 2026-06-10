@@ -60,6 +60,7 @@ func (g *ExternalUpdateGenerator) Generate() (string, error) {
 	g.writeHeader(&sb)
 	g.writeWorkflowTrigger(&sb)
 	g.writePermissions(&sb)
+	g.writeConcurrency(&sb)
 	g.writeJob(&sb)
 
 	return sb.String(), nil
@@ -138,4 +139,28 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("            --sha \"${{ inputs.sha }}\" \\\n")
 	sb.WriteString("            --version \"${{ inputs.version }}\" \\\n")
 	sb.WriteString("            --artifacts '${{ inputs.artifacts }}'\n")
+}
+
+// writeConcurrency emits a top-level concurrency: block on the external-update
+// workflow. Every external update writes back the single shared manifest file
+// (cascade external update writes --config under --manifest-key, then
+// git.CommitAndPush of that same path) regardless of source_repo or environment, so
+// ALL concurrent external-update runs race on that one non-fast-forward push. The
+// group key is therefore the bare workflow name, which serializes every
+// external-update run. Queueing (cancel-in-progress: false) is safer than cancelling
+// because the update writes durable manifest state; dropping a mid-flight write
+// leaves the manifest inconsistent.
+func (g *ExternalUpdateGenerator) writeConcurrency(sb *strings.Builder) {
+	sb.WriteString("concurrency:\n")
+	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
+		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
+	} else {
+		sb.WriteString("  group: \"${{ github.workflow }}\"\n")
+	}
+	if g.config.Concurrency != nil {
+		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
+	} else {
+		sb.WriteString("  cancel-in-progress: false\n")
+	}
+	sb.WriteString("\n")
 }

@@ -522,3 +522,67 @@ func TestExternalUpdateGenerator_NotPrimary(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured as primary")
 }
+
+// TestExternalUpdateGenerator_HasConcurrencyBlock asserts the generated
+// external-update workflow declares a top-level concurrency: block keyed by the bare
+// workflow name. Every external update writes back the single shared manifest file
+// (cascade external update writes --config then git-pushes that same path)
+// regardless of source_repo or environment, so ALL external-update runs race on that
+// one non-fast-forward push (#31); the group must serialize every run. cancel-in
+// -progress is false because a dropped mid-flight write leaves the manifest in an
+// inconsistent state.
+func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "master",
+		Environments: []string{"dev", "test", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "\nconcurrency:\n", "external-update workflow must declare top-level concurrency:")
+	group := concurrencyGroupLine(t, content)
+	assert.Equal(t, "  group: \"${{ github.workflow }}\"", group, "external-update concurrency group must be the bare workflow name to serialize all runs")
+	assert.NotContains(t, group, "inputs.source_repo", "external-update group must NOT scope by source_repo: all runs push the same manifest")
+	assert.NotContains(t, group, "inputs.environment", "external-update group must NOT scope by environment: all runs push the same manifest")
+	assert.Contains(t, content, "cancel-in-progress: false", "external-update default must queue, not cancel")
+}
+
+// TestExternalUpdateGenerator_ConcurrencyOverride asserts that a manifest-level
+// concurrency config is forwarded to the generated external-update workflow.
+func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "master",
+		Environments: []string{"dev", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+		Concurrency: &config.ConcurrencyConfig{
+			Group:            "my-custom-external",
+			CancelInProgress: true,
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "group: my-custom-external", "custom group must propagate to external-update")
+	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to external-update")
+}
