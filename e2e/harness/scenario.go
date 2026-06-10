@@ -42,7 +42,9 @@ type PublishConfig struct {
 // BuildConfig defines a build component
 type BuildConfig struct {
 	Name           string   `yaml:"name"`
-	Workflow       string   `yaml:"workflow"`
+	Workflow       string   `yaml:"workflow,omitempty"`
+	Run            string   `yaml:"run,omitempty"`
+	Shell          string   `yaml:"shell,omitempty"`
 	Triggers       []string `yaml:"triggers"`
 	DependsOn      []string `yaml:"depends_on"`
 	TimeoutMinutes int      `yaml:"timeout_minutes,omitempty"`
@@ -51,7 +53,9 @@ type BuildConfig struct {
 // DeployConfig defines a deploy component
 type DeployConfig struct {
 	Name           string   `yaml:"name"`
-	Workflow       string   `yaml:"workflow"`
+	Workflow       string   `yaml:"workflow,omitempty"`
+	Run            string   `yaml:"run,omitempty"`
+	Shell          string   `yaml:"shell,omitempty"`
 	Triggers       []string `yaml:"triggers"`
 	DependsOn      []string `yaml:"depends_on"`
 	TimeoutMinutes int      `yaml:"timeout_minutes,omitempty"`

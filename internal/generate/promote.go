@@ -102,6 +102,10 @@ func (g *PromoteGenerator) Generate() (string, error) {
 // discoverDeployInputs parses deploy workflow files to discover their inputs
 func (g *PromoteGenerator) discoverDeployInputs() error {
 	for _, d := range g.config.Deploys {
+		// Inline run: deploys have no reusable-workflow file to parse inputs from.
+		if d.Run != "" {
+			continue
+		}
 		workflowPath := filepath.Join(g.baseDir, d.Workflow)
 		data, err := os.ReadFile(workflowPath)
 		if err != nil {
@@ -571,6 +575,20 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 		fmt.Fprintf(sb, "  deploy-%s:\n", d.Name)
 
+		if d.Run != "" {
+			// Inline run: deploy callback — cascade-owned job with an inline run:
+			// step. Inline callbacks don't take with:/inputs (so never matrix);
+			// the standard environment/sha inputs reach the step as env: vars.
+			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
+			sb.WriteString("    needs: [preflight, promote]\n")
+			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			g.writeInlineDeployBody(sb, d,
+				"${{ needs.preflight.outputs.target_env }}",
+				"${{ needs.preflight.outputs.source_sha }}",
+				"${{ needs.preflight.outputs.source_image_tag }}")
+			continue
+		}
+
 		if hasInputs {
 			// Matrix-based deploy job
 			fmt.Fprintf(sb, "    name: Deploy %s (${{ matrix.environment }})\n", d.Name)
@@ -612,6 +630,13 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		fmt.Fprintf(sb, "    name: Deploy %s (%s)\n", d.Name, finalEnv)
 		sb.WriteString("    needs: [preflight, promote]\n")
 		sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		if d.Run != "" {
+			g.writeInlineDeployBody(sb, d,
+				finalEnv,
+				"${{ needs.preflight.outputs.prod_sha }}",
+				"${{ needs.preflight.outputs.prod_version }}")
+			continue
+		}
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 		sb.WriteString("    with:\n")
 		fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
@@ -625,6 +650,35 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 	// Write external deploy jobs (for multi-repo orchestration)
 	g.writeExternalDeployJobs(sb, finalEnv)
+}
+
+// writeInlineDeployBody emits the runs-on / steps body of a cascade-owned inline
+// run: deploy callback in a promote workflow. The standard inputs a reusable
+// deploy callback would receive via with: (environment, sha, and image_tag when
+// the callback declares it) are surfaced to the inline step as env: variables.
+func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig, environment, sha, imageTag string) {
+	sb.WriteString("    runs-on: ubuntu-latest\n")
+	sb.WriteString("    steps:\n")
+	fmt.Fprintf(sb, "      - name: Deploy %s\n", d.Name)
+
+	sb.WriteString("        env:\n")
+	fmt.Fprintf(sb, "          ENVIRONMENT: %s\n", environment)
+	fmt.Fprintf(sb, "          SHA: %s\n", sha)
+	if g.deployHasInput(d.Name, "image_tag") {
+		fmt.Fprintf(sb, "          IMAGE_TAG: %s\n", imageTag)
+	}
+
+	shell := d.Shell
+	if shell == "" {
+		shell = "bash"
+	}
+	fmt.Fprintf(sb, "        shell: %s\n", shell)
+
+	sb.WriteString("        run: |\n")
+	for _, line := range strings.Split(strings.TrimRight(d.Run, "\n"), "\n") {
+		fmt.Fprintf(sb, "          %s\n", line)
+	}
+	sb.WriteString("\n")
 }
 
 func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv string) {

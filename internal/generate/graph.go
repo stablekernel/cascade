@@ -20,6 +20,8 @@ type CallbackInfo struct {
 	DisplayName    string // Display name (e.g., "Build (app)")
 	Type           string // "build" or "deploy" or "validate"
 	Workflow       string
+	Run            string // Inline command; when set the callback is emitted as a cascade-owned inline-step job instead of a reusable-workflow call
+	Shell          string // Shell for the inline run step (default bash; only meaningful with Run)
 	RunPolicy      string
 	OnFailure      string
 	Retries        int
@@ -44,6 +46,8 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:    "Validate (validate)",
 			Type:           config.CallbackTypeValidate,
 			Workflow:       cfg.Validate.Workflow,
+			Run:            cfg.Validate.Run,
+			Shell:          cfg.Validate.Shell,
 			RunPolicy:      defaultString(cfg.Validate.RunPolicy, config.RunPolicyDefault),
 			OnFailure:      defaultString(cfg.Validate.OnFailure, config.OnFailureAbort),
 			Retries:        cfg.Validate.Retries,
@@ -61,6 +65,8 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:    config.DisplayName(config.CallbackTypeBuild, b.Name),
 			Type:           config.CallbackTypeBuild,
 			Workflow:       b.Workflow,
+			Run:            b.Run,
+			Shell:          b.Shell,
 			RunPolicy:      defaultString(b.RunPolicy, config.RunPolicyDefault),
 			OnFailure:      defaultString(b.OnFailure, config.OnFailureAbort),
 			Retries:        b.Retries,
@@ -91,6 +97,8 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:    config.DisplayName(config.CallbackTypeDeploy, d.Name),
 			Type:           config.CallbackTypeDeploy,
 			Workflow:       d.Workflow,
+			Run:            d.Run,
+			Shell:          d.Shell,
 			RunPolicy:      defaultString(d.RunPolicy, config.RunPolicyDefault),
 			OnFailure:      defaultString(d.OnFailure, config.OnFailureAbort),
 			Retries:        d.Retries,
