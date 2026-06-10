@@ -612,7 +612,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	}
 
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
@@ -1192,7 +1192,7 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	}
 
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	// Need full git history for changelog generation
 	if g.config.ChangelogEnabled() {
 		sb.WriteString("        with:\n")
@@ -1441,7 +1441,7 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	if len(g.config.Environments) > 0 {
 		fmt.Fprintf(sb, "        if: github.event.inputs.environment == '%s' || github.event.inputs.environment == ''\n", g.config.Environments[0])
 	}
-	sb.WriteString("        uses: actions/github-script@v7\n")
+	writeActionUses(sb, g.config, "        ", actionGithubScript)
 	sb.WriteString("        with:\n")
 	fmt.Fprintf(sb, "          github-token: %s\n", g.config.Notify.GetToken())
 	sb.WriteString("          script: |\n")
@@ -1603,7 +1603,7 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 
 func (g *Generator) writeArtifactDownloadStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Download Release Artifacts\n")
-	sb.WriteString("        uses: actions/download-artifact@v4\n")
+	writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          pattern: release-*\n")
 	sb.WriteString("          path: release-artifacts\n")
@@ -1662,7 +1662,7 @@ func (g *Generator) writePassthroughDownloadSteps(sb *strings.Builder, info Call
 	for _, src := range info.PassthroughArtifact.Downloads {
 		name := passthroughArtifactName(src)
 		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
-		sb.WriteString("        uses: actions/download-artifact@v4\n")
+		writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
 		sb.WriteString("        with:\n")
 		fmt.Fprintf(sb, "          name: %s\n", name)
 		fmt.Fprintf(sb, "          path: %s\n", name)
@@ -1681,7 +1681,7 @@ func (g *Generator) writePassthroughUploadStep(sb *strings.Builder, info Callbac
 	}
 	name := passthroughArtifactName(info.Name)
 	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
-	sb.WriteString("        uses: actions/upload-artifact@v4\n")
+	writeActionUses(sb, g.config, "        ", actionUploadArtifact)
 	sb.WriteString("        with:\n")
 	fmt.Fprintf(sb, "          name: %s\n", name)
 	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)
@@ -1711,7 +1711,7 @@ func (g *Generator) writePassthroughDownloadJob(sb *strings.Builder, info Callba
 	for _, src := range info.PassthroughArtifact.Downloads {
 		name := passthroughArtifactName(src)
 		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
-		sb.WriteString("        uses: actions/download-artifact@v4\n")
+		writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
 		sb.WriteString("        with:\n")
 		fmt.Fprintf(sb, "          name: %s\n", name)
 		fmt.Fprintf(sb, "          path: %s\n", name)
@@ -1735,7 +1735,7 @@ func (g *Generator) writePassthroughUploadJob(sb *strings.Builder, info Callback
 	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    steps:\n")
 	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
-	sb.WriteString("        uses: actions/upload-artifact@v4\n")
+	writeActionUses(sb, g.config, "        ", actionUploadArtifact)
 	sb.WriteString("        with:\n")
 	fmt.Fprintf(sb, "          name: %s\n", name)
 	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)

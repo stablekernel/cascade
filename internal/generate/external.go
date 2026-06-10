@@ -113,7 +113,7 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("    name: Update External State\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 1\n")
 	sb.WriteString("          token: ${{ secrets.GITHUB_TOKEN }}\n")

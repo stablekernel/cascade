@@ -168,7 +168,7 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      source_version: ${{ steps.validate.outputs.source_version }}\n")
 	sb.WriteString("      semver_tag: ${{ steps.semver.outputs.semver_tag }}\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
@@ -289,7 +289,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
@@ -368,7 +368,7 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    if: always() && needs.preflight.result == 'success' && github.event.inputs.release_action == 'release'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 
 	// Update latest_release state
 	sb.WriteString("      - name: Update Latest Release State\n")
