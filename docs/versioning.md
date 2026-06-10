@@ -72,12 +72,12 @@ A CLI supports the current schema version and the immediately preceding one
 (N-1). When a new schema major lands, CLIs that ship with it continue to read
 the previous major with a warning. A subsequent major may drop support for the
 oldest major, at which point manifests at that version are rejected with a
-pointer to the migration entry in [CHANGELOG.md](../CHANGELOG.md).
+pointer to the migration entry in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md).
 
 ## Migrations
 
 Each `schema_version` bump is recorded with a `Migration` section in
-[CHANGELOG.md](../CHANGELOG.md) describing exactly what changed and the steps to
+[CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md) describing exactly what changed and the steps to
 update a manifest from the previous version. There are no migrations yet: the
 current schema version is the first.
 
@@ -88,7 +88,7 @@ and new capabilities all land here. No stability guarantee is made for the CLI
 command surface or the manifest schema between 0.x releases; additive changes
 arrive without a `schema_version` bump, but breaking changes (field removals,
 type changes, behaviour changes) increment `schema_version` and carry a
-`Migration` entry in [CHANGELOG.md](../CHANGELOG.md).
+`Migration` entry in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md).
 
 **1.0** — when cascade reaches v1.0 the following guarantees apply:
 
@@ -101,7 +101,7 @@ type changes, behaviour changes) increment `schema_version` and carry a
   1.x releases.
 
 Older tags outside the current release line do not receive backported fixes.
-See [SECURITY.md](../SECURITY.md) for the security-patch policy.
+See [SECURITY.md](https://github.com/stablekernel/cascade/blob/main/SECURITY.md) for the security-patch policy.
 
 ## Version bump reference
 
