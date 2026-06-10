@@ -284,6 +284,29 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
+	// Generate the opt-in read-only PR plan-preview workflow (#40). Absent or
+	// disabled pr_preview emits nothing, so existing manifests are unaffected.
+	if cfg.PRPreview != nil && cfg.PRPreview.Enabled {
+		previewGen := NewPRPreviewGenerator(cfg, baseDir)
+		content, err := previewGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating pr-preview workflow: %w", err)
+		}
+
+		previewOutputPath := ".github/workflows/cascade-pr-preview.yaml"
+
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-pr-preview.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(previewOutputPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, previewOutputPath)
+			fmt.Printf("Generated workflow: %s\n", previewOutputPath)
+		}
+	}
+
 	if opts.dryRun {
 		return nil
 	}
