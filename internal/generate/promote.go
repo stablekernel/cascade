@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -16,6 +17,10 @@ type PromoteGenerator struct {
 	baseDir        string
 	inputs         map[string][]string // deploy name -> input names
 	requiredInputs map[string][]string // deploy name -> required input names
+	// state is the manifest state block, used to resolve cascade-owned
+	// ${{ state.<env>.<field> }} references in deploy inputs at generation
+	// time. Optional: nil when no state is threaded.
+	state map[string]*config.EnvState
 }
 
 // NewPromoteGenerator creates a new promote workflow generator
@@ -26,6 +31,12 @@ func NewPromoteGenerator(cfg *config.TrunkConfig, baseDir string) *PromoteGenera
 		inputs:         make(map[string][]string),
 		requiredInputs: make(map[string][]string),
 	}
+}
+
+// SetState threads the manifest state block into the promote generator so
+// ${{ state.<env>.<field> }} input references resolve at generation time.
+func (g *PromoteGenerator) SetState(state map[string]*config.EnvState) {
+	g.state = state
 }
 
 // getCLIRef returns the Git ref to use for the cascade actions.
@@ -208,12 +219,37 @@ func (g *PromoteGenerator) resolveDeployInputs(deployName, env, sha, version str
 	}
 
 	for k, v := range result {
-		if strVal, ok := v.(string); ok {
-			for placeholder, replacement := range substitutions {
-				strVal = strings.ReplaceAll(strVal, placeholder, replacement)
-			}
-			result[k] = strVal
+		strVal, ok := v.(string)
+		if !ok {
+			continue
 		}
+		// Pure passthrough expressions (e.g. ${{ vars.X }}, ${{ secrets.Y }})
+		// are emitted directly into the deploy job's with: block, not routed
+		// through the matrix JSON. Drop them here so they don't become dead
+		// literals trapped inside the matrix payload.
+		if classifyInputValue(strVal) == inputPassthrough {
+			delete(result, k)
+			continue
+		}
+		// Cascade-owned state.* references resolve at generation time against
+		// the manifest state for this environment.
+		if classifyInputValue(strVal) == inputStateRef {
+			resolved, rerr := resolveInputValue(strVal, g.state)
+			if rerr != nil {
+				// Leave the value in place; generation surfaces the error via
+				// validation. Keep the unresolved expression visible rather
+				// than silently dropping it.
+				result[k] = strVal
+				continue
+			}
+			result[k] = resolved
+			continue
+		}
+		// Literal or matrix.* placeholder: apply matrix substitutions.
+		for placeholder, replacement := range substitutions {
+			strVal = strings.ReplaceAll(strVal, placeholder, replacement)
+		}
+		result[k] = strVal
 	}
 
 	return result
@@ -277,17 +313,132 @@ func (g *PromoteGenerator) writeMatrixBuildingStep(sb *strings.Builder) {
 	}
 }
 
+// passthroughInputNames returns the sorted set of input keys on a deploy whose
+// value is a pure passthrough expression (e.g. ${{ vars.X }}) in either the
+// default inputs or any env override. These are emitted directly into the
+// deploy job's with: block rather than routed through the matrix JSON, so the
+// expression survives verbatim to GitHub Actions for run-time evaluation.
+func passthroughInputNames(deploy *config.DeployConfig) []string {
+	seen := make(map[string]struct{})
+	consider := func(k string, v interface{}) {
+		if s, ok := v.(string); ok && classifyInputValue(s) == inputPassthrough {
+			seen[k] = struct{}{}
+		}
+	}
+	for k, v := range deploy.Inputs {
+		consider(k, v)
+	}
+	for _, envMap := range deploy.EnvInputs {
+		for k, v := range envMap {
+			consider(k, v)
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for k := range seen {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// passthroughInputValue returns the verbatim expression to emit for a
+// passthrough input key. The default value wins; an env override is used only
+// when the default is absent. Passthrough expressions (vars/secrets/env/...) are
+// resolved by GitHub Actions at run time, so a single verbatim emission is
+// correct across the matrix.
+func passthroughInputValue(deploy *config.DeployConfig, key string) string {
+	if v, ok := deploy.Inputs[key]; ok {
+		if s, ok := v.(string); ok && classifyInputValue(s) == inputPassthrough {
+			return strings.TrimSpace(s)
+		}
+	}
+	for _, envMap := range deploy.EnvInputs {
+		if v, ok := envMap[key]; ok {
+			if s, ok := v.(string); ok && classifyInputValue(s) == inputPassthrough {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+// matrixInputsJSON returns the default-inputs JSON with passthrough-expression
+// keys removed and state.* references resolved against the manifest state for
+// the given environment. Used to build the per-env matrix payload.
+func (g *PromoteGenerator) matrixDefaultInputs(deploy *config.DeployConfig) map[string]interface{} {
+	out := make(map[string]interface{})
+	for k, v := range deploy.Inputs {
+		if s, ok := v.(string); ok {
+			switch classifyInputValue(s) {
+			case inputPassthrough:
+				continue // emitted directly in with:
+			case inputStateRef:
+				// Resolved per-env below in env-specific maps; default state
+				// refs without an env anchor are left as-is for validation to
+				// flag. Skip from default so a wrong default can't leak.
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// matrixEnvInputs returns env_inputs with passthrough keys removed and state.*
+// references resolved at generation time per environment.
+func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[string]map[string]interface{} {
+	out := make(map[string]map[string]interface{})
+	// Seed every env so default-level state refs resolve into each env entry.
+	envNames := make(map[string]struct{})
+	for env := range deploy.EnvInputs {
+		envNames[env] = struct{}{}
+	}
+	for _, env := range g.config.Environments {
+		envNames[env] = struct{}{}
+	}
+	for env := range envNames {
+		merged := make(map[string]interface{})
+		// Default-level state refs resolve per env.
+		for k, v := range deploy.Inputs {
+			if s, ok := v.(string); ok && classifyInputValue(s) == inputStateRef {
+				if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {
+					merged[k] = resolved
+				}
+			}
+		}
+		for k, v := range deploy.EnvInputs[env] {
+			if s, ok := v.(string); ok {
+				switch classifyInputValue(s) {
+				case inputPassthrough:
+					continue
+				case inputStateRef:
+					if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {
+						merged[k] = resolved
+					}
+					continue
+				}
+			}
+			merged[k] = v
+		}
+		if len(merged) > 0 {
+			out[env] = merged
+		}
+	}
+	return out
+}
+
 // writeMatrixBuildingLogic generates the bash logic to build a matrix for a single deploy.
 // It iterates through promotions and builds matrix entries with resolved inputs.
 func (g *PromoteGenerator) writeMatrixBuildingLogic(sb *strings.Builder, deploy *config.DeployConfig, outputName string) {
-	// Serialize default inputs
-	defaultInputsJSON, err := json.Marshal(deploy.Inputs)
+	// Serialize default inputs (passthrough expressions excluded; state.*
+	// refs resolved per-env into env_inputs below).
+	defaultInputsJSON, err := json.Marshal(g.matrixDefaultInputs(deploy))
 	if err != nil {
 		defaultInputsJSON = []byte("{}")
 	}
 
-	// Serialize env_inputs
-	envInputsJSON, err := json.Marshal(deploy.EnvInputs)
+	// Serialize env_inputs (passthrough excluded, state.* resolved).
+	envInputsJSON, err := json.Marshal(g.matrixEnvInputs(deploy))
 	if err != nil {
 		envInputsJSON = []byte("{}")
 	}
@@ -604,9 +755,28 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 
-			// Pass all inputs from matrix
-			// We need to pass each input that the deploy workflow accepts
+			// Passthrough-expression inputs (e.g. ${{ vars.X }}) are excluded
+			// from the matrix JSON and emitted verbatim so GitHub Actions
+			// evaluates them at run time.
+			passthrough := passthroughInputNames(&d)
+			passSet := make(map[string]struct{}, len(passthrough))
+			for _, name := range passthrough {
+				passSet[name] = struct{}{}
+				fmt.Fprintf(sb, "      %s: %s\n", name, passthroughInputValue(&d, name))
+			}
+
+			// Remaining inputs (literals, matrix.* placeholders, resolved
+			// state.* refs) come from the per-promotion matrix entry. Sorted
+			// for deterministic output.
+			matrixNames := make([]string, 0, len(d.Inputs))
 			for inputName := range d.Inputs {
+				if _, ok := passSet[inputName]; ok {
+					continue
+				}
+				matrixNames = append(matrixNames, inputName)
+			}
+			sort.Strings(matrixNames)
+			for _, inputName := range matrixNames {
 				fmt.Fprintf(sb, "      %s: ${{ matrix.%s }}\n", inputName, inputName)
 			}
 		} else {

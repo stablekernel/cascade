@@ -62,6 +62,10 @@ type Generator struct {
 	requiredInputs map[string][]string // callback name -> required input names
 	graph          *DependencyGraph
 	warnings       []string
+	// state is the manifest state block, used to resolve cascade-owned
+	// ${{ state.<env>.<field> }} references in callback inputs at generation
+	// time. Optional: nil when no state is threaded (e.g. unit tests).
+	state map[string]*config.EnvState
 }
 
 // NewGenerator creates a new workflow generator
@@ -90,6 +94,12 @@ func (g *Generator) ownedJobTimeoutMinutes() int {
 // the given indent.
 func (g *Generator) writeOwnedTimeout(sb *strings.Builder, indent string) {
 	fmt.Fprintf(sb, "%stimeout-minutes: %d\n", indent, g.ownedJobTimeoutMinutes())
+}
+
+// SetState threads the manifest state block into the generator so
+// ${{ state.<env>.<field> }} input references resolve at generation time.
+func (g *Generator) SetState(state map[string]*config.EnvState) {
+	g.state = state
 }
 
 // getCLIRef returns the Git ref to use for the cascade actions.
@@ -226,7 +236,47 @@ func (g *Generator) Validate() []string {
 				"to retag artifacts on release.")
 	}
 
+	// Warn when an input value looks like an expression the operator forgot to
+	// wrap in ${{ }} (e.g. a bare vars.X or state.prod.sha). Such values are
+	// emitted as dead literals; the operator likely intended passthrough.
+	g.warnings = append(g.warnings, g.unwrappedExpressionWarnings()...)
+
 	return g.warnings
+}
+
+// unwrappedExpressionWarnings scans all callback inputs/env_inputs for literal
+// values that resemble an unwrapped expression (bare context.path) and returns
+// a warning for each, so operators catch a forgotten ${{ }} wrapper.
+func (g *Generator) unwrappedExpressionWarnings() []string {
+	var warnings []string
+	check := func(callback string, inputs map[string]interface{}, envInputs map[string]map[string]interface{}) {
+		report := func(key string, v interface{}) {
+			if s, ok := v.(string); ok && looksLikeUnwrappedExpression(s) {
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: %s input %q value %q looks like an expression missing its ${{ }} wrapper; "+
+						"it will be emitted as a literal. Wrap it as ${{ %s }} for passthrough.",
+					callback, key, s, strings.TrimSpace(s)))
+			}
+		}
+		for k, v := range inputs {
+			report(k, v)
+		}
+		for _, env := range envInputs {
+			for k, v := range env {
+				report(k, v)
+			}
+		}
+	}
+	for i := range g.config.Builds {
+		check("build "+g.config.Builds[i].Name, g.config.Builds[i].Inputs, g.config.Builds[i].EnvInputs)
+	}
+	for i := range g.config.Deploys {
+		check("deploy "+g.config.Deploys[i].Name, g.config.Deploys[i].Inputs, g.config.Deploys[i].EnvInputs)
+	}
+	if g.config.Validate != nil {
+		check("validate", g.config.Validate.Inputs, g.config.Validate.EnvInputs)
+	}
+	return warnings
 }
 
 // validateRequiredInputs checks that all required workflow inputs can be provided
@@ -974,6 +1024,17 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		}
 	}
 
+	// Operator-authored inputs from the manifest (inputs:/env_inputs:). These
+	// carry per-callback config. Expression values survive verbatim:
+	//   - passthrough expressions (${{ vars.X }}, ${{ secrets.Y }}, ...) emit
+	//     as-is for GitHub Actions to evaluate at run time.
+	//   - cascade-owned ${{ state.<env>.<field> }} refs resolve at generation
+	//     time from the manifest state.
+	//   - literals emit as-is.
+	// Standard inputs (environment, sha, dependency outputs) already handled
+	// above take precedence and are not duplicated here.
+	inputs = append(inputs, g.operatorInputLines(info, seen(inputs))...)
+
 	// Only write with: block if there are inputs
 	if len(inputs) > 0 {
 		sb.WriteString("    with:\n")
@@ -981,6 +1042,84 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 			sb.WriteString(input + "\n")
 		}
 	}
+}
+
+// seen extracts the set of input keys already present in the given "      key: value"
+// lines, so operator inputs don't duplicate standard ones.
+func seen(lines []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(lines))
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if i := strings.Index(trimmed, ":"); i > 0 {
+			out[trimmed[:i]] = struct{}{}
+		}
+	}
+	return out
+}
+
+// callbackInputs returns the manifest-declared default inputs for a callback,
+// looked up by name and type.
+func (g *Generator) callbackInputs(info CallbackInfo) map[string]interface{} {
+	switch info.Type {
+	case config.CallbackTypeDeploy:
+		for i := range g.config.Deploys {
+			if g.config.Deploys[i].Name == info.Name {
+				return g.config.Deploys[i].Inputs
+			}
+		}
+	case config.CallbackTypeBuild:
+		for i := range g.config.Builds {
+			if g.config.Builds[i].Name == info.Name {
+				return g.config.Builds[i].Inputs
+			}
+		}
+	case config.CallbackTypeValidate:
+		if g.config.Validate != nil {
+			return g.config.Validate.Inputs
+		}
+	}
+	return nil
+}
+
+// operatorInputLines builds the "      key: value" with: lines for an
+// orchestrate callback's manifest-declared inputs. Passthrough expressions
+// survive verbatim; ${{ state.* }} references resolve at generation time;
+// literals emit as-is. Keys already present in skip (standard inputs) are
+// omitted. Output is sorted for deterministic generation.
+func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct{}) []string {
+	declared := g.callbackInputs(info)
+	if len(declared) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(declared))
+	for k := range declared {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var lines []string
+	for _, k := range keys {
+		if _, ok := skip[k]; ok {
+			continue
+		}
+		// Only emit inputs the callback actually declares as workflow inputs.
+		if !g.jobHasInput(info.JobID, k) {
+			continue
+		}
+		s, ok := declared[k].(string)
+		if !ok {
+			lines = append(lines, fmt.Sprintf("      %s: %v", k, declared[k]))
+			continue
+		}
+		val, err := resolveInputValue(s, g.state)
+		if err != nil {
+			// Unresolved state ref: emit verbatim so the failure is visible in
+			// the generated workflow rather than silently dropped.
+			val = s
+		}
+		lines = append(lines, fmt.Sprintf("      %s: %s", k, val))
+	}
+	return lines
 }
 
 func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workflow string, retryNum int) {
