@@ -1,6 +1,7 @@
 ci:
   config:
     trunk_branch: main
+    state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
     triggers:
       - cmd/**
       - internal/**

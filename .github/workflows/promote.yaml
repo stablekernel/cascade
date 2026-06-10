@@ -53,6 +53,10 @@ permissions:
   contents: write
   actions: write
 
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: false
+
 jobs:
   preflight:
     name: Pre-flight Check
@@ -269,6 +273,7 @@ jobs:
       - name: Finalize Promotion
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}
         run: |
