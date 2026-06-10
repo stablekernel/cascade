@@ -244,6 +244,46 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
+	// Generate the opt-in manifest-validation PR check (validate_check.enabled).
+	validateCheckGen := NewValidateCheckGenerator(cfg, baseDir)
+	if validateCheckGen.Enabled() {
+		content, err := validateCheckGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating validate-check workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-validate.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-validate.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+	}
+
+	// Generate the opt-in merge-queue validation lane (merge_queue.enabled).
+	mergeQueueGen := NewMergeQueueGenerator(cfg, baseDir)
+	if mergeQueueGen.Enabled() {
+		content, err := mergeQueueGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating merge-queue workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-merge-queue.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-merge-queue.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+	}
+
 	if opts.dryRun {
 		return nil
 	}
