@@ -1,27 +1,52 @@
 # Pull Request validation workflow
 # Runs unit tests + lint on PRs. E2E runs separately (e2e.yaml) on
 # release tags and manual dispatch — too slow + flaky to run per PR.
+#
+# This workflow triggers on every PR to main so the PR Gate job always
+# reports a status. The expensive jobs (Unit Tests, Lint) are gated on a
+# path filter and skip when only docs / non-code files changed. The PR Gate
+# job aggregates their results and is the single check to require in branch
+# protection: it passes when each gated job succeeds or is skipped, and
+# fails when any gated job fails or is cancelled.
 name: PR Validation
 
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.editorconfig'
-      - '.gitattributes'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: |
+            code:
+              - '!**.md'
+              - '!docs/**'
+              - '!LICENSE'
+              - '!.gitignore'
+              - '!.editorconfig'
+              - '!.gitattributes'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/PULL_REQUEST_TEMPLATE.md'
+
   unit-tests:
     name: Unit Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -42,6 +67,8 @@ jobs:
 
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -55,3 +82,21 @@ jobs:
         uses: golangci/golangci-lint-action@d6238b002a20823d52840fda27e2d4891c5952dc # v4
         with:
           version: latest
+
+  pr-gate:
+    name: PR Gate
+    needs: [unit-tests, lint]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify gated jobs succeeded or were skipped
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "A required check failed or was cancelled."
+            echo "  unit-tests: ${{ needs.unit-tests.result }}"
+            echo "  lint:       ${{ needs.lint.result }}"
+            exit 1
+          fi
+          echo "PR Gate passed (jobs succeeded or were skipped)."
+          echo "  unit-tests: ${{ needs.unit-tests.result }}"
+          echo "  lint:       ${{ needs.lint.result }}"
