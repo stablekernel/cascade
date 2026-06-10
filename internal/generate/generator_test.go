@@ -392,11 +392,13 @@ on:
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	// Verify failure check only includes abort callbacks
+	// Verify failure check only includes abort callbacks. The condition now
+	// matches both failure and cancelled outcomes.
 	assert.Contains(t, result, "Check for Failures")
-	assert.Contains(t, result, "needs.build-app.result == 'failure'")
-	// Should NOT include notifications in failure check
-	assert.NotContains(t, result, "needs.build-notifications.result == 'failure'")
+	assert.Contains(t, result, `contains(fromJSON('["failure", "cancelled"]'), needs.build-app.result)`)
+	// Should NOT include notifications in failure check (it still appears in the
+	// summary table and finalize needs:, so scope to the guard's condition form).
+	assert.NotContains(t, result, `needs.build-notifications.result)`)
 }
 
 func TestGenerator_GenerateWithAllContinue(t *testing.T) {
