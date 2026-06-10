@@ -176,9 +176,15 @@ func Validate(cfg *TrunkConfig) []string {
 		} else {
 			buildNames[b.Name] = true
 		}
-		if b.Workflow == "" {
-			errors = append(errors, fmt.Sprintf("builds[%d].workflow is required", i))
-		}
+		// workflow XOR run: exactly one must be set.
+		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("builds[%d]", i), b.Workflow, b.Run, b.Shell)...)
+
+		// Reusable-workflow callbacks cannot carry job-control fields that GHA
+		// rejects on a jobs.<id>.uses call. matrix: is builds-only.
+		isReusable := b.Workflow != ""
+		errors = append(errors, validateJobControlFields(fmt.Sprintf("builds[%d]", i), isReusable, b.RunsOn, b.Concurrency)...)
+		errors = append(errors, validatePermissions(fmt.Sprintf("builds[%d]", i), b.Permissions)...)
+		errors = append(errors, validateSecrets(fmt.Sprintf("builds[%d]", i), b.Secrets)...)
 
 		// Validate run_policy
 		if b.RunPolicy != "" && b.RunPolicy != RunPolicyDefault && b.RunPolicy != RunPolicyAlways && b.RunPolicy != RunPolicyForce {
@@ -202,6 +208,13 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 
+		// optional_depends_on resolves exactly like depends_on (ordering-only).
+		for _, dep := range b.OptionalDependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err != nil {
+				errors = append(errors, fmt.Sprintf("builds[%d].optional_depends_on: %s", i, err.Error()))
+			}
+		}
+
 		// Validate env_inputs keys match top-level environments
 		for envKey := range b.EnvInputs {
 			if !envSet[envKey] {
@@ -219,9 +232,17 @@ func Validate(cfg *TrunkConfig) []string {
 		} else {
 			deployNames[d.Name] = true
 		}
-		if d.Workflow == "" {
-			errors = append(errors, fmt.Sprintf("deploys[%d].workflow is required", i))
-		}
+		// workflow XOR run: exactly one must be set.
+		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("deploys[%d]", i), d.Workflow, d.Run, d.Shell)...)
+
+		// Reusable-workflow callbacks cannot carry job-control fields that GHA
+		// rejects on a jobs.<id>.uses call. rollout: is deploys-only.
+		isReusable := d.Workflow != ""
+		errors = append(errors, validateJobControlFields(fmt.Sprintf("deploys[%d]", i), isReusable, d.RunsOn, d.Concurrency)...)
+		errors = append(errors, validatePermissions(fmt.Sprintf("deploys[%d]", i), d.Permissions)...)
+		errors = append(errors, validateSecrets(fmt.Sprintf("deploys[%d]", i), d.Secrets)...)
+		errors = append(errors, validateRollout(fmt.Sprintf("deploys[%d]", i), d.Rollout, cfg.Environments)...)
+		errors = append(errors, validateDeployTarget(fmt.Sprintf("deploys[%d]", i), d.DeployTarget)...)
 
 		// Validate run_policy
 		if d.RunPolicy != "" && d.RunPolicy != RunPolicyDefault && d.RunPolicy != RunPolicyAlways && d.RunPolicy != RunPolicyForce {
@@ -246,6 +267,13 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 
+		// optional_depends_on resolves exactly like depends_on (ordering-only).
+		for _, dep := range d.OptionalDependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeDeploy); err != nil {
+				errors = append(errors, fmt.Sprintf("deploys[%d].optional_depends_on: %s", i, err.Error()))
+			}
+		}
+
 		// Validate env_inputs keys match top-level environments
 		for envKey := range d.EnvInputs {
 			if !envSet[envKey] {
@@ -253,6 +281,19 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 	}
+
+	// Validate the validate callback structural rules.
+	if cfg.Validate != nil {
+		v := cfg.Validate
+		errors = append(errors, validateWorkflowRunXOR("validate", v.Workflow, v.Run, v.Shell)...)
+		isReusable := v.Workflow != ""
+		errors = append(errors, validateJobControlFields("validate", isReusable, v.RunsOn, v.Concurrency)...)
+		errors = append(errors, validatePermissions("validate", v.Permissions)...)
+		errors = append(errors, validateSecrets("validate", v.Secrets)...)
+	}
+
+	// Config-level structural validation for v1 reserved fields.
+	errors = append(errors, validateConfigLevel(cfg)...)
 
 	// Validate release.tag reference
 	if cfg.Release != nil && cfg.Release.Tag != "" {
@@ -308,8 +349,18 @@ func Validate(cfg *TrunkConfig) []string {
 					errors = append(errors, fmt.Sprintf("external deploy name '%s' conflicts with local deploy name", d.Name))
 				}
 			}
-			if d.Workflow == "" {
-				errors = append(errors, fmt.Sprintf("external[%d].deploys[%d].workflow is required", i, j))
+			prefix := fmt.Sprintf("external[%d].deploys[%d]", i, j)
+			errors = append(errors, validateWorkflowRunXOR(prefix, d.Workflow, d.Run, d.Shell)...)
+			isReusable := d.Workflow != ""
+			errors = append(errors, validateJobControlFields(prefix, isReusable, d.RunsOn, d.Concurrency)...)
+			errors = append(errors, validatePermissions(prefix, d.Permissions)...)
+			errors = append(errors, validateSecrets(prefix, d.Secrets)...)
+			errors = append(errors, validateRollout(prefix, d.Rollout, cfg.Environments)...)
+			errors = append(errors, validateDeployTarget(prefix, d.DeployTarget)...)
+			for _, dep := range d.OptionalDependsOn {
+				if _, err := cfg.ResolveDependency(dep, CallbackTypeExternal); err != nil {
+					errors = append(errors, fmt.Sprintf("%s.optional_depends_on: %s", prefix, err.Error()))
+				}
 			}
 		}
 	}
@@ -358,28 +409,34 @@ func detectCycles(cfg *TrunkConfig) string {
 	// Build adjacency list using prefixed job IDs
 	deps := make(map[string][]string)
 
-	// Add builds with resolved dependencies
-	for _, b := range cfg.Builds {
-		jobID := JobID(CallbackTypeBuild, b.Name)
+	// resolveEdges resolves a callback's hard and optional dependencies into
+	// prefixed job IDs. optional_depends_on participates in cycle detection
+	// exactly like depends_on (it still adds a needs: edge for ordering).
+	resolveEdges := func(hard, optional []string, fromType string) []string {
 		var resolvedDeps []string
-		for _, dep := range b.DependsOn {
-			if resolved, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err == nil {
+		for _, dep := range hard {
+			if resolved, err := cfg.ResolveDependency(dep, fromType); err == nil {
 				resolvedDeps = append(resolvedDeps, resolved)
 			}
 		}
-		deps[jobID] = resolvedDeps
+		for _, dep := range optional {
+			if resolved, err := cfg.ResolveDependency(dep, fromType); err == nil {
+				resolvedDeps = append(resolvedDeps, resolved)
+			}
+		}
+		return resolvedDeps
+	}
+
+	// Add builds with resolved dependencies
+	for _, b := range cfg.Builds {
+		jobID := JobID(CallbackTypeBuild, b.Name)
+		deps[jobID] = resolveEdges(b.DependsOn, b.OptionalDependsOn, CallbackTypeBuild)
 	}
 
 	// Add deploys with resolved dependencies
 	for _, d := range cfg.Deploys {
 		jobID := JobID(CallbackTypeDeploy, d.Name)
-		var resolvedDeps []string
-		for _, dep := range d.DependsOn {
-			if resolved, err := cfg.ResolveDependency(dep, CallbackTypeDeploy); err == nil {
-				resolvedDeps = append(resolvedDeps, resolved)
-			}
-		}
-		deps[jobID] = resolvedDeps
+		deps[jobID] = resolveEdges(d.DependsOn, d.OptionalDependsOn, CallbackTypeDeploy)
 	}
 
 	// DFS for cycle detection

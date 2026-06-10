@@ -31,6 +31,18 @@ type EnvState struct {
 	Builds      map[string]*BuildState          `yaml:"builds,omitempty" json:"builds,omitempty"`
 	Deploys     map[string]*DeployState         `yaml:"deploys,omitempty" json:"deploys,omitempty"`
 	External    map[string]*ExternalDeployState `yaml:"external,omitempty" json:"external,omitempty"` // External repo deploy states
+	// Previous is the reserved "roll back to N-1" ring (#23). Reserved-shape,
+	// optional: populated only if deterministic history-walking is wired later.
+	Previous []EnvStateSnapshot `yaml:"previous,omitempty" json:"previous,omitempty"`
+}
+
+// EnvStateSnapshot is a single prior env-state entry in the reserved rollback
+// ring (state.<env>.previous). Reserved-shape only.
+type EnvStateSnapshot struct {
+	SHA         string `yaml:"sha,omitempty" json:"sha,omitempty"`
+	Version     string `yaml:"version,omitempty" json:"version,omitempty"`
+	CommittedAt string `yaml:"committed_at,omitempty" json:"committed_at,omitempty"`
+	CommittedBy string `yaml:"committed_by,omitempty" json:"committed_by,omitempty"`
 }
 
 // BuildState tracks the state of a single build within an environment
@@ -45,6 +57,7 @@ type BuildState struct {
 // DeployState tracks the state of a single deployable within an environment
 type DeployState struct {
 	SHA        string            `yaml:"sha,omitempty" json:"sha,omitempty"`
+	Version    string            `yaml:"version,omitempty" json:"version,omitempty"` // Version this deployable deployed (reserved-shape; independent of env-level Version)
 	DeployedAt string            `yaml:"deployed_at,omitempty" json:"deployed_at,omitempty"`
 	DeployedBy string            `yaml:"deployed_by,omitempty" json:"deployed_by,omitempty"`
 	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"` // state_tags values
@@ -98,6 +111,19 @@ type TrunkConfig struct {
 	Release       *ReleaseConfig       `yaml:"release,omitempty" json:"release,omitempty"`
 	Changelog     *ChangelogConfig     `yaml:"changelog,omitempty" json:"changelog,omitempty"`
 	Concurrency   *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"` // Optional: top-level concurrency: block on the orchestrate workflow
+
+	// v1 reserved-shape config-level fields (parse + structural validation only).
+	RunsOn            *RunsOn                      `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`                         // Default runner for cascade-owned jobs
+	JobTimeoutMinutes int                          `yaml:"job_timeout_minutes,omitempty" json:"job_timeout_minutes,omitempty"` // Default timeout-minutes for cascade-owned jobs
+	DispatchInputs    map[string]DispatchInput     `yaml:"dispatch_inputs,omitempty" json:"dispatch_inputs,omitempty"`         // Operator-facing manual-run inputs
+	ExtraTriggers     *ExtraTriggers               `yaml:"extra_triggers,omitempty" json:"extra_triggers,omitempty"`           // Non-push trigger types
+	PRPreview         *PRPreviewConfig             `yaml:"pr_preview,omitempty" json:"pr_preview,omitempty"`
+	ValidateCheck     *ValidateCheckConfig         `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
+	MergeQueue        *MergeQueueConfig            `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
+	PinMode           string                       `yaml:"pin_mode,omitempty" json:"pin_mode,omitempty"` // tag | sha (default tag)
+	ActionPins        map[string]string            `yaml:"action_pins,omitempty" json:"action_pins,omitempty"`
+	Telemetry         *TelemetryConfig             `yaml:"telemetry,omitempty" json:"telemetry,omitempty"`
+	EnvironmentConfig map[string]EnvironmentConfig `yaml:"environment_config,omitempty" json:"environment_config,omitempty"`
 }
 
 // ConcurrencyConfig overrides the default concurrency: block emitted on the
@@ -277,7 +303,9 @@ func (c *TrunkConfig) HasGPGSigning() bool {
 
 // ValidateConfig defines a validation workflow
 type ValidateConfig struct {
-	Workflow       string                            `yaml:"workflow" json:"workflow"`
+	Workflow       string                            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`           // Inline command, XOR with workflow (reserved-shape)
+	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"`       // Shell for inline run (default bash; only valid with run)
 	Triggers       []string                          `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns that should trigger validation
 	SupportsDryRun bool                              `yaml:"supports_dry_run,omitempty" json:"supports_dry_run,omitempty"`
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
@@ -286,12 +314,22 @@ type ValidateConfig struct {
 	OnFailure      string                            `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
 	Retries        int                               `yaml:"retries,omitempty" json:"retries,omitempty"`
 	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
+
+	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	// The validate gate is a singleton, so the spec scopes optional_depends_on
+	// (§2.11) and auto_commits (§5.5) to builds/deploys only — not here.
+	Secrets     *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn      *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 }
 
 // BuildConfig defines a build target
 type BuildConfig struct {
 	Name           string                            `yaml:"name" json:"name"`
-	Workflow       string                            `yaml:"workflow" json:"workflow"`
+	Workflow       string                            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`     // Inline command, XOR with workflow (reserved-shape)
+	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"` // Shell for inline run (default bash; only valid with run)
 	Triggers       []string                          `yaml:"triggers" json:"triggers"`
 	DependsOn      []string                          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	StateTags      []string                          `yaml:"state_tags,omitempty" json:"state_tags,omitempty"`
@@ -302,6 +340,15 @@ type BuildConfig struct {
 	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
+
+	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Matrix            *MatrixConfig      `yaml:"matrix,omitempty" json:"matrix,omitempty"` // Build fan-out (builds only)
+	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
 }
 
 // ArtifactConfig defines a release artifact produced by a build
@@ -315,7 +362,9 @@ type ArtifactConfig struct {
 // DeployConfig defines a deployment target
 type DeployConfig struct {
 	Name           string                            `yaml:"name" json:"name"`
-	Workflow       string                            `yaml:"workflow" json:"workflow"`
+	Workflow       string                            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`     // Inline command, XOR with workflow (reserved-shape)
+	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"` // Shell for inline run (default bash; only valid with run)
 	Triggers       []string                          `yaml:"triggers" json:"triggers"`
 	DependsOn      []string                          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	StateTags      []string                          `yaml:"state_tags,omitempty" json:"state_tags,omitempty"`
@@ -326,6 +375,16 @@ type DeployConfig struct {
 	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
+
+	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Rollout           *RolloutConfig     `yaml:"rollout,omitempty" json:"rollout,omitempty"` // Deploy rollout strategy (deploys only)
+	DeployTarget      *DeployTarget      `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
+	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published.
@@ -360,8 +419,21 @@ type ExternalRepoConfig struct {
 // ExternalDeployConfig defines a deployable from an external repository
 type ExternalDeployConfig struct {
 	Name     string   `yaml:"name" json:"name"`                             // Deploy identifier (e.g., "cdk")
-	Workflow string   `yaml:"workflow" json:"workflow"`                     // Workflow path - local (.github/...) or external (org/repo/.github/...@ref)
+	Workflow string   `yaml:"workflow,omitempty" json:"workflow,omitempty"` // Workflow path - local (.github/...) or external (org/repo/.github/...@ref)
+	Run      string   `yaml:"run,omitempty" json:"run,omitempty"`           // Inline command, XOR with workflow (reserved-shape)
+	Shell    string   `yaml:"shell,omitempty" json:"shell,omitempty"`       // Shell for inline run (default bash; only valid with run)
 	Triggers []string `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns for change detection
+
+	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	// Applied by extension to external deploys per spec §2.
+	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Rollout           *RolloutConfig     `yaml:"rollout,omitempty" json:"rollout,omitempty"`
+	DeployTarget      *DeployTarget      `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
+	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
 }
 
 // NotifyConfig defines how a satellite repo notifies its primary after dev deploys
