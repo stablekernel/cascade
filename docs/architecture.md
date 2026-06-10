@@ -4,11 +4,11 @@ System design and internals of cascade.
 
 ## Design Principles
 
-1. **Build once, deploy everywhere** - Single artifact promoted through environments
-2. **Change-driven** - Only build/deploy what changed
-3. **Trunk-based** - Single main branch, short-lived feature branches
-4. **Callback contract** - Framework orchestrates, adopting repos own build/deploy
-5. **State tracking** - Manifest tracks what's deployed where
+1. Build once, deploy everywhere. One artifact is promoted through every environment.
+2. Change-driven. We build and deploy only what changed.
+3. Trunk-based. A single main branch backs short-lived feature branches.
+4. Callback contract. The framework orchestrates and adopting repos own build and deploy.
+5. State tracking. The manifest records what is deployed where.
 
 ## System Overview
 
@@ -561,21 +561,21 @@ For satellite repos with notify config:
 The generator emits an `environment: <name>` key on each deploy job whenever the
 manifest includes an `environments` list. That single key is enough for GitHub
 Actions to attach deployment records, honour required-reviewer gates, apply
-wait timers, and scope environment secrets — all configured inside GitHub, not
-in the manifest. No cascade code calls the Deployments REST API or the
-Environments REST API directly.
+wait timers, and scope environment secrets. You configure all of that inside
+GitHub, not in the manifest. No cascade code calls the Deployments REST API or
+the Environments REST API directly.
 
 ### What is deferred
 
 Two capabilities are intentionally out of scope for v1:
 
-- **Programmatic Deployments API status** — cascade does not currently call
+- Programmatic Deployments API status. cascade does not call
   `POST /repos/{owner}/{repo}/deployments` or
   `POST /repos/{owner}/{repo}/deployments/{id}/statuses`. GitHub Actions creates
   these records automatically when a job carries `environment:`, so adopters get
-  deployment records for free without cascade owning that call.
+  deployment records without cascade owning that call.
 
-- **Environments REST configuration sync** — cascade does not read or write
+- Environments REST configuration sync. cascade does not read or write
   environment protection rules (required reviewers, wait timers, branch policies)
   via the REST API. That configuration lives in GitHub today.
 
@@ -583,10 +583,10 @@ Two capabilities are intentionally out of scope for v1:
 
 Keeping cascade out of these APIs in v1 bounds the surface area and avoids
 coupling the tool to GitHub API semantics that are still evolving. The
-auto-created deployment records from `environment:` already satisfy the common
-case; adding programmatic control before there is a clear adopter need would
-add complexity without a demonstrable benefit. If those APIs change shape,
-cascade would need to track the change even though nothing in v1 depends on them.
+auto-created deployment records from `environment:` already cover the common
+case. Adding programmatic control before an adopter needs it would buy
+complexity and nothing else. If those APIs change shape, cascade would have to
+track the change even though nothing in v1 depends on them.
 
 ### How the design reserves the extension points
 
@@ -598,7 +598,7 @@ without a breaking change:
 
 ```yaml
 config:
-  environments: [dev, test, prod]      # ordered list — source of truth, unchanged
+  environments: [dev, test, prod]      # ordered list (source of truth), unchanged
   environment_config:                  # reserved; omitting it is valid today
     prod:
       gha_environment: production      # maps to the GHA environment name

@@ -3,7 +3,7 @@ description: |
   Verifies the timeout_minutes field on validate/builds/deploys propagates
   into the generated orchestrate.yaml as a job-level timeout-minutes (#97).
 
-  This is a generator-output verification scenario — assertion runs on the
+  This is a generator-output verification scenario. Assertion runs on the
   staged repo after StageRepoFromConfig generates workflows but before any
   orchestrate runs. We don't run orchestrate because act doesn't honor
   timeout-minutes on `uses:` reusable workflow callers and would fail the

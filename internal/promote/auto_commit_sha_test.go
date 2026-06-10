@@ -98,7 +98,7 @@ func TestFinalizer_NoAutoCommits_KeepsPromotionSHA(t *testing.T) {
 			Version:     "v1.0.0-2",
 		}},
 	})
-	// No SetHeadSHA call — standard path.
+	// No SetHeadSHA call; standard path.
 
 	require.NoError(t, fin.Run())
 
@@ -144,7 +144,7 @@ func TestFinalizer_AutoCommits_EmptySHA_FallsBackToPromotion(t *testing.T) {
 			Version:     "v1.0.0-3",
 		}},
 	})
-	fin.SetHeadSHA("") // explicit empty — must behave like unset
+	fin.SetHeadSHA("") // explicit empty: must behave like unset
 
 	require.NoError(t, fin.Run())
 

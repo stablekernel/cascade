@@ -5,7 +5,7 @@ description: |
   generated orchestrate.yaml (#12, #35, #15, #17).
 
   A sibling reusable-workflow callback (workflow:) must not carry those
-  attributes — GHA forbids runs-on/concurrency on jobs.<id>.uses calls.
+  attributes; GHA forbids runs-on/concurrency on jobs.<id>.uses calls.
 
   Generator-output verification scenario; assertion runs on the staged repo
   after StageRepoFromConfig generates workflows but before any orchestrate runs.

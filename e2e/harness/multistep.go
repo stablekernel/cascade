@@ -65,7 +65,7 @@ type StepExpect struct {
 
 // WorkflowFileExpect asserts a generated workflow file contains/excludes
 // specific substrings. Verifies manifest fields make it into the emitted
-// YAML — orthogonal to behavior checks (state/jobs/etc.) which observe the
+// YAML, orthogonal to behavior checks (state/jobs/etc.) which observe the
 // run outcome. Used for features whose effect is purely the generated
 // workflow shape (#92 concurrency, #97 timeout-minutes, #101/#102 push
 // retry loops).

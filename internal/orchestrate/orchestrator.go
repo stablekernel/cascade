@@ -384,11 +384,11 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 //
 //  1. Multi-env intermediate: next env's state SHA (e.g., dev's changelog
 //     is "what's new vs test"). Preserves the existing per-env progression
-//     model — the changelog shows what's about to be promoted forward.
+//     model. The changelog shows what's about to be promoted forward.
 //  2. Last published release: state["release"].SHA, falling back to
 //     latest_release.SHA. This is the right base whenever there's no
-//     "next env" to compare against — i.e., no-env library/CLI projects
-//     after their first publish, OR the terminal env in a multi-env list.
+//     "next env" to compare against (i.e., no-env library/CLI projects
+//     after their first publish, OR the terminal env in a multi-env list).
 //     Without this, a freshly-published-then-orchestrated repo would
 //     compute a changelog covering its entire git history (cf. #80).
 //  3. Initial commit: only when nothing has been released yet (truly the

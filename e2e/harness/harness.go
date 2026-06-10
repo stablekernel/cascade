@@ -117,7 +117,7 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config) error 
 		// Create stub workflow files for builds and deploys.
 		// These are reusable workflows that the CLI reads to discover inputs/outputs.
 		// We tag each stub's `name:` with a per-scenario suffix so act's
-		// auto-generated job container hash diverges across parallel scenarios —
+		// auto-generated job container hash diverges across parallel scenarios.
 		// otherwise multiple scenarios with the same build/deploy names race on
 		// /act-Build-app-app-app-<hash> at the host docker level.
 		scenarioTag := scenarioTagFromTestName(h.t.Name())
@@ -287,7 +287,7 @@ func scenarioTagFromTestName(name string) string {
 // generatePublishStubWorkflow creates a minimal workflow_dispatch stub for the
 // publish callback. Unlike build/deploy stubs (which are workflow_call), the
 // publish workflow is invoked via `gh workflow run` (dispatch) from the promote
-// finalize job. The stub accepts the standard publish inputs but does nothing —
+// finalize job. The stub accepts the standard publish inputs but does nothing;
 // in the e2e harness the dispatch is a no-op because GITHUB_SERVER_URL points
 // to gitea.
 func generatePublishStubWorkflow(scenarioTag string) string {
@@ -409,7 +409,7 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	// a non-zero exit, so a run that exited 0 but wrote no workflow (e.g. the
 	// "No changes"/skip path) left no trace and the missing orchestrate.yaml
 	// only surfaced much later as a `cat: ... No such file` in the orchestrate
-	// step — a different scenario per parallel dispatch (#25). Keep the output
+	// step. A different scenario per parallel dispatch (#25). Keep the output
 	// for diagnostics.
 	var genOutput bytes.Buffer
 	if reader != nil {
@@ -423,7 +423,7 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	// can exit 0 without emitting .github/workflows/orchestrate.yaml; if we
 	// commit and push that empty set, the downstream orchestrate step runs act
 	// against a non-existent `-W` path and act (with --detect-event) reports no
-	// jobs while still exiting success — the run then masquerades as a passing
+	// jobs while still exiting success. The run then masquerades as a passing
 	// scenario with 0 jobs (#25). Fail here, at the source, with the generate
 	// output and a workflow-dir listing so the real cause is obvious.
 	if err := h.assertOrchestrateGenerated(ctx, genOutput.String()); err != nil {
@@ -436,12 +436,12 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	//   - 'uses: build.yaml' → 'uses: ./build.yaml'
 	//
 	// Earlier this was a fire-and-forget shell sed loop with three blank
-	// receivers — under heavy CI parallelism (28 scenarios × act + gitea
+	// receivers. Under heavy CI parallelism (28 scenarios × act + gitea
 	// containers) the exec would occasionally fail or no-op and leave
 	// un-localized refs in the workflow files. The act job container would
 	// then try to fetch `stablekernel/cascade@latest` from the test
 	// gitea (where that repo doesn't exist), failing with `authentication
-	// required` — cf. #78. Now we check the exit code, verify no
+	// required` (cf. #78). Now we check the exit code, verify no
 	// `stablekernel/cascade` references remain, and retry on transient
 	// failure.
 	if err := h.localizeWorkflows(ctx); err != nil {
@@ -613,7 +613,7 @@ func (h *Harness) SyncRepoToActContainer(ctx context.Context) error {
 	// under heavy parallel load against the per-scenario gitea; bind the fetch
 	// to origin/main explicitly and chain the reset so a partial sync surfaces
 	// as a non-zero exit instead of silently resetting to a stale tree (which
-	// would drop the just-pushed orchestrate.yaml — #25).
+	// would drop the just-pushed orchestrate.yaml (#25).
 	syncCmd := []string{
 		"bash", "-c",
 		"cd /tmp/repo && git fetch origin main && git reset --hard origin/main && (git branch -f master HEAD 2>/dev/null || true)",

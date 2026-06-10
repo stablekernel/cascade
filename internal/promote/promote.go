@@ -134,7 +134,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 		return p.noEnvironmentPromotion()
 	}
 
-	// Snapshot current state — include "release" since it's a virtual env
+	// Snapshot current state; include "release" since it's a virtual env
 	// in the chain but isn't necessarily in the env list.
 	preState := make(map[string]*config.EnvState)
 	for _, env := range envs {
@@ -153,7 +153,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 	var skippedEnvs []string
 
 	// Determine prerelease and prod positions. The implicit chain is
-	// [envs..., "release", prodEnv] — "release" is a virtual env between
+	// [envs..., "release", prodEnv]. "release" is a virtual env between
 	// the prerelease env and prod where the publish action lands. Each
 	// `mode: default` invocation advances state through the chain by one
 	// logical step, stopping at the publish boundary.
@@ -174,14 +174,14 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 	}
 
 	// Sequential walk through env pairs. Stops at the publish boundary
-	// (sourceEnv == prereleaseEnv && targetEnv == prodEnv) — that crossing
+	// (sourceEnv == prereleaseEnv && targetEnv == prodEnv): that crossing
 	// produces a "release" promotion that advances state[release] only;
 	// state[prodEnv] is advanced by a subsequent default-mode invocation.
 	for i := 0; i < len(envs)-1; i++ {
 		sourceEnv := envs[i]
 		targetEnv := envs[i+1]
 
-		// Skip "release" as a target if it's literally in the env list — the
+		// Skip "release" as a target if it's literally in the env list. The
 		// release marker is advanced via the publish path, not as a normal env.
 		if targetEnv == "release" {
 			continue
@@ -208,7 +208,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 		// (state marker + publish action). State[prodEnv] is left untouched;
 		// a subsequent default-mode invocation handles release→prod.
 		if sourceEnv == prereleaseEnv && targetEnv == prodEnv {
-			// Skip if state[release] is already at sourceState.SHA — the
+			// Skip if state[release] is already at sourceState.SHA. The
 			// publish was completed by a prior invocation. Without this, a
 			// repeat default-mode call would re-emit a no-op publish promo
 			// instead of falling through to the release→prod fallback below.
@@ -315,7 +315,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 
 	// Fallback: if the env walk produced nothing AND state[release] is ahead
 	// of state[prodEnv], deploy release → prod. This is the second step of
-	// the two-step "publish then deploy" flow — runs only when no upstream
+	// the two-step "publish then deploy" flow. Runs only when no upstream
 	// advance is pending. Order matters: if uat is ahead of release, we
 	// publish first; if release is ahead of prod and there's no upstream
 	// work, we deploy. (When "release" is in the env list literally, the
@@ -533,7 +533,7 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 	// Build promotions for envs[sourceIdx+1..targetIdx]. Materialize "release"
 	// as its own promotion either when it's in the env list or when crossing
 	// into prodEnv from prereleaseEnv (publish boundary). The release
-	// promotion advances state[release] only — no deploy.
+	// promotion advances state[release] only; no deploy.
 	var promotions []EnvPromotion
 	for i := sourceIdx + 1; i <= targetIdx; i++ {
 		env := envs[i]

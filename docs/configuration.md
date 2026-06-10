@@ -13,7 +13,7 @@ ci:
     environments: [dev, test, prod]
     # builds, deploys, etc.
 
-  state:            # Deployment tracking (managed by the framework — do not edit)
+  state:            # Deployment tracking (managed by the framework, do not edit)
     dev:
       sha: "abc123"
       version: "v1.2.0-rc.3"
@@ -57,7 +57,7 @@ Controls which CLI version the generated workflows install via setup-cli:
 | Value | Behavior |
 |-------|----------|
 | `latest` | Most recent stable release (default) |
-| `beta` | Bleeding edge from `master` branch |
+| `beta` | Latest build from the `master` branch |
 | `vX.Y.Z` | Specific version (e.g., `v2.0.4`) |
 
 Pin to a specific version for reproducibility. Use `beta` for early access.
@@ -122,7 +122,7 @@ ci:
 | `env_inputs` | map | {} | Per-environment input overrides |
 | `run_policy` | string | default | Execution policy |
 | `on_failure` | string | abort | Failure handling |
-| `retries` | int | 0 | Retry attempts (0–3) |
+| `retries` | int | 0 | Retry attempts (0-3) |
 
 ### builds Section
 
@@ -156,7 +156,7 @@ ci:
 | `env_inputs` | map | No | Per-environment input overrides |
 | `run_policy` | string | No | Execution policy |
 | `on_failure` | string | No | Failure handling |
-| `retries` | int | No | Retry attempts (0–3) |
+| `retries` | int | No | Retry attempts (0-3) |
 
 The build's `artifact_id` output (if declared) is captured automatically into state. Any other declared outputs are forwarded to dependent deploys as inputs.
 
@@ -194,7 +194,7 @@ ci:
 | `env_inputs` | map | No | Per-environment overrides |
 | `run_policy` | string | No | Execution policy |
 | `on_failure` | string | No | Failure handling |
-| `retries` | int | No | Retry attempts (0–3) |
+| `retries` | int | No | Retry attempts (0-3) |
 
 ### Deploy Types
 
@@ -210,7 +210,7 @@ Build-linked deploys inherit the build's triggers for change detection during pr
 
 ### publish Section
 
-The publish callback runs once per build when a release is published (RC → final semver). Use it to retag artifacts that still carry their RC version.
+The publish callback runs once per build when a release is published, at the point where an RC version becomes a final semver. Use it to retag artifacts that still carry their RC version.
 
 ```yaml
 ci:
@@ -265,8 +265,8 @@ ci:
 | `deploys[].triggers` | list | No | File patterns for change detection |
 
 **Workflow paths:**
-- Local (`.github/workflows/deploy.yaml`) — calls a workflow in the primary repo
-- External (`org/repo/.github/workflows/deploy.yaml@ref`) — calls a workflow in the external repo
+- Local (`.github/workflows/deploy.yaml`) calls a workflow in the primary repo
+- External (`org/repo/.github/workflows/deploy.yaml@ref`) calls a workflow in the external repo
 
 When external deploys are configured, the generated promote workflow includes deploy jobs for each external deploy and the finalize job tracks their state.
 
@@ -331,7 +331,7 @@ Omit this section to use the built-in conventional commit parser.
 
 ## State Section
 
-The `state` section tracks deployment state per environment plus a synthetic `release` slot. It is automatically managed by the framework — do not hand-edit.
+The `state` section tracks deployment state per environment plus a synthetic `release` slot. The framework manages it automatically. Do not hand-edit.
 
 ### Structure
 
@@ -430,7 +430,7 @@ deploys:
       stack_version: "v2.1.0"
 ```
 
-This enables diff-based change detection during promotions — only deployables with actual file changes are redeployed.
+This enables diff-based change detection during promotions. Only deployables with actual file changes are redeployed.
 
 ### External Deploy Tracking
 
@@ -477,7 +477,7 @@ Controls when a callback executes:
 
 ### retries
 
-Number of retry attempts if the callback fails (0–3).
+Number of retry attempts if the callback fails (0-3).
 
 ## Trigger Patterns
 
@@ -493,9 +493,9 @@ Triggers use glob patterns:
 | `deploy/k8s/**` | All files under deploy/k8s/ |
 
 Special characters:
-- `*` — matches any characters except `/`
-- `**` — matches any path segments
-- `?` — matches a single character
+- `*` matches any characters except `/`
+- `**` matches any path segments
+- `?` matches a single character
 
 ## Input Inheritance
 

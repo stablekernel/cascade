@@ -584,7 +584,7 @@ func (g *Generator) writeExtraTriggers(sb *strings.Builder, et *config.ExtraTrig
 // writeConcurrency emits a top-level concurrency: block. Two rapid pushes to
 // trunk used to fire concurrent orchestrate runs, which raced on state writes
 // and produced duplicate RC tags + non-fast-forward push failures (#92).
-// Default: cancel an older in-progress run when a newer push lands —
+// Default: cancel an older in-progress run when a newer push lands.
 // the older run's work is obsolete. Override via config.concurrency.
 func (g *Generator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
@@ -749,7 +749,7 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
 
 	// if: condition based on run_policy. Optional deps are intentionally not
-	// passed here — they sequence the job without gating it.
+	// passed here; they sequence the job without gating it.
 	g.writeIfCondition(sb, info, needs)
 
 	switch {
@@ -768,7 +768,7 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		g.writeStrategyBlock(sb, info.Matrix)
 	}
 
-	// environment: — emitted on deploy jobs when the config declares a
+	// environment: emitted on deploy jobs when the config declares a
 	// gha_environment for at least one environment. The job-level environment:
 	// key wires the job to a GitHub Environment so that the environment's
 	// protection rules (required reviewers, wait timers, deployment branch
@@ -792,7 +792,7 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		sb.WriteString("    continue-on-error: true\n")
 	}
 
-	// Inline run: callback — emit a cascade-owned job with an inline run: step
+	// Inline run: callback. Emit a cascade-owned job with an inline run: step
 	// instead of a jobs.<id>.uses reusable-workflow call. Standard inputs reach
 	// the step as env: variables rather than reusable-workflow with: inputs.
 	if info.Run != "" {
@@ -1434,7 +1434,7 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	}
 
 	// Add env vars for build artifact IDs. Only emitted when the build
-	// workflow declares an `artifact_id` output — the generator discovers
+	// workflow declares an `artifact_id` output. The generator discovers
 	// this via discoverOutputsAndInputs. When present, finalize captures
 	// the immutable identifier (e.g., a Docker image digest) so it can be
 	// stored in state and later passed to the publish callback on release.

@@ -12,7 +12,7 @@ import (
 )
 
 // TestOrchestrateInputExpressionPassthrough verifies that operator-authored
-// inputs survive into the orchestrate callback with: block — vars.*
+// inputs survive into the orchestrate callback with: block. Vars.*
 // passthrough expressions emit verbatim, literals emit as-is, and matrix.*
 // placeholders are not treated as passthrough.
 func TestOrchestrateInputExpressionPassthrough(t *testing.T) {

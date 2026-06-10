@@ -96,8 +96,8 @@ runs:
         # Robustly capture a single-line version, sanitized for GHA's output
         # file format. Older form `echo "version=$RAW" >> $GITHUB_OUTPUT`
         # produced `##[error]Invalid format 'unknown'` against the v1.1.0
-        # binary — likely a GHA file-command parser quirk where certain
-        # values get mis-interpreted as a format directive. Strip CR/newlines
+        # binary (likely a GHA file-command parser quirk where certain
+        # values get mis-interpreted as a format directive). Strip CR/newlines
         # and non-printable characters, fall back to "unknown" on empty/error,
         # cap length, and use printf instead of echo to avoid backslash
         # interpretation surprises.

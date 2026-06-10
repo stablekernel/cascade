@@ -4,7 +4,7 @@ description: |
   inline run: step in the generated orchestrate.yaml, while a sibling callback
   declaring workflow: still emits a jobs.<id>.uses reusable-workflow call (#36).
 
-  This is a generator-output verification scenario — assertion runs on the
+  This is a generator-output verification scenario. Assertion runs on the
   staged repo after StageRepoFromConfig generates workflows but before any
   orchestrate runs.
 

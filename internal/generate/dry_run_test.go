@@ -31,7 +31,7 @@ func TestPromote_SupportsDryRun_SingleDeploy(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	// The job must NOT gate on dry_run != 'true' — the callback runs regardless.
+	// The job must NOT gate on dry_run != 'true'; the callback runs regardless.
 	assert.NotContains(t, content,
 		"github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), 'app')",
 		"supports_dry_run deploy should not be skipped by dry_run guard")

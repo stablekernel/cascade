@@ -255,7 +255,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-data.outputs.sem_version }}
         run: |
-          # Only dispatch on real GitHub — in act/gitea e2e environments
+          # Only dispatch on real GitHub. In act/gitea e2e environments
           # GITHUB_SERVER_URL is http://gitea:3000 and the Release workflow
           # doesn't exist, so skip silently.
           if [[ "$GITHUB_SERVER_URL" != "https://github.com" ]]; then

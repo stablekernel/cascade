@@ -18,7 +18,7 @@ on:
   release:
     types: [published, released]
   # Explicitly triggered by the promote workflow's finalize job after
-  # publishing. This is the reliable path — event-based triggers don't
+  # publishing. This is the reliable path; event-based triggers don't
   # fire when releases are managed via API calls in a workflow run.
   workflow_dispatch:
 

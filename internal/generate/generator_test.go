@@ -216,7 +216,7 @@ func TestGenerator_CallbackTimeoutMinutes(t *testing.T) {
 
 // TestGenerator_CallbackTimeoutOmittedWhenZero asserts no timeout-minutes is
 // emitted on a reusable-workflow callback (jobs.<id>.uses) when its
-// timeout_minutes is unset — those callers own their own timeout. Cascade-owned
+// timeout_minutes is unset; those callers own their own timeout. Cascade-owned
 // jobs (setup/finalize) still receive the owned-job default (#37), so the check
 // is scoped to the callback job block, not the whole workflow.
 func TestGenerator_CallbackTimeoutOmittedWhenZero(t *testing.T) {
@@ -1389,7 +1389,7 @@ on:
 }
 
 // =============================================================================
-// Publish callback (#39) — artifact_id tracking in orchestrate finalize
+// Publish callback (#39): artifact_id tracking in orchestrate finalize
 // =============================================================================
 
 func TestGenerator_BuildArtifactIDTracked(t *testing.T) {
@@ -1603,7 +1603,7 @@ func TestGenerator_ExtraTriggers_MergeGroup(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, result, "  merge_group:\n", "merge_group trigger must be emitted when MergeGroup is non-nil")
-	// Lane behavior is a separate issue — no merge_queue: config involved here.
+	// Lane behavior is a separate issue; no merge_queue: config involved here.
 	assert.NotContains(t, result, "merge_queue:", "lane behavior config must not appear from trigger emission alone")
 }
 
@@ -1712,7 +1712,7 @@ func TestGenerator_BuildMatrix_MaxParallelOmittedWhenZero(t *testing.T) {
 				Triggers: []string{"src/**"},
 				Matrix: &config.MatrixConfig{
 					Dimensions: map[string][]string{"os": {"linux"}},
-					// MaxParallel zero and FailFast nil — neither should appear.
+					// MaxParallel zero and FailFast nil: neither should appear.
 				},
 			},
 		},
@@ -1783,7 +1783,7 @@ func TestGenerator_PassthroughArtifact_InlineUpload(t *testing.T) {
 	// The path must match the declared upload path.
 	assert.Contains(t, result, "path: dist/",
 		"upload step must set path to artifact.upload value")
-	// No download step — this build has no downloads configured.
+	// No download step; this build has no downloads configured.
 	assert.NotContains(t, result, "uses: actions/download-artifact@v4",
 		"build without artifact.downloads must not emit download-artifact step")
 }
@@ -1860,7 +1860,7 @@ func TestGenerator_PassthroughArtifact_NoArtifactNoSteps(t *testing.T) {
 	// (no release config is set, so the finalize job emits no artifact steps either).
 	assert.NotContains(t, result, "actions/upload-artifact@v4",
 		"build without artifact: must not emit upload-artifact")
-	// download-artifact only appears in finalize when HasReleaseArtifacts — it is
+	// download-artifact only appears in finalize when HasReleaseArtifacts. It is
 	// absent here because no release artifacts are declared and no passthrough is set.
 	assert.NotContains(t, result, "actions/download-artifact@v4",
 		"build without artifact: must not emit download-artifact")

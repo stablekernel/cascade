@@ -172,7 +172,7 @@ func TestOrchestrateDeployCallbackJob_ExplicitSecretsMap(t *testing.T) {
 }
 
 // TestOrchestrateCallbackJob_InlineRunUnaffected verifies that an inline-run
-// callback (run: ...) does not emit any secrets: key at all — inline jobs are
+// callback (run: ...) does not emit any secrets: key at all; inline jobs are
 // cascade-owned, not reusable-workflow calls.
 func TestOrchestrateCallbackJob_InlineRunUnaffected(t *testing.T) {
 	cfg := &config.TrunkConfig{
@@ -183,7 +183,7 @@ func TestOrchestrateCallbackJob_InlineRunUnaffected(t *testing.T) {
 				Name:     "smoke",
 				Run:      "go test ./...",
 				Triggers: []string{"**/*.go"},
-				// Secrets field set on an inline-run callback — must be ignored.
+				// Secrets field set on an inline-run callback; must be ignored.
 				Secrets: &config.SecretsConfig{
 					Map: map[string]string{"SOME_TOKEN": "MY_TOKEN"},
 				},
@@ -195,7 +195,7 @@ func TestOrchestrateCallbackJob_InlineRunUnaffected(t *testing.T) {
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	// Inline run: jobs are cascade-owned steps — no secrets: key of any form.
+	// Inline run: jobs are cascade-owned steps; no secrets: key of any form.
 	assert.NotContains(t, result, "secrets:")
 }
 

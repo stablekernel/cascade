@@ -291,7 +291,7 @@ func TestNewOrchestratorInvalidYAML(t *testing.T) {
 //  2. No-env or last env → state["release"] (or latest_release)
 //  3. Nothing released → initial commit (git fallback, not exercised here)
 //
-// The git fallback isn't exercised — it requires a real repo and the rest of
+// The git fallback isn't exercised; it requires a real repo and the rest of
 // the priority ladder is what we're really fixing.
 func TestCalculateChangelogRefs(t *testing.T) {
 	tests := []struct {

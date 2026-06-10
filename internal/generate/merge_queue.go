@@ -13,8 +13,8 @@ import (
 // workflow that validates the prospective trunk commit with cascade's own
 // logic: it runs `cascade parse-config` as a validity gate and a dry-run
 // `cascade orchestrate setup` to preview the build/deploy decisions against the
-// merge-group candidate ref. The lane is read-only — no state writes, no
-// releases, no deploys — and reports a status the merge queue can require.
+// merge-group candidate ref. The lane is read-only (no state writes, no
+// releases, no deploys) and reports a status the merge queue can require.
 //
 // This generator owns the LANE behavior. The raw merge_group trigger itself is
 // expressible separately under extra_triggers.merge_group; the two are

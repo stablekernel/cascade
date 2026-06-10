@@ -349,11 +349,11 @@ func TestFormatMarkdown_WithContributors(t *testing.T) {
 
 	result := FormatMarkdown(nil, features, fixes, nil, "owner/repo", "base123", "head456")
 
-	// Check inline attribution exists (new format: — @username)
-	if !strings.Contains(result, "— @alice") {
+	// Check inline attribution exists (the "(@username)" format).
+	if !strings.Contains(result, "(@alice)") {
 		t.Error("Missing inline contributor attribution for alice")
 	}
-	if !strings.Contains(result, "— @bob") {
+	if !strings.Contains(result, "(@bob)") {
 		t.Error("Missing inline contributor attribution for bob")
 	}
 

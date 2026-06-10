@@ -39,7 +39,7 @@ Merge to Trunk
 
 ### Triggering
 
-The orchestrate workflow is generated to fire on `push` to the trunk branch. There is no need to wrap it — the generator emits the trigger directly:
+The orchestrate workflow is generated to fire on `push` to the trunk branch. You don't need to wrap it. The generator emits the trigger directly:
 
 ```yaml
 # .github/workflows/orchestrate.yaml (generated)
@@ -50,7 +50,7 @@ on:
 
 ### Standard Inputs
 
-The orchestrate workflow has no manual inputs by default — it runs automatically on push.
+The orchestrate workflow has no manual inputs by default. It runs automatically on push.
 
 ### Outputs
 
@@ -198,7 +198,7 @@ on:
 
 ### Atomic Promotions with Rollback
 
-The promote workflow supports atomic promotions where successful deploys are automatically rolled back if any deploy fails:
+The promote workflow can run atomic promotions. If any deploy fails, the deploys that already succeeded are rolled back:
 
 ```yaml
 # Enabled by default
@@ -209,7 +209,8 @@ When enabled:
 1. Preflight captures the target environment's current SHA as `rollback_sha`
 2. If any deploy job fails, rollback jobs trigger for successful deploys
 3. Rollback jobs redeploy using the `rollback_sha`
-4. This ensures all-or-nothing promotion semantics
+
+The result is all-or-nothing promotion: either every deploy lands or none does.
 
 Disable for non-atomic promotions:
 ```yaml
@@ -278,7 +279,7 @@ The framework drops the RC suffix when crossing the prerelease→release boundar
 
 ## Hotfix
 
-Hotfix is currently handled via the standard promote workflow with `dry_run: false` and a deploy-list filter. A first-class hotfix workflow is on the roadmap (issue #94 — direct promotion to prod with branch ancestry checks).
+Hotfix is currently handled via the standard promote workflow with `dry_run: false` and a deploy-list filter. A first-class hotfix workflow is tracked in issue #94 (direct promotion to prod with branch ancestry checks).
 
 ## Workflow Permissions
 

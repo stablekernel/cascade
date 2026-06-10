@@ -2,17 +2,17 @@ name: "Owned-job timeouts and optional dependencies"
 description: |
   Verifies two generator features in the emitted orchestrate.yaml:
 
-  #37 — cascade-owned jobs (setup, finalize) carry a timeout-minutes from the
+  #37: cascade-owned jobs (setup, finalize) carry a timeout-minutes from the
   config-level job_timeout_minutes (here 20), so cascade's own jobs do not
   inherit GHA's 360-minute default. Reusable-workflow callbacks (jobs.<id>.uses)
-  get no timeout — the called workflow owns its own.
+  get no timeout; the called workflow owns its own.
 
-  #18 — optional_depends_on sequences a deploy AFTER a build (adds it to needs:)
+  #18: optional_depends_on sequences a deploy AFTER a build (adds it to needs:)
   but does NOT skip-gate it: a skipped optional dep must not skip the deploy.
   The emitted shape that yields this is the optional dep present in needs: and
   absent from the if: skip-gate, while a hard depends_on still gates.
 
-  This is a generator-output verification scenario — assertions run on the staged
+  This is a generator-output verification scenario. Assertions run on the staged
   repo after StageRepoFromConfig generates workflows. We don't run orchestrate
   because act does not honor timeout-minutes on `uses:` callers; real
   timeout-firing belongs to real-GHA validation.
