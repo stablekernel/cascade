@@ -33,6 +33,12 @@ type Config struct {
 	Builds            []BuildConfig  `yaml:"builds"`
 	Deploys           []DeployConfig `yaml:"deploys"`
 	Publish           *PublishConfig `yaml:"publish,omitempty"`
+	// DispatchInputs carries operator-facing workflow_dispatch inputs through to
+	// the generated manifest untouched. A generic map (rather than a typed
+	// struct) is used so the harness stays decoupled from the generator's
+	// DispatchInput shape while preserving every key (type, options, default,
+	// description, required) across the marshal round-trip.
+	DispatchInputs map[string]map[string]any `yaml:"dispatch_inputs,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published
