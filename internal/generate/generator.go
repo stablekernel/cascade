@@ -692,6 +692,33 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
+// writeSecretsBlock emits the secrets: line for a reusable-workflow job.
+// When s is nil or s.Inherit is true the default "secrets: inherit" is emitted.
+// When s carries an explicit Map each entry is emitted as
+//
+//	secrets:
+//	  CALLED_NAME: ${{ secrets.CALLER_NAME }}
+//
+// The trailing newline that terminates the job block is always written by the
+// caller, so this function writes a trailing "\n" after the last entry only in
+// the map form (matching the blank-line separation written by the inherit path).
+func writeSecretsBlock(sb *strings.Builder, s *config.SecretsConfig) {
+	if s == nil || s.Inherit || len(s.Map) == 0 {
+		sb.WriteString("    secrets: inherit\n\n")
+		return
+	}
+	sb.WriteString("    secrets:\n")
+	keys := make([]string, 0, len(s.Map))
+	for k := range s.Map {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(sb, "      %s: ${{ secrets.%s }}\n", k, s.Map[k])
+	}
+	sb.WriteString("\n")
+}
+
 func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, workflow string) {
 	// For reusable-workflow callbacks that declare passthrough artifact downloads,
 	// emit a cascade-owned pre-job that fetches the artifacts before the callback
@@ -776,7 +803,7 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		// with: pass outputs from dependencies
 		g.writeWithInputs(sb, info)
 
-		sb.WriteString("    secrets: inherit\n\n")
+		writeSecretsBlock(sb, info.Secrets)
 	}
 
 	// Generate retry jobs if retries > 0
@@ -1233,7 +1260,7 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	}
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 	g.writeWithInputs(sb, info)
-	sb.WriteString("    secrets: inherit\n\n")
+	writeSecretsBlock(sb, info.Secrets)
 }
 
 func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {

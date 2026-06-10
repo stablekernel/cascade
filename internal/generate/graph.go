@@ -47,6 +47,12 @@ type CallbackInfo struct {
 	// around this job's callback invocation, enabling inter-job artifact passing
 	// within a single orchestrate run (#16).
 	PassthroughArtifact *config.PassthroughArtifact
+
+	// Secrets holds the per-callback secrets passing config. Nil means inherit
+	// (the default). When non-nil and Inherit is true, secrets: inherit is emitted.
+	// When non-nil with an explicit Map, a secrets: block with per-entry
+	// ${{ secrets.CALLER_NAME }} expressions is emitted instead.
+	Secrets *config.SecretsConfig
 }
 
 // BuildDependencyGraph creates a dependency graph from config
@@ -77,6 +83,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Permissions:    cfg.Validate.Permissions,
 			Concurrency:    cfg.Validate.Concurrency,
 			SupportsDryRun: cfg.Validate.SupportsDryRun,
+			Secrets:        cfg.Validate.Secrets,
 		}
 		g.Edges[jobID] = nil
 	}
@@ -101,6 +108,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Permissions:         b.Permissions,
 			Concurrency:         b.Concurrency,
 			PassthroughArtifact: b.PassthroughArtifact,
+			Secrets:             b.Secrets,
 		}
 
 		// Resolve dependencies to job IDs
@@ -146,6 +154,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Concurrency:         d.Concurrency,
 			PassthroughArtifact: d.PassthroughArtifact,
 			SupportsDryRun:      d.SupportsDryRun,
+			Secrets:             d.Secrets,
 		}
 
 		// Resolve dependencies to job IDs

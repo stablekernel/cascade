@@ -851,7 +851,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
 			}
 		}
-		sb.WriteString("    secrets: inherit\n\n")
+		writeSecretsBlock(sb, d.Secrets)
 	}
 
 	// Add prod deploy jobs for cascade mode (separate from intermediate promotions)
@@ -892,7 +892,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		if d.SupportsDryRun {
 			sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
 		}
-		sb.WriteString("    secrets: inherit\n\n")
+		writeSecretsBlock(sb, d.Secrets)
 	}
 
 	// Write external deploy jobs (for multi-repo orchestration)
@@ -958,7 +958,7 @@ func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv
 			// For external deploys, we pass the external deploy's SHA from state
 			// The workflow will receive this via inputs
 			sb.WriteString("      sha: ${{ needs.preflight.outputs.source_sha }}\n")
-			sb.WriteString("    secrets: inherit\n\n")
+			writeSecretsBlock(sb, d.Secrets)
 
 			// Prod deploy job for cascade mode
 			fmt.Fprintf(sb, "  deploy-%s-prod:\n", d.Name)
@@ -969,7 +969,7 @@ func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv
 			sb.WriteString("    with:\n")
 			fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
 			sb.WriteString("      sha: ${{ needs.preflight.outputs.prod_sha }}\n")
-			sb.WriteString("    secrets: inherit\n\n")
+			writeSecretsBlock(sb, d.Secrets)
 		}
 	}
 }
@@ -1044,7 +1044,7 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 		if g.deployHasInput(d.Name, "image_tag") {
 			sb.WriteString("      image_tag: ${{ needs.preflight.outputs.changelog_base_sha }}\n")
 		}
-		sb.WriteString("    secrets: inherit\n\n")
+		writeSecretsBlock(sb, d.Secrets)
 	}
 
 	// Write rollback jobs for external deploys
@@ -1065,7 +1065,7 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
 			sb.WriteString("      sha: ${{ needs.preflight.outputs.rollback_sha }}\n")
-			sb.WriteString("    secrets: inherit\n\n")
+			writeSecretsBlock(sb, d.Secrets)
 		}
 	}
 }
