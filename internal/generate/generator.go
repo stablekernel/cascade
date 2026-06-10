@@ -530,6 +530,11 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
 	}
 
+	// strategy: emitted only for build callbacks that declare matrix:
+	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
+		g.writeStrategyBlock(sb, info.Matrix)
+	}
+
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 
 	// with: pass outputs from dependencies
@@ -540,6 +545,40 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// Generate retry jobs if retries > 0
 	for i := 1; i <= info.Retries; i++ {
 		g.writeRetryJob(sb, info, workflow, i)
+	}
+}
+
+// writeStrategyBlock emits the GHA strategy: block for a build matrix.
+// max-parallel is omitted when 0 (GHA default). fail-fast is emitted only
+// when explicitly set (non-nil pointer).
+func (g *Generator) writeStrategyBlock(sb *strings.Builder, m *config.MatrixConfig) {
+	sb.WriteString("    strategy:\n")
+	sb.WriteString("      matrix:\n")
+
+	// Emit dimensions in sorted order for deterministic output
+	keys := make([]string, 0, len(m.Dimensions))
+	for k := range m.Dimensions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		vals := m.Dimensions[k]
+		valsJSON := "["
+		for i, v := range vals {
+			if i > 0 {
+				valsJSON += ", "
+			}
+			valsJSON += fmt.Sprintf("%q", v)
+		}
+		valsJSON += "]"
+		fmt.Fprintf(sb, "        %s: %s\n", k, valsJSON)
+	}
+
+	if m.MaxParallel > 0 {
+		fmt.Fprintf(sb, "      max-parallel: %d\n", m.MaxParallel)
+	}
+	if m.FailFast != nil {
+		fmt.Fprintf(sb, "      fail-fast: %t\n", *m.FailFast)
 	}
 }
 
@@ -646,6 +685,23 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 	// Optional standard inputs - only passed if callback declares them
 	if g.jobHasInput(info.JobID, "sha") {
 		inputs = append(inputs, "      sha: ${{ needs.setup.outputs.head_sha }}")
+	}
+
+	// For build callbacks with a matrix, pass each dimension's current value to
+	// the reusable workflow via `with:` so the callback can act on it. Dimension
+	// keys are passed through only when the callback workflow declares a matching
+	// input; unknown inputs are silently skipped (GHA rejects undeclared inputs).
+	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
+		keys := make([]string, 0, len(info.Matrix.Dimensions))
+		for k := range info.Matrix.Dimensions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if g.jobHasInput(info.JobID, k) {
+				inputs = append(inputs, fmt.Sprintf("      %s: ${{ matrix.%s }}", k, k))
+			}
+		}
 	}
 
 	// Pass outputs from dependencies
