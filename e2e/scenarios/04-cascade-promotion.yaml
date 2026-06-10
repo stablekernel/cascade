@@ -1,0 +1,373 @@
+name: "Four Environment Cascade Promotion"
+description: "Cascade (atomic multi-environment) promotion across dev → qa → uat → release → prod"
+
+config:
+  trunk_branch: main
+  environments: [dev, qa, uat, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+
+# Starting state: Mature repo similar to end of Scenario 3
+# All environments have v0.1.0 deployed with some history
+setup:
+  state:
+    dev:
+      version: "v0.1.0-rc.0"
+    qa:
+      version: "v0.1.0-rc.0"
+    uat:
+      version: "v0.1.0-rc.0"
+    release:
+      version: "v0.1.0"
+    prod:
+      version: "v0.1.0"
+  # Setup represents end-of-prior-cycle state: v0.1.0 has been published.
+  # The corresponding RC tag (v0.1.0-rc.0) and prerelease record were cleaned
+  # up at publish time, so they aren't present in setup.
+  tags:
+    - "v0.1.0"
+  releases:
+    - tag: "v0.1.0"
+      prerelease: false
+
+steps:
+  # Step 1: New feature commit to test cascade promotion
+  - name: "New app feature for v0.2.0"
+    action: commit
+    commit:
+      message: "feat: add new feature"
+      files:
+        src/app.ts: |
+          export function main() {
+            console.log("App v0.2.0 with new feature");
+          }
+
+  - name: "Orchestrate dev after feature"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.2.0-rc.0"
+      jobs:
+        build-app: success
+        deploy-cdk: skipped
+      releases:
+        - tag: "v0.2.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0", "v0.2.0-rc.0"]
+
+  # Step 2: Cascade promote from dev to qa
+  # This should atomically promote through intermediate environments
+  - name: "Cascade promote dev to qa"
+    action: promote
+    promote:
+      mode: cascade
+      target: qa
+    expect:
+      state:
+        qa:
+          sha: commit1
+          version: "v0.2.0-rc.0"
+        dev:
+          unchanged: true
+        uat:
+          unchanged: true
+        prod:
+          unchanged: true
+      releases:
+        - tag: "v0.2.0-rc.0"
+          prerelease: true
+          draft: false
+      jobs:
+        deploy-cdk: skipped
+
+  # Step 3: Cascade promote from qa to uat (prerelease environment)
+  - name: "Cascade promote qa to uat"
+    action: promote
+    promote:
+      mode: cascade
+      target: uat
+    expect:
+      state:
+        uat:
+          sha: commit1
+          version: "v0.2.0-rc.0"
+        qa:
+          unchanged: true
+        dev:
+          unchanged: true
+        prod:
+          unchanged: true
+      releases:
+        - tag: "v0.2.0-rc.0"
+          prerelease: true
+          draft: false
+
+  # Step 4: Standard promote from uat to release (crosses prerelease boundary)
+  - name: "Promote uat to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit1
+          version: "v0.2.0"
+        uat:
+          unchanged: true
+      releases:
+        - tag: "v0.2.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0", "v0.2.0"]
+        deleted: ["v0.1.0-rc.0", "v0.2.0-rc.0"]
+
+  # Step 5: Standard promote from release to prod
+  - name: "Promote release to prod"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit1
+          version: "v0.2.0"
+      jobs:
+        deploy-cdk: skipped
+
+  # Step 6: New commit with deploy changes
+  - name: "Add CDK deployment"
+    action: commit
+    commit:
+      message: "feat: add CDK stack"
+      files:
+        cdk/stack.ts: |
+          export class AppStack {
+            constructor() {
+              console.log("Stack v0.3.0");
+            }
+          }
+
+  - name: "Orchestrate dev after CDK"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+          version: "v0.3.0-rc.0"
+          deploys:
+            cdk:
+              sha: commit2
+      jobs:
+        build-app: skipped
+        deploy-cdk: success
+      releases:
+        - tag: "v0.3.0-rc.0"
+          prerelease: true
+          draft: true
+
+  # Step 7: Cascade promote all the way to uat in one step
+  - name: "Cascade promote dev to uat (skipping qa)"
+    action: promote
+    promote:
+      mode: cascade
+      target: uat
+    expect:
+      state:
+        qa:
+          sha: commit2
+          version: "v0.3.0-rc.0"
+          deploys:
+            cdk:
+              sha: commit2
+        uat:
+          sha: commit2
+          version: "v0.3.0-rc.0"
+          deploys:
+            cdk:
+              sha: commit2
+        dev:
+          unchanged: true
+      jobs:
+        deploy-cdk: success
+      releases:
+        - tag: "v0.3.0-rc.0"
+          prerelease: true
+          draft: false
+
+  # Step 8: Promote uat to release
+  - name: "Promote uat to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit2
+          version: "v0.3.0"
+      releases:
+        - tag: "v0.3.0"
+          prerelease: false
+          latest: true
+      tags:
+        exist: ["v0.1.0", "v0.2.0", "v0.3.0"]
+        deleted: ["v0.3.0-rc.0"]
+
+  # Step 9: Breaking change to test cascade with breaking change gate
+  - name: "Breaking change"
+    action: commit
+    commit:
+      message: "feat!: major app refactor"
+      files:
+        src/app.ts: |
+          export function mainV2() {
+            console.log("App v2.0.0 - Breaking!");
+          }
+        cdk/stack.ts: |
+          export class AppStackV2 {
+            constructor() {
+              console.log("Stack v2.0.0");
+            }
+          }
+
+  - name: "Orchestrate dev after breaking change"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit3
+          version: "v1.0.0-rc.0"
+          deploys:
+            cdk:
+              sha: commit3
+      jobs:
+        build-app: success
+        deploy-cdk: success
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: true
+
+  # Step 10: Cascade promote dev to qa (should work - no breaking gate in prerelease)
+  - name: "Cascade promote dev to qa with breaking change"
+    action: promote
+    promote:
+      mode: cascade
+      target: qa
+    expect:
+      state:
+        qa:
+          sha: commit3
+          version: "v1.0.0-rc.0"
+          deploys:
+            cdk:
+              sha: commit3
+      jobs:
+        deploy-cdk: success
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: false
+
+  # Step 11: Cascade promote qa to uat (should work - no breaking gate in prerelease)
+  - name: "Cascade promote qa to uat with breaking change"
+    action: promote
+    promote:
+      mode: cascade
+      target: uat
+    expect:
+      state:
+        uat:
+          sha: commit3
+          version: "v1.0.0-rc.0"
+          deploys:
+            cdk:
+              sha: commit3
+      jobs:
+        deploy-cdk: success
+
+  # Step 12: Attempt promote uat to release without breaking flag (should fail)
+  - name: "Promote uat to release without breaking flag"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      preflight:
+        has_breaking: true
+        can_proceed: false
+      state:
+        uat:
+          unchanged: true
+        release:
+          unchanged: true
+
+  # Step 13: Promote uat to release with breaking flag
+  - name: "Promote uat to release with breaking flag"
+    action: promote
+    promote:
+      mode: default
+      allow_breaking: true
+    expect:
+      state:
+        release:
+          sha: commit3
+          version: "v1.0.0"
+      releases:
+        - tag: "v1.0.0"
+          prerelease: false
+          latest: true
+      tags:
+        exist: ["v0.1.0", "v0.2.0", "v0.3.0", "v1.0.0"]
+        deleted: ["v1.0.0-rc.0"]
+
+  # Step 14: Attempt cascade promote to prod without breaking flag (should fail)
+  - name: "Cascade promote release to prod without breaking flag"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      expect_failure: true
+    expect:
+      preflight:
+        has_breaking: true
+        can_proceed: false
+
+  # Step 15: Cascade promote to prod with breaking flag
+  - name: "Cascade promote release to prod with breaking flag"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      allow_breaking: true
+    expect:
+      state:
+        prod:
+          sha: commit3
+          version: "v1.0.0"
+          deploys:
+            cdk:
+              sha: commit3
+      jobs:
+        deploy-cdk: success
+
+# FINAL STATE:
+# dev:     commit3 @ v1.0.0-rc.0 (or next rc if another commit)
+# qa:      commit3 @ v1.0.0-rc.0
+# uat:     commit3 @ v1.0.0-rc.0
+# release: commit3 @ v1.0.0
+# prod:    commit3 @ v1.0.0
+# - All environments synchronized at v1.0.0
+# - CDK deployed to all environments at commit3
+# - Latest release: v1.0.0 (published, not prerelease)

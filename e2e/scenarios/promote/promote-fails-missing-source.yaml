@@ -1,0 +1,51 @@
+name: "Promotion fails with missing source"
+description: "Validates that promotion fails when source environment has no deployment"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - test
+      - prod
+    builds:
+      - name: app
+        workflow: ""
+        triggers:
+          - "src/**"
+    deploys:
+      - name: services
+        workflow: ""
+        triggers: []
+        depends_on:
+          - app
+
+  commits:
+    - message: "feat: initial application"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {
+              println("Hello World")
+          }
+
+  manifest:
+    ci:
+      state:
+        dev: {}
+        test: {}
+        prod: {}
+
+trigger:
+  workflow: promote.yaml
+  event: workflow_dispatch
+  inputs:
+    mode: "dev-to-test"
+
+expect:
+  workflow:
+    conclusion: failure
+    jobs:
+      preflight:
+        conclusion: failure

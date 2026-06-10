@@ -1,0 +1,430 @@
+name: Hotfix
+
+# Security Note: This workflow uses workflow_call inputs which are controlled
+# by trusted calling workflows, not by external users. All dynamic values are
+# passed through env variables where they are used in run commands.
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: 'Path to cicd-config.yaml'
+        required: true
+        type: string
+      manifest_path:
+        description: 'Path to manifest.yaml'
+        required: true
+        type: string
+      hotfix_branch:
+        description: 'Hotfix branch name (must start with hotfix/)'
+        required: true
+        type: string
+      version_override:
+        description: 'Version override (must be valid semver patch bump)'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Skip actual build/deploy, log what would happen'
+        required: false
+        type: boolean
+        default: false
+      log_level:
+        description: 'Log level (info|debug)'
+        required: false
+        type: string
+        default: 'info'
+    outputs:
+      deployed_sha:
+        description: 'SHA that was deployed'
+        value: ${{ jobs.finalize.outputs.deployed_sha }}
+      image_tag:
+        description: 'Image tag used'
+        value: ${{ jobs.build.outputs.image_tag }}
+      version:
+        description: 'Hotfix version'
+        value: ${{ jobs.validate.outputs.version }}
+      changelog:
+        description: 'Generated changelog markdown'
+        value: ${{ jobs.finalize.outputs.changelog }}
+      release_url:
+        description: 'URL to the release'
+        value: ${{ jobs.finalize.outputs.release_url }}
+
+jobs:
+  validate:
+    name: Validate Hotfix
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.validate.outputs.sha }}
+      version: ${{ steps.version.outputs.final_version }}
+      prod_sha: ${{ steps.validate.outputs.prod_sha }}
+      builds: ${{ steps.parse.outputs.builds }}
+      deploys: ${{ steps.parse.outputs.deploys }}
+      build_names: ${{ steps.names.outputs.build_names }}
+      deploy_names: ${{ steps.names.outputs.deploy_names }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hotfix_branch }}
+          fetch-depth: 0
+
+      - name: Validate Hotfix Branch
+        id: validate
+        env:
+          HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          GITHUB_SHA_VAL: ${{ github.sha }}
+        run: |
+          # Validate branch name
+          if [[ ! "$HOTFIX_BRANCH" =~ ^hotfix/ ]]; then
+            echo "::error::Branch must start with 'hotfix/': $HOTFIX_BRANCH"
+            exit 1
+          fi
+
+          echo "sha=$GITHUB_SHA_VAL" >> "$GITHUB_OUTPUT"
+          echo "::notice::Hotfix SHA: $GITHUB_SHA_VAL"
+
+          # Get current prod SHA for changelog
+          if [[ -f "$MANIFEST_PATH" ]]; then
+            PROD_SHA=$(yq eval ".environments.prod.sha // \"\"" "$MANIFEST_PATH")
+          fi
+          if [[ -z "$PROD_SHA" || "$PROD_SHA" == "null" ]]; then
+            PROD_SHA=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+          fi
+          echo "prod_sha=$PROD_SHA" >> "$GITHUB_OUTPUT"
+
+          # Validate hotfix is based on prod
+          if ! git merge-base --is-ancestor "$PROD_SHA" "$GITHUB_SHA_VAL" 2>/dev/null; then
+            echo "::warning::Hotfix branch may not be based on current prod SHA"
+          fi
+
+      - name: Parse Config
+        id: parse
+        uses: ./.github/actions/parse-config
+        with:
+          config_path: ${{ inputs.config_path }}
+          environment: prod
+
+      - name: Extract Names
+        id: names
+        env:
+          BUILDS_JSON: ${{ steps.parse.outputs.builds }}
+          DEPLOYS_JSON: ${{ steps.parse.outputs.deploys }}
+        run: |
+          BUILD_NAMES=$(echo "$BUILDS_JSON" | jq -c '[.[].name]')
+          DEPLOY_NAMES=$(echo "$DEPLOYS_JSON" | jq -c '[.[].name]')
+          echo "build_names=$BUILD_NAMES" >> "$GITHUB_OUTPUT"
+          echo "deploy_names=$DEPLOY_NAMES" >> "$GITHUB_OUTPUT"
+
+      - name: Determine Version
+        id: version
+        uses: ./.github/actions/determine-version
+        with:
+          repo: ${{ github.repository }}
+          base_sha: ${{ steps.validate.outputs.prod_sha }}
+          head_sha: ${{ steps.validate.outputs.sha }}
+          override: ${{ inputs.version_override }}
+          token: ${{ github.token }}
+
+      - name: Validate Patch Version
+        env:
+          BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+          VERSION: ${{ steps.version.outputs.final_version }}
+        run: |
+          # Hotfixes should only be patch versions
+          if [[ "$BUMP_TYPE" != "patch" ]]; then
+            echo "::warning::Hotfix detected as $BUMP_TYPE bump. Hotfixes should typically be patch versions."
+            echo "::warning::Consider if this should be a regular release instead."
+          fi
+          echo "::notice::Hotfix version: $VERSION"
+
+      - name: Validation Summary
+        env:
+          HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
+          SHA: ${{ steps.validate.outputs.sha }}
+          PROD_SHA: ${{ steps.validate.outputs.prod_sha }}
+          VERSION: ${{ steps.version.outputs.final_version }}
+          BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## Hotfix Validation"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Branch | $HOTFIX_BRANCH |"
+            echo "| SHA | \`$SHA\` |"
+            echo "| Current Prod | \`$PROD_SHA\` |"
+            echo "| Version | $VERSION ($BUMP_TYPE) |"
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "| Mode | **DRY RUN** |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build
+    needs: validate
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    strategy:
+      matrix:
+        build: ${{ fromJson(needs.validate.outputs.build_names) }}
+      fail-fast: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hotfix_branch }}
+
+      - name: Generate Image Tag
+        id: tag
+        env:
+          SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          SHORT_SHA="${SHA:0:7}"
+          EPOCH=$(date +%s)
+          IMAGE_TAG="${SHORT_SHA}-${EPOCH}"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "::notice::Image tag: $IMAGE_TAG"
+
+      - name: Get Build Config
+        id: config
+        env:
+          BUILDS_JSON: ${{ needs.validate.outputs.builds }}
+          BUILD_NAME: ${{ matrix.build }}
+        run: |
+          BUILD_CONFIG=$(echo "$BUILDS_JSON" | jq -c --arg name "$BUILD_NAME" '.[] | select(.name == $name)')
+          WORKFLOW=$(echo "$BUILD_CONFIG" | jq -r '.workflow // empty')
+          echo "workflow=$WORKFLOW" >> "$GITHUB_OUTPUT"
+
+      - name: Build Placeholder
+        env:
+          BUILD_NAME: ${{ matrix.build }}
+          WORKFLOW: ${{ steps.config.outputs.workflow }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          echo "::notice::Would call build workflow: $WORKFLOW for $BUILD_NAME"
+          echo "::notice::Image tag: $IMAGE_TAG"
+          # TODO: Implement dynamic workflow call
+
+  deploy:
+    name: Deploy to Prod
+    needs: [validate, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        deploy: ${{ fromJson(needs.validate.outputs.deploy_names) }}
+      fail-fast: true
+      max-parallel: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hotfix_branch }}
+
+      - name: Get Deploy Config
+        id: config
+        env:
+          DEPLOYS_JSON: ${{ needs.validate.outputs.deploys }}
+          DEPLOY_NAME: ${{ matrix.deploy }}
+        run: |
+          DEPLOY_CONFIG=$(echo "$DEPLOYS_JSON" | jq -c --arg name "$DEPLOY_NAME" '.[] | select(.name == $name)')
+          WORKFLOW=$(echo "$DEPLOY_CONFIG" | jq -r '.workflow // empty')
+          echo "workflow=$WORKFLOW" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Placeholder
+        env:
+          DEPLOY_NAME: ${{ matrix.deploy }}
+          WORKFLOW: ${{ steps.config.outputs.workflow }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          echo "::notice::Would call deploy workflow: $WORKFLOW for $DEPLOY_NAME"
+          echo "::notice::Environment: prod (HOTFIX), Image: $IMAGE_TAG, SHA: $SHA"
+          # TODO: Implement dynamic workflow call
+
+  finalize:
+    name: Finalize
+    needs: [validate, build, deploy]
+    if: |
+      always() &&
+      (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      deployed_sha: ${{ needs.validate.outputs.sha }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+      release_url: ${{ steps.release.outputs.html_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hotfix_branch }}
+          fetch-depth: 0
+
+      - name: Update Manifest
+        if: ${{ !inputs.dry_run }}
+        id: manifest
+        uses: ./.github/actions/update-manifest
+        with:
+          manifest_path: ${{ inputs.manifest_path }}
+          environment: prod
+          sha: ${{ needs.validate.outputs.sha }}
+          image_tag: ${{ needs.build.outputs.image_tag }}
+          version: ${{ needs.validate.outputs.version }}
+          deployed_by: ${{ github.actor }}
+
+      - name: Commit Manifest
+        if: steps.manifest.outputs.updated == 'true'
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          SHA: ${{ needs.validate.outputs.sha }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          # TODO: Configure system user for commits
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "$MANIFEST_PATH"
+          git commit -m "hotfix: deploy v$VERSION to prod
+
+          SHA: $SHA
+          Image: $IMAGE_TAG
+          Version: $VERSION"
+
+          # Push with retry
+          for i in 1 2 3; do
+            if git push; then
+              echo "::notice::Manifest committed successfully"
+              break
+            fi
+            echo "::warning::Push failed, retrying ($i/3)..."
+            git pull --rebase
+            sleep 2
+          done
+
+      - name: Generate Changelog
+        id: changelog
+        uses: ./.github/actions/generate-changelog
+        with:
+          base_sha: ${{ needs.validate.outputs.prod_sha }}
+          head_sha: ${{ needs.validate.outputs.sha }}
+          repo: ${{ github.repository }}
+
+      - name: Publish Release
+        if: ${{ !inputs.dry_run }}
+        id: release
+        uses: ./.github/actions/manage-draft-release
+        with:
+          repo: ${{ github.repository }}
+          action: publish
+          environment: prod
+          sha: ${{ needs.validate.outputs.sha }}
+          tag: v${{ needs.validate.outputs.version }}
+          changelog: ${{ steps.changelog.outputs.changelog }}
+          token: ${{ github.token }}
+
+      - name: Create Git Tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          git tag -a "v$VERSION" "$SHA" -m "Hotfix v$VERSION"
+          git push origin "v$VERSION"
+          echo "::notice::Created tag v$VERSION"
+
+      - name: Merge to Trunk
+        if: ${{ !inputs.dry_run }}
+        env:
+          HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
+        run: |
+          # Merge hotfix back to trunk
+          git fetch origin master
+          git checkout master
+          git merge "$HOTFIX_BRANCH" -m "Merge hotfix back to trunk"
+          git push origin master
+          echo "::notice::Merged hotfix back to master"
+
+      - name: Finalize Summary
+        env:
+          HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
+          SHA: ${{ needs.validate.outputs.sha }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          MANIFEST_UPDATED: ${{ steps.manifest.outputs.updated }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
+          RELEASE_URL: ${{ steps.release.outputs.html_url }}
+        run: |
+          {
+            echo "## Hotfix Complete"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Branch | $HOTFIX_BRANCH |"
+            echo "| SHA | \`$SHA\` |"
+            echo "| Image Tag | \`$IMAGE_TAG\` |"
+            echo "| Version | v$VERSION |"
+            echo "| Manifest Updated | $MANIFEST_UPDATED |"
+            if [[ -n "$RELEASE_URL" ]]; then
+              echo "| Release | [$RELEASE_URL]($RELEASE_URL) |"
+            fi
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "| Mode | **DRY RUN** |"
+            fi
+            echo ""
+            echo "### Changelog"
+            echo ""
+            echo "$CHANGELOG"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  dry-run-summary:
+    name: Dry Run Summary
+    needs: validate
+    if: inputs.dry_run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dry Run Summary
+        env:
+          HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
+          SHA: ${{ needs.validate.outputs.sha }}
+          PROD_SHA: ${{ needs.validate.outputs.prod_sha }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          BUILD_NAMES: ${{ needs.validate.outputs.build_names }}
+          DEPLOY_NAMES: ${{ needs.validate.outputs.deploy_names }}
+        run: |
+          {
+            echo "## Dry Run Summary"
+            echo ""
+            echo "**No actual changes would be made.**"
+            echo ""
+            echo "### What would happen:"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Branch | $HOTFIX_BRANCH |"
+            echo "| SHA | \`$SHA\` |"
+            echo "| Current Prod | \`$PROD_SHA\` |"
+            echo "| Version | v$VERSION |"
+            echo ""
+            echo "#### Builds to trigger:"
+            echo "\`\`\`json"
+            echo "$BUILD_NAMES"
+            echo "\`\`\`"
+            echo ""
+            echo "#### Deploys to prod:"
+            echo "\`\`\`json"
+            echo "$DEPLOY_NAMES"
+            echo "\`\`\`"
+            echo ""
+            echo "#### After deployment:"
+            echo "- Create release v$VERSION"
+            echo "- Create git tag v$VERSION"
+            echo "- Merge hotfix back to master"
+          } >> "$GITHUB_STEP_SUMMARY"

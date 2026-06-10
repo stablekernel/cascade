@@ -1,0 +1,263 @@
+name: "Three Environment Happy Path"
+description: "Repository with dev (draft), uat (prerelease), and prod - full lifecycle through environments"
+
+config:
+  trunk_branch: main
+  environments: [dev, uat, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+
+steps:
+  # Step 1: Push first commit to trunk → creates draft at dev
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.ts: |
+          export function main() {
+            console.log("App v0.1.0");
+          }
+
+  - name: "Orchestrate dev after app feature"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+        deploy-cdk: skipped
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]
+
+  # Step 2: Push deploy change to trunk → triggers deploy at dev
+  - name: "CDK deployment update"
+    action: commit
+    commit:
+      message: "feat: add CDK stack"
+      files:
+        cdk/stack.ts: |
+          export class AppStack {
+            constructor() {
+              console.log("Stack v0.1.0");
+            }
+          }
+
+  - name: "Orchestrate dev after CDK update"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+          version: "v0.1.0-rc.1"
+          deploys:
+            cdk:
+              sha: commit2
+      jobs:
+        build-app: skipped
+        deploy-cdk: success
+      releases:
+        - tag: "v0.1.0-rc.1"
+          prerelease: true
+          draft: true
+          changelog:
+            - "feat: add CDK stack"
+            - "feat: add app feature"
+      tags:
+        exist: ["v0.1.0-rc.0", "v0.1.0-rc.1"]
+
+  # Step 3: Promote dev → uat (intermediate prerelease environment)
+  - name: "Promote dev to uat"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        uat:
+          sha: commit2
+          version: "v0.1.0-rc.1"
+          deploys:
+            cdk:
+              sha: commit2
+        dev:
+          unchanged: true
+      jobs:
+        deploy-cdk: success
+      releases:
+        - tag: "v0.1.0-rc.1"
+          prerelease: true
+          draft: false
+
+  # Step 4: Promote uat → release (creates RC tag, prerelease)
+  - name: "Promote uat to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit2
+          version: "v0.1.0"
+        uat:
+          unchanged: true
+      releases:
+        - tag: "v0.1.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0"]
+        deleted: ["v0.1.0-rc.0", "v0.1.0-rc.1"]
+
+  # Step 5: Promote release → prod (publishes final release)
+  - name: "Promote release to prod"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit2
+          version: "v0.1.0"
+          deploys:
+            cdk:
+              sha: commit2
+      jobs:
+        deploy-cdk: success
+
+  # Step 6: Breaking change commit
+  - name: "Breaking change"
+    action: commit
+    commit:
+      message: "feat!: major app refactor"
+      files:
+        src/app.ts: |
+          export function mainV2() {
+            console.log("App v2.0.0 - Breaking!");
+          }
+
+  - name: "Orchestrate dev after breaking change"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit3
+          version: "v1.0.0-rc.0"
+      jobs:
+        build-app: success
+        deploy-cdk: skipped
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0", "v1.0.0-rc.0"]
+
+  # Step 7: Promote dev → uat (no breaking gate here)
+  - name: "Promote dev to uat after breaking change"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        uat:
+          sha: commit3
+          version: "v1.0.0-rc.0"
+        dev:
+          unchanged: true
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: false
+
+  # Step 8: Attempt promote uat → release without breaking flag (should fail at uat→release gate)
+  - name: "Promote uat to release without breaking flag"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      preflight:
+        has_breaking: true
+        can_proceed: false
+      state:
+        uat:
+          unchanged: true
+        release:
+          unchanged: true
+
+  # Step 9: Promote uat → release with breaking flag
+  - name: "Promote uat to release with breaking flag"
+    action: promote
+    promote:
+      mode: default
+      allow_breaking: true
+    expect:
+      state:
+        release:
+          sha: commit3
+          version: "v1.0.0"
+        uat:
+          unchanged: true
+      releases:
+        - tag: "v1.0.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0", "v1.0.0"]
+        deleted: ["v1.0.0-rc.0"]
+
+  # Step 10: Attempt promote release → prod without breaking flag (should fail at release→prod gate)
+  - name: "Promote release to prod without breaking flag"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      preflight:
+        has_breaking: true
+        can_proceed: false
+      state:
+        prod:
+          unchanged: true
+        release:
+          unchanged: true
+
+  # Step 11: Promote release → prod with breaking flag (final state for cascade scenario)
+  - name: "Promote release to prod with breaking flag"
+    action: promote
+    promote:
+      mode: default
+      allow_breaking: true
+    expect:
+      state:
+        prod:
+          sha: commit3
+          version: "v1.0.0"
+          deploys:
+            cdk:
+              sha: commit2
+      jobs:
+        deploy-cdk: skipped
+
+# FINAL STATE (for Task 9 Cascade scenario):
+# dev:     commit3 @ v1.0.0-rc.0 (or next rc if another commit happens)
+# uat:     commit3 @ v1.0.0-rc.0
+# release: commit3 @ v1.0.0
+# prod:    commit3 @ v1.0.0
+# - All environments synchronized at v1.0.0
+# - CDK deploy SHA still at commit2 (no deploy changes since)
+# - Latest release: v1.0.0 (published, not prerelease)

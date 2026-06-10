@@ -1,0 +1,33 @@
+name: "Deploy skipped when dependencies not met"
+description: "Validates that deploy is skipped when required build dependencies are not satisfied"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+    builds:
+      - name: app
+        triggers:
+          - "src/**"
+    deploys:
+      - name: deploy-app
+        depends_on:
+          - app
+
+  commits:
+    - message: "docs: update deployment guide"
+      files:
+        docs/deploy.md: |
+          # Deployment Guide
+
+          This change does not trigger build, so deploy should be skipped.
+
+trigger:
+  workflow: orchestrate.yaml
+  event: push
+
+expect:
+  workflow:
+    conclusion: success

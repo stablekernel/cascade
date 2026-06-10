@@ -1,0 +1,393 @@
+package harness
+
+import (
+	"fmt"
+	"strings"
+)
+
+// testingT is an interface that matches the subset of testing.T we use
+type testingT interface {
+	Errorf(format string, args ...interface{})
+	Helper()
+}
+
+// WorkflowRunResult represents the result of a workflow run
+type WorkflowRunResult struct {
+	Jobs      map[string]string // job name -> conclusion (success/skipped/failure)
+	Preflight *PreflightResult
+}
+
+// PreflightResult mirrors the promote preflight output for assertion
+type PreflightResult struct {
+	HasBreaking bool
+	CanProceed  bool
+	SourceEnv   string
+	TargetEnv   string
+}
+
+// AssertStateMatches validates environment state against expectations
+func AssertStateMatches(t testingT, ctx *ExecutionContext, expected map[string]*StateExpect) {
+	t.Helper()
+
+	for env, expect := range expected {
+		assertState(t, ctx, env, expect)
+	}
+}
+
+// assertState validates a single environment state against expectations
+func assertState(t testingT, ctx *ExecutionContext, env string, expect *StateExpect) {
+	t.Helper()
+	actual := ctx.GetState(env)
+
+	// Check if state should be wiped
+	if expect.Wiped {
+		if actual.SHA != "" || actual.Version != "" {
+			t.Errorf("state[%s] expected to be wiped but has SHA=%s, Version=%s",
+				env, actual.SHA, actual.Version)
+		}
+		return
+	}
+
+	// Check SHA (resolve commit references)
+	if expect.SHA != "" {
+		expectedSHA := ctx.ResolveSHA(expect.SHA)
+		if expectedSHA == "" {
+			expectedSHA = expect.SHA // Use as literal if not a reference
+		}
+		if actual.SHA != expectedSHA {
+			t.Errorf("state[%s].sha expected %s, got %s",
+				env, expectedSHA, actual.SHA)
+		}
+	}
+
+	// Check version
+	if expect.Version != "" && actual.Version != expect.Version {
+		t.Errorf("state[%s].version expected %s, got %s",
+			env, expect.Version, actual.Version)
+	}
+
+	// Check deploys
+	for deployName, deployExpect := range expect.Deploys {
+		actualDeploy := actual.Deploys[deployName]
+		if actualDeploy == nil {
+			t.Errorf("state[%s].deploys[%s] expected but not found",
+				env, deployName)
+			continue
+		}
+		if deployExpect.SHA != "" {
+			expectedSHA := ctx.ResolveSHA(deployExpect.SHA)
+			if expectedSHA == "" {
+				expectedSHA = deployExpect.SHA
+			}
+			if actualDeploy.SHA != expectedSHA {
+				t.Errorf("state[%s].deploys[%s].sha expected %s, got %s",
+					env, deployName, expectedSHA, actualDeploy.SHA)
+			}
+		}
+	}
+}
+
+// AssertJobsRan validates job conclusions against expectations
+func AssertJobsRan(t testingT, runResult *WorkflowRunResult, expected map[string]string) {
+	t.Helper()
+
+	if runResult == nil {
+		t.Errorf("workflow run result is nil")
+		return
+	}
+
+	for job, expectedConclusion := range expected {
+		actualConclusion, ok := runResult.Jobs[job]
+		if !ok {
+			t.Errorf("job[%s] expected %s but job not found",
+				job, expectedConclusion)
+			continue
+		}
+		if actualConclusion != expectedConclusion {
+			t.Errorf("job[%s] expected %s, got %s",
+				job, expectedConclusion, actualConclusion)
+		}
+	}
+}
+
+// AssertTagsExist validates tag existence against expectations
+func AssertTagsExist(t testingT, ctx *ExecutionContext, expected *TagsExpect) {
+	t.Helper()
+
+	if expected == nil {
+		return
+	}
+
+	for _, tag := range expected.Exist {
+		if !ctx.HasTag(tag) {
+			t.Errorf("tag %s expected to exist but not found", tag)
+		}
+	}
+
+	for _, tag := range expected.Deleted {
+		if ctx.HasTag(tag) {
+			t.Errorf("tag %s expected to be deleted but exists", tag)
+		}
+	}
+}
+
+// AssertReleases validates release state against expectations
+func AssertReleases(t testingT, ctx *ExecutionContext, expected []ReleaseExpectStep) {
+	t.Helper()
+
+	for _, exp := range expected {
+		release := ctx.GetRelease(exp.Tag)
+
+		if exp.Deleted {
+			if release != nil {
+				t.Errorf("release %s expected to be deleted but exists", exp.Tag)
+			}
+			continue
+		}
+
+		if release == nil {
+			t.Errorf("release %s expected but not found", exp.Tag)
+			continue
+		}
+
+		// Check prerelease flag
+		if exp.Prerelease != release.Prerelease {
+			t.Errorf("release %s expected prerelease=%v, got %v",
+				exp.Tag, exp.Prerelease, release.Prerelease)
+		}
+
+		// Check draft flag
+		if exp.Draft != release.Draft {
+			t.Errorf("release %s expected draft=%v, got %v",
+				exp.Tag, exp.Draft, release.Draft)
+		}
+
+		// Check latest flag if specified
+		if exp.Latest && !release.Latest {
+			t.Errorf("release %s expected latest=true, got false", exp.Tag)
+		}
+	}
+}
+
+// AssertPreflight validates preflight outputs against expectations
+func AssertPreflight(t testingT, runResult *WorkflowRunResult, expected *PreflightExpect) {
+	t.Helper()
+
+	if expected == nil {
+		return
+	}
+
+	if runResult == nil || runResult.Preflight == nil {
+		t.Errorf("preflight result is nil")
+		return
+	}
+
+	actual := runResult.Preflight
+
+	if expected.HasBreaking != actual.HasBreaking {
+		t.Errorf("preflight expected has_breaking=%v, got %v",
+			expected.HasBreaking, actual.HasBreaking)
+	}
+
+	if expected.CanProceed != actual.CanProceed {
+		t.Errorf("preflight expected can_proceed=%v, got %v",
+			expected.CanProceed, actual.CanProceed)
+	}
+
+	if expected.SourceEnv != "" && actual.SourceEnv != expected.SourceEnv {
+		t.Errorf("preflight expected source_env=%s, got %s",
+			expected.SourceEnv, actual.SourceEnv)
+	}
+
+	if expected.TargetEnv != "" && actual.TargetEnv != expected.TargetEnv {
+		t.Errorf("preflight expected target_env=%s, got %s",
+			expected.TargetEnv, actual.TargetEnv)
+	}
+}
+
+// AssertState validates environment state against expectations (used internally)
+// Returns errors instead of failing test directly for more flexible error handling
+func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error {
+	var errs []error
+	actual := ctx.GetState(env)
+
+	// Check if state should be wiped
+	if expect.Wiped {
+		if actual.SHA != "" || actual.Version != "" {
+			errs = append(errs, fmt.Errorf("state[%s] expected to be wiped but has SHA=%s, Version=%s",
+				env, actual.SHA, actual.Version))
+		}
+		return errs
+	}
+
+	// Check SHA (resolve commit references)
+	if expect.SHA != "" {
+		expectedSHA := ctx.ResolveSHA(expect.SHA)
+		if expectedSHA == "" {
+			expectedSHA = expect.SHA // Use as literal if not a reference
+		}
+		if actual.SHA != expectedSHA {
+			errs = append(errs, fmt.Errorf("state[%s].sha expected %s, got %s",
+				env, expectedSHA, actual.SHA))
+		}
+	}
+
+	// Check version
+	if expect.Version != "" && actual.Version != expect.Version {
+		errs = append(errs, fmt.Errorf("state[%s].version expected %s, got %s",
+			env, expect.Version, actual.Version))
+	}
+
+	// Check deploys
+	for deployName, deployExpect := range expect.Deploys {
+		actualDeploy := actual.Deploys[deployName]
+		if actualDeploy == nil {
+			errs = append(errs, fmt.Errorf("state[%s].deploys[%s] expected but not found",
+				env, deployName))
+			continue
+		}
+		if deployExpect.SHA != "" {
+			expectedSHA := ctx.ResolveSHA(deployExpect.SHA)
+			if expectedSHA == "" {
+				expectedSHA = deployExpect.SHA
+			}
+			if actualDeploy.SHA != expectedSHA {
+				errs = append(errs, fmt.Errorf("state[%s].deploys[%s].sha expected %s, got %s",
+					env, deployName, expectedSHA, actualDeploy.SHA))
+			}
+		}
+	}
+
+	return errs
+}
+
+// AssertJobs validates job conclusions against expectations (used internally)
+// Returns errors instead of failing test directly for more flexible error handling
+func AssertJobs(actual map[string]string, expect map[string]string) []error {
+	var errs []error
+
+	for job, expectedConclusion := range expect {
+		actualConclusion, ok := actual[job]
+		if !ok {
+			errs = append(errs, fmt.Errorf("job[%s] expected %s but job not found",
+				job, expectedConclusion))
+			continue
+		}
+		if actualConclusion != expectedConclusion {
+			errs = append(errs, fmt.Errorf("job[%s] expected %s, got %s",
+				job, expectedConclusion, actualConclusion))
+		}
+	}
+
+	return errs
+}
+
+// AssertTags validates tag existence against expectations (used internally)
+// Returns errors instead of failing test directly for more flexible error handling
+func AssertTags(ctx *ExecutionContext, expect *TagsExpect) []error {
+	var errs []error
+
+	for _, tag := range expect.Exist {
+		if !ctx.HasTag(tag) {
+			errs = append(errs, fmt.Errorf("tag %s expected to exist but not found", tag))
+		}
+	}
+
+	for _, tag := range expect.Deleted {
+		if ctx.HasTag(tag) {
+			errs = append(errs, fmt.Errorf("tag %s expected to be deleted but exists", tag))
+		}
+	}
+
+	return errs
+}
+
+// AssertReleasesInternal validates release state against expectations (used internally)
+// Returns errors instead of failing test directly for more flexible error handling
+func AssertReleasesInternal(ctx *ExecutionContext, expect []ReleaseExpectStep) []error {
+	var errs []error
+
+	for _, exp := range expect {
+		release := ctx.GetRelease(exp.Tag)
+
+		if exp.Deleted {
+			if release != nil {
+				errs = append(errs, fmt.Errorf("release %s expected to be deleted but exists", exp.Tag))
+			}
+			continue
+		}
+
+		if release == nil {
+			errs = append(errs, fmt.Errorf("release %s expected but not found", exp.Tag))
+			continue
+		}
+
+		if exp.Prerelease != release.Prerelease {
+			errs = append(errs, fmt.Errorf("release %s expected prerelease=%v, got %v",
+				exp.Tag, exp.Prerelease, release.Prerelease))
+		}
+
+		if exp.Draft != release.Draft {
+			errs = append(errs, fmt.Errorf("release %s expected draft=%v, got %v",
+				exp.Tag, exp.Draft, release.Draft))
+		}
+
+		if exp.Latest && !release.Latest {
+			errs = append(errs, fmt.Errorf("release %s expected latest=true, got false", exp.Tag))
+		}
+	}
+
+	return errs
+}
+
+// AssertWorkflowExecution validates workflow execution against expectations
+// Returns errors instead of failing test directly for more flexible error handling
+func AssertWorkflowExecution(result *ExtendedWorkflowResult, expectJobs map[string]string) []error {
+	var errs []error
+
+	if result == nil {
+		errs = append(errs, fmt.Errorf("workflow result is nil"))
+		return errs
+	}
+
+	for jobName, expectedConclusion := range expectJobs {
+		job := findJob(result.Jobs, jobName)
+		if job == nil {
+			// When act doesn't run a job (condition false), it's not in the output
+			// Treat "not found" as equivalent to "skipped" when that's expected
+			if expectedConclusion == "skipped" {
+				continue // Not found = skipped, which is what we expect
+			}
+			errs = append(errs, fmt.Errorf("job %s expected %s but not found in result", jobName, expectedConclusion))
+			continue
+		}
+		if job.Conclusion != expectedConclusion {
+			errs = append(errs, fmt.Errorf("job %s expected conclusion=%s, got %s",
+				jobName, expectedConclusion, job.Conclusion))
+		}
+	}
+
+	return errs
+}
+
+// findJob looks up a job by name, handling act's job ID normalization
+// Act sometimes strips prefixes like "build-" or "deploy-" from job IDs
+func findJob(jobs map[string]*JobResultExtended, name string) *JobResultExtended {
+	// Try exact match first
+	if job, ok := jobs[name]; ok {
+		return job
+	}
+
+	// Try stripping common prefixes (act normalizes these)
+	prefixes := []string{"build-", "deploy-"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			stripped := strings.TrimPrefix(name, prefix)
+			if job, ok := jobs[stripped]; ok {
+				return job
+			}
+		}
+	}
+
+	return nil
+}

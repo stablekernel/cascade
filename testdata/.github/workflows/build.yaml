@@ -1,0 +1,19 @@
+name: Build App
+on:
+  workflow_call:
+    inputs:
+      sha:
+        type: string
+    outputs:
+      image_tag:
+        description: The image tag
+        value: ${{ jobs.build.outputs.image_tag }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Generate tag
+        id: tag
+        run: echo "tag=v1.0.0" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,458 @@
+package version
+
+import (
+	"testing"
+
+	"github.com/stablekernel/cascade/internal/changelog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParse(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      *Version
+		wantError bool
+	}{
+		{
+			name:  "simple version with v prefix",
+			input: "v1.2.3",
+			want: &Version{
+				Major:      1,
+				Minor:      2,
+				Patch:      3,
+				PreRelease: -1,
+				Prefix:     "v",
+			},
+		},
+		{
+			name:  "version with RC",
+			input: "v1.2.3-rc.4",
+			want: &Version{
+				Major:      1,
+				Minor:      2,
+				Patch:      3,
+				PreRelease: 4,
+				Prefix:     "v",
+			},
+		},
+		{
+			name:  "version with RC 0",
+			input: "v2.0.0-rc.0",
+			want: &Version{
+				Major:      2,
+				Minor:      0,
+				Patch:      0,
+				PreRelease: 0,
+				Prefix:     "v",
+			},
+		},
+		{
+			name:  "version without prefix",
+			input: "1.2.3",
+			want: &Version{
+				Major:      1,
+				Minor:      2,
+				Patch:      3,
+				PreRelease: -1,
+				Prefix:     "",
+			},
+		},
+		{
+			name:  "version without prefix with RC",
+			input: "1.2.3-rc.5",
+			want: &Version{
+				Major:      1,
+				Minor:      2,
+				Patch:      3,
+				PreRelease: 5,
+				Prefix:     "",
+			},
+		},
+		{
+			name:      "invalid format",
+			input:     "not-a-version",
+			wantError: true,
+		},
+		{
+			name:      "partial version",
+			input:     "v1.2",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Parse(tt.input)
+			if tt.wantError {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestVersion_String(t *testing.T) {
+	tests := []struct {
+		name    string
+		version *Version
+		want    string
+	}{
+		{
+			name: "with RC",
+			version: &Version{
+				Major: 1, Minor: 2, Patch: 3, PreRelease: 4, Prefix: "v",
+			},
+			want: "v1.2.3-rc.4",
+		},
+		{
+			name: "without RC",
+			version: &Version{
+				Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Prefix: "v",
+			},
+			want: "v1.2.3",
+		},
+		{
+			name: "RC 0",
+			version: &Version{
+				Major: 2, Minor: 0, Patch: 0, PreRelease: 0, Prefix: "v",
+			},
+			want: "v2.0.0-rc.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.version.String())
+		})
+	}
+}
+
+func TestVersion_Bump(t *testing.T) {
+	base := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Prefix: "v"}
+
+	t.Run("major bump", func(t *testing.T) {
+		result := base.Bump(BumpMajor)
+		assert.Equal(t, "v2.0.0", result.String())
+	})
+
+	t.Run("minor bump", func(t *testing.T) {
+		result := base.Bump(BumpMinor)
+		assert.Equal(t, "v1.3.0", result.String())
+	})
+
+	t.Run("patch bump", func(t *testing.T) {
+		result := base.Bump(BumpPatch)
+		assert.Equal(t, "v1.2.4", result.String())
+	})
+
+	t.Run("no bump", func(t *testing.T) {
+		result := base.Bump(BumpNone)
+		assert.Equal(t, "v1.2.3", result.String())
+	})
+}
+
+func TestDetermineBumpType(t *testing.T) {
+	tests := []struct {
+		name    string
+		commits []changelog.ConventionalCommit
+		want    BumpType
+	}{
+		{
+			name:    "no commits",
+			commits: nil,
+			want:    BumpNone,
+		},
+		{
+			name: "fix only",
+			commits: []changelog.ConventionalCommit{
+				{Type: "fix", Description: "bug fix"},
+			},
+			want: BumpPatch,
+		},
+		{
+			name: "feat only",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "new feature"},
+			},
+			want: BumpMinor,
+		},
+		{
+			name: "breaking change",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "new feature", Breaking: true},
+			},
+			want: BumpMajor,
+		},
+		{
+			name: "mixed - feat wins over fix",
+			commits: []changelog.ConventionalCommit{
+				{Type: "fix", Description: "bug fix"},
+				{Type: "feat", Description: "new feature"},
+				{Type: "fix", Description: "another fix"},
+			},
+			want: BumpMinor,
+		},
+		{
+			name: "mixed - breaking wins over feat",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "new feature"},
+				{Type: "fix", Description: "bug fix", Breaking: true},
+			},
+			want: BumpMajor,
+		},
+		{
+			name: "chore and docs are ignored",
+			commits: []changelog.ConventionalCommit{
+				{Type: "chore", Description: "update deps"},
+				{Type: "docs", Description: "update readme"},
+			},
+			want: BumpNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DetermineBumpType(tt.commits)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCalculator_CalculateNext(t *testing.T) {
+	calc := NewCalculator("v")
+
+	tests := []struct {
+		name              string
+		currentDevVersion string
+		nextEnvVersion    string
+		commits           []changelog.ConventionalCommit
+		want              string
+	}{
+		{
+			name:              "first release - feat",
+			currentDevVersion: "",
+			nextEnvVersion:    "",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "initial feature"},
+			},
+			want: "v0.1.0-rc.0",
+		},
+		{
+			name:              "after promotion - new feat",
+			currentDevVersion: "v2.0.0-rc.0",
+			nextEnvVersion:    "v2.0.0-rc.0", // matching = just promoted
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "new feature"},
+			},
+			want: "v2.1.0-rc.0",
+		},
+		{
+			name:              "same version - increment RC",
+			currentDevVersion: "v2.1.0-rc.0",
+			nextEnvVersion:    "v2.0.0-rc.0",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "feature"},
+				{Type: "fix", Description: "fix"},
+			},
+			want: "v2.1.0-rc.1", // same base version, increment RC
+		},
+		{
+			name:              "same version - increment RC again",
+			currentDevVersion: "v2.1.0-rc.2",
+			nextEnvVersion:    "v2.0.0-rc.0",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "feature"},
+			},
+			want: "v2.1.0-rc.3",
+		},
+		{
+			name:              "breaking change - major bump",
+			currentDevVersion: "v2.1.0-rc.0",
+			nextEnvVersion:    "v2.0.0-rc.0",
+			commits: []changelog.ConventionalCommit{
+				{Type: "feat", Description: "breaking feature", Breaking: true},
+			},
+			want: "v3.0.0-rc.0", // different version, RC resets
+		},
+		{
+			name:              "fix only - patch bump",
+			currentDevVersion: "v2.0.0-rc.0",
+			nextEnvVersion:    "v2.0.0-rc.0",
+			commits: []changelog.ConventionalCommit{
+				{Type: "fix", Description: "bug fix"},
+			},
+			want: "v2.0.1-rc.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := calc.CalculateNext(tt.currentDevVersion, tt.nextEnvVersion, tt.commits)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+		})
+	}
+}
+
+func TestGetLatestRelease(t *testing.T) {
+	tests := []struct {
+		name    string
+		tags    []string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "single release",
+			tags:    []string{"v1.0.0"},
+			want:    "v1.0.0",
+			wantErr: false,
+		},
+		{
+			name:    "multiple releases",
+			tags:    []string{"v1.0.0", "v2.0.0", "v1.5.0"},
+			want:    "v2.0.0",
+			wantErr: false,
+		},
+		{
+			name:    "skip pre-releases",
+			tags:    []string{"v1.0.0", "v2.0.0-rc.0", "v1.5.0-rc.3"},
+			want:    "v1.0.0",
+			wantErr: false,
+		},
+		{
+			name:    "only pre-releases",
+			tags:    []string{"v2.0.0-rc.0", "v1.5.0-rc.3"},
+			wantErr: true,
+		},
+		{
+			name:    "empty list",
+			tags:    []string{},
+			wantErr: true,
+		},
+		{
+			name:    "mixed valid and invalid",
+			tags:    []string{"v1.0.0", "not-a-version", "v2.0.0"},
+			want:    "v2.0.0",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GetLatestRelease(tt.tags)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+		})
+	}
+}
+
+func TestStripRC(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"v1.2.3-rc.4", "v1.2.3", false},
+		{"v1.2.3-rc.0", "v1.2.3", false},
+		{"v1.2.3", "v1.2.3", false},
+		{"invalid", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := StripRC(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestVersion_WithRC(t *testing.T) {
+	base := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Prefix: "v"}
+
+	t.Run("add RC to version without RC", func(t *testing.T) {
+		result := base.WithRC(0)
+		assert.Equal(t, "v1.2.3-rc.0", result.String())
+	})
+
+	t.Run("change RC number", func(t *testing.T) {
+		withRC := base.WithRC(5)
+		result := withRC.WithRC(10)
+		assert.Equal(t, "v1.2.3-rc.10", result.String())
+	})
+
+	t.Run("preserves original", func(t *testing.T) {
+		_ = base.WithRC(3)
+		assert.Equal(t, "v1.2.3", base.String()) // Original unchanged
+	})
+}
+
+func TestVersion_Equal(t *testing.T) {
+	v1 := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Prefix: "v"}
+	v2 := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: 5, Prefix: "v"}
+	v3 := &Version{Major: 1, Minor: 2, Patch: 4, PreRelease: -1, Prefix: "v"}
+
+	t.Run("same version different RC", func(t *testing.T) {
+		assert.True(t, v1.Equal(v2))
+	})
+
+	t.Run("different patch", func(t *testing.T) {
+		assert.False(t, v1.Equal(v3))
+	})
+
+	t.Run("nil comparison", func(t *testing.T) {
+		assert.False(t, v1.Equal(nil))
+	})
+}
+
+func TestVersion_Base(t *testing.T) {
+	v := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: 4, Prefix: "v"}
+	assert.Equal(t, "v1.2.3", v.Base())
+}
+
+func TestVersion_BaseVersion(t *testing.T) {
+	v := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: 4, Prefix: "v"}
+	base := v.BaseVersion()
+
+	assert.Equal(t, "v1.2.3", base.String())
+	assert.Equal(t, -1, base.PreRelease)
+	// Original unchanged
+	assert.Equal(t, 4, v.PreRelease)
+}
+
+func TestNewCalculator_CustomPrefix(t *testing.T) {
+	calc := NewCalculator("release-")
+
+	commits := []changelog.ConventionalCommit{
+		{Type: "feat", Description: "new feature"},
+	}
+
+	got, err := calc.CalculateNext("", "", commits)
+	require.NoError(t, err)
+	assert.Equal(t, "release-0.1.0-rc.0", got.String())
+}
+
+func TestNewCalculator_EmptyPrefixDefaultsToV(t *testing.T) {
+	// Empty prefix defaults to "v"
+	calc := NewCalculator("")
+
+	commits := []changelog.ConventionalCommit{
+		{Type: "feat", Description: "new feature"},
+	}
+
+	got, err := calc.CalculateNext("", "", commits)
+	require.NoError(t, err)
+	assert.Equal(t, "v0.1.0-rc.0", got.String())
+}

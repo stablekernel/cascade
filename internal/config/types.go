@@ -1,0 +1,887 @@
+package config
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// CICDFile represents the .github/cicd.yaml file structure
+// Contains both config (pipeline definition) and state (deployment tracking)
+type CICDFile struct {
+	Config        *TrunkConfig         `yaml:"config" json:"config"`
+	State         map[string]*EnvState `yaml:"state,omitempty" json:"state,omitempty"`
+	LatestRelease *LatestReleaseState  `yaml:"latest_release,omitempty" json:"latest_release,omitempty"`
+}
+
+// LatestReleaseState tracks the most recent published release
+type LatestReleaseState struct {
+	Version    string `yaml:"version,omitempty" json:"version,omitempty"`         // e.g., v1.2.0
+	SHA        string `yaml:"sha,omitempty" json:"sha,omitempty"`                 // Commit SHA
+	ReleasedOn string `yaml:"released_on,omitempty" json:"released_on,omitempty"` // ISO 8601 timestamp
+	ReleasedBy string `yaml:"released_by,omitempty" json:"released_by,omitempty"` // GitHub actor who triggered release
+}
+
+// EnvState tracks the state of a single environment
+type EnvState struct {
+	SHA         string                          `yaml:"sha,omitempty" json:"sha,omitempty"`
+	Version     string                          `yaml:"version,omitempty" json:"version,omitempty"` // Semantic version tag (e.g., v1.2.3-rc.0)
+	CommittedAt string                          `yaml:"committed_at,omitempty" json:"committed_at,omitempty"`
+	CommittedBy string                          `yaml:"committed_by,omitempty" json:"committed_by,omitempty"`
+	Builds      map[string]*BuildState          `yaml:"builds,omitempty" json:"builds,omitempty"`
+	Deploys     map[string]*DeployState         `yaml:"deploys,omitempty" json:"deploys,omitempty"`
+	External    map[string]*ExternalDeployState `yaml:"external,omitempty" json:"external,omitempty"` // External repo deploy states
+}
+
+// BuildState tracks the state of a single build within an environment
+type BuildState struct {
+	SHA        string            `yaml:"sha,omitempty" json:"sha,omitempty"`
+	BuiltAt    string            `yaml:"built_at,omitempty" json:"built_at,omitempty"`
+	BuiltBy    string            `yaml:"built_by,omitempty" json:"built_by,omitempty"`
+	ArtifactID string            `yaml:"artifact_id,omitempty" json:"artifact_id,omitempty"` // Immutable artifact identifier from build output (e.g., Docker image digest)
+	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"`               // state_tags values
+}
+
+// DeployState tracks the state of a single deployable within an environment
+type DeployState struct {
+	SHA        string            `yaml:"sha,omitempty" json:"sha,omitempty"`
+	DeployedAt string            `yaml:"deployed_at,omitempty" json:"deployed_at,omitempty"`
+	DeployedBy string            `yaml:"deployed_by,omitempty" json:"deployed_by,omitempty"`
+	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"` // state_tags values
+}
+
+// ExternalDeployState tracks the state of an external deployable within an environment
+type ExternalDeployState struct {
+	Repo       string            `yaml:"repo" json:"repo"`                                   // Source repo (e.g., "org/cdk-infra")
+	SHA        string            `yaml:"sha,omitempty" json:"sha,omitempty"`                 // Commit SHA from external repo
+	Version    string            `yaml:"version,omitempty" json:"version,omitempty"`         // Version from external repo
+	DeployedAt string            `yaml:"deployed_at,omitempty" json:"deployed_at,omitempty"` // Last deployment timestamp
+	DeployedBy string            `yaml:"deployed_by,omitempty" json:"deployed_by,omitempty"` // Actor who triggered deploy
+	Artifacts  map[string]string `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`     // Artifact references (e.g., image_tag)
+}
+
+// TrunkConfig represents the pipeline configuration (within config: section)
+type TrunkConfig struct {
+	TrunkBranch  string               `yaml:"trunk_branch" json:"trunk_branch"`
+	Triggers     []string             `yaml:"triggers,omitempty" json:"triggers,omitempty"`           // Global triggers for orchestration workflow paths filter
+	Environments []string             `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
+	CLIVersion   string               `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
+	TagPrefix    string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
+	ReleaseToken string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
+	ManifestFile string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
+	ManifestKey  string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
+	ActionFolder string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
+	Git          *GitConfig           `yaml:"git,omitempty" json:"git,omitempty"`
+	Validate     *ValidateConfig      `yaml:"validate,omitempty" json:"validate,omitempty"`
+	Builds       []BuildConfig        `yaml:"builds,omitempty" json:"builds,omitempty"`     // Empty = no orchestrated builds
+	Deploys      []DeployConfig       `yaml:"deploys,omitempty" json:"deploys,omitempty"`   // Empty = no deploys (library/CLI projects)
+	Publish      *PublishConfig       `yaml:"publish,omitempty" json:"publish,omitempty"`   // Optional: retag artifacts after a release is published
+	External     []ExternalRepoConfig `yaml:"external,omitempty" json:"external,omitempty"` // External repos this primary coordinates
+	Notify       *NotifyConfig        `yaml:"notify,omitempty" json:"notify,omitempty"`     // Satellite: notify primary after dev deploy
+	Release      *ReleaseConfig       `yaml:"release,omitempty" json:"release,omitempty"`
+	Changelog    *ChangelogConfig     `yaml:"changelog,omitempty" json:"changelog,omitempty"`
+	Concurrency  *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"` // Optional: top-level concurrency: block on the orchestrate workflow
+}
+
+// ConcurrencyConfig overrides the default concurrency: block emitted on the
+// generated orchestrate workflow. Defaults: group=orchestrate-${{ github.ref }},
+// cancel-in-progress=true. Set cancel_in_progress=false to queue runs instead
+// of cancelling older ones.
+type ConcurrencyConfig struct {
+	Group            string `yaml:"group,omitempty" json:"group,omitempty"`
+	CancelInProgress bool   `yaml:"cancel_in_progress" json:"cancel_in_progress"`
+}
+
+// GetConcurrencyGroup returns the configured group expression or the default.
+func (c *TrunkConfig) GetConcurrencyGroup() string {
+	if c.Concurrency != nil && c.Concurrency.Group != "" {
+		return c.Concurrency.Group
+	}
+	return "orchestrate-${{ github.ref }}"
+}
+
+// GetConcurrencyCancelInProgress returns whether to cancel older in-progress
+// runs. Defaults to true (newer push obsoletes older). Returns false only when
+// explicitly configured.
+func (c *TrunkConfig) GetConcurrencyCancelInProgress() bool {
+	if c.Concurrency == nil {
+		return true
+	}
+	return c.Concurrency.CancelInProgress
+}
+
+// GetCLIVersion returns the configured CLI version.
+// Supported values:
+//   - "" or "latest" → uses the "latest" tag (most recent stable release)
+//   - "beta" → uses "master" branch (bleeding edge, may be unstable)
+//   - "vX.Y.Z" → uses a specific version tag
+func (c *TrunkConfig) GetCLIVersion() string {
+	if c.CLIVersion == "" {
+		return "latest"
+	}
+	return c.CLIVersion
+}
+
+// GetTagPrefix returns the configured tag prefix or "v" if not specified
+func (c *TrunkConfig) GetTagPrefix() string {
+	if c.TagPrefix == "" {
+		return "v"
+	}
+	return c.TagPrefix
+}
+
+// GetReleaseToken returns the configured release token expression or "${{ secrets.GITHUB_TOKEN }}" if not specified.
+// Users should provide the full GitHub Actions expression, e.g. "${{ secrets.MY_TOKEN }}".
+func (c *TrunkConfig) GetReleaseToken() string {
+	if c.ReleaseToken == "" {
+		return "${{ secrets.GITHUB_TOKEN }}"
+	}
+	return c.ReleaseToken
+}
+
+// GetManifestFile returns the configured manifest file path or ".github/manifest.yaml" if not specified
+func (c *TrunkConfig) GetManifestFile() string {
+	if c.ManifestFile == "" {
+		return ".github/manifest.yaml"
+	}
+	return c.ManifestFile
+}
+
+// GetManifestKey returns the configured manifest key or "ci" if not specified
+func (c *TrunkConfig) GetManifestKey() string {
+	if c.ManifestKey == "" {
+		return "ci"
+	}
+	return c.ManifestKey
+}
+
+// GetActionFolder returns the configured action folder name or "manage-release" if not specified
+func (c *TrunkConfig) GetActionFolder() string {
+	if c.ActionFolder == "" {
+		return "manage-release"
+	}
+	return c.ActionFolder
+}
+
+// GitConfig defines git identity and signing configuration
+type GitConfig struct {
+	Mode         string `yaml:"mode,omitempty" json:"mode,omitempty"`                     // default, custom, external
+	UserName     string `yaml:"user_name,omitempty" json:"user_name,omitempty"`           // git user.name (if mode=custom)
+	UserEmail    string `yaml:"user_email,omitempty" json:"user_email,omitempty"`         // git user.email (if mode=custom)
+	GPGKeyID     string `yaml:"gpg_key_id,omitempty" json:"gpg_key_id,omitempty"`         // GPG key ID for signing
+	GPGKeySecret string `yaml:"gpg_key_secret,omitempty" json:"gpg_key_secret,omitempty"` // secret name containing GPG key
+}
+
+// GitMode constants
+const (
+	GitModeDefault  = "default"  // Use github-actions[bot]
+	GitModeCustom   = "custom"   // Use configured user_name/user_email
+	GitModeExternal = "external" // Skip git config, assume pre-configured
+)
+
+// GetGitMode returns the effective git mode (default if not specified)
+func (c *TrunkConfig) GetGitMode() string {
+	if c.Git == nil || c.Git.Mode == "" {
+		return GitModeDefault
+	}
+	return c.Git.Mode
+}
+
+// GetGitUserName returns the git user.name to use
+func (c *TrunkConfig) GetGitUserName() string {
+	if c.Git != nil && c.Git.UserName != "" {
+		return c.Git.UserName
+	}
+	return "github-actions[bot]"
+}
+
+// GetGitUserEmail returns the git user.email to use
+func (c *TrunkConfig) GetGitUserEmail() string {
+	if c.Git != nil && c.Git.UserEmail != "" {
+		return c.Git.UserEmail
+	}
+	return "github-actions[bot]@users.noreply.github.com"
+}
+
+// HasGPGSigning returns true if GPG signing is configured
+func (c *TrunkConfig) HasGPGSigning() bool {
+	return c.Git != nil && c.Git.GPGKeyID != "" && c.Git.GPGKeySecret != ""
+}
+
+// ValidateConfig defines a validation workflow
+type ValidateConfig struct {
+	Workflow       string                            `yaml:"workflow" json:"workflow"`
+	Triggers       []string                          `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns that should trigger validation
+	SupportsDryRun bool                              `yaml:"supports_dry_run,omitempty" json:"supports_dry_run,omitempty"`
+	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
+	RunPolicy      string                            `yaml:"run_policy,omitempty" json:"run_policy,omitempty"`
+	OnFailure      string                            `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
+	Retries        int                               `yaml:"retries,omitempty" json:"retries,omitempty"`
+	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
+}
+
+// BuildConfig defines a build target
+type BuildConfig struct {
+	Name           string                            `yaml:"name" json:"name"`
+	Workflow       string                            `yaml:"workflow" json:"workflow"`
+	Triggers       []string                          `yaml:"triggers" json:"triggers"`
+	DependsOn      []string                          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	StateTags      []string                          `yaml:"state_tags,omitempty" json:"state_tags,omitempty"`
+	Artifacts      []ArtifactConfig                  `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	RunPolicy      string                            `yaml:"run_policy,omitempty" json:"run_policy,omitempty"`
+	OnFailure      string                            `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
+	Retries        int                               `yaml:"retries,omitempty" json:"retries,omitempty"`
+	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
+	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
+}
+
+// ArtifactConfig defines a release artifact produced by a build
+// Build workflows should upload artifacts with name: release-{build-name}-{artifact-name}
+type ArtifactConfig struct {
+	Name     string `yaml:"name" json:"name"`                             // Artifact identifier (e.g., "linux-amd64", "checksums")
+	Path     string `yaml:"path" json:"path"`                             // Glob pattern for files to include (e.g., "dist/*.tar.gz")
+	Required bool   `yaml:"required,omitempty" json:"required,omitempty"` // Fail release if artifact missing (default: true)
+}
+
+// DeployConfig defines a deployment target
+type DeployConfig struct {
+	Name           string                            `yaml:"name" json:"name"`
+	Workflow       string                            `yaml:"workflow" json:"workflow"`
+	Triggers       []string                          `yaml:"triggers" json:"triggers"`
+	DependsOn      []string                          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	StateTags      []string                          `yaml:"state_tags,omitempty" json:"state_tags,omitempty"`
+	SupportsDryRun bool                              `yaml:"supports_dry_run,omitempty" json:"supports_dry_run,omitempty"`
+	RunPolicy      string                            `yaml:"run_policy,omitempty" json:"run_policy,omitempty"`
+	OnFailure      string                            `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
+	Retries        int                               `yaml:"retries,omitempty" json:"retries,omitempty"`
+	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
+	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
+}
+
+// PublishConfig defines a publish callback invoked after a release is published.
+// The publish workflow receives one matrix entry per configured build, carrying
+// the build's metadata so the user can retag artifacts in their registries.
+//
+// Inputs passed to the publish workflow per build:
+//   - build_name:   name of the build (e.g., "app")
+//   - old_version:  the RC version that was published (e.g., "v1.0.0-rc.2")
+//   - new_version:  the final semver version (e.g., "v1.0.0")
+//   - sha:          the git commit SHA of the built artifact
+//   - artifact_id:  the immutable artifact identifier stored from the build job
+//                   output (e.g., Docker image digest "sha256:abc..."). Empty if
+//                   the build did not emit an artifact_id output.
+type PublishConfig struct {
+	Workflow string `yaml:"workflow" json:"workflow"` // Path to the reusable workflow (e.g., ".github/workflows/publish.yaml")
+}
+
+// ReleaseConfig defines release management settings
+type ReleaseConfig struct {
+	Disabled bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"` // true = disabled
+	Tag      string `yaml:"tag,omitempty" json:"tag,omitempty"`           // callback.output reference for external releases
+}
+
+// ExternalRepoConfig defines an external repository that this primary coordinates
+type ExternalRepoConfig struct {
+	Repo    string                 `yaml:"repo" json:"repo"`                   // e.g., "org/cdk-infra"
+	Ref     string                 `yaml:"ref,omitempty" json:"ref,omitempty"` // Branch/tag reference (default: trunk_branch)
+	Deploys []ExternalDeployConfig `yaml:"deploys" json:"deploys"`             // Deployables from this repo
+}
+
+// ExternalDeployConfig defines a deployable from an external repository
+type ExternalDeployConfig struct {
+	Name     string   `yaml:"name" json:"name"`                             // Deploy identifier (e.g., "cdk")
+	Workflow string   `yaml:"workflow" json:"workflow"`                     // Workflow path - local (.github/...) or external (org/repo/.github/...@ref)
+	Triggers []string `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns for change detection
+}
+
+// NotifyConfig defines how a satellite repo notifies its primary after dev deploys
+type NotifyConfig struct {
+	Repo     string `yaml:"repo" json:"repo"`                             // Primary repo to notify (e.g., "org/my-backend")
+	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"` // Workflow to dispatch (default: "external-update.yaml")
+	Token    string `yaml:"token,omitempty" json:"token,omitempty"`       // Secret name for cross-repo dispatch (default: "PRIMARY_REPO_TOKEN")
+}
+
+// GetWorkflow returns the notify workflow name or default
+func (n *NotifyConfig) GetWorkflow() string {
+	if n.Workflow == "" {
+		return "external-update.yaml"
+	}
+	return n.Workflow
+}
+
+// GetToken returns the token secret expression or default
+func (n *NotifyConfig) GetToken() string {
+	if n.Token == "" {
+		return "${{ secrets.PRIMARY_REPO_TOKEN }}"
+	}
+	return n.Token
+}
+
+// ChangelogConfig defines changelog generation settings
+type ChangelogConfig struct {
+	Disabled     bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`         // true = disabled
+	Workflow     string `yaml:"workflow,omitempty" json:"workflow,omitempty"`         // custom changelog workflow
+	Contributors bool   `yaml:"contributors,omitempty" json:"contributors,omitempty"` // true = include contributors section
+}
+
+// ReleaseEnabled returns true if release management is enabled (default: true)
+func (c *TrunkConfig) ReleaseEnabled() bool {
+	return c.Release == nil || !c.Release.Disabled
+}
+
+// HasExternalRelease returns true if an external tool creates releases
+func (c *TrunkConfig) HasExternalRelease() bool {
+	return c.Release != nil && c.Release.Tag != ""
+}
+
+// HasCustomChangelog returns true if a custom changelog workflow is configured
+func (c *TrunkConfig) HasCustomChangelog() bool {
+	return c.Changelog != nil && c.Changelog.Workflow != ""
+}
+
+// ChangelogEnabled returns true if changelog generation is enabled (default: true)
+func (c *TrunkConfig) ChangelogEnabled() bool {
+	return c.Changelog == nil || !c.Changelog.Disabled
+}
+
+// HasReleaseArtifacts returns true if any build has artifacts configured
+func (c *TrunkConfig) HasReleaseArtifacts() bool {
+	for _, b := range c.Builds {
+		if len(b.Artifacts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// GetAllReleaseArtifacts returns all artifact configs across all builds
+// Each artifact name is prefixed with the build name for uniqueness
+func (c *TrunkConfig) GetAllReleaseArtifacts() []struct {
+	BuildName string
+	Artifact  ArtifactConfig
+} {
+	var artifacts []struct {
+		BuildName string
+		Artifact  ArtifactConfig
+	}
+	for _, b := range c.Builds {
+		for _, a := range b.Artifacts {
+			artifacts = append(artifacts, struct {
+				BuildName string
+				Artifact  ArtifactConfig
+			}{BuildName: b.Name, Artifact: a})
+		}
+	}
+	return artifacts
+}
+
+// ParseResult is the output of parse-config command
+type ParseResult struct {
+	Config      TrunkConfig `json:"config"`
+	BuildNames  []string    `json:"build_names"`
+	DeployNames []string    `json:"deploy_names"`
+	Valid       bool        `json:"valid"`
+	Errors      []string    `json:"errors,omitempty"`
+}
+
+// RunPolicy constants
+const (
+	RunPolicyDefault = "default"
+	RunPolicyAlways  = "always"
+	RunPolicyForce   = "force"
+)
+
+// OnFailure constants
+const (
+	OnFailureAbort    = "abort"
+	OnFailureContinue = "continue"
+)
+
+// PromotionMode represents the promotion mode
+type PromotionMode string
+
+const (
+	// ModeDefault promotes each environment to its immediate next only (sequential)
+	// Supports force flag to continue on failure
+	ModeDefault PromotionMode = "default"
+
+	// ModeCascade promotes source through all intermediate environments to target (atomic)
+	// Bails entirely on any failure - no partial state updates
+	ModeCascade PromotionMode = "cascade"
+)
+
+// PromotionOption represents a cascade promotion target for manual mode
+type PromotionOption struct {
+	Name         string   `json:"name"`           // e.g., "dev-to-uat", "dev-to-prod"
+	FromEnv      string   `json:"from_env"`       // source environment
+	ToEnv        string   `json:"to_env"`         // target environment
+	EnvsToUpdate []string `json:"envs_to_update"` // all envs between source and target (inclusive of target)
+	IsPrerelease bool     `json:"is_prerelease"`  // triggers draft→prerelease (env before release marker)
+	IsRelease    bool     `json:"is_release"`     // triggers prerelease→released (includes release marker)
+	IncludesProd bool     `json:"includes_prod"`  // includes prod deployment
+}
+
+// GetPromotionModes returns the available promotion modes
+func (c *TrunkConfig) GetPromotionModes() []PromotionMode {
+	return []PromotionMode{ModeDefault, ModeCascade}
+}
+
+// GetAllDirectPromotionOptions returns all direct promotion options.
+// Release states are determined by position, not by fake "release" environment:
+//   - Promotion to second-from-top env (e.g., uat) = prerelease state
+//   - Promotion to top env (e.g., prod) = released state
+//
+// For 4 envs [dev, test, uat, prod], generates:
+//   - dev-to-test, dev-to-uat, test-to-uat (env-to-env, uat promotions trigger prerelease)
+//   - dev-to-prod, test-to-prod, uat-to-prod (includes prod deployment, triggers released)
+func (c *TrunkConfig) GetAllDirectPromotionOptions() []PromotionOption {
+	envs := c.Environments
+	if len(envs) < 2 {
+		return nil
+	}
+
+	var options []PromotionOption
+	prodEnv := envs[len(envs)-1]
+	prereleaseEnv := envs[len(envs)-2] // Second from top = prerelease environment
+
+	// Generate from each environment (except prod)
+	for i := 0; i < len(envs)-1; i++ {
+		fromEnv := envs[i]
+
+		// To each subsequent environment (including prod)
+		for j := i + 1; j < len(envs); j++ {
+			toEnv := envs[j]
+			name := fromEnv + "-to-" + toEnv
+
+			// Calculate all environments that will be updated (from+1 to target, inclusive)
+			envsToUpdate := make([]string, 0, j-i)
+			for k := i + 1; k <= j; k++ {
+				envsToUpdate = append(envsToUpdate, envs[k])
+			}
+
+			isProd := toEnv == prodEnv
+			isPrerelease := toEnv == prereleaseEnv
+
+			options = append(options, PromotionOption{
+				Name:         name,
+				FromEnv:      fromEnv,
+				ToEnv:        toEnv,
+				EnvsToUpdate: envsToUpdate,
+				IsRelease:    isProd, // Promoting to prod triggers release
+				IncludesProd: isProd,
+				IsPrerelease: isPrerelease, // Promoting to prerelease env triggers prerelease
+			})
+		}
+	}
+
+	return options
+}
+
+// GetCascadeTargets returns all valid cascade promotion targets for manual mode
+// These are the direct promotion options (e.g., dev-to-test, dev-to-prod)
+func (c *TrunkConfig) GetCascadeTargets() []PromotionOption {
+	return c.GetAllDirectPromotionOptions()
+}
+
+// IsSingleEnvironment returns true if only one environment is configured
+// Single-environment projects get a Release workflow instead of Promote
+func (c *TrunkConfig) IsSingleEnvironment() bool {
+	return len(c.Environments) == 1
+}
+
+// IsFirstEnvironment returns true if env is the first (build target)
+func (c *TrunkConfig) IsFirstEnvironment(env string) bool {
+	if len(c.Environments) == 0 {
+		return false
+	}
+	return c.Environments[0] == env
+}
+
+// IsLastEnvironment returns true if env is the last (production)
+func (c *TrunkConfig) IsLastEnvironment(env string) bool {
+	if len(c.Environments) == 0 {
+		return false
+	}
+	return c.Environments[len(c.Environments)-1] == env
+}
+
+// GetEnvironmentIndex returns the index of the environment, -1 if not found
+func (c *TrunkConfig) GetEnvironmentIndex(env string) int {
+	for i, e := range c.Environments {
+		if e == env {
+			return i
+		}
+	}
+	return -1
+}
+
+// GetNextEnvironment returns the next environment in the list, empty if last
+func (c *TrunkConfig) GetNextEnvironment(env string) string {
+	idx := c.GetEnvironmentIndex(env)
+	if idx == -1 || idx == len(c.Environments)-1 {
+		return ""
+	}
+	return c.Environments[idx+1]
+}
+
+// GetEnvironmentsInRange returns all environments from start to end (inclusive)
+// Returns nil if start or end not found, or if end comes before start
+func (c *TrunkConfig) GetEnvironmentsInRange(start, end string) []string {
+	startIdx := c.GetEnvironmentIndex(start)
+	endIdx := c.GetEnvironmentIndex(end)
+
+	if startIdx == -1 || endIdx == -1 || endIdx < startIdx {
+		return nil
+	}
+
+	result := make([]string, 0, endIdx-startIdx+1)
+	for i := startIdx; i <= endIdx; i++ {
+		result = append(result, c.Environments[i])
+	}
+	return result
+}
+
+// Callback type constants
+const (
+	CallbackTypeBuild    = "build"
+	CallbackTypeDeploy   = "deploy"
+	CallbackTypeValidate = "validate"
+	CallbackTypeExternal = "external" // External repo deploy
+)
+
+// JobID returns the prefixed job ID for a callback (e.g., "build-app", "deploy-app")
+func JobID(callbackType, name string) string {
+	if callbackType == CallbackTypeValidate {
+		return "validate"
+	}
+	return callbackType + "-" + name
+}
+
+// OutputKey converts a job ID to an output-safe key by using underscores instead of hyphens
+// GitHub Actions expressions interpret hyphens as subtraction, so we use underscores for output keys
+// Example: "build-app" -> "build_app"
+func OutputKey(jobID string) string {
+	return strings.ReplaceAll(jobID, "-", "_")
+}
+
+// DisplayName returns the display name for a callback (e.g., "Build (app)", "Deploy (app)")
+func DisplayName(callbackType, name string) string {
+	if callbackType == CallbackTypeValidate {
+		return "Validate (validate)"
+	}
+	switch callbackType {
+	case CallbackTypeBuild:
+		return "Build (" + name + ")"
+	case CallbackTypeDeploy:
+		return "Deploy (" + name + ")"
+	default:
+		return name
+	}
+}
+
+// ResolveDependency resolves a dependency reference to its job ID.
+// Supports:
+//   - Explicit: "build:app" -> "build-app", "deploy:infra" -> "deploy-infra"
+//   - Implicit: "app" -> infers type based on context (deploys look in builds first)
+//
+// Returns the resolved job ID and an error if ambiguous or not found.
+func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string, error) {
+	// Check for explicit prefix
+	if idx := indexByte(depRef, ':'); idx != -1 {
+		prefix := depRef[:idx]
+		name := depRef[idx+1:]
+		switch prefix {
+		case "build":
+			for _, b := range c.Builds {
+				if b.Name == name {
+					return JobID(CallbackTypeBuild, name), nil
+				}
+			}
+			return "", fmt.Errorf("build '%s' not found", name)
+		case "deploy":
+			for _, d := range c.Deploys {
+				if d.Name == name {
+					return JobID(CallbackTypeDeploy, name), nil
+				}
+			}
+			return "", fmt.Errorf("deploy '%s' not found", name)
+		case "external":
+			for _, ext := range c.External {
+				for _, d := range ext.Deploys {
+					if d.Name == name {
+						return JobID(CallbackTypeExternal, name), nil
+					}
+				}
+			}
+			return "", fmt.Errorf("external deploy '%s' not found", name)
+		case "validate":
+			if c.Validate != nil {
+				return "validate", nil
+			}
+			return "", fmt.Errorf("validate not configured")
+		default:
+			return "", fmt.Errorf("unknown dependency type: %s", prefix)
+		}
+	}
+
+	// Implicit resolution - check based on fromType
+	var foundInBuilds, foundInDeploys, foundInExternal bool
+	for _, b := range c.Builds {
+		if b.Name == depRef {
+			foundInBuilds = true
+			break
+		}
+	}
+	for _, d := range c.Deploys {
+		if d.Name == depRef {
+			foundInDeploys = true
+			break
+		}
+	}
+	// Check external deploys
+	for _, ext := range c.External {
+		for _, d := range ext.Deploys {
+			if d.Name == depRef {
+				foundInExternal = true
+				break
+			}
+		}
+		if foundInExternal {
+			break
+		}
+	}
+
+	// Smart inference based on context
+	switch fromType {
+	case CallbackTypeDeploy:
+		// Deploys prefer builds first (most common case)
+		if foundInBuilds {
+			return JobID(CallbackTypeBuild, depRef), nil
+		}
+		if foundInDeploys {
+			return JobID(CallbackTypeDeploy, depRef), nil
+		}
+		// External deploys use "external-" prefix
+		if foundInExternal {
+			return JobID(CallbackTypeExternal, depRef), nil
+		}
+	case CallbackTypeBuild:
+		// Builds can only depend on other builds or validate
+		if foundInBuilds {
+			return JobID(CallbackTypeBuild, depRef), nil
+		}
+	}
+
+	// Count how many places we found it
+	foundCount := 0
+	if foundInBuilds {
+		foundCount++
+	}
+	if foundInDeploys {
+		foundCount++
+	}
+	if foundInExternal {
+		foundCount++
+	}
+
+	// Ambiguous case - multiple exist
+	if foundCount > 1 {
+		var locations []string
+		if foundInBuilds {
+			locations = append(locations, "build")
+		}
+		if foundInDeploys {
+			locations = append(locations, "deploy")
+		}
+		if foundInExternal {
+			locations = append(locations, "external")
+		}
+		return "", fmt.Errorf("ambiguous dependency '%s': exists as %s. Use explicit prefix (e.g., 'build:%s' or 'deploy:%s')", depRef, strings.Join(locations, ", "), depRef, depRef)
+	}
+
+	// Not found
+	if foundCount == 0 {
+		return "", fmt.Errorf("dependency '%s' not found in builds, deploys, or external", depRef)
+	}
+
+	// Single match found
+	if foundInBuilds {
+		return JobID(CallbackTypeBuild, depRef), nil
+	}
+	if foundInDeploys {
+		return JobID(CallbackTypeDeploy, depRef), nil
+	}
+	return JobID(CallbackTypeExternal, depRef), nil
+}
+
+// indexByte returns the index of the first instance of c in s, or -1 if c is not present
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// GetAllTriggers returns trigger patterns for the orchestrate workflow paths filter.
+// Priority order:
+//  1. Global triggers (config.triggers) - if defined, use exclusively
+//  2. Component triggers - collect from validate, builds, and deploys
+//
+// If no triggers are defined anywhere, returns nil (orchestrate runs on all pushes).
+func (c *TrunkConfig) GetAllTriggers() []string {
+	// If global triggers are defined, use them exclusively
+	if len(c.Triggers) > 0 {
+		triggers := make([]string, len(c.Triggers))
+		copy(triggers, c.Triggers)
+		sort.Strings(triggers)
+		return triggers
+	}
+
+	// Otherwise, collect from all components
+	seen := make(map[string]bool)
+	var triggers []string
+
+	// Add validate triggers
+	if c.Validate != nil {
+		for _, t := range c.Validate.Triggers {
+			if !seen[t] {
+				seen[t] = true
+				triggers = append(triggers, t)
+			}
+		}
+	}
+
+	// Add build triggers
+	for _, b := range c.Builds {
+		for _, t := range b.Triggers {
+			if !seen[t] {
+				seen[t] = true
+				triggers = append(triggers, t)
+			}
+		}
+	}
+
+	// Add deploy triggers
+	for _, d := range c.Deploys {
+		for _, t := range d.Triggers {
+			if !seen[t] {
+				seen[t] = true
+				triggers = append(triggers, t)
+			}
+		}
+	}
+
+	// Sort for deterministic output
+	sort.Strings(triggers)
+	return triggers
+}
+
+// IsPrimary returns true if this repo coordinates external repos
+func (c *TrunkConfig) IsPrimary() bool {
+	return len(c.External) > 0
+}
+
+// IsSatellite returns true if this repo notifies a primary after dev deploys
+func (c *TrunkConfig) IsSatellite() bool {
+	return c.Notify != nil && c.Notify.Repo != ""
+}
+
+// GetExternalDeploy returns an external deploy config by name, or nil if not found
+func (c *TrunkConfig) GetExternalDeploy(name string) (*ExternalDeployConfig, *ExternalRepoConfig) {
+	for i := range c.External {
+		for j := range c.External[i].Deploys {
+			if c.External[i].Deploys[j].Name == name {
+				return &c.External[i].Deploys[j], &c.External[i]
+			}
+		}
+	}
+	return nil, nil
+}
+
+// GetAllExternalDeploys returns all external deploys across all external repos
+func (c *TrunkConfig) GetAllExternalDeploys() []struct {
+	Repo   *ExternalRepoConfig
+	Deploy *ExternalDeployConfig
+} {
+	var result []struct {
+		Repo   *ExternalRepoConfig
+		Deploy *ExternalDeployConfig
+	}
+	for i := range c.External {
+		for j := range c.External[i].Deploys {
+			result = append(result, struct {
+				Repo   *ExternalRepoConfig
+				Deploy *ExternalDeployConfig
+			}{
+				Repo:   &c.External[i],
+				Deploy: &c.External[i].Deploys[j],
+			})
+		}
+	}
+	return result
+}
+
+// GetAllExternalDeployNames returns the names of all external deploys
+func (c *TrunkConfig) GetAllExternalDeployNames() []string {
+	var names []string
+	for _, ext := range c.External {
+		for _, d := range ext.Deploys {
+			names = append(names, d.Name)
+		}
+	}
+	return names
+}
+
+// IsExternalWorkflow returns true if the workflow path references an external repo
+// External paths have format: "org/repo/.github/workflows/file.yaml@ref"
+// Local paths start with "." or ".github/"
+func IsExternalWorkflow(workflowPath string) bool {
+	return !strings.HasPrefix(workflowPath, ".") && strings.Contains(workflowPath, "/")
+}
+
+// GetExternalRef returns the ref for an external repo config, defaulting to trunk_branch
+func (e *ExternalRepoConfig) GetRef(trunkBranch string) string {
+	if e.Ref == "" {
+		return trunkBranch
+	}
+	return e.Ref
+}
+
+// GetTriggersForDeploy returns the trigger patterns for a deploy.
+// If deploy has depends_on, returns the first referenced build's triggers.
+// If deploy has own triggers, returns those.
+// Otherwise returns nil (deploy always runs).
+func (c *TrunkConfig) GetTriggersForDeploy(deployName string) []string {
+	// Find the deploy
+	var deploy *DeployConfig
+	for i := range c.Deploys {
+		if c.Deploys[i].Name == deployName {
+			deploy = &c.Deploys[i]
+			break
+		}
+	}
+	if deploy == nil {
+		return nil
+	}
+
+	// If depends_on build, use build's triggers
+	if len(deploy.DependsOn) > 0 {
+		for _, b := range c.Builds {
+			if b.Name == deploy.DependsOn[0] {
+				return b.Triggers
+			}
+		}
+	}
+
+	// Otherwise use deploy's own triggers
+	if len(deploy.Triggers) > 0 {
+		return deploy.Triggers
+	}
+
+	return nil
+}

@@ -1,0 +1,276 @@
+// Package version provides semantic versioning utilities for release management.
+package version
+
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/stablekernel/cascade/internal/changelog"
+)
+
+// Version represents a semantic version with optional pre-release suffix
+type Version struct {
+	Major      int
+	Minor      int
+	Patch      int
+	PreRelease int    // -1 means no pre-release suffix, >= 0 is the RC number
+	Prefix     string // e.g., "v" or custom prefix
+}
+
+// BumpType represents the type of version bump
+type BumpType int
+
+const (
+	BumpNone BumpType = iota
+	BumpPatch
+	BumpMinor
+	BumpMajor
+)
+
+// semverRegex matches versions like v1.2.3 or v1.2.3-rc.4
+var semverRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
+
+// Parse parses a version string into a Version struct
+func Parse(s string) (*Version, error) {
+	matches := semverRegex.FindStringSubmatch(s)
+	if matches == nil {
+		return nil, fmt.Errorf("invalid version format: %s", s)
+	}
+
+	major, _ := strconv.Atoi(matches[2])
+	minor, _ := strconv.Atoi(matches[3])
+	patch, _ := strconv.Atoi(matches[4])
+
+	preRelease := -1
+	if matches[5] != "" {
+		preRelease, _ = strconv.Atoi(matches[5])
+	}
+
+	return &Version{
+		Major:      major,
+		Minor:      minor,
+		Patch:      patch,
+		PreRelease: preRelease,
+		Prefix:     matches[1],
+	}, nil
+}
+
+// String returns the version as a string
+func (v *Version) String() string {
+	base := fmt.Sprintf("%s%d.%d.%d", v.Prefix, v.Major, v.Minor, v.Patch)
+	if v.PreRelease >= 0 {
+		return fmt.Sprintf("%s-rc.%d", base, v.PreRelease)
+	}
+	return base
+}
+
+// Base returns the version without pre-release suffix
+func (v *Version) Base() string {
+	return fmt.Sprintf("%s%d.%d.%d", v.Prefix, v.Major, v.Minor, v.Patch)
+}
+
+// BaseVersion returns a copy without pre-release suffix
+func (v *Version) BaseVersion() *Version {
+	return &Version{
+		Major:      v.Major,
+		Minor:      v.Minor,
+		Patch:      v.Patch,
+		PreRelease: -1,
+		Prefix:     v.Prefix,
+	}
+}
+
+// WithRC returns a copy with the specified RC number
+func (v *Version) WithRC(rc int) *Version {
+	return &Version{
+		Major:      v.Major,
+		Minor:      v.Minor,
+		Patch:      v.Patch,
+		PreRelease: rc,
+		Prefix:     v.Prefix,
+	}
+}
+
+// Bump returns a new version with the specified bump applied
+func (v *Version) Bump(bump BumpType) *Version {
+	result := &Version{
+		Major:      v.Major,
+		Minor:      v.Minor,
+		Patch:      v.Patch,
+		PreRelease: -1,
+		Prefix:     v.Prefix,
+	}
+
+	switch bump {
+	case BumpMajor:
+		result.Major++
+		result.Minor = 0
+		result.Patch = 0
+	case BumpMinor:
+		result.Minor++
+		result.Patch = 0
+	case BumpPatch:
+		result.Patch++
+	}
+
+	return result
+}
+
+// Equal returns true if two versions have the same major.minor.patch (ignoring RC)
+func (v *Version) Equal(other *Version) bool {
+	if other == nil {
+		return false
+	}
+	return v.Major == other.Major && v.Minor == other.Minor && v.Patch == other.Patch
+}
+
+// DetermineBumpType analyzes commits and returns the highest bump type needed
+func DetermineBumpType(commits []changelog.ConventionalCommit) BumpType {
+	bump := BumpNone
+
+	for _, c := range commits {
+		if c.Breaking {
+			return BumpMajor // Can't get higher than this
+		}
+
+		commitType := strings.ToLower(c.Type)
+		switch commitType {
+		case "feat":
+			if bump < BumpMinor {
+				bump = BumpMinor
+			}
+		case "fix":
+			if bump < BumpPatch {
+				bump = BumpPatch
+			}
+		}
+	}
+
+	return bump
+}
+
+// Calculator handles version calculation for the release workflow
+type Calculator struct {
+	prefix string
+}
+
+// NewCalculator creates a new version calculator
+func NewCalculator(prefix string) *Calculator {
+	if prefix == "" {
+		prefix = "v"
+	}
+	return &Calculator{prefix: prefix}
+}
+
+// CalculateNext determines the next version for the lowest environment
+// Parameters:
+//   - currentDevVersion: current version in dev (may be empty or same as nextEnvVersion after promotion)
+//   - nextEnvVersion: version in the next environment (e.g., test)
+//   - commits: conventional commits between nextEnv's SHA and HEAD
+//
+// Returns the calculated version with appropriate RC suffix
+func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, commits []changelog.ConventionalCommit) (*Version, error) {
+	// Parse next env's version as our base
+	var baseVersion *Version
+	if nextEnvVersion == "" {
+		// No version in next env - start at v0.0.0, bump will bring it up
+		baseVersion = &Version{
+			Major:      0,
+			Minor:      0,
+			Patch:      0,
+			PreRelease: -1,
+			Prefix:     c.prefix,
+		}
+	} else {
+		var err error
+		baseVersion, err = Parse(nextEnvVersion)
+		if err != nil {
+			return nil, fmt.Errorf("parsing next env version: %w", err)
+		}
+	}
+
+	// Determine bump type from commits
+	bumpType := DetermineBumpType(commits)
+
+	// If no commits or no significant changes, default to patch for new work
+	if bumpType == BumpNone && len(commits) > 0 {
+		bumpType = BumpPatch
+	}
+
+	// Calculate the new version
+	newVersion := baseVersion.BaseVersion().Bump(bumpType)
+	newVersion.Prefix = c.prefix
+
+	// Ensure minimum version of v0.1.0 (v0.0.x is not valid for releases)
+	if newVersion.Major == 0 && newVersion.Minor == 0 {
+		newVersion.Minor = 1
+		newVersion.Patch = 0
+	}
+
+	// Determine RC number
+	if currentDevVersion == "" || currentDevVersion == nextEnvVersion {
+		// After promotion or first release - start at RC 0
+		newVersion.PreRelease = 0
+	} else {
+		// Parse current dev version to check if we should increment RC
+		currentDev, err := Parse(currentDevVersion)
+		if err != nil {
+			// Can't parse current - start fresh
+			newVersion.PreRelease = 0
+		} else if newVersion.Equal(currentDev) {
+			// Same base version - increment RC
+			newVersion.PreRelease = currentDev.PreRelease + 1
+		} else {
+			// Different version - start at RC 0
+			newVersion.PreRelease = 0
+		}
+	}
+
+	return newVersion, nil
+}
+
+// GetLatestRelease returns the latest published (non-prerelease) version from a list of tags
+func GetLatestRelease(tags []string) (*Version, error) {
+	var latest *Version
+
+	for _, tag := range tags {
+		v, err := Parse(tag)
+		if err != nil {
+			continue // Skip non-semver tags
+		}
+
+		// Skip pre-releases
+		if v.PreRelease >= 0 {
+			continue
+		}
+
+		if latest == nil {
+			latest = v
+			continue
+		}
+
+		// Compare versions
+		if v.Major > latest.Major ||
+			(v.Major == latest.Major && v.Minor > latest.Minor) ||
+			(v.Major == latest.Major && v.Minor == latest.Minor && v.Patch > latest.Patch) {
+			latest = v
+		}
+	}
+
+	if latest == nil {
+		return nil, fmt.Errorf("no published releases found")
+	}
+
+	return latest, nil
+}
+
+// StripRC removes the pre-release suffix for publishing
+func StripRC(version string) (string, error) {
+	v, err := Parse(version)
+	if err != nil {
+		return "", err
+	}
+	return v.Base(), nil
+}

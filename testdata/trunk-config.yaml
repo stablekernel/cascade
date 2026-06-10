@@ -1,0 +1,18 @@
+trunk_branch: main
+environments:
+  - dev
+  - prod
+
+builds:
+  - name: app
+    workflow: .github/workflows/build.yaml
+    triggers:
+      - "src/**"
+
+deploys:
+  - name: services
+    workflow: .github/workflows/deploy.yaml
+    triggers:
+      - "deploy/**"
+    depends_on:
+      - app

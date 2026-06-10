@@ -1,0 +1,35 @@
+name: "State Push Retry Loop"
+description: |
+  Verifies the generated orchestrate.yaml's Update Manifest step uses a
+  fetch+reset+reapply+push retry loop (#101) instead of a single git push.
+
+  Generator-output verification. Reproducing the actual concurrent-push race
+  needs real GHA — out of scope for the act+gitea harness.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert retry loop in Update Manifest step"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "Update Manifest"
+            - "for attempt in 1 2 3 4 5"
+            - "git fetch origin"
+            - "git reset --hard"
+            - "apply_state_edits"

@@ -1,0 +1,56 @@
+# Build cascade CLI
+# Called by orchestrate workflow - no direct triggers
+# Distribution: Use `go install github.com/stablekernel/cascade/cmd/cascade@latest`
+name: Build CLI
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: 'SHA to build'
+        type: string
+        required: false
+    outputs:
+      result:
+        description: 'Build result (success/failure)'
+        value: ${{ jobs.e2e-tests.result }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build binary
+        run: go build -o cascade ./cmd/cascade
+
+      - name: Verify CLI works
+        run: |
+          ./cascade version
+          ./cascade --help
+          ./cascade parse-config --help
+          ./cascade detect-changes --help
+          ./cascade generate-changelog --help
+          ./cascade generate-workflow --help
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run E2E tests
+        working-directory: e2e
+        run: go test -v -parallel 4 -timeout 30m ./...

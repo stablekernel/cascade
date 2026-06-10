@@ -1,0 +1,20 @@
+ci:
+  config:
+    trunk_branch: master
+    triggers:
+      - cmd/**
+      - internal/**
+      - e2e/**
+      - go.mod
+      - go.sum
+    cli_version: v0.1.0
+    manifest_file: .github/manifest.yaml
+    manifest_key: ci
+    validate:
+      workflow: .github/workflows/validate.yaml
+    builds:
+      - name: cli
+        workflow: .github/workflows/build-cli.yaml
+        triggers: []
+    changelog:
+      contributors: true

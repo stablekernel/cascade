@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  # Fires when a tag is pushed via git (e.g. manual hotfix tag or
+  # tag-pushed-by-release-action workflows).
+  push:
+    tags:
+      - "v*"
+  # Fires when the promote workflow's manage-release step transitions a
+  # draft release to non-draft via the GitHub API. API-only releases
+  # don't emit `push: tags`, so without this the binaries wouldn't be
+  # built and downstream `setup-cli` calls would 404 on assets.
+  #
+  # Both listed but neither fires reliably from promote-driven API
+  # releases (#86). The promote workflow explicitly dispatches via
+  # workflow_dispatch instead. Kept as belt-and-suspenders for any
+  # future path that creates releases outside the promote flow.
+  release:
+    types: [published, released]
+  # Explicitly triggered by the promote workflow's finalize job after
+  # publishing. This is the reliable path — event-based triggers don't
+  # fire when releases are managed via API calls in a workflow run.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Run linter
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  release:
+    name: Release
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

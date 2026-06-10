@@ -1,0 +1,65 @@
+# End-to-end test workflow
+# Runs only on release tags and manual dispatch. E2E uses act + gitea
+# testcontainers and is too slow + flaky to run per PR. Run locally
+# (`go test -v ./e2e/...`) before pushing instead.
+name: E2E
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or commit SHA to test (default: master)'
+        required: false
+        default: master
+      timeout:
+        description: 'Per-package go test timeout (e.g. 60m)'
+        required: false
+        default: '60m'
+      parallel:
+        description: 'Subtest parallelism (lower = slower but more reliable)'
+        required: false
+        default: '2'
+
+jobs:
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Show runner resources
+        run: |
+          echo "=== CPU ==="
+          nproc
+          echo "=== Memory ==="
+          free -h
+          echo "=== Disk ==="
+          df -h /
+
+      - name: Run e2e tests
+        working-directory: e2e
+        env:
+          # Default 60m to give 32 scenarios (4 cores × ~6min ÷ 2 parallel)
+          # enough headroom. Override per-dispatch as needed.
+          E2E_TIMEOUT: ${{ github.event.inputs.timeout || '60m' }}
+          # Cap subtest parallelism. The GitHub runner has 4 cores / ~7.9GB
+          # RAM. Each scenario spins up gitea + act + N job containers — at
+          # the default GOMAXPROCS=4, four scenarios concurrently exhaust
+          # memory and the test process is OOM-killed (silent FAIL with no
+          # per-test output, see #104).
+          E2E_PARALLEL: ${{ github.event.inputs.parallel || '2' }}
+        run: |
+          go test -v \
+            -timeout "$E2E_TIMEOUT" \
+            -parallel "$E2E_PARALLEL" \
+            ./...

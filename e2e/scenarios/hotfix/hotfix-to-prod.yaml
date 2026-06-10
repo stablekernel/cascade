@@ -1,0 +1,88 @@
+name: "Hotfix deployed directly to production"
+description: "Validates hotfix is deployed directly to production bypassing other environments"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - test
+      - prod
+    builds:
+      - name: app
+        workflow: build-app.yaml
+        triggers:
+          - "src/**"
+    deploys:
+      - name: app
+        workflow: deploy-app.yaml
+        triggers:
+          - "src/**"
+
+  commits:
+    - message: "feat: initial release"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {
+              println("Hello v1.0.0")
+          }
+        src/utils.go: |
+          package main
+
+          func helper() string {
+              return "working"
+          }
+
+  tags:
+    - "v1.0.0"
+
+  manifest:
+    environments:
+      dev:
+        sha: "{{HEAD}}"
+        version: "1.1.0-dev"
+        image_tag: "xyz5678-1234567890"
+      test:
+        sha: "{{HEAD}}"
+        version: "1.1.0-rc.1"
+        image_tag: "xyz5678-1234567890"
+      prod:
+        sha: "{{HEAD}}"
+        version: "1.0.0"
+        image_tag: "abc1234-1234567890"
+
+trigger:
+  workflow: hotfix.yaml
+  event: workflow_call
+  inputs:
+    config_path: ".github/cicd-config.yaml"
+    manifest_path: ".github/manifest.yaml"
+    hotfix_branch: "hotfix/security-patch"
+
+expect:
+  workflow:
+    conclusion: success
+    jobs:
+      validate:
+        conclusion: success
+      build:
+        conclusion: success
+      deploy:
+        conclusion: success
+      finalize:
+        conclusion: success
+
+  manifest:
+    environments:
+      prod:
+        version: "1.0.1"
+
+  tags:
+    - pattern: "v1.0.1"
+      on_sha: "{{HEAD}}"
+
+  releases:
+    - tag: "v1.0.1"
+      prerelease: false

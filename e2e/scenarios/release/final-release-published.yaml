@@ -1,0 +1,76 @@
+name: "Final release published"
+description: "Validates that a final semver tag and GitHub release are created when promoting to production"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - test
+      - prod
+    builds:
+      - name: app
+        triggers:
+          - "src/**"
+
+  commits:
+    - message: "feat: implement user authentication"
+      files:
+        src/auth.go: |
+          package main
+
+          func Authenticate(user string) bool {
+              return user != ""
+          }
+    - message: "feat: add user profile management"
+      files:
+        src/profile.go: |
+          package main
+
+          type Profile struct {
+              Username string
+              Email    string
+          }
+
+          func GetProfile(user string) *Profile {
+              return &Profile{Username: user}
+          }
+    - message: "fix: handle empty username edge case"
+      files:
+        src/auth.go: |
+          package main
+
+          func Authenticate(user string) bool {
+              if user == "" {
+                  return false
+              }
+              return true
+          }
+
+  tags:
+    - "v0.1.0-rc.0"
+
+  manifest:
+    ci:
+      state:
+        dev:
+          sha: "{{HEAD}}"
+          version: "0.1.0-rc.0"
+          committed_at: "2024-01-01T00:00:00Z"
+          committed_by: "system"
+
+trigger:
+  workflow: promote.yaml
+  event: workflow_dispatch
+  inputs:
+    mode: "dev-to-prod"
+
+expect:
+  workflow:
+    conclusion: success
+  tags:
+    - pattern: "v0.1.0"
+  release:
+    tag: "v0.1.0"
+    draft: false
+    prerelease: false

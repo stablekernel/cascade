@@ -1,0 +1,61 @@
+name: "Promote from dev to test"
+description: "Validates successful promotion from dev environment to test environment"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - test
+      - prod
+    builds:
+      - name: app
+        workflow: ""
+        triggers:
+          - "src/**"
+    deploys:
+      - name: services
+        workflow: ""
+        triggers: []
+        depends_on:
+          - app
+
+  commits:
+    - message: "feat: initial application"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {
+              println("Hello World")
+          }
+
+  manifest:
+    ci:
+      state:
+        dev:
+          sha: "{{HEAD}}"
+          version: "0.1.0-rc.0"
+          committed_at: "2024-01-01T00:00:00Z"
+          committed_by: "system"
+        test: {}
+        prod: {}
+
+trigger:
+  workflow: promote.yaml
+  event: workflow_dispatch
+  inputs:
+    mode: "dev-to-test"
+
+expect:
+  workflow:
+    conclusion: success
+  manifest:
+    ci:
+      state:
+        dev:
+          sha: "{{HEAD}}"
+          version: "0.1.0-rc.0"
+        test:
+          sha: "{{HEAD}}"
+          version: "0.1.0-rc.0"

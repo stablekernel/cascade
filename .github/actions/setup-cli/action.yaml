@@ -1,0 +1,98 @@
+name: 'Setup cascade CLI'
+description: 'Install the cascade CLI tool from pre-built release binaries'
+
+inputs:
+  version:
+    description: 'CLI version tag (e.g., latest, v1.0.0)'
+    required: false
+    default: 'latest'
+  token:
+    description: 'GitHub token for private repo access'
+    required: true
+
+outputs:
+  version:
+    description: 'Installed CLI version'
+    value: ${{ steps.version.outputs.version }}
+  cache-hit:
+    description: 'Whether CLI was restored from cache'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check if CLI already installed
+      id: check
+      shell: bash
+      run: |
+        if command -v cascade &> /dev/null; then
+          echo "installed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Determine archive name
+      if: steps.check.outputs.installed != 'true'
+      id: binary
+      shell: bash
+      run: |
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+        echo "name=cascade_${OS}_${ARCH}" >> "$GITHUB_OUTPUT"
+        echo "pattern=cascade_*_${OS}_${ARCH}.tar.gz" >> "$GITHUB_OUTPUT"
+
+    - name: Restore CLI from cache
+      if: steps.check.outputs.installed != 'true'
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/cascade
+        key: cascade-${{ steps.binary.outputs.name }}-${{ inputs.version }}
+
+    - name: Download and extract CLI
+      if: steps.check.outputs.installed != 'true' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        VERSION: ${{ inputs.version }}
+        ARCHIVE_PATTERN: ${{ steps.binary.outputs.pattern }}
+      run: |
+        if [[ "$VERSION" == "latest" ]]; then
+          TAG=$(gh release list -R stablekernel/cascade -L 1 --json tagName -q '.[0].tagName')
+        else
+          TAG="$VERSION"
+        fi
+
+        echo "Downloading archive matching $ARCHIVE_PATTERN from release $TAG..."
+        TMPDIR=$(mktemp -d)
+        gh release download "$TAG" \
+          -R stablekernel/cascade \
+          -p "$ARCHIVE_PATTERN" \
+          -D "$TMPDIR"
+
+        tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
+        install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
+        rm -rf "$TMPDIR"
+
+    - name: Get CLI version
+      id: version
+      shell: bash
+      run: |
+        # Robustly capture a single-line version, sanitized for GHA's output
+        # file format. Older form `echo "version=$RAW" >> $GITHUB_OUTPUT`
+        # produced `##[error]Invalid format 'unknown'` against the v1.1.0
+        # binary — likely a GHA file-command parser quirk where certain
+        # values get mis-interpreted as a format directive. Strip CR/newlines
+        # and non-printable characters, fall back to "unknown" on empty/error,
+        # cap length, and use printf instead of echo to avoid backslash
+        # interpretation surprises.
+        RAW=$(cascade version 2>/dev/null || true)
+        INSTALLED_VERSION=$(printf '%s' "$RAW" | head -n 1 | tr -d '\r\n' | tr -dc '[:print:]' | head -c 200)
+        if [ -z "$INSTALLED_VERSION" ]; then
+          INSTALLED_VERSION="unknown"
+        fi
+        printf 'version=%s\n' "$INSTALLED_VERSION" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,423 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// DefaultManifestFile is the default manifest file path
+const DefaultManifestFile = ".github/manifest.yaml"
+
+// DefaultManifestKey is the default key used in the manifest file
+const DefaultManifestKey = "ci"
+
+// ParseManifestFile reads and parses a manifest file with config under a specific key.
+// The manifest must have the specified key (default: "ci") at the top level.
+// Returns an error if the key is not found.
+func ParseManifestFile(path, key string) (*CICDFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest file: %w", err)
+	}
+
+	if key == "" {
+		key = DefaultManifestKey
+	}
+
+	var manifest map[string]interface{}
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("parsing manifest YAML: %w", err)
+	}
+
+	ciData, ok := manifest[key]
+	if !ok {
+		return nil, fmt.Errorf("manifest file missing required '%s' key at top level", key)
+	}
+
+	// Re-marshal and unmarshal to get the CICDFile structure
+	ciBytes, err := yaml.Marshal(ciData)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling %s section: %w", key, err)
+	}
+
+	var file CICDFile
+	if err := yaml.Unmarshal(ciBytes, &file); err != nil {
+		return nil, fmt.Errorf("parsing %s section: %w", key, err)
+	}
+
+	// Initialize state map if nil
+	if file.State == nil {
+		file.State = make(map[string]*EnvState)
+	}
+
+	// Ensure all environments have state entries
+	if file.Config != nil {
+		file.Config.ManifestFile = path
+		file.Config.ManifestKey = key
+		for _, env := range file.Config.Environments {
+			if file.State[env] == nil {
+				file.State[env] = &EnvState{}
+			}
+		}
+	}
+
+	return &file, nil
+}
+
+// FindManifestFile looks for manifest.yaml or manifest.yml in the given directory.
+// Returns the path to the found file, or empty string if not found.
+func FindManifestFile(baseDir string) string {
+	yamlPath := filepath.Join(baseDir, ".github", "manifest.yaml")
+	if _, err := os.Stat(yamlPath); err == nil {
+		return yamlPath
+	}
+	ymlPath := filepath.Join(baseDir, ".github", "manifest.yml")
+	if _, err := os.Stat(ymlPath); err == nil {
+		return ymlPath
+	}
+	return ""
+}
+
+// FindConfigFile finds the manifest file path.
+// If baseDir is empty, uses current working directory.
+// Returns the default path if no file is found.
+func FindConfigFile(baseDir string) string {
+	if baseDir == "" {
+		baseDir, _ = os.Getwd()
+	}
+
+	if found := FindManifestFile(baseDir); found != "" {
+		return found
+	}
+
+	// Return default path even if not found (let Parse handle the error)
+	return DefaultManifestFile
+}
+
+// ParseWithKey reads and parses a manifest file with config under a specific key.
+// The manifest must have the specified key (default: "ci") at the top level.
+func ParseWithKey(path, key string) (*TrunkConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+
+	if key == "" {
+		key = DefaultManifestKey
+	}
+
+	var manifest map[string]interface{}
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("parsing manifest YAML: %w", err)
+	}
+
+	ciData, ok := manifest[key]
+	if !ok {
+		return nil, fmt.Errorf("manifest file missing required '%s' key at top level", key)
+	}
+
+	// Re-marshal and unmarshal to get the CICDFile structure
+	ciBytes, err := yaml.Marshal(ciData)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling %s section: %w", key, err)
+	}
+
+	var file CICDFile
+	if err := yaml.Unmarshal(ciBytes, &file); err != nil {
+		return nil, fmt.Errorf("parsing %s section: %w", key, err)
+	}
+
+	if file.Config == nil {
+		return nil, fmt.Errorf("manifest file missing 'config' section under '%s'", key)
+	}
+
+	file.Config.ManifestFile = path
+	file.Config.ManifestKey = key
+	return file.Config, nil
+}
+
+// Parse reads and parses a manifest file with config under the default "ci" key.
+func Parse(path string) (*TrunkConfig, error) {
+	return ParseWithKey(path, DefaultManifestKey)
+}
+
+// Validate checks the configuration for errors
+func Validate(cfg *TrunkConfig) []string {
+	var errors []string
+
+	// Empty environments is valid - means pre-release -> release only (no deployments)
+
+	envSet := make(map[string]bool)
+	for _, env := range cfg.Environments {
+		envSet[env] = true
+	}
+
+	// Build name sets for each section (builds and deploys can share names)
+	buildNames := make(map[string]bool)
+	deployNames := make(map[string]bool)
+
+	// Validate builds
+	for i, b := range cfg.Builds {
+		if b.Name == "" {
+			errors = append(errors, fmt.Sprintf("builds[%d].name is required", i))
+		} else if buildNames[b.Name] {
+			errors = append(errors, fmt.Sprintf("duplicate build name: %s", b.Name))
+		} else {
+			buildNames[b.Name] = true
+		}
+		if b.Workflow == "" {
+			errors = append(errors, fmt.Sprintf("builds[%d].workflow is required", i))
+		}
+
+		// Validate run_policy
+		if b.RunPolicy != "" && b.RunPolicy != RunPolicyDefault && b.RunPolicy != RunPolicyAlways && b.RunPolicy != RunPolicyForce {
+			errors = append(errors, fmt.Sprintf("builds[%d].run_policy must be one of: default, always, force", i))
+		}
+
+		// Validate on_failure
+		if b.OnFailure != "" && b.OnFailure != OnFailureAbort && b.OnFailure != OnFailureContinue {
+			errors = append(errors, fmt.Sprintf("builds[%d].on_failure must be one of: abort, continue", i))
+		}
+
+		// Validate retries
+		if b.Retries < 0 || b.Retries > 3 {
+			errors = append(errors, fmt.Sprintf("builds[%d].retries must be between 0 and 3", i))
+		}
+
+		// Validate depends_on references using ResolveDependency
+		for _, dep := range b.DependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err != nil {
+				errors = append(errors, fmt.Sprintf("builds[%d].depends_on: %s", i, err.Error()))
+			}
+		}
+
+		// Validate env_inputs keys match top-level environments
+		for envKey := range b.EnvInputs {
+			if !envSet[envKey] {
+				errors = append(errors, fmt.Sprintf("builds[%d].env_inputs has key '%s' which is not in environments %v", i, envKey, cfg.Environments))
+			}
+		}
+	}
+
+	// Validate deploys
+	for i, d := range cfg.Deploys {
+		if d.Name == "" {
+			errors = append(errors, fmt.Sprintf("deploys[%d].name is required", i))
+		} else if deployNames[d.Name] {
+			errors = append(errors, fmt.Sprintf("duplicate deploy name: %s", d.Name))
+		} else {
+			deployNames[d.Name] = true
+		}
+		if d.Workflow == "" {
+			errors = append(errors, fmt.Sprintf("deploys[%d].workflow is required", i))
+		}
+
+		// Validate run_policy
+		if d.RunPolicy != "" && d.RunPolicy != RunPolicyDefault && d.RunPolicy != RunPolicyAlways && d.RunPolicy != RunPolicyForce {
+			errors = append(errors, fmt.Sprintf("deploys[%d].run_policy must be one of: default, always, force", i))
+		}
+
+		// Validate on_failure
+		if d.OnFailure != "" && d.OnFailure != OnFailureAbort && d.OnFailure != OnFailureContinue {
+			errors = append(errors, fmt.Sprintf("deploys[%d].on_failure must be one of: abort, continue", i))
+		}
+
+		// Validate retries
+		if d.Retries < 0 || d.Retries > 3 {
+			errors = append(errors, fmt.Sprintf("deploys[%d].retries must be between 0 and 3", i))
+		}
+
+		// Validate depends_on references using ResolveDependency
+		// Deploys can depend on builds (preferred) or other deploys
+		for _, dep := range d.DependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeDeploy); err != nil {
+				errors = append(errors, fmt.Sprintf("deploys[%d].depends_on: %s", i, err.Error()))
+			}
+		}
+
+		// Validate env_inputs keys match top-level environments
+		for envKey := range d.EnvInputs {
+			if !envSet[envKey] {
+				errors = append(errors, fmt.Sprintf("deploys[%d].env_inputs has key '%s' which is not in environments %v", i, envKey, cfg.Environments))
+			}
+		}
+	}
+
+	// Validate release.tag reference
+	if cfg.Release != nil && cfg.Release.Tag != "" {
+		parts := strings.SplitN(cfg.Release.Tag, ".", 2)
+		if len(parts) != 2 {
+			errors = append(errors, "release.tag invalid format (expected callback.output, e.g., goreleaser.tag)")
+		} else {
+			callbackName := parts[0]
+			// Check where callback exists
+			inBuilds := buildNames[callbackName]
+			inDeploys := deployNames[callbackName]
+			inValidate := callbackName == "validate" && cfg.Validate != nil
+
+			if !inBuilds && !inDeploys && !inValidate {
+				errors = append(errors, fmt.Sprintf("release.tag references unknown callback: %s", callbackName))
+			} else if (inBuilds && inDeploys) || (inBuilds && inValidate) || (inDeploys && inValidate) {
+				// Conflict - multiple callbacks with same name
+				var locations []string
+				if inBuilds {
+					locations = append(locations, "build:"+callbackName)
+				}
+				if inDeploys {
+					locations = append(locations, "deploy:"+callbackName)
+				}
+				if inValidate {
+					locations = append(locations, "validate:"+callbackName)
+				}
+				errors = append(errors, fmt.Sprintf("release.tag '%s' is ambiguous: exists as %s. Use explicit prefix (e.g., build:%s.output)",
+					callbackName, strings.Join(locations, ", "), callbackName))
+			}
+		}
+	}
+
+	// Validate external repos (for primary repos)
+	externalDeployNames := make(map[string]bool)
+	for i, ext := range cfg.External {
+		if ext.Repo == "" {
+			errors = append(errors, fmt.Sprintf("external[%d].repo is required", i))
+		}
+
+		for j, d := range ext.Deploys {
+			if d.Name == "" {
+				errors = append(errors, fmt.Sprintf("external[%d].deploys[%d].name is required", i, j))
+			} else {
+				// Check for duplicate external deploy names
+				if externalDeployNames[d.Name] {
+					errors = append(errors, fmt.Sprintf("duplicate external deploy name: %s", d.Name))
+				} else {
+					externalDeployNames[d.Name] = true
+				}
+				// Check for conflicts with local deploy names
+				if deployNames[d.Name] {
+					errors = append(errors, fmt.Sprintf("external deploy name '%s' conflicts with local deploy name", d.Name))
+				}
+			}
+			if d.Workflow == "" {
+				errors = append(errors, fmt.Sprintf("external[%d].deploys[%d].workflow is required", i, j))
+			}
+		}
+	}
+
+	// Validate notify config (for satellite repos)
+	if cfg.Notify != nil {
+		if cfg.Notify.Repo == "" {
+			errors = append(errors, "notify.repo is required")
+		}
+	}
+
+	// Check for mutually exclusive: can't be both primary and satellite
+	if len(cfg.External) > 0 && cfg.Notify != nil {
+		errors = append(errors, "cannot have both 'external' (primary) and 'notify' (satellite) config - a repo must be one or the other")
+	}
+
+	// Check for circular dependencies
+	if cycleErr := detectCycles(cfg); cycleErr != "" {
+		errors = append(errors, cycleErr)
+	}
+
+	return errors
+}
+
+// GetBuildNames returns a list of all build names
+func GetBuildNames(cfg *TrunkConfig) []string {
+	names := make([]string, len(cfg.Builds))
+	for i, b := range cfg.Builds {
+		names[i] = b.Name
+	}
+	return names
+}
+
+// GetDeployNames returns a list of all deploy names
+func GetDeployNames(cfg *TrunkConfig) []string {
+	names := make([]string, len(cfg.Deploys))
+	for i, d := range cfg.Deploys {
+		names[i] = d.Name
+	}
+	return names
+}
+
+// detectCycles checks for circular dependencies in the callback graph
+// Uses prefixed job IDs (build-app, deploy-app) to handle name collisions
+func detectCycles(cfg *TrunkConfig) string {
+	// Build adjacency list using prefixed job IDs
+	deps := make(map[string][]string)
+
+	// Add builds with resolved dependencies
+	for _, b := range cfg.Builds {
+		jobID := JobID(CallbackTypeBuild, b.Name)
+		var resolvedDeps []string
+		for _, dep := range b.DependsOn {
+			if resolved, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err == nil {
+				resolvedDeps = append(resolvedDeps, resolved)
+			}
+		}
+		deps[jobID] = resolvedDeps
+	}
+
+	// Add deploys with resolved dependencies
+	for _, d := range cfg.Deploys {
+		jobID := JobID(CallbackTypeDeploy, d.Name)
+		var resolvedDeps []string
+		for _, dep := range d.DependsOn {
+			if resolved, err := cfg.ResolveDependency(dep, CallbackTypeDeploy); err == nil {
+				resolvedDeps = append(resolvedDeps, resolved)
+			}
+		}
+		deps[jobID] = resolvedDeps
+	}
+
+	// DFS for cycle detection
+	visited := make(map[string]int) // 0=unvisited, 1=visiting, 2=visited
+	var path []string
+
+	var dfs func(node string) string
+	dfs = func(node string) string {
+		if visited[node] == 1 {
+			// Found cycle - build path string
+			cycleStart := -1
+			for i, n := range path {
+				if n == node {
+					cycleStart = i
+					break
+				}
+			}
+			cyclePath := append(path[cycleStart:], node)
+			return fmt.Sprintf("circular dependency detected: %s", strings.Join(cyclePath, " -> "))
+		}
+		if visited[node] == 2 {
+			return ""
+		}
+
+		visited[node] = 1
+		path = append(path, node)
+
+		for _, dep := range deps[node] {
+			if result := dfs(dep); result != "" {
+				return result
+			}
+		}
+
+		path = path[:len(path)-1]
+		visited[node] = 2
+		return ""
+	}
+
+	for name := range deps {
+		if visited[name] == 0 {
+			if result := dfs(name); result != "" {
+				return result
+			}
+		}
+	}
+
+	return ""
+}

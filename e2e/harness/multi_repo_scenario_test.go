@@ -1,0 +1,364 @@
+package harness
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestMultiRepoScenario_Parse(t *testing.T) {
+	yaml := `
+name: satellite-notifies-primary
+description: Test cross-repo notification
+
+repos:
+  primary-backend:
+    config:
+      trunk_branch: master
+      environments: [dev, test, prod]
+      deploys:
+        - name: api
+          workflow: .github/workflows/deploy-api.yaml
+  cdk-infra:
+    config:
+      trunk_branch: main
+      environments: [dev, test, prod]
+      deploys:
+        - name: cdk
+          workflow: .github/workflows/deploy.yaml
+
+primary: primary-backend
+
+steps:
+  - name: commit-to-satellite
+    repo: cdk-infra
+    action: commit
+    commit:
+      message: "feat: update cdk"
+      files:
+        cdk/stack.ts: "// updated"
+
+  - name: notify-primary
+    repo: cdk-infra
+    action: dispatch
+    dispatch:
+      target_repo: primary-backend
+      workflow: .github/workflows/external-update.yaml
+      inputs:
+        deploy_name: cdk
+        environment: dev
+        sha: "${cdk-infra.head_sha}"
+
+expect:
+  repos:
+    primary-backend:
+      tags:
+        - pattern: v1.0.0-rc.0
+`
+
+	scenario, err := ParseMultiRepoScenario([]byte(yaml))
+	require.NoError(t, err)
+
+	assert.Equal(t, "satellite-notifies-primary", scenario.Name)
+	assert.Equal(t, "primary-backend", scenario.Primary)
+	assert.Len(t, scenario.Repos, 2)
+	assert.Len(t, scenario.Steps, 2)
+
+	// Check step parsing
+	step1 := scenario.Steps[0]
+	assert.Equal(t, "commit-to-satellite", step1.Name)
+	assert.Equal(t, "cdk-infra", step1.Repo)
+	assert.Equal(t, "commit", step1.Action)
+	assert.NotNil(t, step1.Commit)
+	assert.Equal(t, "feat: update cdk", step1.Commit.Message)
+
+	step2 := scenario.Steps[1]
+	assert.Equal(t, "dispatch", step2.Action)
+	assert.NotNil(t, step2.Dispatch)
+	assert.Equal(t, "primary-backend", step2.Dispatch.TargetRepo)
+}
+
+func TestMultiRepoRunner_Setup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	h := NewMultiRepoHarness(t)
+	require.NoError(t, h.SetupInfra(ctx))
+	defer h.Cleanup(ctx)
+
+	scenario := &MultiRepoScenario{
+		Name: "test-setup",
+		Repos: map[string]RepoScenario{
+			"service-a": {
+				Config: config.TrunkConfig{
+					TrunkBranch:  "main",
+					Environments: []string{"dev", "prod"},
+				},
+			},
+			"service-b": {
+				Config: config.TrunkConfig{
+					TrunkBranch:  "main",
+					Environments: []string{"dev", "prod"},
+				},
+			},
+		},
+		Primary: "service-a",
+	}
+
+	runner := NewMultiRepoRunner(h, scenario)
+	err := runner.Setup(ctx)
+	require.NoError(t, err)
+
+	// Verify repos were created
+	assert.NotNil(t, h.GetRepo("service-a"))
+	assert.NotNil(t, h.GetRepo("service-b"))
+
+	// Verify variables were stored
+	assert.NotEmpty(t, runner.varStore["service-a.head_sha"])
+	assert.NotEmpty(t, runner.varStore["service-b.head_sha"])
+}
+
+func TestMultiRepoRunner_CommitStep(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	h := NewMultiRepoHarness(t)
+	require.NoError(t, h.SetupInfra(ctx))
+	defer h.Cleanup(ctx)
+
+	scenario := &MultiRepoScenario{
+		Name: "test-commit",
+		Repos: map[string]RepoScenario{
+			"my-repo": {
+				Config: config.TrunkConfig{
+					TrunkBranch:  "main",
+					Environments: []string{"dev"},
+				},
+			},
+		},
+		Steps: []ScenarioStep{
+			{
+				Name:   "add-feature",
+				Repo:   "my-repo",
+				Action: "commit",
+				Commit: &StepCommit{
+					Message: "feat: add feature",
+					Files: map[string]string{
+						"src/feature.go": "package feature",
+					},
+				},
+			},
+		},
+	}
+
+	runner := NewMultiRepoRunner(h, scenario)
+	require.NoError(t, runner.Setup(ctx))
+
+	initialSHA := runner.varStore["my-repo.head_sha"]
+
+	require.NoError(t, runner.RunSteps(ctx))
+
+	// Verify SHA changed
+	newSHA := runner.varStore["my-repo.head_sha"]
+	assert.NotEqual(t, initialSHA, newSHA)
+
+	// Verify file was created
+	content, err := h.GetFileContentInRepo(ctx, "my-repo", "src/feature.go")
+	require.NoError(t, err)
+	assert.Equal(t, "package feature", content)
+}
+
+func TestMultiRepoRunner_Interpolation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	h := NewMultiRepoHarness(t)
+	require.NoError(t, h.SetupInfra(ctx))
+	defer h.Cleanup(ctx)
+
+	scenario := &MultiRepoScenario{
+		Name: "test-interpolation",
+		Repos: map[string]RepoScenario{
+			"my-repo": {
+				Config: config.TrunkConfig{
+					TrunkBranch:  "main",
+					Environments: []string{"dev"},
+				},
+			},
+		},
+		Steps: []ScenarioStep{
+			{
+				Name:   "commit-with-sha",
+				Repo:   "my-repo",
+				Action: "commit",
+				Commit: &StepCommit{
+					Message: "feat: add sha file",
+					Files: map[string]string{
+						// Include the SHA in the file content to verify interpolation
+						"sha.txt": "Previous SHA: ${my-repo.head_sha}",
+					},
+				},
+			},
+		},
+	}
+
+	runner := NewMultiRepoRunner(h, scenario)
+	require.NoError(t, runner.Setup(ctx))
+
+	initialSHA := runner.varStore["my-repo.head_sha"]
+	require.NoError(t, runner.RunSteps(ctx))
+
+	// Verify interpolation worked
+	content, err := h.GetFileContentInRepo(ctx, "my-repo", "sha.txt")
+	require.NoError(t, err)
+	assert.Contains(t, content, initialSHA)
+}
+
+func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	h := NewMultiRepoHarness(t)
+	require.NoError(t, h.SetupInfra(ctx))
+	defer h.Cleanup(ctx)
+
+	// Create primary and satellite repos
+	primary := MultiRepoSetup{
+		Name: "primary",
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "master",
+			Environments: []string{"dev", "test", "prod"},
+			External: []config.ExternalRepoConfig{
+				{
+					Repo: "org/satellite",
+					Ref:  "main",
+					Deploys: []config.ExternalDeployConfig{
+						{Name: "cdk", Workflow: "org/satellite/.github/workflows/deploy.yaml"},
+					},
+				},
+			},
+		},
+	}
+
+	satellite := MultiRepoSetup{
+		Name: "satellite",
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev", "test", "prod"},
+			Deploys: []config.DeployConfig{
+				{Name: "cdk", Workflow: ".github/workflows/deploy.yaml"},
+			},
+			Notify: &config.NotifyConfig{
+				Repo:     "org/primary",
+				Workflow: ".github/workflows/external-update.yaml",
+			},
+		},
+	}
+
+	require.NoError(t, h.SetupPrimarySatellite(ctx, primary, satellite))
+
+	// Simulate cross-repo dispatch
+	err := h.SimulateCrossRepoDispatch(ctx, "satellite", "primary",
+		".github/workflows/external-update.yaml",
+		map[string]string{
+			"deploy_name": "cdk",
+			"environment": "dev",
+			"sha":         "satellite-sha-123",
+			"version":     "v1.0.0",
+		})
+	require.NoError(t, err)
+
+	// Verify external state was recorded
+	primaryRepo := h.GetRepo("primary")
+	extState := primaryRepo.ExecCtx.GetExternalDeployState("dev", "cdk")
+	require.NotNil(t, extState)
+	assert.Equal(t, "satellite-sha-123", extState.SHA)
+	assert.Equal(t, "v1.0.0", extState.Version)
+}
+
+func TestMultiRepoRunner_FullScenario(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	h := NewMultiRepoHarness(t)
+	require.NoError(t, h.SetupInfra(ctx))
+	defer h.Cleanup(ctx)
+
+	scenario := &MultiRepoScenario{
+		Name: "full-lifecycle",
+		Repos: map[string]RepoScenario{
+			"primary": {
+				Config: config.TrunkConfig{
+					TrunkBranch:  "master",
+					Environments: []string{"dev", "test", "prod"},
+				},
+			},
+			"satellite": {
+				Config: config.TrunkConfig{
+					TrunkBranch:  "main",
+					Environments: []string{"dev", "test", "prod"},
+				},
+			},
+		},
+		Primary: "primary",
+		Steps: []ScenarioStep{
+			{
+				Name:   "commit-to-primary",
+				Repo:   "primary",
+				Action: "commit",
+				Commit: &StepCommit{
+					Message: "feat: add api",
+					Files:   map[string]string{"src/api.go": "package api"},
+				},
+			},
+			{
+				Name:   "commit-to-satellite",
+				Repo:   "satellite",
+				Action: "commit",
+				Commit: &StepCommit{
+					Message: "feat: add cdk",
+					Files:   map[string]string{"cdk/stack.ts": "// stack"},
+				},
+			},
+			{
+				Name:   "tag-primary",
+				Repo:   "primary",
+				Action: "tag",
+				Tag:    &StepTag{Tag: "v1.0.0"},
+			},
+		},
+	}
+
+	runner := NewMultiRepoRunner(h, scenario)
+	err := runner.Run(ctx)
+	require.NoError(t, err)
+
+	// Verify tags
+	tags, err := h.GetTagsInRepo(ctx, "primary")
+	require.NoError(t, err)
+	assert.Contains(t, tags, "v1.0.0")
+}

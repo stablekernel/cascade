@@ -1,0 +1,525 @@
+package promote
+
+import (
+	"fmt"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/stablekernel/cascade/internal/changelog"
+	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/git"
+)
+
+// PreflightResult contains all outputs needed by the workflow
+type PreflightResult struct {
+	// Mode and configuration
+	Mode              PromotionMode `json:"mode"`
+	Target            string        `json:"target,omitempty"`              // For cascade mode
+	Force             bool          `json:"force,omitempty"`               // For default mode
+	RollbackOnFailure bool          `json:"rollback_on_failure,omitempty"` // Revert successful deploys if any fails
+
+	// Source/target info
+	SourceEnv     string `json:"source_env"`
+	TargetEnv     string `json:"target_env"`
+	SourceSHA     string `json:"source_sha"`
+	SourceVersion string `json:"source_version"`
+
+	// Rollback SHA (target env's current SHA before promotion - what we revert to on failure)
+	RollbackSHA string `json:"rollback_sha,omitempty"`
+
+	// Changelog comparison point (SHA of first target env before promotion)
+	ChangelogBaseSHA string `json:"changelog_base_sha"`
+
+	// Environments to update
+	EnvsToUpdate []string `json:"envs_to_update"`
+	SkippedEnvs  []string `json:"skipped_envs"`
+
+	// Deploy decisions
+	DeploysToRun         []string `json:"deploys_to_run"`          // Local deploys to run
+	ExternalDeploysToRun []string `json:"external_deploys_to_run"` // External deploys to run
+
+	// Release info
+	IsPrereleaseEnv bool   `json:"is_prerelease_env"`
+	IsFinalEnv      bool   `json:"is_final_env"`
+	IsCascade       bool   `json:"is_cascade"`
+	ReleaseAction   string `json:"release_action"`
+
+	// Full-pass prod deployment (separate from cascade)
+	HasProdDeployment bool   `json:"has_prod_deployment"`
+	ProdSHA           string `json:"prod_sha"`
+	ProdVersion       string `json:"prod_version"`
+
+	// Breaking changes
+	HasBreaking       bool   `json:"has_breaking"`
+	CanProceed        bool   `json:"can_proceed"`
+	BreakingBlockedAt string `json:"breaking_blocked_at,omitempty"` // The transition that was blocked
+
+	// Full promotion result for downstream use
+	PromotionResult *PromotionResult `json:"promotion_result"`
+}
+
+// Preflighter handles preflight validation and planning
+type Preflighter struct {
+	cicdFile          *config.CICDFile
+	mode              PromotionMode
+	target            string // For cascade mode (e.g., "dev-to-prod")
+	force             bool   // For default mode
+	baseDir           string
+	deployChecks      map[string]bool // deploy name -> include in run
+	deploysFilter     []string        // Specific deploys to include (empty = all)
+	rollbackOnFailure bool            // Revert successful deploys if any fails
+}
+
+// PreflighterOptions configures the Preflighter
+type PreflighterOptions struct {
+	Config            *config.CICDFile
+	Mode              PromotionMode
+	Target            string // For cascade mode (e.g., "dev-to-prod")
+	Force             bool   // For default mode
+	BaseDir           string
+	DeploysFilter     []string // Specific deploys to include (empty = all)
+	RollbackOnFailure bool     // Revert successful deploys if any fails
+}
+
+// NewPreflighter creates a new Preflighter instance
+func NewPreflighter(opts PreflighterOptions) *Preflighter {
+	baseDir := opts.BaseDir
+	if baseDir == "" {
+		baseDir = "."
+	}
+	return &Preflighter{
+		cicdFile:          opts.Config,
+		mode:              opts.Mode,
+		target:            opts.Target,
+		force:             opts.Force,
+		baseDir:           baseDir,
+		deployChecks:      make(map[string]bool),
+		deploysFilter:     opts.DeploysFilter,
+		rollbackOnFailure: opts.RollbackOnFailure,
+	}
+}
+
+// SetDeployCheck sets whether a deploy should be included
+func (p *Preflighter) SetDeployCheck(name string, include bool) {
+	p.deployChecks[name] = include
+}
+
+// Run executes the preflight checks and returns the result
+func (p *Preflighter) Run() (*PreflightResult, error) {
+	// 1. Calculate promotion plan using Promoter in dry-run mode
+	promoter := &Promoter{
+		cicdFile: p.cicdFile,
+		dryRun:   true, // Always dry run for preflight
+		actor:    "preflight",
+		force:    p.force,
+	}
+
+	promoResult, err := promoter.Promote(p.mode, p.target)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate promotion: %w", err)
+	}
+	if !promoResult.Success {
+		return nil, fmt.Errorf("promotion validation failed: %s", promoResult.Error)
+	}
+
+	result := &PreflightResult{
+		Mode:              p.mode,
+		Target:            p.target,
+		Force:             p.force,
+		RollbackOnFailure: p.rollbackOnFailure,
+		PromotionResult:   promoResult,
+		IsCascade:         promoResult.IsCascade,
+		ReleaseAction:     promoResult.ReleaseAction,
+	}
+
+	// 2. Extract source/target from promotion result
+	if len(promoResult.Promotions) > 0 {
+		first := promoResult.Promotions[0]
+		result.SourceEnv = first.SourceEnv
+		result.TargetEnv = promoResult.FinalEnv
+
+		// Get source state
+		if state := p.cicdFile.State[first.SourceEnv]; state != nil {
+			result.SourceSHA = state.SHA
+			result.SourceVersion = state.Version
+		}
+
+		// Build envs to update list
+		for _, promo := range promoResult.Promotions {
+			result.EnvsToUpdate = append(result.EnvsToUpdate, promo.Environment)
+		}
+
+		// Calculate changelog base SHA (what the first target env currently has)
+		// This ensures changelog shows what's new compared to the immediate next env
+		firstTargetEnv := first.Environment
+		if state := p.cicdFile.State[firstTargetEnv]; state != nil && state.SHA != "" {
+			result.ChangelogBaseSHA = state.SHA
+		}
+		// If empty, workflow will fall back to initial commit (first deployment ever)
+
+		// Get rollback SHA (target env's current SHA before promotion)
+		// This is what we revert to if rollback_on_failure is enabled and a deploy fails
+		if state := p.cicdFile.State[firstTargetEnv]; state != nil && state.SHA != "" {
+			result.RollbackSHA = state.SHA
+		}
+	}
+
+	// 3. Check for prod deployment
+	if promoResult.ProdDeployment != nil {
+		result.HasProdDeployment = true
+		result.ProdSHA = promoResult.ProdDeployment.SHA
+		result.ProdVersion = promoResult.ProdDeployment.Version
+	}
+
+	// 4. Determine prerelease/final env and release marker positions
+	envs := p.cicdFile.Config.Environments
+	var prereleaseEnv, prodEnv string
+	hasReleaseMarker := false
+
+	if len(envs) == 0 {
+		// No-environment mode (library/CLI projects)
+		// Implicit environments: prerelease → release
+		prereleaseEnv = "prerelease"
+		prodEnv = "release"
+		hasReleaseMarker = true // Treat as having release marker for breaking change checks
+	} else {
+		releaseIdx := indexOf(envs, "release")
+		hasReleaseMarker = releaseIdx > 0
+		if releaseIdx > 0 {
+			prereleaseEnv = envs[releaseIdx-1]
+			if releaseIdx < len(envs)-1 {
+				prodEnv = envs[len(envs)-1]
+			}
+		} else if len(envs) >= 2 {
+			prereleaseEnv = envs[len(envs)-2]
+			prodEnv = envs[len(envs)-1]
+		}
+	}
+
+	result.IsPrereleaseEnv = result.TargetEnv == prereleaseEnv
+	// is_final_env fires when the publish action lands. Under the implicit
+	// chain [envs..., "release", prodEnv] this is either:
+	//   - target_env == "release" (default-mode advance to publish marker), or
+	//   - target_env == prodEnv with ReleaseAction == "publish" (cascade
+	//     atomically through the publish boundary into prod).
+	result.IsFinalEnv = result.TargetEnv == "release" ||
+		(result.TargetEnv == prodEnv && result.ReleaseAction == "publish")
+
+	// 5. Detect which deploys need to run. The release marker advance is a
+	// metadata step (no deploy jobs), so emit no deploys when target is "release".
+	if result.TargetEnv == "release" {
+		result.DeploysToRun = nil
+		result.ExternalDeploysToRun = nil
+	} else {
+		result.DeploysToRun, result.ExternalDeploysToRun = p.detectDeployChanges(result.SourceSHA, result.TargetEnv)
+	}
+
+	// 6. Check for breaking changes
+	// Breaking changes block at: pre-release → release AND release → prod
+	result.HasBreaking, result.BreakingBlockedAt = p.checkBreakingChangesForMode(
+		promoResult.Promotions, prereleaseEnv, prodEnv, hasReleaseMarker,
+	)
+
+	result.CanProceed = !result.HasBreaking
+
+	return result, nil
+}
+
+// detectDeployChanges determines which deploys need to run based on changes and deploy checks
+// Returns (localDeploys, externalDeploys)
+func (p *Preflighter) detectDeployChanges(sourceSHA, targetEnv string) ([]string, []string) {
+	var localDeploys []string
+	var externalDeploys []string
+
+	// Get source environment name for external deploy comparison
+	var sourceEnv string
+	if len(p.cicdFile.Config.Environments) > 0 {
+		sourceEnv = p.cicdFile.Config.Environments[0] // Default to first env
+		// Find the env before targetEnv for source
+		for i, env := range p.cicdFile.Config.Environments {
+			if env == targetEnv && i > 0 {
+				sourceEnv = p.cicdFile.Config.Environments[i-1]
+				break
+			}
+		}
+	}
+
+	// Process local deploys
+	for _, d := range p.cicdFile.Config.Deploys {
+		// Check if deploy is in the filter list (if filter is specified)
+		if len(p.deploysFilter) > 0 && !stringSliceContains(p.deploysFilter, d.Name) {
+			continue
+		}
+
+		// Check if deploy is included (from checkbox - legacy support)
+		if include, ok := p.deployChecks[d.Name]; ok && !include {
+			continue
+		}
+
+		// Get target deploy state. Per-deploy state is the most precise
+		// comparison point ("when was this specific deploy last run for this
+		// env"). When unavailable — typical for first-promotion scenarios
+		// where the env has been promoted to some SHA but no deploy has run
+		// yet — fall back to the env-level SHA. That captures the semantic
+		// "if the env is at SHA X, treat the deploy as having seen X" so
+		// trigger filters still apply rather than unconditionally including.
+		var targetSHA string
+		if state := p.cicdFile.State[targetEnv]; state != nil {
+			if ds := state.Deploys[d.Name]; ds != nil {
+				targetSHA = ds.SHA
+			}
+			if targetSHA == "" {
+				targetSHA = state.SHA
+			}
+		}
+
+		// If neither per-deploy nor env-level state exists, include
+		// unconditionally — this is a never-deployed env.
+		if targetSHA == "" {
+			localDeploys = append(localDeploys, d.Name)
+			continue
+		}
+
+		// Check for changes in triggers
+		if p.hasChanges(targetSHA, sourceSHA, d.Triggers) {
+			localDeploys = append(localDeploys, d.Name)
+		}
+	}
+
+	// Process external deploys (from primary repo coordinating satellites)
+	for _, ext := range p.cicdFile.Config.External {
+		for _, d := range ext.Deploys {
+			// Check if deploy is in the filter list (if filter is specified)
+			if len(p.deploysFilter) > 0 && !stringSliceContains(p.deploysFilter, d.Name) {
+				continue
+			}
+
+			// Check if deploy is included (from checkbox - legacy support)
+			if include, ok := p.deployChecks[d.Name]; ok && !include {
+				continue
+			}
+
+			// Get source and target external deploy states
+			var sourceSHAExt, targetSHAExt string
+			if state := p.cicdFile.State[sourceEnv]; state != nil {
+				if es := state.External[d.Name]; es != nil {
+					sourceSHAExt = es.SHA
+				}
+			}
+			if state := p.cicdFile.State[targetEnv]; state != nil {
+				if es := state.External[d.Name]; es != nil {
+					targetSHAExt = es.SHA
+				}
+			}
+
+			// Include if never deployed to target or source is different from target
+			if targetSHAExt == "" || sourceSHAExt != targetSHAExt {
+				externalDeploys = append(externalDeploys, d.Name)
+			}
+		}
+	}
+
+	return localDeploys, externalDeploys
+}
+
+// hasChanges checks if there are changes between two SHAs matching any of the triggers
+func (p *Preflighter) hasChanges(baseSHA, headSHA string, triggers []string) bool {
+	if len(triggers) == 0 {
+		return true // No triggers = always deploy
+	}
+
+	// Use git diff to get changed files
+	cmd := exec.Command("git", "diff", "--name-only", baseSHA, headSHA)
+	cmd.Dir = p.baseDir
+	out, err := cmd.Output()
+	if err != nil {
+		return true // On error, assume changes
+	}
+
+	changedFiles := strings.Split(string(out), "\n")
+
+	// Check if any changed file matches any trigger pattern
+	for _, file := range changedFiles {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		for _, pattern := range triggers {
+			if matchGlob(pattern, file) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// matchGlob matches a file path against a glob pattern
+// Supports: * (single segment), ** (any segments)
+func matchGlob(pattern, path string) bool {
+	// Handle ** patterns
+	if strings.Contains(pattern, "**") {
+		return matchDoublestar(pattern, path)
+	}
+
+	// For simple patterns, use filepath.Match
+	matched, _ := filepath.Match(pattern, path)
+	return matched
+}
+
+// matchDoublestar handles ** glob patterns
+func matchDoublestar(pattern, path string) bool {
+	// Split pattern and path into segments
+	patternParts := strings.Split(pattern, "/")
+	pathParts := strings.Split(path, "/")
+
+	return matchParts(patternParts, pathParts)
+}
+
+// matchParts recursively matches pattern parts against path parts
+func matchParts(pattern, path []string) bool {
+	pi, ppi := 0, 0
+
+	for pi < len(pattern) && ppi < len(path) {
+		if pattern[pi] == "**" {
+			// ** matches zero or more path segments
+			if pi == len(pattern)-1 {
+				// ** at end matches everything
+				return true
+			}
+
+			// Try matching remaining pattern at each position
+			for i := ppi; i <= len(path); i++ {
+				if matchParts(pattern[pi+1:], path[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+
+		// Match single segment
+		matched, _ := filepath.Match(pattern[pi], path[ppi])
+		if !matched {
+			return false
+		}
+
+		pi++
+		ppi++
+	}
+
+	// Check if pattern is exhausted
+	for pi < len(pattern) {
+		if pattern[pi] != "**" {
+			return false
+		}
+		pi++
+	}
+
+	return ppi == len(path)
+}
+
+// checkBreakingChangesForMode checks if there are breaking changes based on mode and transitions.
+// Breaking changes block at: pre-release → release AND release → prod
+// For cascade mode: blocks entire operation if target includes release or prod
+// Returns (hasBreaking, blockedTransition)
+func (p *Preflighter) checkBreakingChangesForMode(
+	promotions []EnvPromotion,
+	prereleaseEnv, prodEnv string,
+	hasReleaseMarker bool,
+) (bool, string) {
+	if len(promotions) == 0 {
+		return false, ""
+	}
+
+	// Get source SHA for breaking change detection
+	sourceSHA := promotions[0].SHA
+	if sourceSHA == "" {
+		return false, ""
+	}
+
+	// Determine the transitions that should be blocked by breaking changes.
+	// The implicit chain is [envs..., "release", prodEnv]; we block at the two
+	// crossings around the virtual "release" env: prereleaseEnv → release and
+	// release → prod. Each promotion's target_env is matched against this set.
+	blockedTransitions := make(map[string]string) // target env -> transition description
+
+	if prereleaseEnv != "" {
+		blockedTransitions["release"] = fmt.Sprintf("%s → release", prereleaseEnv)
+	}
+	if prodEnv != "" {
+		blockedTransitions[prodEnv] = fmt.Sprintf("release → %s", prodEnv)
+	}
+	// Pre-#45 callers may pass empty hasReleaseMarker for env lists that
+	// don't include "release" literally; the chain is still implicit so we
+	// keep both entries above. The flag is preserved for API compatibility.
+	_ = hasReleaseMarker
+
+	// Check if any promotion targets a blocked transition
+	for _, promo := range promotions {
+		if transition, blocked := blockedTransitions[promo.Environment]; blocked {
+			// Check for actual breaking changes in the diff
+			targetSHA := p.getEnvCurrentSHA(promo.Environment)
+			if targetSHA != "" && p.hasBreakingChangesBetween(targetSHA, sourceSHA) {
+				return true, transition
+			}
+		}
+	}
+
+	// For cascade mode targeting release or prod, check the final target
+	if p.mode == ModeCascade && len(promotions) > 0 {
+		finalEnv := promotions[len(promotions)-1].Environment
+		if transition, blocked := blockedTransitions[finalEnv]; blocked {
+			targetSHA := p.getEnvCurrentSHA(finalEnv)
+			if targetSHA != "" && p.hasBreakingChangesBetween(targetSHA, sourceSHA) {
+				return true, transition
+			}
+		}
+	}
+
+	return false, ""
+}
+
+// getEnvCurrentSHA returns the current SHA for an environment
+func (p *Preflighter) getEnvCurrentSHA(env string) string {
+	if state := p.cicdFile.State[env]; state != nil {
+		return state.SHA
+	}
+	return ""
+}
+
+// hasBreakingChangesBetween reports whether any commit in the range
+// (baseSHA, headSHA] is a breaking change per the conventional-commit spec
+// (`feat!:`, `fix!:`, or any commit body containing `BREAKING CHANGE:`).
+//
+// On any failure to read git history, returns false (fail-open) — the gate
+// is a guardrail, not a hard correctness check, and surfacing parse errors
+// at preflight time would make the CLI brittle in environments with shallow
+// or partially fetched histories.
+func (p *Preflighter) hasBreakingChangesBetween(baseSHA, headSHA string) bool {
+	if baseSHA == "" || headSHA == "" {
+		return false
+	}
+	commits, err := git.GetCommits(baseSHA, headSHA, nil)
+	if err != nil {
+		return false
+	}
+	return containsBreakingCommit(commits)
+}
+
+// containsBreakingCommit reports whether any commit in the slice is breaking
+// per the conventional-commit spec. Pure function for unit-testability.
+func containsBreakingCommit(commits []git.Commit) bool {
+	for _, gc := range commits {
+		if cc := changelog.ParseCommit(gc); cc != nil && cc.Breaking {
+			return true
+		}
+	}
+	return false
+}
+
+// stringSliceContains checks if a string is in a slice
+func stringSliceContains(slice []string, item string) bool {
+	return slices.Contains(slice, item)
+}

@@ -1,0 +1,94 @@
+# Scenario: Satellite deploys to dev and notifies primary to update external state
+#
+# This tests the push-based notification pattern where:
+# 1. Satellite repo deploys to dev environment
+# 2. Satellite notifies primary repo via workflow_dispatch
+# 3. Primary updates its external state tracking
+
+name: satellite-notifies-primary
+description: Satellite deploys and notifies primary to track external state
+
+repos:
+  primary-backend:
+    config:
+      trunk_branch: master
+      environments: [dev, test, prod]
+      deploys:
+        - name: api
+          workflow: .github/workflows/deploy-api.yaml
+          triggers:
+            - src/**
+      external:
+        - repo: example/cdk-infra
+          ref: main
+          deploys:
+            - name: cdk
+              workflow: example/cdk-infra/.github/workflows/deploy.yaml
+    manifest:
+      state:
+        dev:
+          sha: "primary-initial"
+          version: "v1.0.0-rc.0"
+
+  cdk-infra:
+    config:
+      trunk_branch: main
+      environments: [dev, test, prod]
+      deploys:
+        - name: cdk
+          workflow: .github/workflows/deploy.yaml
+          triggers:
+            - cdk/**
+      notify:
+        repo: example/primary-backend
+        workflow: .github/workflows/external-update.yaml
+    manifest:
+      state:
+        dev:
+          sha: "cdk-initial"
+          version: "v1.0.0-rc.0"
+
+primary: primary-backend
+
+steps:
+  # Step 1: Commit changes to satellite CDK repo
+  - name: update-cdk-stack
+    repo: cdk-infra
+    action: commit
+    commit:
+      message: "feat: update CDK stack with new resources"
+      files:
+        cdk/lib/stack.ts: |
+          import * as cdk from 'aws-cdk-lib';
+          export class MyStack extends cdk.Stack {
+            constructor(scope: cdk.App, id: string) {
+              super(scope, id);
+              // New resources added
+            }
+          }
+
+  # Step 2: Satellite notifies primary after deploy
+  - name: notify-primary
+    repo: cdk-infra
+    action: dispatch
+    dispatch:
+      target_repo: primary-backend
+      workflow: .github/workflows/external-update.yaml
+      inputs:
+        source_repo: example/cdk-infra
+        deploy_name: cdk
+        environment: dev
+        sha: "${cdk-infra.head_sha}"
+        version: "v1.1.0-rc.0"
+
+expect:
+  repos:
+    primary-backend:
+      state:
+        dev:
+          external:
+            cdk:
+              sha: "${cdk-infra.head_sha}"
+              version: "v1.1.0-rc.0"
+    cdk-infra:
+      tags: []  # No tags created yet (just dev deploy)

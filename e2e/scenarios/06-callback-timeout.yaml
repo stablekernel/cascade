@@ -1,0 +1,35 @@
+name: "Callback Timeout"
+description: |
+  Verifies the timeout_minutes field on validate/builds/deploys propagates
+  into the generated orchestrate.yaml as a job-level timeout-minutes (#97).
+
+  This is a generator-output verification scenario — assertion runs on the
+  staged repo after StageRepoFromConfig generates workflows but before any
+  orchestrate runs. We don't run orchestrate because act doesn't honor
+  timeout-minutes on `uses:` reusable workflow callers and would fail the
+  workflow execution. Real timeout-firing belongs to real-GHA PoC validation.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+      timeout_minutes: 30
+  deploys: []
+
+steps:
+  - name: "Initial commit triggers workflow generation; assert timeout-minutes"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "timeout-minutes: 30"

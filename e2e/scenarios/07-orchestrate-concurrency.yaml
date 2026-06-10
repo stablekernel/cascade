@@ -1,0 +1,33 @@
+name: "Orchestrate Concurrency"
+description: |
+  Verifies the generated orchestrate.yaml declares a top-level concurrency:
+  block (#92) so concurrent pushes to trunk don't race on state writes.
+
+  Generator-output verification. Actual cancel-in-progress is a GHA runtime
+  feature outside the harness's scope.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert concurrency block in generated workflow"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "concurrency:"
+            - "github.ref"
+            - "cancel-in-progress: true"

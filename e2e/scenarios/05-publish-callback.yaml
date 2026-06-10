@@ -1,0 +1,48 @@
+name: "Publish Callback"
+description: >
+  No-env library/CLI project with a publish callback configured.
+  Validates that:
+  1. The generate-workflow command includes the Publish Artifacts step in the promote workflow
+  2. The orchestrate finalize captures artifact_id from the build job output into state
+  3. The promote workflow runs successfully when a publish callback is configured
+  Note: the actual 'gh workflow run' dispatch in the Publish Artifacts step is
+  a no-op in the e2e harness (GITHUB_SERVER_URL != https://github.com), so
+  we assert on the promote succeeding rather than the publish job running.
+
+config:
+  trunk_branch: main
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  publish:
+    workflow: publish.yaml
+
+steps:
+  - name: "Add app feature"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.ts: |
+          export function main() { console.log("v0.1.0 feature"); }
+
+  - name: "Orchestrate — build runs, state.prerelease created"
+    action: orchestrate
+    expect:
+      state:
+        prerelease:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        app: success
+
+  - name: "Promote to release — publish step runs (dispatch no-op in harness)"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit1
+          version: "v0.1.0"

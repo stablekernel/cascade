@@ -1,0 +1,41 @@
+name: "No-environment build triggered"
+description: "Validates that orchestrate workflow works correctly with zero environments (library/CLI projects)"
+
+setup:
+  config:
+    trunk_branch: main
+    environments: []  # No environments - library/CLI project
+    builds:
+      - name: cli
+        triggers:
+          - "cmd/**"
+          - "internal/**"
+
+  commits:
+    - message: "feat: initial CLI implementation"
+      files:
+        cmd/main.go: |
+          package main
+
+          func main() {
+              println("Hello from CLI")
+          }
+        internal/lib/lib.go: |
+          package lib
+
+          func Greet() string {
+              return "Hello"
+          }
+
+trigger:
+  workflow: orchestrate.yaml
+  event: push
+
+expect:
+  workflow:
+    conclusion: success
+  manifest:
+    ci:
+      state:
+        prerelease:
+          sha: HEAD

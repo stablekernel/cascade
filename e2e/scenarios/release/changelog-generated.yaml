@@ -1,0 +1,83 @@
+name: "Changelog generated from commits"
+description: "Validates that a changelog is automatically generated from conventional commits during release"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - test
+      - prod
+    builds:
+      - name: app
+        triggers:
+          - "src/**"
+
+  commits:
+    - message: "feat: add payment processing module"
+      files:
+        src/payment.go: |
+          package main
+
+          func ProcessPayment(amount float64) bool {
+              return amount > 0
+          }
+    - message: "feat: implement refund functionality"
+      files:
+        src/refund.go: |
+          package main
+
+          func ProcessRefund(transactionId string) error {
+              return nil
+          }
+    - message: "fix: correct payment validation logic"
+      files:
+        src/payment.go: |
+          package main
+
+          func ProcessPayment(amount float64) bool {
+              if amount <= 0 {
+                  return false
+              }
+              return true
+          }
+    - message: "docs: update payment API documentation"
+      files:
+        docs/api.md: |
+          # Payment API
+
+          Process payments and refunds.
+
+  tags:
+    - "v0.2.0-rc.0"
+
+  manifest:
+    ci:
+      state:
+        dev:
+          sha: "{{HEAD}}"
+          version: "0.2.0-rc.0"
+          committed_at: "2024-01-01T00:00:00Z"
+          committed_by: "system"
+
+trigger:
+  workflow: promote.yaml
+  event: workflow_dispatch
+  inputs:
+    mode: "dev-to-prod"
+
+expect:
+  workflow:
+    conclusion: success
+  tags:
+    - pattern: "v0.2.0"
+  release:
+    tag: "v0.2.0"
+    changelog:
+      contains:
+        - "feat: add payment processing module"
+        - "feat: implement refund functionality"
+        - "fix: correct payment validation logic"
+      sections:
+        - "Features"
+        - "Bug Fixes"

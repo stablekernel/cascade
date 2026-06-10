@@ -1,0 +1,32 @@
+name: "Build failure stops pipeline"
+description: "Validates that a build failure prevents subsequent deploys"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+    builds:
+      - name: app
+        triggers:
+          - "src/**"
+    deploys:
+      - name: services
+        depends_on:
+          - app
+
+  commits:
+    - message: "feat: broken code"
+      files:
+        src/main.go: |
+          package main
+          func main() { syntax error here }
+
+trigger:
+  workflow: orchestrate.yaml
+  event: push
+
+expect:
+  workflow:
+    conclusion: failure

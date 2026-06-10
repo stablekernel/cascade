@@ -1,0 +1,92 @@
+name: "No Environment Happy Path"
+description: "Repository with no environments (CLI/library) - draft releases on trunk"
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  # Step 1: Push first commit to trunk → creates draft release v0.1.0
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add initial feature"
+      files:
+        src/app.go: |
+          package main
+          func main() {
+            println("Hello v0.1.0")
+          }
+
+  - name: "Orchestrate after first commit"
+    action: orchestrate
+    expect:
+      state:
+        prerelease:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]
+
+  # Step 2: Push second commit → updates draft with new SHA/changelog
+  - name: "Second feature commit"
+    action: commit
+    commit:
+      message: "feat: add second feature"
+      files:
+        src/feature.go: |
+          package main
+          func Feature() string {
+            return "feature2"
+          }
+
+  - name: "Orchestrate after second commit"
+    action: orchestrate
+    expect:
+      state:
+        prerelease:
+          sha: commit2
+          version: "v0.1.0-rc.1"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.1"
+          prerelease: true
+          draft: true
+          changelog:
+            - "feat: add second feature"
+            - "feat: add initial feature"
+      tags:
+        exist: ["v0.1.0-rc.0", "v0.1.0-rc.1"]
+
+  # Step 3: Run standard promote → publishes v0.1.0
+  - name: "Promote to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit2
+          version: "v0.1.0"
+        prerelease:
+          wiped: true
+      releases:
+        - tag: "v0.1.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0"]
+        deleted: ["v0.1.0-rc.0", "v0.1.0-rc.1"]

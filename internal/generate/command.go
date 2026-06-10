@@ -1,0 +1,332 @@
+package generate
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/stablekernel/cascade/internal/config"
+)
+
+// NewCommand creates the generate-workflow command
+func NewCommand() *cobra.Command {
+	var configPath string
+	var manifestKey string
+	var actionFolder string
+	var outputPath string
+	var promoteOutputPath string
+	var validateOnly bool
+	var dryRun bool
+	var force bool
+	var commit bool
+	var push bool
+	var orchestrateOnly bool
+	var promoteOnly bool
+
+	cmd := &cobra.Command{
+		Use:   "generate-workflow",
+		Short: "Generate orchestration workflow from manifest.yaml",
+		Long: `Generate GitHub Actions workflow files that orchestrate builds, deploys, and promotions
+based on the manifest.yaml configuration. By default generates both:
+  - orchestrate.yaml: Handles CI/CD on trunk merges
+  - promote.yaml: Handles environment promotions
+
+Use --orchestrate-only or --promote-only to generate just one workflow.
+
+Configuration is read from .github/manifest.yaml (or .github/manifest.yml) under
+the "ci" key by default. Use --manifest-key to change the key name.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// --push implies --commit
+			if push {
+				commit = true
+			}
+			opts := generateOptions{
+				configPath:        configPath,
+				manifestKey:       manifestKey,
+				actionFolder:      actionFolder,
+				outputPath:        outputPath,
+				promoteOutputPath: promoteOutputPath,
+				validateOnly:      validateOnly,
+				dryRun:            dryRun,
+				force:             force,
+				commit:            commit,
+				push:              push,
+				orchestrateOnly:   orchestrateOnly,
+				promoteOnly:       promoteOnly,
+			}
+			return runGenerateWorkflow(opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file (default: auto-detect .github/manifest.yaml)")
+	cmd.Flags().StringVar(&manifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
+	cmd.Flags().StringVar(&actionFolder, "action-folder", "manage-release", "Folder name for the manage-release composite action")
+	cmd.Flags().StringVarP(&outputPath, "output", "o", ".github/workflows/orchestrate.yaml", "Output path for orchestrate workflow")
+	cmd.Flags().StringVar(&promoteOutputPath, "promote-output", ".github/workflows/promote.yaml", "Output path for promote workflow")
+	cmd.Flags().BoolVar(&validateOnly, "validate-only", false, "Validate config without generating")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print generated workflow to stdout")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite output file without prompting")
+	cmd.Flags().BoolVar(&commit, "commit", false, "Commit generated workflow files to git")
+	cmd.Flags().BoolVarP(&push, "push", "p", false, "Push commit to remote (implies --commit)")
+	cmd.Flags().BoolVar(&orchestrateOnly, "orchestrate-only", false, "Only generate orchestrate.yaml")
+	cmd.Flags().BoolVar(&promoteOnly, "promote-only", false, "Only generate promote.yaml")
+
+	return cmd
+}
+
+type generateOptions struct {
+	configPath         string
+	manifestKey        string
+	actionFolder       string
+	outputPath         string
+	promoteOutputPath  string
+	externalOutputPath string
+	validateOnly       bool
+	dryRun             bool
+	force              bool
+	commit             bool
+	push               bool
+	orchestrateOnly    bool
+	promoteOnly        bool
+}
+
+func runGenerateWorkflow(opts generateOptions) error {
+	// Determine config path - auto-detect if not specified
+	configPath := opts.configPath
+	if configPath == "" {
+		configPath = config.FindConfigFile("")
+	}
+
+	// Parse config with manifest key
+	cfg, err := config.ParseWithKey(configPath, opts.manifestKey)
+	if err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+
+	// Override action folder if specified on command line
+	if opts.actionFolder != "" && opts.actionFolder != "manage-release" {
+		cfg.ActionFolder = opts.actionFolder
+	}
+
+	// Validate config
+	if errs := config.Validate(cfg); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", e)
+		}
+		return fmt.Errorf("config validation failed")
+	}
+
+	// Get base directory for workflow file resolution
+	// Workflow paths are relative to repo root
+	configDir := filepath.Dir(configPath)
+	if !filepath.IsAbs(configDir) {
+		cwd, _ := os.Getwd()
+		configDir = filepath.Join(cwd, configDir)
+	}
+	// If config is in .github/, go up one level to get repo root
+	baseDir := configDir
+	if filepath.Base(configDir) == ".github" {
+		baseDir = filepath.Dir(configDir)
+	}
+
+	// Determine which workflows to generate
+	generateOrchestrate := !opts.promoteOnly
+	generatePromote := !opts.orchestrateOnly
+
+	// Create orchestrate generator and validate
+	var orchestrateGen *Generator
+	if generateOrchestrate {
+		orchestrateGen = NewGenerator(cfg, baseDir)
+		warnings := orchestrateGen.Validate()
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "%s\n", w)
+		}
+	}
+
+	if opts.validateOnly {
+		fmt.Println("Config is valid")
+		return nil
+	}
+
+	var generatedFiles []string
+
+	// Generate orchestrate workflow
+	if generateOrchestrate {
+		content, err := orchestrateGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating orchestrate workflow: %w", err)
+		}
+
+		if opts.dryRun {
+			fmt.Println("=== orchestrate.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(opts.outputPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, opts.outputPath)
+			fmt.Printf("Generated workflow: %s\n", opts.outputPath)
+		}
+	}
+
+	// Generate promote/release workflow based on number of environments
+	if generatePromote {
+		var content string
+		var err error
+		var workflowName string
+
+		if cfg.IsSingleEnvironment() {
+			// Single-environment projects get a simpler Release workflow
+			releaseGen := NewReleaseGenerator(cfg, baseDir)
+			content, err = releaseGen.Generate()
+			workflowName = "release"
+		} else {
+			// Multi-environment projects get the full Promote workflow
+			promoteGen := NewPromoteGenerator(cfg, baseDir)
+			content, err = promoteGen.Generate()
+			workflowName = "promote"
+		}
+
+		if err != nil {
+			return fmt.Errorf("generating %s workflow: %w", workflowName, err)
+		}
+
+		if opts.dryRun {
+			if generateOrchestrate {
+				fmt.Printf("\n=== %s.yaml ===\n", workflowName)
+			}
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(opts.promoteOutputPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, opts.promoteOutputPath)
+			fmt.Printf("Generated workflow: %s\n", opts.promoteOutputPath)
+		}
+	}
+
+	// Generate external-update workflow for primary repos
+	if cfg.IsPrimary() {
+		externalGen := NewExternalUpdateGenerator(cfg, baseDir)
+		content, err := externalGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating external-update workflow: %w", err)
+		}
+
+		externalOutputPath := ".github/workflows/external-update.yaml"
+		if opts.externalOutputPath != "" {
+			externalOutputPath = opts.externalOutputPath
+		}
+
+		if opts.dryRun {
+			fmt.Println("\n=== external-update.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(externalOutputPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, externalOutputPath)
+			fmt.Printf("Generated workflow: %s\n", externalOutputPath)
+		}
+	}
+
+	if opts.dryRun {
+		return nil
+	}
+
+	// Generate local actions (manage-release or custom folder name)
+	if err := GenerateLocalActions(baseDir, cfg); err != nil {
+		return fmt.Errorf("generating local actions: %w", err)
+	}
+	actionPath := filepath.Join(baseDir, ".github", "actions", cfg.GetActionFolder(), "action.yaml")
+	generatedFiles = append(generatedFiles, actionPath)
+	fmt.Printf("Generated action: %s\n", actionPath)
+
+	// Commit the generated files if requested
+	if opts.commit && len(generatedFiles) > 0 {
+		committed, err := gitCommitFiles(generatedFiles)
+		if err != nil {
+			return fmt.Errorf("committing workflows: %w", err)
+		}
+		if committed {
+			fmt.Printf("Committed: %v\n", generatedFiles)
+		}
+
+		// Push if requested (and we actually committed something)
+		if opts.push && committed {
+			if err := gitPush(); err != nil {
+				return fmt.Errorf("pushing to remote: %w", err)
+			}
+			fmt.Println("Pushed to remote")
+		}
+	}
+
+	return nil
+}
+
+// writeWorkflow writes the workflow content to the specified path
+func writeWorkflow(outputPath, content string, force bool) error {
+	// Check if output exists
+	if !force {
+		if _, err := os.Stat(outputPath); err == nil {
+			return fmt.Errorf("output file %s exists, use --force to overwrite", outputPath)
+		}
+	}
+
+	// Ensure output directory exists
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("creating output directory: %w", err)
+	}
+
+	// Write output
+	if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing output file: %w", err)
+	}
+
+	return nil
+}
+
+// gitCommitFiles stages and commits the specified files.
+// Returns true if a commit was created, false if there were no changes.
+func gitCommitFiles(filePaths []string) (bool, error) {
+	// Stage all files
+	args := append([]string{"add"}, filePaths...)
+	addCmd := exec.Command("git", args...)
+	if output, err := addCmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git add failed: %s: %w", string(output), err)
+	}
+
+	// Check if there are staged changes
+	diffCmd := exec.Command("git", "diff", "--cached", "--quiet")
+	if err := diffCmd.Run(); err == nil {
+		// No changes to commit
+		fmt.Println("No changes to commit")
+		return false, nil
+	}
+
+	// Build commit message with file names
+	var fileNames []string
+	for _, fp := range filePaths {
+		fileNames = append(fileNames, filepath.Base(fp))
+	}
+	commitMsg := fmt.Sprintf("chore: regenerate %s\n\nAuto-generated by cascade generate-workflow", strings.Join(fileNames, ", "))
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	if output, err := commitCmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git commit failed: %s: %w", string(output), err)
+	}
+
+	return true, nil
+}
+
+// gitPush pushes the current branch to its upstream remote
+func gitPush() error {
+	pushCmd := exec.Command("git", "push")
+	if output, err := pushCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push failed: %s: %w", string(output), err)
+	}
+	return nil
+}

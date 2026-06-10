@@ -1,0 +1,333 @@
+package promote
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"time"
+
+	"github.com/stablekernel/cascade/internal/config"
+	"gopkg.in/yaml.v3"
+)
+
+// getEnv returns the value of an environment variable or a default value.
+func getEnv(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
+}
+
+// Finalizer handles post-deployment state updates after a promotion completes.
+// It updates the manifest state based on:
+// - Deploy job results (from GitHub Actions)
+// - Promotion result (from preflight output)
+// - Release publishing status
+type Finalizer struct {
+	configPath      string
+	targetEnv       string
+	cicdFile        *config.CICDFile
+	deployResults   map[string]string // deploy name -> conclusion ("success", "failure", "skipped")
+	promotionResult *PromotionResult
+	actor           string
+}
+
+// NewFinalizer creates a new Finalizer instance.
+// It loads the manifest from configPath and prepares for state updates.
+// The manifest must have the ci: key at the top level.
+func NewFinalizer(configPath, targetEnv string) (*Finalizer, error) {
+	return NewFinalizerWithKey(configPath, targetEnv, config.DefaultManifestKey)
+}
+
+// NewFinalizerWithKey creates a Finalizer with a custom manifest key.
+func NewFinalizerWithKey(configPath, targetEnv, manifestKey string) (*Finalizer, error) {
+	cicdFile, err := config.ParseManifestFile(configPath, manifestKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	actor := getEnv("GITHUB_ACTOR", "github-actions[bot]")
+
+	return &Finalizer{
+		configPath:    configPath,
+		targetEnv:     targetEnv,
+		cicdFile:      cicdFile,
+		deployResults: make(map[string]string),
+		actor:         actor,
+	}, nil
+}
+
+// SetDeployResult records the result of a deploy job.
+// Valid results: "success", "failure", "skipped", "cancelled"
+func (f *Finalizer) SetDeployResult(name, result string) {
+	f.deployResults[name] = result
+}
+
+// SetPromotionResult sets the promotion result from preflight output.
+// This contains information about which environments to update and release actions.
+func (f *Finalizer) SetPromotionResult(pr *PromotionResult) {
+	f.promotionResult = pr
+}
+
+// SetActor sets the actor performing the finalization (for audit trail).
+func (f *Finalizer) SetActor(actor string) {
+	f.actor = actor
+}
+
+// Run executes the finalization logic:
+// 1. Updates environment state for all promoted environments
+// 2. Updates per-deploy state for successful deploys only
+// 3. Updates latest_release state if publishing a release
+// 4. Writes the updated manifest back to disk
+//
+// Note: This updates the in-memory state and writes to disk.
+// Call this only when you want to persist changes.
+func (f *Finalizer) Run() error {
+	f.updateState()
+	return f.WriteConfig()
+}
+
+// updateState performs the in-memory state updates.
+// This is separated from Run() to allow dry-run mode.
+func (f *Finalizer) updateState() {
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+
+	// Ensure state maps exist
+	if f.cicdFile.State == nil {
+		f.cicdFile.State = make(map[string]*config.EnvState)
+	}
+
+	// Update environment state from promotion result
+	if f.promotionResult != nil {
+		for _, promo := range f.promotionResult.Promotions {
+			if f.cicdFile.State[promo.Environment] == nil {
+				f.cicdFile.State[promo.Environment] = &config.EnvState{}
+			}
+			state := f.cicdFile.State[promo.Environment]
+			state.SHA = promo.SHA
+			state.Version = promo.Version
+			state.CommittedAt = timestamp
+			state.CommittedBy = f.actor
+
+			// Initialize deploys map if needed
+			if state.Deploys == nil {
+				state.Deploys = make(map[string]*config.DeployState)
+			}
+		}
+	}
+
+	// Update per-deploy state for successful deploys. In cascade mode the
+	// promotion result includes every env in the path (e.g., dev→uat
+	// produces promotions for qa and uat); each env's per-deploy state must
+	// reflect the new SHA so subsequent change-detection compares against
+	// the right base. Without this, state[intermediateEnv].deploys[name]
+	// stays empty and the next promotion re-runs the deploy unnecessarily.
+	for name, result := range f.deployResults {
+		if result != "success" {
+			continue
+		}
+
+		// Check if this is an external deploy
+		if f.isExternalDeploy(name) {
+			f.updateExternalDeployState(name, timestamp)
+			continue
+		}
+
+		for _, promo := range f.promotionResult.Promotions {
+			if promo.Environment == "" || promo.Environment == "release" {
+				// Skip the release marker — it tracks publish state, not deploys.
+				continue
+			}
+			if promo.SHA == "" {
+				continue
+			}
+			if f.cicdFile.State[promo.Environment] == nil {
+				f.cicdFile.State[promo.Environment] = &config.EnvState{}
+			}
+			if f.cicdFile.State[promo.Environment].Deploys == nil {
+				f.cicdFile.State[promo.Environment].Deploys = make(map[string]*config.DeployState)
+			}
+			if f.cicdFile.State[promo.Environment].Deploys[name] == nil {
+				f.cicdFile.State[promo.Environment].Deploys[name] = &config.DeployState{}
+			}
+
+			ds := f.cicdFile.State[promo.Environment].Deploys[name]
+			ds.SHA = promo.SHA
+			ds.DeployedAt = timestamp
+			ds.DeployedBy = f.actor
+		}
+	}
+
+	// Update latest_release if publishing
+	if f.promotionResult != nil && f.promotionResult.ReleaseAction == "publish" {
+		if f.cicdFile.LatestRelease == nil {
+			f.cicdFile.LatestRelease = &config.LatestReleaseState{}
+		}
+		f.cicdFile.LatestRelease.Version = f.promotionResult.ReleaseData.SemVersion
+		f.cicdFile.LatestRelease.SHA = f.promotionResult.ReleaseData.SHA
+		f.cicdFile.LatestRelease.ReleasedOn = timestamp
+		f.cicdFile.LatestRelease.ReleasedBy = f.actor
+
+		// Update "release" state marker (for multi-environment repos)
+		// The "release" state marker tracks what version has been published
+		if f.cicdFile.State["release"] == nil {
+			f.cicdFile.State["release"] = &config.EnvState{}
+		}
+		f.cicdFile.State["release"].SHA = f.promotionResult.ReleaseData.SHA
+		f.cicdFile.State["release"].Version = f.promotionResult.ReleaseData.SemVersion
+		f.cicdFile.State["release"].CommittedAt = timestamp
+		f.cicdFile.State["release"].CommittedBy = f.actor
+
+		// Clear prerelease tracking state after final release is published
+		// This prevents stale RC state from persisting in the manifest
+		delete(f.cicdFile.State, "prerelease")
+	}
+}
+
+// WriteConfig writes the updated manifest back to disk.
+// The output is wrapped in the manifest key (default: "ci") to match the expected format.
+func (f *Finalizer) WriteConfig() error {
+	// Get the manifest key from config (defaults to "ci")
+	key := config.DefaultManifestKey
+	if f.cicdFile.Config != nil && f.cicdFile.Config.ManifestKey != "" {
+		key = f.cicdFile.Config.ManifestKey
+	}
+
+	// Wrap the CICDFile in the manifest key
+	wrapper := map[string]any{
+		key: f.cicdFile,
+	}
+
+	data, err := yaml.Marshal(wrapper)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if err := os.WriteFile(f.configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+	return nil
+}
+
+// CommitAndPush commits the manifest changes and pushes to the remote repository.
+// This should be called after Run() to persist state changes to git.
+//
+// It performs the following steps:
+// 1. Checks if there are any changes to commit
+// 2. Configures git user (if not external mode)
+// 3. Commits the manifest with [skip ci] to avoid triggering workflows
+// 4. Pushes the commit to the remote
+//
+// Note: We skip git pull because the workflow just checked out the repo,
+// so it should already be at the latest state. The finalize job runs after
+// all deploy jobs complete, and they don't modify the manifest.
+func (f *Finalizer) CommitAndPush() error {
+	// Check for changes
+	cmd := exec.Command("git", "status", "--porcelain", f.configPath)
+	status, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("git status failed: %w", err)
+	}
+	if len(status) == 0 {
+		return nil // No changes
+	}
+
+	// Configure git (use default bot identity)
+	cmd = exec.Command("git", "config", "user.name", "github-actions[bot]")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git config user.name failed: %w", err)
+	}
+
+	cmd = exec.Command("git", "config", "user.email", "github-actions[bot]@users.noreply.github.com")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git config user.email failed: %w", err)
+	}
+
+	// Add the manifest file
+	cmd = exec.Command("git", "add", f.configPath)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// Commit with [skip ci] to avoid triggering workflows
+	message := fmt.Sprintf("chore: update state after promotion to %s [skip ci]", f.targetEnv)
+	cmd = exec.Command("git", "commit", "-m", message)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+
+	// Push to remote
+	cmd = exec.Command("git", "push")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git push failed: %w", err)
+	}
+
+	return nil
+}
+
+// isExternalDeploy checks if a deploy is an external deploy (from satellite repo)
+func (f *Finalizer) isExternalDeploy(name string) bool {
+	for _, ext := range f.cicdFile.Config.External {
+		for _, d := range ext.Deploys {
+			if d.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getExternalDeployRepo returns the repo name for an external deploy
+func (f *Finalizer) getExternalDeployRepo(name string) string {
+	for _, ext := range f.cicdFile.Config.External {
+		for _, d := range ext.Deploys {
+			if d.Name == name {
+				return ext.Repo
+			}
+		}
+	}
+	return ""
+}
+
+// updateExternalDeployState updates the state for an external deploy
+func (f *Finalizer) updateExternalDeployState(name, timestamp string) {
+	// For external deploys, get SHA from the source environment's external state
+	// (the satellite notified us with this SHA via external-update)
+	sha := f.getExternalDeploySHA(name)
+	if sha == "" {
+		return
+	}
+
+	if f.cicdFile.State[f.targetEnv] == nil {
+		f.cicdFile.State[f.targetEnv] = &config.EnvState{}
+	}
+	if f.cicdFile.State[f.targetEnv].External == nil {
+		f.cicdFile.State[f.targetEnv].External = make(map[string]*config.ExternalDeployState)
+	}
+	if f.cicdFile.State[f.targetEnv].External[name] == nil {
+		f.cicdFile.State[f.targetEnv].External[name] = &config.ExternalDeployState{}
+	}
+
+	es := f.cicdFile.State[f.targetEnv].External[name]
+	es.Repo = f.getExternalDeployRepo(name)
+	es.SHA = sha
+	es.DeployedAt = timestamp
+	es.DeployedBy = f.actor
+}
+
+// getExternalDeploySHA retrieves the SHA for an external deploy from the source environment state
+func (f *Finalizer) getExternalDeploySHA(name string) string {
+	if f.promotionResult == nil || len(f.promotionResult.Promotions) == 0 {
+		return ""
+	}
+
+	// Get source environment (first promotion's source)
+	sourceEnv := f.promotionResult.Promotions[0].SourceEnv
+
+	// Look up the external deploy's SHA in the source environment
+	if state := f.cicdFile.State[sourceEnv]; state != nil {
+		if es := state.External[name]; es != nil {
+			return es.SHA
+		}
+	}
+	return ""
+}

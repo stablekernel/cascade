@@ -1,0 +1,161 @@
+# Scenario: Mixed local and external deploys
+#
+# This tests a realistic production setup where:
+# 1. Primary has local deploys (API, workers)
+# 2. Primary coordinates external deploys (CDK, K8s from satellite repos)
+# 3. All deploys are triggered and tracked together
+
+name: mixed-local-and-external
+description: Primary coordinates both local and external deploys
+
+repos:
+  primary-backend:
+    config:
+      trunk_branch: master
+      environments: [dev, test, prod]
+      deploys:
+        - name: api
+          workflow: .github/workflows/deploy-api.yaml
+          triggers:
+            - src/api/**
+        - name: workers
+          workflow: .github/workflows/deploy-workers.yaml
+          triggers:
+            - src/workers/**
+      external:
+        - repo: example/cdk-infra
+          ref: main
+          deploys:
+            - name: cdk
+              workflow: example/cdk-infra/.github/workflows/deploy.yaml
+        - repo: example/k8s-configs
+          ref: main
+          deploys:
+            - name: k8s
+              workflow: example/k8s-configs/.github/workflows/deploy.yaml
+    manifest:
+      state:
+        dev:
+          sha: "initial"
+          version: "v0.1.0"
+    commits:
+      - message: "chore: initial setup"
+        files:
+          src/api/main.go: "package main"
+          src/workers/worker.go: "package workers"
+
+  cdk-infra:
+    config:
+      trunk_branch: main
+      environments: [dev, test, prod]
+      deploys:
+        - name: cdk
+          workflow: .github/workflows/deploy.yaml
+          triggers:
+            - cdk/**
+      notify:
+        repo: example/primary-backend
+        workflow: .github/workflows/external-update.yaml
+    manifest:
+      state:
+        dev:
+          sha: "cdk-initial"
+          version: "v0.1.0"
+
+  k8s-configs:
+    config:
+      trunk_branch: main
+      environments: [dev, test, prod]
+      deploys:
+        - name: k8s
+          workflow: .github/workflows/deploy.yaml
+          triggers:
+            - manifests/**
+      notify:
+        repo: example/primary-backend
+        workflow: .github/workflows/external-update.yaml
+    manifest:
+      state:
+        dev:
+          sha: "k8s-initial"
+          version: "v0.1.0"
+
+primary: primary-backend
+
+steps:
+  # Step 1: Update API code
+  - name: update-api
+    repo: primary-backend
+    action: commit
+    commit:
+      message: "feat: add new API endpoint"
+      files:
+        src/api/handler.go: |
+          package main
+          func NewHandler() {}
+
+  # Step 2: CDK satellite updates and notifies
+  - name: cdk-update
+    repo: cdk-infra
+    action: commit
+    commit:
+      message: "feat: add API Gateway"
+      files:
+        cdk/api-gateway.ts: "// API Gateway stack"
+
+  - name: cdk-notify
+    repo: cdk-infra
+    action: dispatch
+    dispatch:
+      target_repo: primary-backend
+      workflow: .github/workflows/external-update.yaml
+      inputs:
+        source_repo: example/cdk-infra
+        deploy_name: cdk
+        environment: dev
+        sha: "${cdk-infra.head_sha}"
+        version: "v0.2.0-rc.0"
+
+  # Step 3: K8s satellite updates and notifies
+  - name: k8s-update
+    repo: k8s-configs
+    action: commit
+    commit:
+      message: "feat: add API deployment"
+      files:
+        manifests/api-deployment.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+
+  - name: k8s-notify
+    repo: k8s-configs
+    action: dispatch
+    dispatch:
+      target_repo: primary-backend
+      workflow: .github/workflows/external-update.yaml
+      inputs:
+        source_repo: example/k8s-configs
+        deploy_name: k8s
+        environment: dev
+        sha: "${k8s-configs.head_sha}"
+        version: "v0.2.0-rc.0"
+
+  # Step 4: Tag primary for release candidate
+  - name: tag-release-candidate
+    repo: primary-backend
+    action: tag
+    tag:
+      tag: "v0.2.0-rc.0"
+
+expect:
+  repos:
+    primary-backend:
+      tags:
+        - pattern: "v0.2.0-rc.0"
+      state:
+        dev:
+          external:
+            cdk:
+              version: "v0.2.0-rc.0"
+            k8s:
+              version: "v0.2.0-rc.0"

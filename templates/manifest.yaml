@@ -1,0 +1,28 @@
+# manifest.yaml - Deployment Manifest Template
+# This file tracks what's deployed to each environment
+# Copy to your repository root - it will be auto-updated by CI/CD
+#
+# For full documentation, see: https://github.com/stablekernel/cascade
+
+environments:
+  dev:
+    sha: ""                  # Deployed commit SHA
+    image_tag: ""            # Docker image tag (sha-epoch format)
+    deployed_at: ""          # ISO 8601 timestamp
+    deployed_by: ""          # GitHub actor who triggered deploy
+    deploys: {}              # Per-deployable tracking (auto-populated)
+
+  test:
+    sha: ""
+    image_tag: ""
+    deployed_at: ""
+    deployed_by: ""
+    deploys: {}
+
+  prod:
+    sha: ""
+    image_tag: ""
+    version: ""              # Semver version (prod only)
+    deployed_at: ""
+    deployed_by: ""
+    deploys: {}

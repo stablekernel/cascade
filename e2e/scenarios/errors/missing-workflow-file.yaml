@@ -1,0 +1,32 @@
+name: "Missing workflow file"
+description: "Validates error handling when a referenced workflow file doesn't exist"
+
+setup:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+    builds:
+      - name: app
+        triggers:
+          - "src/**"
+        workflow: .github/workflows/nonexistent-build.yaml
+
+  commits:
+    - message: "feat: add application"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {
+              println("Hello")
+          }
+
+trigger:
+  workflow: orchestrate.yaml
+  event: push
+
+expect:
+  workflow:
+    conclusion: failure

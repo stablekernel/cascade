@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+# git-safe-rebase - Safely rebase feature branches onto trunk
+#
+# Features:
+# - Fetches latest trunk before rebasing
+# - Handles uncommitted changes (stash with prompts)
+# - Interactive rebase support
+# - Conflict detection and recovery guidance
+# - Protected branch safeguards
+#
+# Usage: git safe-rebase [options]
+#
+# Options:
+#   -b, --branch <name>    Target branch to rebase onto (default: auto-detect trunk)
+#   -s, --stash            Automatically stash uncommitted changes
+#   -i, --interactive      Run interactive rebase
+#   -f, --force            Skip confirmation prompts
+#   -n, --dry-run          Show what would happen without doing it
+#   -h, --help             Show this help message
+
+set -euo pipefail
+
+# Colors
+if [[ -t 1 ]]; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[0;33m'
+  BLUE='\033[0;34m'
+  RESET='\033[0m'
+else
+  RED=''
+  GREEN=''
+  YELLOW=''
+  BLUE=''
+  RESET=''
+fi
+
+# Logging
+log_info() { echo -e "${BLUE}[INFO]${RESET} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${RESET} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${RESET} $1"; }
+log_error() { echo -e "${RED}[ERROR]${RESET} $1" >&2; }
+
+# Parse arguments
+TARGET_BRANCH=""
+AUTO_STASH=false
+INTERACTIVE=false
+FORCE=false
+DRY_RUN=false
+
+show_help() {
+  cat << 'EOF'
+git-safe-rebase - Safely rebase feature branches onto trunk
+
+Usage: git safe-rebase [options]
+
+Options:
+  -b, --branch <name>    Target branch to rebase onto (default: auto-detect trunk)
+  -s, --stash            Automatically stash uncommitted changes
+  -i, --interactive      Run interactive rebase
+  -f, --force            Skip confirmation prompts
+  -n, --dry-run          Show what would happen without doing it
+  -h, --help             Show this help message
+
+Examples:
+  git safe-rebase                    # Rebase onto auto-detected trunk
+  git safe-rebase -b dev             # Rebase onto dev branch
+  git safe-rebase -s                 # Auto-stash changes before rebase
+  git safe-rebase -i                 # Interactive rebase
+  git safe-rebase -n                 # Dry run to see what would happen
+
+Protected Branches:
+  The following branches cannot be rebased:
+  - master, main (trunk branches)
+  - dev, develop (development branches)
+  - release/* (release branches)
+
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -b|--branch)
+      TARGET_BRANCH="$2"
+      shift 2
+      ;;
+    -s|--stash)
+      AUTO_STASH=true
+      shift
+      ;;
+    -i|--interactive)
+      INTERACTIVE=true
+      shift
+      ;;
+    -f|--force)
+      FORCE=true
+      shift
+      ;;
+    -n|--dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    *)
+      log_error "Unknown option: $1"
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+# Check we're in a git repository
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+  log_error "Not in a git repository"
+  exit 1
+fi
+
+# Get current branch
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Protected branches check
+is_protected_branch() {
+  local branch="$1"
+  case "$branch" in
+    master|main|dev|develop)
+      return 0
+      ;;
+    release/*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+if is_protected_branch "$CURRENT_BRANCH"; then
+  log_error "Cannot rebase protected branch: $CURRENT_BRANCH"
+  log_error "Protected branches: master, main, dev, develop, release/*"
+  exit 1
+fi
+
+log_info "Current branch: $CURRENT_BRANCH"
+
+# Auto-detect trunk branch if not specified
+if [[ -z "$TARGET_BRANCH" ]]; then
+  for branch in origin/master origin/main origin/dev; do
+    if git rev-parse --verify "$branch" &>/dev/null; then
+      TARGET_BRANCH="$branch"
+      break
+    fi
+  done
+
+  if [[ -z "$TARGET_BRANCH" ]]; then
+    log_error "Could not auto-detect trunk branch"
+    log_error "Please specify with -b/--branch"
+    exit 1
+  fi
+fi
+
+log_info "Target branch: $TARGET_BRANCH"
+
+# Check for uncommitted changes
+HAS_CHANGES=false
+HAS_STAGED=false
+HAS_UNSTAGED=false
+
+if ! git diff --cached --quiet; then
+  HAS_STAGED=true
+  HAS_CHANGES=true
+fi
+
+if ! git diff --quiet; then
+  HAS_UNSTAGED=true
+  HAS_CHANGES=true
+fi
+
+if [[ "$HAS_CHANGES" == "true" ]]; then
+  log_warn "You have uncommitted changes:"
+  if [[ "$HAS_STAGED" == "true" ]]; then
+    echo "  - Staged changes (ready to commit)"
+  fi
+  if [[ "$HAS_UNSTAGED" == "true" ]]; then
+    echo "  - Unstaged changes (not yet added)"
+  fi
+  echo ""
+
+  if [[ "$AUTO_STASH" == "true" ]]; then
+    log_info "Auto-stashing changes..."
+    if [[ "$DRY_RUN" == "false" ]]; then
+      STASH_MSG="safe-rebase: auto-stash before rebasing $CURRENT_BRANCH onto $TARGET_BRANCH"
+      git stash push -m "$STASH_MSG"
+      log_success "Changes stashed"
+    else
+      log_info "[DRY RUN] Would stash changes"
+    fi
+  elif [[ "$FORCE" == "true" ]]; then
+    log_error "Cannot proceed with uncommitted changes without --stash"
+    exit 1
+  else
+    echo "What would you like to do?"
+    echo "  1) Stash changes and continue"
+    echo "  2) Commit changes first (abort rebase)"
+    echo "  3) Abort"
+    echo ""
+    read -r -p "Choice [1-3]: " choice
+
+    case "$choice" in
+      1)
+        if [[ "$DRY_RUN" == "false" ]]; then
+          STASH_MSG="safe-rebase: stash before rebasing $CURRENT_BRANCH onto $TARGET_BRANCH"
+          git stash push -m "$STASH_MSG"
+          log_success "Changes stashed"
+        else
+          log_info "[DRY RUN] Would stash changes"
+        fi
+        ;;
+      2)
+        log_info "Please commit your changes and run safe-rebase again"
+        exit 0
+        ;;
+      3|*)
+        log_info "Aborted"
+        exit 0
+        ;;
+    esac
+  fi
+fi
+
+# Fetch latest
+log_info "Fetching latest from remote..."
+if [[ "$DRY_RUN" == "false" ]]; then
+  git fetch origin
+else
+  log_info "[DRY RUN] Would fetch origin"
+fi
+
+# Check if rebase is needed
+UPSTREAM_COMMIT=$(git rev-parse "$TARGET_BRANCH")
+MERGE_BASE=$(git merge-base HEAD "$TARGET_BRANCH")
+
+if [[ "$MERGE_BASE" == "$UPSTREAM_COMMIT" ]]; then
+  log_success "Already up to date with $TARGET_BRANCH"
+
+  # Pop stash if we stashed
+  if [[ "$HAS_CHANGES" == "true" && ("$AUTO_STASH" == "true" || "${choice:-}" == "1") ]]; then
+    if [[ "$DRY_RUN" == "false" ]]; then
+      log_info "Restoring stashed changes..."
+      git stash pop
+      log_success "Changes restored"
+    else
+      log_info "[DRY RUN] Would restore stashed changes"
+    fi
+  fi
+  exit 0
+fi
+
+# Show what will be rebased
+COMMITS_BEHIND=$(git rev-list --count "$MERGE_BASE..$TARGET_BRANCH")
+COMMITS_TO_REBASE=$(git rev-list --count "$MERGE_BASE..HEAD")
+
+log_info "Branch is $COMMITS_BEHIND commits behind $TARGET_BRANCH"
+log_info "$COMMITS_TO_REBASE commits will be rebased"
+
+if [[ "$COMMITS_TO_REBASE" -gt 0 ]]; then
+  echo ""
+  echo "Commits to rebase:"
+  git log --oneline "$MERGE_BASE..HEAD" | head -10
+  if [[ "$COMMITS_TO_REBASE" -gt 10 ]]; then
+    echo "  ... and $((COMMITS_TO_REBASE - 10)) more"
+  fi
+  echo ""
+fi
+
+# Confirm rebase
+if [[ "$FORCE" == "false" && "$DRY_RUN" == "false" ]]; then
+  read -r -p "Proceed with rebase? [y/N]: " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    log_info "Aborted"
+
+    # Pop stash if we stashed
+    if [[ "$HAS_CHANGES" == "true" && ("$AUTO_STASH" == "true" || "${choice:-}" == "1") ]]; then
+      log_info "Restoring stashed changes..."
+      git stash pop
+      log_success "Changes restored"
+    fi
+    exit 0
+  fi
+fi
+
+# Perform rebase
+if [[ "$DRY_RUN" == "true" ]]; then
+  log_info "[DRY RUN] Would rebase onto $TARGET_BRANCH"
+  if [[ "$INTERACTIVE" == "true" ]]; then
+    log_info "[DRY RUN] Would use interactive mode"
+  fi
+else
+  log_info "Starting rebase..."
+
+  REBASE_ARGS=("$TARGET_BRANCH")
+  if [[ "$INTERACTIVE" == "true" ]]; then
+    REBASE_ARGS=("-i" "${REBASE_ARGS[@]}")
+  fi
+
+  if git rebase "${REBASE_ARGS[@]}"; then
+    log_success "Rebase completed successfully!"
+  else
+    log_error "Rebase failed - conflicts detected"
+    echo ""
+    echo "To resolve:"
+    echo "  1. Fix conflicts in the listed files"
+    echo "  2. Stage fixed files: git add <file>"
+    echo "  3. Continue rebase: git rebase --continue"
+    echo ""
+    echo "To abort and return to previous state:"
+    echo "  git rebase --abort"
+    echo ""
+
+    if [[ "$HAS_CHANGES" == "true" && ("$AUTO_STASH" == "true" || "${choice:-}" == "1") ]]; then
+      log_warn "Note: You have stashed changes. After resolving conflicts, run:"
+      echo "  git stash pop"
+    fi
+    exit 1
+  fi
+fi
+
+# Pop stash if we stashed
+if [[ "$HAS_CHANGES" == "true" && ("$AUTO_STASH" == "true" || "${choice:-}" == "1") ]]; then
+  if [[ "$DRY_RUN" == "false" ]]; then
+    log_info "Restoring stashed changes..."
+    if git stash pop; then
+      log_success "Changes restored"
+    else
+      log_error "Failed to restore stashed changes - conflicts detected"
+      echo ""
+      echo "Your changes are still in the stash. To resolve:"
+      echo "  1. Fix conflicts"
+      echo "  2. Stage fixed files: git add <file>"
+      echo "  3. Drop the stash: git stash drop"
+      exit 1
+    fi
+  else
+    log_info "[DRY RUN] Would restore stashed changes"
+  fi
+fi
+
+if [[ "$DRY_RUN" == "false" ]]; then
+  log_success "Done! Branch $CURRENT_BRANCH is now rebased onto $TARGET_BRANCH"
+  echo ""
+  echo "To push your rebased branch:"
+  echo "  git push --force-with-lease origin $CURRENT_BRANCH"
+fi

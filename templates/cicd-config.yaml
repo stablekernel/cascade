@@ -1,0 +1,86 @@
+# cicd-config.yaml - CI/CD Configuration Template
+# Copy this file to your repository root and customize for your project
+#
+# For full documentation, see: https://github.com/stablekernel/cascade
+
+# Project configuration
+trunk_branch: master         # Main branch name
+environments:                # Valid environment names
+  - dev
+  - test
+  - prod
+
+# Release management (optional)
+# Omit to use framework defaults (framework creates releases with conventional commit changelog)
+# release:
+#   enabled: true            # Set to false to disable release management entirely
+#   tag: goreleaser.tag      # Reference to callback.output if external tool creates release
+
+# Changelog generation (optional)
+# Omit to use built-in conventional commit parser
+# changelog:
+#   workflow: .github/workflows/custom-changelog.yaml  # Custom changelog generator
+
+# Validation callback (optional)
+# Called before builds to validate code quality
+validate:
+  workflow: .github/workflows/validate.yaml
+  # supports_dry_run: false  # Set to true if workflow handles dry_run input
+
+# Build configurations
+# Each build produces artifacts (Docker images, binaries, etc.)
+builds:
+  - name: app                # Unique build identifier
+    workflow: .github/workflows/build-app.yaml
+    triggers:                # Glob patterns that trigger this build
+      - "src/**"
+      - "Dockerfile"
+      - "go.mod"
+      - "go.sum"
+    # outputs:               # Optional: expected outputs from build workflow
+    #   - image_tag
+
+  # Example: Separate build for a sidecar/tool
+  # - name: wiremock
+  #   workflow: .github/workflows/build-wiremock.yaml
+  #   triggers:
+  #     - "wiremock/**"
+  #     - "wiremock.Dockerfile"
+
+# Deploy configurations
+# Each deploy targets a specific environment tier
+deploys:
+  - name: cdk                # CDK/infrastructure deployment
+    workflow: .github/workflows/deploy-cdk.yaml
+    environments:            # Which environments this deploy runs in
+      - dev
+      - test
+      - prod
+    triggers:                # Glob patterns that trigger this deploy
+      - "cdk/**"
+      - "cdk.json"
+    depends_on: []           # Other deploys that must complete first
+    # supports_dry_run: true # Set to true if workflow handles dry_run input
+
+  - name: services           # Application services deployment
+    workflow: .github/workflows/deploy-services.yaml
+    environments:
+      - dev
+      - test
+      - prod
+    triggers:
+      - "src/**"
+      - "deploy/**"
+    depends_on:
+      - cdk                  # Wait for infrastructure before deploying services
+    # supports_dry_run: false
+
+# Example: Environment-specific deploy
+# - name: monitoring
+#   workflow: .github/workflows/deploy-monitoring.yaml
+#   environments:
+#     - prod               # Only deploy to prod
+#   triggers:
+#     - "monitoring/**"
+#   depends_on:
+#     - services

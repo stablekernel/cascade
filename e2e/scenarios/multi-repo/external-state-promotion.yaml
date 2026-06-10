@@ -1,0 +1,122 @@
+# Scenario: Promote with external deploys requires satellite state
+#
+# This tests that:
+# 1. Primary can track external deploy state per environment
+# 2. Promotions include external deploys that have changes
+# 3. State is correctly propagated through the promotion cascade
+
+name: external-state-promotion
+description: External deploy state is tracked across environment promotions
+
+repos:
+  primary-backend:
+    config:
+      trunk_branch: master
+      environments: [dev, test, prod]
+      deploys:
+        - name: api
+          workflow: .github/workflows/deploy-api.yaml
+      external:
+        - repo: example/infra
+          ref: main
+          deploys:
+            - name: cdk
+              workflow: example/infra/.github/workflows/deploy.yaml
+            - name: k8s
+              workflow: example/infra/.github/workflows/k8s-deploy.yaml
+    manifest:
+      state:
+        dev:
+          sha: "api-sha-dev"
+          version: "v1.0.0-rc.0"
+          external:
+            cdk:
+              sha: "cdk-sha-dev"
+              version: "v1.0.0-rc.0"
+            k8s:
+              sha: "k8s-sha-dev"
+              version: "v1.0.0-rc.0"
+    tags:
+      - "v1.0.0-rc.0"
+
+  infra:
+    config:
+      trunk_branch: main
+      environments: [dev, test, prod]
+      deploys:
+        - name: cdk
+          workflow: .github/workflows/deploy.yaml
+          triggers:
+            - cdk/**
+        - name: k8s
+          workflow: .github/workflows/k8s-deploy.yaml
+          triggers:
+            - k8s/**
+      notify:
+        repo: example/primary-backend
+        workflow: .github/workflows/external-update.yaml
+    manifest:
+      state:
+        dev:
+          sha: "infra-sha-dev"
+          version: "v1.0.0-rc.0"
+
+primary: primary-backend
+
+steps:
+  # Step 1: Update CDK in satellite
+  - name: update-cdk
+    repo: infra
+    action: commit
+    commit:
+      message: "feat: add new CDK stack"
+      files:
+        cdk/new-stack.ts: "// new stack"
+
+  # Step 2: Satellite deploys CDK to dev
+  - name: cdk-deploy-dev
+    repo: infra
+    action: dispatch
+    dispatch:
+      target_repo: primary-backend
+      workflow: .github/workflows/external-update.yaml
+      inputs:
+        source_repo: example/infra
+        deploy_name: cdk
+        environment: dev
+        sha: "${infra.head_sha}"
+        version: "v1.1.0-rc.0"
+
+  # Step 3: Update K8s in satellite
+  - name: update-k8s
+    repo: infra
+    action: commit
+    commit:
+      message: "feat: add new K8s deployment"
+      files:
+        k8s/deployment.yaml: "apiVersion: apps/v1"
+
+  # Step 4: Satellite deploys K8s to dev
+  - name: k8s-deploy-dev
+    repo: infra
+    action: dispatch
+    dispatch:
+      target_repo: primary-backend
+      workflow: .github/workflows/external-update.yaml
+      inputs:
+        source_repo: example/infra
+        deploy_name: k8s
+        environment: dev
+        sha: "${infra.head_sha}"
+        version: "v1.1.0-rc.1"
+
+expect:
+  repos:
+    primary-backend:
+      state:
+        dev:
+          external:
+            cdk:
+              version: "v1.1.0-rc.0"
+            k8s:
+              version: "v1.1.0-rc.1"
