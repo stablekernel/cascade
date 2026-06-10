@@ -149,6 +149,13 @@ func Parse(path string) (*TrunkConfig, error) {
 func Validate(cfg *TrunkConfig) []string {
 	var errors []string
 
+	// Schema version compatibility is a fatal-class check: an unreadable schema
+	// must block generation. Warnings (omitted/older-supported version) are
+	// surfaced separately via ParseResult.Warnings, not here.
+	if _, fatalErr := cfg.ValidateSchemaVersion(); fatalErr != nil {
+		errors = append(errors, fatalErr.Error())
+	}
+
 	// Empty environments is valid - means pre-release -> release only (no deployments)
 
 	envSet := make(map[string]bool)

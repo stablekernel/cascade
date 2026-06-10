@@ -60,27 +60,44 @@ type ExternalDeployState struct {
 	Artifacts  map[string]string `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`     // Artifact references (e.g., image_tag)
 }
 
+// Schema version bounds. schema_version declares which generation of the
+// manifest schema a config is written for. It is a single monotonic integer
+// (a "schema major"), not a semver string: additive changes (new optional
+// fields, new enum values) never bump it, because old manifests keep working
+// and the CLI fills defaults. Only a breaking change (a removed field, a
+// changed default's behavior, a re-typed field) bumps it, with a matching
+// migration entry in CHANGELOG.md. See docs/versioning.md for the policy.
+const (
+	// CurrentSchemaVersion is the highest schema version this CLI understands
+	// and the version assumed for manifests that omit schema_version.
+	CurrentSchemaVersion = 1
+	// MinSchemaVersion is the oldest schema version this CLI still reads.
+	// Manifests below this are rejected with a pointer to the migration table.
+	MinSchemaVersion = 1
+)
+
 // TrunkConfig represents the pipeline configuration (within config: section)
 type TrunkConfig struct {
-	TrunkBranch  string               `yaml:"trunk_branch" json:"trunk_branch"`
-	Triggers     []string             `yaml:"triggers,omitempty" json:"triggers,omitempty"`           // Global triggers for orchestration workflow paths filter
-	Environments []string             `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
-	CLIVersion   string               `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
-	TagPrefix    string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
-	ReleaseToken string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
-	ManifestFile string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
-	ManifestKey  string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
-	ActionFolder string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
-	Git          *GitConfig           `yaml:"git,omitempty" json:"git,omitempty"`
-	Validate     *ValidateConfig      `yaml:"validate,omitempty" json:"validate,omitempty"`
-	Builds       []BuildConfig        `yaml:"builds,omitempty" json:"builds,omitempty"`     // Empty = no orchestrated builds
-	Deploys      []DeployConfig       `yaml:"deploys,omitempty" json:"deploys,omitempty"`   // Empty = no deploys (library/CLI projects)
-	Publish      *PublishConfig       `yaml:"publish,omitempty" json:"publish,omitempty"`   // Optional: retag artifacts after a release is published
-	External     []ExternalRepoConfig `yaml:"external,omitempty" json:"external,omitempty"` // External repos this primary coordinates
-	Notify       *NotifyConfig        `yaml:"notify,omitempty" json:"notify,omitempty"`     // Satellite: notify primary after dev deploy
-	Release      *ReleaseConfig       `yaml:"release,omitempty" json:"release,omitempty"`
-	Changelog    *ChangelogConfig     `yaml:"changelog,omitempty" json:"changelog,omitempty"`
-	Concurrency  *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"` // Optional: top-level concurrency: block on the orchestrate workflow
+	SchemaVersion int                  `yaml:"schema_version,omitempty" json:"schema_version,omitempty"` // Manifest schema generation (default: CurrentSchemaVersion when omitted)
+	TrunkBranch   string               `yaml:"trunk_branch" json:"trunk_branch"`
+	Triggers      []string             `yaml:"triggers,omitempty" json:"triggers,omitempty"`           // Global triggers for orchestration workflow paths filter
+	Environments  []string             `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
+	CLIVersion    string               `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
+	TagPrefix     string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
+	ReleaseToken  string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
+	ManifestFile  string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
+	ManifestKey   string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
+	ActionFolder  string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
+	Git           *GitConfig           `yaml:"git,omitempty" json:"git,omitempty"`
+	Validate      *ValidateConfig      `yaml:"validate,omitempty" json:"validate,omitempty"`
+	Builds        []BuildConfig        `yaml:"builds,omitempty" json:"builds,omitempty"`     // Empty = no orchestrated builds
+	Deploys       []DeployConfig       `yaml:"deploys,omitempty" json:"deploys,omitempty"`   // Empty = no deploys (library/CLI projects)
+	Publish       *PublishConfig       `yaml:"publish,omitempty" json:"publish,omitempty"`   // Optional: retag artifacts after a release is published
+	External      []ExternalRepoConfig `yaml:"external,omitempty" json:"external,omitempty"` // External repos this primary coordinates
+	Notify        *NotifyConfig        `yaml:"notify,omitempty" json:"notify,omitempty"`     // Satellite: notify primary after dev deploy
+	Release       *ReleaseConfig       `yaml:"release,omitempty" json:"release,omitempty"`
+	Changelog     *ChangelogConfig     `yaml:"changelog,omitempty" json:"changelog,omitempty"`
+	Concurrency   *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"` // Optional: top-level concurrency: block on the orchestrate workflow
 }
 
 // ConcurrencyConfig overrides the default concurrency: block emitted on the
@@ -108,6 +125,56 @@ func (c *TrunkConfig) GetConcurrencyCancelInProgress() bool {
 		return true
 	}
 	return c.Concurrency.CancelInProgress
+}
+
+// GetSchemaVersion returns the effective schema version: the configured value,
+// or CurrentSchemaVersion when omitted (schema_version == 0). An omitted version
+// is treated as the current generation for all downstream logic; ValidateSchemaVersion
+// surfaces the accompanying "no schema_version" warning.
+func (c *TrunkConfig) GetSchemaVersion() int {
+	if c.SchemaVersion == 0 {
+		return CurrentSchemaVersion
+	}
+	return c.SchemaVersion
+}
+
+// ValidateSchemaVersion checks the manifest's schema_version against the CLI's
+// supported range and returns (warnings, fatalErr). It enforces the
+// compatibility contract documented in docs/versioning.md:
+//
+//   - omitted (0)                        → accept, warn (assume current)
+//   - MinSchemaVersion..Current-1        → accept, warn (older but supported)
+//   - == CurrentSchemaVersion            → accept silently
+//   - < MinSchemaVersion (and != 0)      → reject (too old; migrate)
+//   - > CurrentSchemaVersion             → reject (newer; upgrade CLI)
+//   - negative                           → reject (invalid)
+//
+// A non-nil fatalErr means the manifest must not be used for generation.
+func (c *TrunkConfig) ValidateSchemaVersion() (warnings []string, fatalErr error) {
+	v := c.SchemaVersion
+
+	switch {
+	case v == 0:
+		return []string{fmt.Sprintf(
+			"manifest has no schema_version; assuming %d. Pin it explicitly (schema_version: %d).",
+			CurrentSchemaVersion, CurrentSchemaVersion)}, nil
+	case v < 0:
+		return nil, fmt.Errorf("schema_version must be a positive integer, got %d", v)
+	case v > CurrentSchemaVersion:
+		return nil, fmt.Errorf(
+			"manifest requires schema version %d but this cascade CLI only understands up to %d; "+
+				"upgrade the CLI (cli_version) — see docs/versioning.md", v, CurrentSchemaVersion)
+	case v < MinSchemaVersion:
+		return nil, fmt.Errorf(
+			"manifest schema version %d is no longer supported (minimum %d); "+
+				"see the migration table in CHANGELOG.md / docs/versioning.md", v, MinSchemaVersion)
+	case v < CurrentSchemaVersion:
+		return []string{fmt.Sprintf(
+			"manifest targets schema version %d; this cascade CLI is %d and still reads it. "+
+				"See the migration table in docs/versioning.md.", v, CurrentSchemaVersion)}, nil
+	default: // v == CurrentSchemaVersion
+		return nil, nil
+	}
 }
 
 // GetCLIVersion returns the configured CLI version.
@@ -385,6 +452,7 @@ type ParseResult struct {
 	DeployNames []string    `json:"deploy_names"`
 	Valid       bool        `json:"valid"`
 	Errors      []string    `json:"errors,omitempty"`
+	Warnings    []string    `json:"warnings,omitempty"` // Non-fatal advisories (e.g. omitted/older schema_version)
 }
 
 // RunPolicy constants
