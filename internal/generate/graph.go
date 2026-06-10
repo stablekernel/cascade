@@ -10,7 +10,13 @@ import (
 // Uses prefixed job IDs (build-app, deploy-app) to allow name reuse across sections
 type DependencyGraph struct {
 	Nodes map[string]CallbackInfo // job ID -> info
-	Edges map[string][]string     // job ID -> dependencies (as job IDs)
+	Edges map[string][]string     // job ID -> hard dependencies (as job IDs)
+
+	// OptionalEdges holds optional_depends_on edges (job ID -> dependencies as
+	// job IDs). Optional deps add to a job's needs: for ordering but do NOT
+	// contribute a skip-gate to its if: condition — the job still runs when an
+	// optional dep was skipped because its triggers didn't match (#18).
+	OptionalEdges map[string][]string
 }
 
 // CallbackInfo holds information about a callback
@@ -46,8 +52,9 @@ type CallbackInfo struct {
 // Uses prefixed job IDs to support same names in builds and deploys
 func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 	g := &DependencyGraph{
-		Nodes: make(map[string]CallbackInfo),
-		Edges: make(map[string][]string),
+		Nodes:         make(map[string]CallbackInfo),
+		Edges:         make(map[string][]string),
+		OptionalEdges: make(map[string][]string),
 	}
 
 	// Add validate if present
@@ -106,6 +113,15 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			deps = ensureValidateDependency(deps)
 		}
 		g.Edges[jobID] = deps
+
+		// Optional dependencies: ordering-only edges (sequence after, no skip-gate).
+		var optDeps []string
+		for _, dep := range b.OptionalDependsOn {
+			if resolved, err := cfg.ResolveDependency(dep, config.CallbackTypeBuild); err == nil {
+				optDeps = append(optDeps, resolved)
+			}
+		}
+		g.OptionalEdges[jobID] = optDeps
 	}
 
 	// Add deploys
@@ -141,6 +157,15 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			deps = ensureValidateDependency(deps)
 		}
 		g.Edges[jobID] = deps
+
+		// Optional dependencies: ordering-only edges (sequence after, no skip-gate).
+		var optDeps []string
+		for _, dep := range d.OptionalDependsOn {
+			if resolved, err := cfg.ResolveDependency(dep, config.CallbackTypeDeploy); err == nil {
+				optDeps = append(optDeps, resolved)
+			}
+		}
+		g.OptionalEdges[jobID] = optDeps
 	}
 
 	return g
@@ -202,9 +227,15 @@ func (g *DependencyGraph) GetAllDependencies(node string) []string {
 	return deps
 }
 
-// GetDirectDependencies returns only direct dependencies for a node
+// GetDirectDependencies returns only direct (hard) dependencies for a node
 func (g *DependencyGraph) GetDirectDependencies(node string) []string {
 	return g.Edges[node]
+}
+
+// GetOptionalDependencies returns the optional_depends_on dependencies for a
+// node. These add to needs: for ordering only; they do not skip-gate the job.
+func (g *DependencyGraph) GetOptionalDependencies(node string) []string {
+	return g.OptionalEdges[node]
 }
 
 func defaultString(s, def string) string {
