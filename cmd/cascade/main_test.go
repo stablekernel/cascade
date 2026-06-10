@@ -208,3 +208,189 @@ func TestUnknownCommand(t *testing.T) {
 		t.Error("Expected error message for unknown command")
 	}
 }
+
+// -------- status command integration tests --------
+
+// fixtureManifestPath returns the path to the on-disk status fixture.
+func fixtureManifestPath(t *testing.T) string {
+	t.Helper()
+	// Resolve relative to the source tree root (two levels up from cmd/cascade/).
+	p, err := filepath.Abs("../../testdata/status/manifest.yaml")
+	if err != nil {
+		t.Fatalf("resolving fixture path: %v", err)
+	}
+	return p
+}
+
+func TestStatusCommand_AllEnvs(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "--config", manifest)
+	if err != nil {
+		t.Fatalf("status command failed: %v\nstderr: %s", err, stderr)
+	}
+	if !contains(stdout, "environment: dev") {
+		t.Errorf("expected 'environment: dev' in output, got:\n%s", stdout)
+	}
+	if !contains(stdout, "v1.2.3-rc.1") {
+		t.Errorf("expected version in output, got:\n%s", stdout)
+	}
+	if !contains(stdout, "latest_release:") {
+		t.Errorf("expected latest_release section, got:\n%s", stdout)
+	}
+}
+
+func TestStatusCommand_AllEnvs_JSON(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "--config", manifest, "--json")
+	if err != nil {
+		t.Fatalf("status --json failed: %v\nstderr: %s", err, stderr)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("JSON parse error: %v\noutput: %s", err, stdout)
+	}
+	envs, ok := result["environments"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected 'environments' map in JSON output")
+	}
+	if _, ok := envs["dev"]; !ok {
+		t.Error("expected 'dev' in environments")
+	}
+	if _, ok := result["latest_release"]; !ok {
+		t.Error("expected 'latest_release' in JSON output")
+	}
+}
+
+func TestStatusCommand_EnvSubcommand(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "env", "staging", "--config", manifest)
+	if err != nil {
+		t.Fatalf("status env failed: %v\nstderr: %s", err, stderr)
+	}
+	if !contains(stdout, "111aaa") {
+		t.Errorf("expected sha in output, got:\n%s", stdout)
+	}
+	if !contains(stdout, "v1.2.2") {
+		t.Errorf("expected version in output, got:\n%s", stdout)
+	}
+}
+
+func TestStatusCommand_EnvSubcommand_JSON(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "env", "dev", "--config", manifest, "--json")
+	if err != nil {
+		t.Fatalf("status env --json failed: %v\nstderr: %s", err, stderr)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("JSON parse error: %v\noutput: %s", err, stdout)
+	}
+	if result["environment"] != "dev" {
+		t.Errorf("expected environment=dev, got %v", result["environment"])
+	}
+}
+
+func TestStatusCommand_BuildSubcommand(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "build", "app", "--env", "dev", "--config", manifest)
+	if err != nil {
+		t.Fatalf("status build failed: %v\nstderr: %s", err, stderr)
+	}
+	if !contains(stdout, "sha256:aabbcc") {
+		t.Errorf("expected artifact_id in output, got:\n%s", stdout)
+	}
+}
+
+func TestStatusCommand_BuildSubcommand_JSON(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "build", "app", "--env", "dev", "--config", manifest, "--json")
+	if err != nil {
+		t.Fatalf("status build --json failed: %v\nstderr: %s", err, stderr)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("JSON parse error: %v\noutput: %s", err, stdout)
+	}
+	if result["build"] != "app" {
+		t.Errorf("expected build=app, got %v", result["build"])
+	}
+	state, ok := result["state"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected state map in JSON")
+	}
+	if state["artifact_id"] != "sha256:aabbcc" {
+		t.Errorf("unexpected artifact_id: %v", state["artifact_id"])
+	}
+}
+
+func TestStatusCommand_DeploySubcommand(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "deploy", "services", "--env", "dev", "--config", manifest)
+	if err != nil {
+		t.Fatalf("status deploy failed: %v\nstderr: %s", err, stderr)
+	}
+	if !contains(stdout, "2026-01-01T10:05:00Z") {
+		t.Errorf("expected deployed_at in output, got:\n%s", stdout)
+	}
+}
+
+func TestStatusCommand_DeploySubcommand_JSON(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	stdout, stderr, err := runCLI("status", "deploy", "services", "--env", "dev", "--config", manifest, "--json")
+	if err != nil {
+		t.Fatalf("status deploy --json failed: %v\nstderr: %s", err, stderr)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("JSON parse error: %v\noutput: %s", err, stdout)
+	}
+	if result["deploy"] != "services" {
+		t.Errorf("expected deploy=services, got %v", result["deploy"])
+	}
+}
+
+func TestStatusCommand_EmptyState_NoPanic(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "manifest.yaml")
+	content := "ci:\n  config:\n    trunk_branch: main\n    environments:\n      - dev\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	stdout, stderr, err := runCLI("status", "--config", path)
+	if err != nil {
+		t.Fatalf("status on empty state failed: %v\nstderr: %s", err, stderr)
+	}
+	if !contains(stdout, "dev") {
+		t.Errorf("expected 'dev' in output, got:\n%s", stdout)
+	}
+}
+
+func TestStatusCommand_MissingManifest(t *testing.T) {
+	_, _, err := runCLI("status", "--config", "/no/such/manifest.yaml")
+	if err == nil {
+		t.Error("expected error for missing manifest file")
+	}
+}
+
+func TestStatusCommand_BuildMissingEnvFlag(t *testing.T) {
+	manifest := fixtureManifestPath(t)
+	_, stderr, err := runCLI("status", "build", "app", "--config", manifest)
+	if err == nil {
+		t.Error("expected error when --env flag is missing")
+	}
+	if !contains(stderr, "env") {
+		t.Errorf("expected --env mentioned in error, got: %s", stderr)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+			return false
+		}())
+}
