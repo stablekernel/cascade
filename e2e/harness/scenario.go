@@ -41,24 +41,36 @@ type PublishConfig struct {
 
 // BuildConfig defines a build component
 type BuildConfig struct {
-	Name           string   `yaml:"name"`
-	Workflow       string   `yaml:"workflow,omitempty"`
-	Run            string   `yaml:"run,omitempty"`
-	Shell          string   `yaml:"shell,omitempty"`
-	Triggers       []string `yaml:"triggers"`
-	DependsOn      []string `yaml:"depends_on"`
-	TimeoutMinutes int      `yaml:"timeout_minutes,omitempty"`
+	Name           string            `yaml:"name"`
+	Workflow       string            `yaml:"workflow,omitempty"`
+	Run            string            `yaml:"run,omitempty"`
+	Shell          string            `yaml:"shell,omitempty"`
+	Triggers       []string          `yaml:"triggers"`
+	DependsOn      []string          `yaml:"depends_on"`
+	TimeoutMinutes int               `yaml:"timeout_minutes,omitempty"`
+	RunsOn         any               `yaml:"runs_on,omitempty"`
+	Permissions    map[string]string `yaml:"permissions,omitempty"`
+	Concurrency    *ConcurrencySpec  `yaml:"concurrency,omitempty"`
 }
 
 // DeployConfig defines a deploy component
 type DeployConfig struct {
-	Name           string   `yaml:"name"`
-	Workflow       string   `yaml:"workflow,omitempty"`
-	Run            string   `yaml:"run,omitempty"`
-	Shell          string   `yaml:"shell,omitempty"`
-	Triggers       []string `yaml:"triggers"`
-	DependsOn      []string `yaml:"depends_on"`
-	TimeoutMinutes int      `yaml:"timeout_minutes,omitempty"`
+	Name           string            `yaml:"name"`
+	Workflow       string            `yaml:"workflow,omitempty"`
+	Run            string            `yaml:"run,omitempty"`
+	Shell          string            `yaml:"shell,omitempty"`
+	Triggers       []string          `yaml:"triggers"`
+	DependsOn      []string          `yaml:"depends_on"`
+	TimeoutMinutes int               `yaml:"timeout_minutes,omitempty"`
+	RunsOn         any               `yaml:"runs_on,omitempty"`
+	Permissions    map[string]string `yaml:"permissions,omitempty"`
+	Concurrency    *ConcurrencySpec  `yaml:"concurrency,omitempty"`
+}
+
+// ConcurrencySpec defines the per-callback concurrency block written to trunk-config.yaml.
+type ConcurrencySpec struct {
+	Group            string `yaml:"group"`
+	CancelInProgress bool   `yaml:"cancel_in_progress"`
 }
 
 // Commit defines a commit to create

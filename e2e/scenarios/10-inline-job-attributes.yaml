@@ -1,0 +1,56 @@
+name: "Inline Job Attributes"
+description: |
+  Verifies that per-callback runs_on, permissions (including id-token: write for
+  OIDC), and concurrency are emitted on a cascade-owned inline run: job in the
+  generated orchestrate.yaml (#12, #35, #15, #17).
+
+  A sibling reusable-workflow callback (workflow:) must not carry those
+  attributes — GHA forbids runs-on/concurrency on jobs.<id>.uses calls.
+
+  Generator-output verification scenario; assertion runs on the staged repo
+  after StageRepoFromConfig generates workflows but before any orchestrate runs.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: sign
+      run: |
+        cosign sign --yes "$IMAGE_DIGEST"
+      shell: bash
+      triggers: ["src/**"]
+      runs_on: self-hosted
+      permissions:
+        id-token: write
+        contents: read
+      concurrency:
+        group: sign-${{ github.ref }}
+        cancel_in_progress: true
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert inline job carries runs-on, permissions, and concurrency"
+    action: commit
+    commit:
+      message: "feat: add sign and app callbacks"
+      files:
+        src/main.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "build-sign:"
+            - "runs-on: self-hosted"
+            - "permissions:"
+            - "id-token: write"
+            - "contents: read"
+            - "concurrency:"
+            - "group: sign-${{ github.ref }}"
+            - "cancel-in-progress: true"
+            - "build-app:"
+            - "uses: ./build.yaml"
