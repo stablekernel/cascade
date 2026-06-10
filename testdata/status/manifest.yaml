@@ -1,0 +1,47 @@
+ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - staging
+      - prod
+    builds:
+      - name: app
+        workflow: .github/workflows/build.yaml
+        triggers:
+          - "src/**"
+    deploys:
+      - name: services
+        workflow: .github/workflows/deploy.yaml
+        triggers:
+          - "deploy/**"
+  state:
+    dev:
+      sha: abc123def456
+      version: v1.2.3-rc.1
+      committed_at: "2026-01-01T10:00:00Z"
+      committed_by: alice
+      builds:
+        app:
+          sha: abc123def456
+          built_at: "2026-01-01T09:50:00Z"
+          built_by: alice
+          artifact_id: "sha256:aabbcc"
+      deploys:
+        services:
+          sha: abc123def456
+          deployed_at: "2026-01-01T10:05:00Z"
+          deployed_by: alice
+    staging:
+      sha: 111aaa
+      version: v1.2.2
+      committed_at: "2025-12-20T08:00:00Z"
+      committed_by: bob
+    prod:
+      sha: ""
+      version: ""
+  latest_release:
+    version: v1.2.2
+    sha: 111aaa
+    released_on: "2025-12-20T08:00:00Z"
+    released_by: bob

@@ -17,6 +17,7 @@ import (
 	"github.com/stablekernel/cascade/internal/promote"
 	"github.com/stablekernel/cascade/internal/release"
 	"github.com/stablekernel/cascade/internal/reset"
+	"github.com/stablekernel/cascade/internal/status"
 	versionpkg "github.com/stablekernel/cascade/internal/version"
 )
 
@@ -71,6 +72,7 @@ change detection, and changelog generation.`,
 	rootCmd.AddCommand(promote.NewCommand())
 	rootCmd.AddCommand(release.NewCommand())
 	rootCmd.AddCommand(reset.NewCommand())
+	rootCmd.AddCommand(status.NewCommand())
 	rootCmd.AddCommand(versionpkg.NewCommand())
 	rootCmd.AddCommand(newVersionCmd())
 
