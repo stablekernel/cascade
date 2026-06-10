@@ -153,6 +153,15 @@ func (f *Finalizer) updateState() {
 
 			ds := f.cicdFile.State[promo.Environment].Deploys[name]
 			ds.SHA = promo.SHA
+			// Record the version this deployable deployed, mirroring the
+			// env-level Version write above. This is what lets state answer
+			// "which version of <name> is live in <env>" per deployable,
+			// independent of the env-level version (the data foundation for
+			// per-deployable rollback). Empty promo.Version leaves the prior
+			// value untouched so non-versioned promotions stay non-breaking.
+			if promo.Version != "" {
+				ds.Version = promo.Version
+			}
 			ds.DeployedAt = timestamp
 			ds.DeployedBy = f.actor
 		}
@@ -310,8 +319,32 @@ func (f *Finalizer) updateExternalDeployState(name, timestamp string) {
 	es := f.cicdFile.State[f.targetEnv].External[name]
 	es.Repo = f.getExternalDeployRepo(name)
 	es.SHA = sha
+	// Carry the satellite-reported version forward alongside the SHA so the
+	// external deployable's per-env state records which version is live, in
+	// parity with internal per-deploy version tracking. Empty version (older
+	// satellites that report SHA only) leaves the prior value untouched.
+	if version := f.getExternalDeployVersion(name); version != "" {
+		es.Version = version
+	}
 	es.DeployedAt = timestamp
 	es.DeployedBy = f.actor
+}
+
+// getExternalDeployVersion retrieves the version for an external deploy from
+// the source environment state (mirrors getExternalDeploySHA).
+func (f *Finalizer) getExternalDeployVersion(name string) string {
+	if f.promotionResult == nil || len(f.promotionResult.Promotions) == 0 {
+		return ""
+	}
+
+	sourceEnv := f.promotionResult.Promotions[0].SourceEnv
+
+	if state := f.cicdFile.State[sourceEnv]; state != nil {
+		if es := state.External[name]; es != nil {
+			return es.Version
+		}
+	}
+	return ""
 }
 
 // getExternalDeploySHA retrieves the SHA for an external deploy from the source environment state
