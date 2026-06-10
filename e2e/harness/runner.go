@@ -376,24 +376,43 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 	// pair into the "<source>-to-<target>" form. Source defaults to the first
 	// env (typically dev) since the workflow generator only emits dev-rooted
 	// cascade options.
-	mode := promote.Mode
-	if mode == "cascade" {
-		source := "dev"
-		if len(config.Environments) > 0 {
-			source = config.Environments[0]
+	var inputs map[string]string
+	if len(config.Environments) == 1 {
+		// Single-environment repos generate a Release workflow (see
+		// command.go IsSingleEnvironment → NewReleaseGenerator) written to
+		// promote.yaml. That workflow's dispatch input is release_action
+		// (create-draft|prerelease|release), not the multi-env promote's
+		// mode. A "promote to release" step on a single-env repo means
+		// publish the final release, so dispatch release_action: release.
+		// Sending mode here was silently ignored, the workflow fell back to
+		// its create-draft default, and the run "succeeded" without ever
+		// publishing v0.1.0, wiping prod state, or cleaning up the RC tags.
+		inputs = map[string]string{
+			"release_action": "release",
 		}
-		mode = fmt.Sprintf("%s-to-%s", source, promote.Target)
-	}
-	inputs := map[string]string{
-		"mode": mode,
-	}
-	if promote.AllowBreaking {
-		// Workflow input is named allow_breaking_changes (see internal/generate
-		// promote.go); the workflow forwards it to the CLI's --allow-breaking
-		// flag. The harness's previous "allow_breaking" key was silently
-		// ignored, leaving the breaking-change gate active even when the
-		// scenario asked for it to be bypassed.
-		inputs["allow_breaking_changes"] = "true"
+		if promote.AllowBreaking {
+			inputs["allow_breaking_changes"] = "true"
+		}
+	} else {
+		mode := promote.Mode
+		if mode == "cascade" {
+			source := "dev"
+			if len(config.Environments) > 0 {
+				source = config.Environments[0]
+			}
+			mode = fmt.Sprintf("%s-to-%s", source, promote.Target)
+		}
+		inputs = map[string]string{
+			"mode": mode,
+		}
+		if promote.AllowBreaking {
+			// Workflow input is named allow_breaking_changes (see internal/generate
+			// promote.go); the workflow forwards it to the CLI's --allow-breaking
+			// flag. The harness's previous "allow_breaking" key was silently
+			// ignored, leaving the breaking-change gate active even when the
+			// scenario asked for it to be bypassed.
+			inputs["allow_breaking_changes"] = "true"
+		}
 	}
 
 	// Determine the branch ref
@@ -521,6 +540,14 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 				SHA string `yaml:"sha"`
 			} `yaml:"deploys"`
 		} `yaml:"state"`
+		// LatestRelease is the single-environment Release workflow's published
+		// pointer (ci.latest_release). Single-env repos publish via the Release
+		// workflow's finalize step, which writes latest_release.{version,sha}
+		// rather than a state[release] env (see internal/generate/release.go).
+		LatestRelease struct {
+			SHA     string `yaml:"sha"`
+			Version string `yaml:"version"`
+		} `yaml:"latest_release"`
 	}
 	if err := yaml.Unmarshal([]byte(manifestContent), &manifest); err != nil {
 		return fmt.Errorf("failed to parse manifest: %w", err)
@@ -548,6 +575,16 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 			r.ctx.RecordDeployState(env, deployName, deployState.SHA)
 			r.t.Logf("  Synced state[%s].deploys[%s] = %s", env, deployName, truncateSHA(deployState.SHA))
 		}
+	}
+
+	// Surface the single-env Release workflow's latest_release pointer under the
+	// synthetic "release" state key so scenarios can assert it the same way they
+	// assert any other environment's state. Multi-env repos leave latest_release
+	// empty (they wipe and repopulate state[release] directly), so this only
+	// records when the Release workflow has actually published.
+	if lr := ciData.LatestRelease; lr.Version != "" || lr.SHA != "" {
+		r.ctx.RecordState("release", lr.SHA, lr.Version)
+		r.t.Logf("  Synced state[release] (from latest_release) = %s @ %s", truncateSHA(lr.SHA), lr.Version)
 	}
 
 	return nil
