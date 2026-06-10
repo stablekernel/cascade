@@ -271,8 +271,8 @@ type DeployConfig struct {
 //   - new_version:  the final semver version (e.g., "v1.0.0")
 //   - sha:          the git commit SHA of the built artifact
 //   - artifact_id:  the immutable artifact identifier stored from the build job
-//                   output (e.g., Docker image digest "sha256:abc..."). Empty if
-//                   the build did not emit an artifact_id output.
+//     output (e.g., Docker image digest "sha256:abc..."). Empty if
+//     the build did not emit an artifact_id output.
 type PublishConfig struct {
 	Workflow string `yaml:"workflow" json:"workflow"` // Path to the reusable workflow (e.g., ".github/workflows/publish.yaml")
 }
