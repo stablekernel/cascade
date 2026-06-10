@@ -2,8 +2,17 @@
 
 ## Supported versions
 
-The current `0.x` release line receives security fixes. Older tags are not
-actively maintained.
+| Version | Supported |
+| --- | --- |
+| 0.x (latest) | Yes — security fixes backported promptly |
+| Older 0.x tags | No |
+
+The `0.x` line is the active release line. Only the most recent tag receives
+security patches. Upgrade to the latest release to stay covered.
+
+The schema-version compatibility policy (which CLI versions read which manifest
+versions) is documented separately in
+[docs/versioning.md](docs/versioning.md).
 
 ## Reporting a vulnerability
 
