@@ -83,7 +83,7 @@ func TestMergeQueueGenerator_PinModeSHA(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, content, "uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5")
+	assert.Contains(t, content, "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10")
 	assert.NotContains(t, content, "uses: actions/checkout@v4")
 }
 

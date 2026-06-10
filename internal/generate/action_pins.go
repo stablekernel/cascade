@@ -35,7 +35,7 @@ type actionPin struct {
 // repositories at the major tags below; action_pins entries in the manifest
 // override any of these without code changes.
 var defaultActionPins = map[string]actionPin{
-	actionCheckout:         {tag: "v4", sha: "34e114876b0b11c390a56381ad16ebd13914f8d5", shaVersion: "v4.3.1"},
+	actionCheckout:         {tag: "v6", sha: "df4cb1c069e1874edd31b4311f1884172cec0e10", shaVersion: "v6.0.3"},
 	actionGithubScript:     {tag: "v7", sha: "f28e40c7f34bde8b3046d885e986cb6290c5673b", shaVersion: "v7.1.0"},
 	actionDownloadArtifact: {tag: "v4", sha: "d3f86a106a0bac45b974a628896c90dbdf5c8093", shaVersion: "v4.3.0"},
 	actionUploadArtifact:   {tag: "v4", sha: "ea165f8d65b6e75b540449e92b4886f43607fa02", shaVersion: "v4.6.2"},
