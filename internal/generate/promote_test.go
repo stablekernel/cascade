@@ -11,6 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// concurrencyGroupLine extracts the "  group: ..." line from the top-level
+// concurrency: block of a generated workflow. It lets concurrency tests assert on
+// the group key in isolation, without false matches from input definitions or CLI
+// flags elsewhere in the workflow that mention the same context expressions.
+func concurrencyGroupLine(t *testing.T, content string) string {
+	t.Helper()
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if line == "concurrency:" {
+			require.Less(t, i+1, len(lines), "concurrency: block must have a group line")
+			return lines[i+1]
+		}
+	}
+	t.Fatalf("no top-level concurrency: block found in workflow")
+	return ""
+}
+
 func TestPromoteGenerator_Generate(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1516,11 +1533,11 @@ func TestPromoteGenerator_NoPublishCallbackWhenNotConfigured(t *testing.T) {
 }
 
 // TestPromoteGenerator_HasConcurrencyBlock asserts the generated promote workflow
-// declares a top-level concurrency: block. Without it, two concurrent promote
-// dispatches targeting the same mode race on state pushes and RC tag writes (#31).
-// Default group is per-mode so promotes targeting different cascade targets do not
-// block each other; cancel-in-progress is false because dropping a mid-flight
-// promote leaves durable env state partially written.
+// declares a top-level concurrency: block keyed by the bare workflow name. Every
+// promote finalize pushes the same shared .github/manifest.yaml and shared release
+// tags, so ALL promote runs race regardless of mode (#31); the group must serialize
+// every promote run, not just same-mode runs. cancel-in-progress is false because
+// dropping a mid-flight promote leaves durable env state partially written.
 func TestPromoteGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
@@ -1532,8 +1549,9 @@ func TestPromoteGenerator_HasConcurrencyBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, content, "\nconcurrency:\n", "promote workflow must declare top-level concurrency:")
-	assert.Contains(t, content, "github.workflow", "concurrency group must scope by workflow name")
-	assert.Contains(t, content, "github.event.inputs.mode", "concurrency group must scope by promotion mode")
+	group := concurrencyGroupLine(t, content)
+	assert.Equal(t, "  group: \"${{ github.workflow }}\"", group, "promote concurrency group must be the bare workflow name to serialize all runs")
+	assert.NotContains(t, group, "inputs.mode", "promote concurrency group must NOT scope by mode: different modes still push the same manifest")
 	assert.Contains(t, content, "cancel-in-progress: false", "promote default must queue, not cancel")
 }
 

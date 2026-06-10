@@ -1032,19 +1032,18 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 }
 
 // writeConcurrency emits a top-level concurrency: block on the promote workflow.
-// Two concurrent promote dispatches targeting the same mode race on state pushes
-// and RC tag writes, producing non-fast-forward failures or duplicate tags.
-// Queueing (cancel-in-progress: false) is safer than cancelling: promote mutates
-// durable env state and tags, so abandoning a mid-flight run leaves state
-// partially written. The group key includes mode so two promotes targeting
-// different cascade targets (e.g. dev-to-test vs dev-to-prod) do not block each
-// other, but two identical promotes to the same target queue behind each other.
+// Every promote finalize pushes the same shared .github/manifest.yaml (env state)
+// and writes shared release tags, so ANY two concurrent promote runs race on those
+// non-fast-forward pushes regardless of mode. The group key is therefore the bare
+// workflow name, which serializes all promote runs against each other. Queueing
+// (cancel-in-progress: false) is safer than cancelling: promote mutates durable env
+// state and tags, so abandoning a mid-flight run leaves state partially written.
 func (g *PromoteGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
 	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
 		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
 	} else {
-		sb.WriteString("  group: \"${{ github.workflow }}-${{ github.event.inputs.mode }}\"\n")
+		sb.WriteString("  group: \"${{ github.workflow }}\"\n")
 	}
 	if g.config.Concurrency != nil {
 		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)

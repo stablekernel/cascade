@@ -250,11 +250,12 @@ func TestReleaseGenerator_WithCLIVersion(t *testing.T) {
 }
 
 // TestReleaseGenerator_HasConcurrencyBlock asserts the generated release workflow
-// declares a top-level concurrency: block. Without it, two concurrent release
-// dispatches for the same action race on GitHub Release writes and tag pushes (#31).
-// Default group is per-release_action so a create-draft and a release run do not
-// block each other; cancel-in-progress is false because a partially-executed release
-// action may already have pushed a tag that a cancelled run leaves dangling.
+// declares a top-level concurrency: block keyed by the bare workflow name. Release
+// runs write the shared GitHub Releases surface and shared tags, so ALL release runs
+// race regardless of release_action (#31); the group must serialize every release
+// run, not just same-action runs. cancel-in-progress is false because a
+// partially-executed release action may already have pushed a tag that a cancelled
+// run leaves dangling.
 func TestReleaseGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
@@ -266,8 +267,9 @@ func TestReleaseGenerator_HasConcurrencyBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, content, "\nconcurrency:\n", "release workflow must declare top-level concurrency:")
-	assert.Contains(t, content, "github.workflow", "concurrency group must scope by workflow name")
-	assert.Contains(t, content, "github.event.inputs.release_action", "concurrency group must scope by release action")
+	group := concurrencyGroupLine(t, content)
+	assert.Equal(t, "  group: \"${{ github.workflow }}\"", group, "release concurrency group must be the bare workflow name to serialize all runs")
+	assert.NotContains(t, group, "release_action", "release concurrency group must NOT scope by action: different actions still touch the same releases/tags")
 	assert.Contains(t, content, "cancel-in-progress: false", "release default must queue, not cancel")
 }
 
