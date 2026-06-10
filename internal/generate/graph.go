@@ -27,6 +27,14 @@ type CallbackInfo struct {
 	Retries        int
 	TimeoutMinutes int                  // Job-level timeout-minutes (omitted when 0)
 	Matrix         *config.MatrixConfig // Build fan-out; nil for deploys and validate
+
+	// Per-callback job attributes for cascade-owned inline run: jobs. These are
+	// emitted only on inline-run jobs (never on reusable-workflow uses: callbacks,
+	// where GHA forbids runs-on/concurrency); schema validation already rejects
+	// runs_on/concurrency on reusable callbacks.
+	RunsOn      *config.RunsOn            // Per-callback runner selection (#12)
+	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15)
+	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17)
 }
 
 // BuildDependencyGraph creates a dependency graph from config
@@ -52,6 +60,9 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			OnFailure:      defaultString(cfg.Validate.OnFailure, config.OnFailureAbort),
 			Retries:        cfg.Validate.Retries,
 			TimeoutMinutes: cfg.Validate.TimeoutMinutes,
+			RunsOn:         cfg.Validate.RunsOn,
+			Permissions:    cfg.Validate.Permissions,
+			Concurrency:    cfg.Validate.Concurrency,
 		}
 		g.Edges[jobID] = nil
 	}
@@ -72,6 +83,9 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Retries:        b.Retries,
 			TimeoutMinutes: b.TimeoutMinutes,
 			Matrix:         b.Matrix,
+			RunsOn:         b.RunsOn,
+			Permissions:    b.Permissions,
+			Concurrency:    b.Concurrency,
 		}
 
 		// Resolve dependencies to job IDs
@@ -103,6 +117,9 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			OnFailure:      defaultString(d.OnFailure, config.OnFailureAbort),
 			Retries:        d.Retries,
 			TimeoutMinutes: d.TimeoutMinutes,
+			RunsOn:         d.RunsOn,
+			Permissions:    d.Permissions,
+			Concurrency:    d.Concurrency,
 		}
 
 		// Resolve dependencies to job IDs

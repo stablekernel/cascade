@@ -577,7 +577,12 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 // receive via with: are surfaced to the inline step as env: variables (uppercased,
 // e.g. ENVIRONMENT, SHA, and any dependency outputs the callback declares).
 func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
-	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// Per-callback job attributes (inline-run jobs only): runner selection (#12),
+	// permissions incl. id-token: write OIDC (#35/#15), and concurrency (#17). The
+	// config-level runs_on default applies when the callback sets no runner.
+	writeRunsOn(sb, "    ", info.RunsOn, g.config.RunsOn)
+	writeJobPermissions(sb, "    ", info.Permissions)
+	writeJobConcurrency(sb, "    ", info.Concurrency)
 	sb.WriteString("    steps:\n")
 	fmt.Fprintf(sb, "      - name: %s\n", info.DisplayName)
 
