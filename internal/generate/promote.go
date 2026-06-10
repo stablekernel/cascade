@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -16,6 +17,10 @@ type PromoteGenerator struct {
 	baseDir        string
 	inputs         map[string][]string // deploy name -> input names
 	requiredInputs map[string][]string // deploy name -> required input names
+	// state is the manifest state block, used to resolve cascade-owned
+	// ${{ state.<env>.<field> }} references in deploy inputs at generation
+	// time. Optional: nil when no state is threaded.
+	state map[string]*config.EnvState
 }
 
 // NewPromoteGenerator creates a new promote workflow generator
@@ -26,6 +31,12 @@ func NewPromoteGenerator(cfg *config.TrunkConfig, baseDir string) *PromoteGenera
 		inputs:         make(map[string][]string),
 		requiredInputs: make(map[string][]string),
 	}
+}
+
+// SetState threads the manifest state block into the promote generator so
+// ${{ state.<env>.<field> }} input references resolve at generation time.
+func (g *PromoteGenerator) SetState(state map[string]*config.EnvState) {
+	g.state = state
 }
 
 // getCLIRef returns the Git ref to use for the cascade actions.
@@ -49,6 +60,13 @@ func (g *PromoteGenerator) getCLIRef() string {
 // Users configure the full expression via release_token config option.
 func (g *PromoteGenerator) getReleaseTokenRef() string {
 	return g.config.GetReleaseToken()
+}
+
+// getStateTokenRef returns the token expression used to write manifest state to
+// the trunk branch. Users configure the full expression via the state_token
+// config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
+func (g *PromoteGenerator) getStateTokenRef() string {
+	return g.config.GetStateToken()
 }
 
 // getManifestFilePath returns the manifest file path for use in generated scripts.
@@ -102,6 +120,12 @@ func (g *PromoteGenerator) Generate() (string, error) {
 // discoverDeployInputs parses deploy workflow files to discover their inputs
 func (g *PromoteGenerator) discoverDeployInputs() error {
 	for _, d := range g.config.Deploys {
+		// Inline run: deploys have no reusable-workflow file to parse inputs from;
+		// their declared-input set comes from the manifest inputs: keys instead.
+		if d.Run != "" {
+			g.inputs[d.Name] = inputKeys(d.Inputs)
+			continue
+		}
 		workflowPath := filepath.Join(g.baseDir, d.Workflow)
 		data, err := os.ReadFile(workflowPath)
 		if err != nil {
@@ -202,12 +226,37 @@ func (g *PromoteGenerator) resolveDeployInputs(deployName, env, sha, version str
 	}
 
 	for k, v := range result {
-		if strVal, ok := v.(string); ok {
-			for placeholder, replacement := range substitutions {
-				strVal = strings.ReplaceAll(strVal, placeholder, replacement)
-			}
-			result[k] = strVal
+		strVal, ok := v.(string)
+		if !ok {
+			continue
 		}
+		// Pure passthrough expressions (e.g. ${{ vars.X }}, ${{ secrets.Y }})
+		// are emitted directly into the deploy job's with: block, not routed
+		// through the matrix JSON. Drop them here so they don't become dead
+		// literals trapped inside the matrix payload.
+		if classifyInputValue(strVal) == inputPassthrough {
+			delete(result, k)
+			continue
+		}
+		// Cascade-owned state.* references resolve at generation time against
+		// the manifest state for this environment.
+		if classifyInputValue(strVal) == inputStateRef {
+			resolved, rerr := resolveInputValue(strVal, g.state)
+			if rerr != nil {
+				// Leave the value in place; generation surfaces the error via
+				// validation. Keep the unresolved expression visible rather
+				// than silently dropping it.
+				result[k] = strVal
+				continue
+			}
+			result[k] = resolved
+			continue
+		}
+		// Literal or matrix.* placeholder: apply matrix substitutions.
+		for placeholder, replacement := range substitutions {
+			strVal = strings.ReplaceAll(strVal, placeholder, replacement)
+		}
+		result[k] = strVal
 	}
 
 	return result
@@ -271,17 +320,132 @@ func (g *PromoteGenerator) writeMatrixBuildingStep(sb *strings.Builder) {
 	}
 }
 
+// passthroughInputNames returns the sorted set of input keys on a deploy whose
+// value is a pure passthrough expression (e.g. ${{ vars.X }}) in either the
+// default inputs or any env override. These are emitted directly into the
+// deploy job's with: block rather than routed through the matrix JSON, so the
+// expression survives verbatim to GitHub Actions for run-time evaluation.
+func passthroughInputNames(deploy *config.DeployConfig) []string {
+	seen := make(map[string]struct{})
+	consider := func(k string, v interface{}) {
+		if s, ok := v.(string); ok && classifyInputValue(s) == inputPassthrough {
+			seen[k] = struct{}{}
+		}
+	}
+	for k, v := range deploy.Inputs {
+		consider(k, v)
+	}
+	for _, envMap := range deploy.EnvInputs {
+		for k, v := range envMap {
+			consider(k, v)
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for k := range seen {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// passthroughInputValue returns the verbatim expression to emit for a
+// passthrough input key. The default value wins; an env override is used only
+// when the default is absent. Passthrough expressions (vars/secrets/env/...) are
+// resolved by GitHub Actions at run time, so a single verbatim emission is
+// correct across the matrix.
+func passthroughInputValue(deploy *config.DeployConfig, key string) string {
+	if v, ok := deploy.Inputs[key]; ok {
+		if s, ok := v.(string); ok && classifyInputValue(s) == inputPassthrough {
+			return strings.TrimSpace(s)
+		}
+	}
+	for _, envMap := range deploy.EnvInputs {
+		if v, ok := envMap[key]; ok {
+			if s, ok := v.(string); ok && classifyInputValue(s) == inputPassthrough {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+// matrixInputsJSON returns the default-inputs JSON with passthrough-expression
+// keys removed and state.* references resolved against the manifest state for
+// the given environment. Used to build the per-env matrix payload.
+func (g *PromoteGenerator) matrixDefaultInputs(deploy *config.DeployConfig) map[string]interface{} {
+	out := make(map[string]interface{})
+	for k, v := range deploy.Inputs {
+		if s, ok := v.(string); ok {
+			switch classifyInputValue(s) {
+			case inputPassthrough:
+				continue // emitted directly in with:
+			case inputStateRef:
+				// Resolved per-env below in env-specific maps; default state
+				// refs without an env anchor are left as-is for validation to
+				// flag. Skip from default so a wrong default can't leak.
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// matrixEnvInputs returns env_inputs with passthrough keys removed and state.*
+// references resolved at generation time per environment.
+func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[string]map[string]interface{} {
+	out := make(map[string]map[string]interface{})
+	// Seed every env so default-level state refs resolve into each env entry.
+	envNames := make(map[string]struct{})
+	for env := range deploy.EnvInputs {
+		envNames[env] = struct{}{}
+	}
+	for _, env := range g.config.Environments {
+		envNames[env] = struct{}{}
+	}
+	for env := range envNames {
+		merged := make(map[string]interface{})
+		// Default-level state refs resolve per env.
+		for k, v := range deploy.Inputs {
+			if s, ok := v.(string); ok && classifyInputValue(s) == inputStateRef {
+				if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {
+					merged[k] = resolved
+				}
+			}
+		}
+		for k, v := range deploy.EnvInputs[env] {
+			if s, ok := v.(string); ok {
+				switch classifyInputValue(s) {
+				case inputPassthrough:
+					continue
+				case inputStateRef:
+					if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {
+						merged[k] = resolved
+					}
+					continue
+				}
+			}
+			merged[k] = v
+		}
+		if len(merged) > 0 {
+			out[env] = merged
+		}
+	}
+	return out
+}
+
 // writeMatrixBuildingLogic generates the bash logic to build a matrix for a single deploy.
 // It iterates through promotions and builds matrix entries with resolved inputs.
 func (g *PromoteGenerator) writeMatrixBuildingLogic(sb *strings.Builder, deploy *config.DeployConfig, outputName string) {
-	// Serialize default inputs
-	defaultInputsJSON, err := json.Marshal(deploy.Inputs)
+	// Serialize default inputs (passthrough expressions excluded; state.*
+	// refs resolved per-env into env_inputs below).
+	defaultInputsJSON, err := json.Marshal(g.matrixDefaultInputs(deploy))
 	if err != nil {
 		defaultInputsJSON = []byte("{}")
 	}
 
-	// Serialize env_inputs
-	envInputsJSON, err := json.Marshal(deploy.EnvInputs)
+	// Serialize env_inputs (passthrough excluded, state.* resolved).
+	envInputsJSON, err := json.Marshal(g.matrixEnvInputs(deploy))
 	if err != nil {
 		envInputsJSON = []byte("{}")
 	}
@@ -489,7 +653,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	}
 
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
@@ -541,7 +705,7 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("      - name: Setup CLI\n")
 	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
 	sb.WriteString("        with:\n")
@@ -554,6 +718,25 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	sb.WriteString("          echo \"Source: ${{ needs.preflight.outputs.source_env }}\"\n")
 	sb.WriteString("          echo \"Final Env: ${{ needs.preflight.outputs.target_env }}\"\n")
 	sb.WriteString("          echo \"::notice::Promotion validation completed successfully\"\n\n")
+}
+
+// writeDeployStrategyOptions emits the fail-fast and (when set) max-parallel
+// lines inside a strategy: block. It must be called after the caller writes
+// "    strategy:\n". The fail-fast default is false (preserves historical
+// behaviour for callers that have no rollout config).
+func (g *PromoteGenerator) writeDeployStrategyOptions(sb *strings.Builder, rollout *config.RolloutConfig) {
+	failFast := false
+	if rollout != nil && rollout.FailFast != nil {
+		failFast = *rollout.FailFast
+	}
+	if failFast {
+		sb.WriteString("      fail-fast: true\n")
+	} else {
+		sb.WriteString("      fail-fast: false\n")
+	}
+	if rollout != nil && rollout.MaxParallel > 0 {
+		fmt.Fprintf(sb, "      max-parallel: %d\n", rollout.MaxParallel)
+	}
 }
 
 func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
@@ -571,28 +754,96 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 		fmt.Fprintf(sb, "  deploy-%s:\n", d.Name)
 
+		if d.Run != "" {
+			// Inline run: deploy callback. This is a cascade-owned job with an inline run:
+			// step. Inline callbacks declare their inputs via the manifest inputs:
+			// keys (no reusable-workflow with: matrix); the standard environment/
+			// sha/image_tag inputs reach the step as env: vars.
+			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
+			sb.WriteString("    needs: [preflight, promote]\n")
+			if d.SupportsDryRun {
+				// Callback handles dry-run internally: run it regardless of dry_run,
+				// and let the inline body surface DRY_RUN so the script can emulate.
+				fmt.Fprintf(sb, "    if: ${{ contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			} else {
+				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			}
+			// environment: wires the job to a GitHub Environment so that the
+			// environment's protection rules apply when gha_environment is configured
+			// for any env. The target env is resolved at runtime by preflight.
+			if anyEnvHasGHAConfig(g.config) {
+				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
+			}
+			g.writeInlineDeployBody(sb, d,
+				"${{ needs.preflight.outputs.target_env }}",
+				"${{ needs.preflight.outputs.source_sha }}",
+				"${{ needs.preflight.outputs.source_image_tag }}")
+			continue
+		}
+
 		if hasInputs {
 			// Matrix-based deploy job
 			fmt.Fprintf(sb, "    name: Deploy %s (${{ matrix.environment }})\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
-			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
+			if d.SupportsDryRun {
+				// Callback handles dry-run internally: run regardless of dry_run input.
+				fmt.Fprintf(sb, "    if: ${{ needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
+			} else {
+				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.deploy_%s_matrix != '[]' }}\n", outputName)
+			}
 			sb.WriteString("    strategy:\n")
-			sb.WriteString("      fail-fast: false\n")
+			g.writeDeployStrategyOptions(sb, d.Rollout)
 			sb.WriteString("      matrix:\n")
 			fmt.Fprintf(sb, "        include: ${{ fromJSON(needs.preflight.outputs.deploy_%s_matrix) }}\n", outputName)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 
-			// Pass all inputs from matrix
-			// We need to pass each input that the deploy workflow accepts
+			// When the callback opts in to dry-run passthrough, forward the
+			// dispatch input so it can emulate internally.
+			if d.SupportsDryRun {
+				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+			}
+
+			// Passthrough-expression inputs (e.g. ${{ vars.X }}) are excluded
+			// from the matrix JSON and emitted verbatim so GitHub Actions
+			// evaluates them at run time.
+			passthrough := passthroughInputNames(&d)
+			passSet := make(map[string]struct{}, len(passthrough))
+			for _, name := range passthrough {
+				passSet[name] = struct{}{}
+				fmt.Fprintf(sb, "      %s: %s\n", name, passthroughInputValue(&d, name))
+			}
+
+			// Remaining inputs (literals, matrix.* placeholders, resolved
+			// state.* refs) come from the per-promotion matrix entry. Sorted
+			// for deterministic output.
+			matrixNames := make([]string, 0, len(d.Inputs))
 			for inputName := range d.Inputs {
+				if _, ok := passSet[inputName]; ok {
+					continue
+				}
+				matrixNames = append(matrixNames, inputName)
+			}
+			sort.Strings(matrixNames)
+			for _, inputName := range matrixNames {
 				fmt.Fprintf(sb, "      %s: ${{ matrix.%s }}\n", inputName, inputName)
 			}
 		} else {
 			// Single deploy job (backwards compatibility)
 			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
-			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			if d.SupportsDryRun {
+				// Callback handles dry-run internally: run regardless of dry_run input.
+				fmt.Fprintf(sb, "    if: ${{ contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			} else {
+				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
+			}
+			// environment: wires the job to a GitHub Environment so that the
+			// environment's protection rules apply when gha_environment is configured
+			// for any env. The target env is resolved at runtime by preflight.
+			if anyEnvHasGHAConfig(g.config) {
+				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
+			}
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
@@ -601,8 +852,13 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			if g.deployHasInput(d.Name, "image_tag") {
 				sb.WriteString("      image_tag: ${{ needs.preflight.outputs.source_image_tag }}\n")
 			}
+			// When the callback opts in to dry-run passthrough, forward the
+			// dispatch input so it can emulate internally.
+			if d.SupportsDryRun {
+				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+			}
 		}
-		sb.WriteString("    secrets: inherit\n\n")
+		writeSecretsBlock(sb, d.Secrets)
 	}
 
 	// Add prod deploy jobs for cascade mode (separate from intermediate promotions)
@@ -611,7 +867,25 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		fmt.Fprintf(sb, "  deploy-%s-prod:\n", d.Name)
 		fmt.Fprintf(sb, "    name: Deploy %s (%s)\n", d.Name, finalEnv)
 		sb.WriteString("    needs: [preflight, promote]\n")
-		sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		if d.SupportsDryRun {
+			// Callback handles dry-run internally: run regardless of dry_run input.
+			sb.WriteString("    if: ${{ needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		} else {
+			sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+		}
+		// environment: The prod deploy job always targets a single known env
+		// (the final environment in the pipeline), so we can resolve the GitHub
+		// Environment name statically from gha_environment when configured.
+		if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
+			fmt.Fprintf(sb, "    environment: %s\n", ec.GHAEnvironment)
+		}
+		if d.Run != "" {
+			g.writeInlineDeployBody(sb, d,
+				finalEnv,
+				"${{ needs.preflight.outputs.prod_sha }}",
+				"${{ needs.preflight.outputs.prod_version }}")
+			continue
+		}
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 		sb.WriteString("    with:\n")
 		fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
@@ -620,11 +894,56 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		if g.deployHasInput(d.Name, "image_tag") {
 			sb.WriteString("      image_tag: ${{ needs.preflight.outputs.prod_version }}\n")
 		}
-		sb.WriteString("    secrets: inherit\n\n")
+		// When the callback opts in to dry-run passthrough, forward the
+		// dispatch input so it can emulate internally.
+		if d.SupportsDryRun {
+			sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+		}
+		writeSecretsBlock(sb, d.Secrets)
 	}
 
 	// Write external deploy jobs (for multi-repo orchestration)
 	g.writeExternalDeployJobs(sb, finalEnv)
+}
+
+// writeInlineDeployBody emits the runs-on / steps body of a cascade-owned inline
+// run: deploy callback in a promote workflow. The standard inputs a reusable
+// deploy callback would receive via with: (environment, sha, and image_tag when
+// the callback declares it) are surfaced to the inline step as env: variables.
+func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig, environment, sha, imageTag string) {
+	// Per-callback job attributes (inline-run deploy jobs only): runner selection
+	// (#12), permissions incl. id-token: write OIDC (#35/#15), and concurrency
+	// (#17). The config-level runs_on default applies when the deploy sets no
+	// runner.
+	writeRunsOn(sb, "    ", d.RunsOn, g.config.RunsOn)
+	writeJobPermissions(sb, "    ", d.Permissions)
+	writeJobConcurrency(sb, "    ", d.Concurrency)
+	sb.WriteString("    steps:\n")
+	fmt.Fprintf(sb, "      - name: Deploy %s\n", d.Name)
+
+	sb.WriteString("        env:\n")
+	fmt.Fprintf(sb, "          ENVIRONMENT: %s\n", environment)
+	fmt.Fprintf(sb, "          SHA: %s\n", sha)
+	if g.deployHasInput(d.Name, "image_tag") {
+		fmt.Fprintf(sb, "          IMAGE_TAG: %s\n", imageTag)
+	}
+	// When the callback opts in to dry-run emulation, surface the dispatch input
+	// as DRY_RUN so the inline script can branch on it.
+	if d.SupportsDryRun {
+		sb.WriteString("          DRY_RUN: ${{ github.event.inputs.dry_run }}\n")
+	}
+
+	shell := d.Shell
+	if shell == "" {
+		shell = "bash"
+	}
+	fmt.Fprintf(sb, "        shell: %s\n", shell)
+
+	sb.WriteString("        run: |\n")
+	for _, line := range strings.Split(strings.TrimRight(d.Run, "\n"), "\n") {
+		fmt.Fprintf(sb, "          %s\n", line)
+	}
+	sb.WriteString("\n")
 }
 
 func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv string) {
@@ -646,7 +965,7 @@ func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv
 			// For external deploys, we pass the external deploy's SHA from state
 			// The workflow will receive this via inputs
 			sb.WriteString("      sha: ${{ needs.preflight.outputs.source_sha }}\n")
-			sb.WriteString("    secrets: inherit\n\n")
+			writeSecretsBlock(sb, d.Secrets)
 
 			// Prod deploy job for cascade mode
 			fmt.Fprintf(sb, "  deploy-%s-prod:\n", d.Name)
@@ -657,7 +976,7 @@ func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv
 			sb.WriteString("    with:\n")
 			fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
 			sb.WriteString("      sha: ${{ needs.preflight.outputs.prod_sha }}\n")
-			sb.WriteString("    secrets: inherit\n\n")
+			writeSecretsBlock(sb, d.Secrets)
 		}
 	}
 }
@@ -732,7 +1051,7 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 		if g.deployHasInput(d.Name, "image_tag") {
 			sb.WriteString("      image_tag: ${{ needs.preflight.outputs.changelog_base_sha }}\n")
 		}
-		sb.WriteString("    secrets: inherit\n\n")
+		writeSecretsBlock(sb, d.Secrets)
 	}
 
 	// Write rollback jobs for external deploys
@@ -753,7 +1072,7 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
 			sb.WriteString("      sha: ${{ needs.preflight.outputs.rollback_sha }}\n")
-			sb.WriteString("    secrets: inherit\n\n")
+			writeSecretsBlock(sb, d.Secrets)
 		}
 	}
 }
@@ -782,7 +1101,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    if: always() && needs.preflight.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 	sb.WriteString("      - name: Setup CLI\n")
@@ -935,7 +1254,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
 	sb.WriteString("          TAG: ${{ steps.release-data.outputs.sem_version }}\n")
 	sb.WriteString("        run: |\n")
-	sb.WriteString("          # Only dispatch on real GitHub — in act/gitea e2e environments\n")
+	sb.WriteString("          # Only dispatch on real GitHub. In act/gitea e2e environments\n")
 	sb.WriteString("          # GITHUB_SERVER_URL is http://gitea:3000 and the Release workflow\n")
 	sb.WriteString("          # doesn't exist, so skip silently.\n")
 	sb.WriteString("          if [[ \"$GITHUB_SERVER_URL\" != \"https://github.com\" ]]; then\n")
@@ -985,12 +1304,17 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	//
 	// Each deploy job's conclusion is passed in as DEPLOY_RESULT_<NAME>, derived
 	// from `needs.deploy-<name>.result`. finalize reads these env vars to know
-	// which deploys succeeded — more reliable than the legacy
+	// which deploys succeeded. More reliable than the legacy
 	// `gh api ... /jobs` query, which can't reach the GitHub API in act/Gitea
 	// test environments.
 	sb.WriteString("      - name: Finalize Promotion\n")
 	sb.WriteString("        if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("        env:\n")
+	// GH_TOKEN authenticates the Contents REST API write that finalize performs
+	// on real GitHub (signed commit, branch-protection bypass). It defaults to
+	// the same token as the release operations but is independently configurable
+	// via state_token so a bot/App token can be supplied for protected trunks.
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
 	sb.WriteString("          PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}\n")
 	for _, d := range g.config.Deploys {

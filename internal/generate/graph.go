@@ -10,7 +10,13 @@ import (
 // Uses prefixed job IDs (build-app, deploy-app) to allow name reuse across sections
 type DependencyGraph struct {
 	Nodes map[string]CallbackInfo // job ID -> info
-	Edges map[string][]string     // job ID -> dependencies (as job IDs)
+	Edges map[string][]string     // job ID -> hard dependencies (as job IDs)
+
+	// OptionalEdges holds optional_depends_on edges (job ID -> dependencies as
+	// job IDs). Optional deps add to a job's needs: for ordering but do NOT
+	// contribute a skip-gate to its if: condition. The job still runs when an
+	// optional dep was skipped because its triggers didn't match (#18).
+	OptionalEdges map[string][]string
 }
 
 // CallbackInfo holds information about a callback
@@ -20,19 +26,42 @@ type CallbackInfo struct {
 	DisplayName    string // Display name (e.g., "Build (app)")
 	Type           string // "build" or "deploy" or "validate"
 	Workflow       string
+	Run            string // Inline command; when set the callback is emitted as a cascade-owned inline-step job instead of a reusable-workflow call
+	Shell          string // Shell for the inline run step (default bash; only meaningful with Run)
 	RunPolicy      string
 	OnFailure      string
 	Retries        int
 	TimeoutMinutes int                  // Job-level timeout-minutes (omitted when 0)
 	Matrix         *config.MatrixConfig // Build fan-out; nil for deploys and validate
+	SupportsDryRun bool                 // When true, dry-run promotes invoke the callback with dry_run: true instead of skipping it
+
+	// Per-callback job attributes for cascade-owned inline run: jobs. These are
+	// emitted only on inline-run jobs (never on reusable-workflow uses: callbacks,
+	// where GHA forbids runs-on/concurrency); schema validation already rejects
+	// runs_on/concurrency on reusable callbacks.
+	RunsOn      *config.RunsOn            // Per-callback runner selection (#12)
+	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15)
+	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17)
+
+	// PassthroughArtifact declares GHA artifact upload/download steps to inject
+	// around this job's callback invocation, enabling inter-job artifact passing
+	// within a single orchestrate run (#16).
+	PassthroughArtifact *config.PassthroughArtifact
+
+	// Secrets holds the per-callback secrets passing config. Nil means inherit
+	// (the default). When non-nil and Inherit is true, secrets: inherit is emitted.
+	// When non-nil with an explicit Map, a secrets: block with per-entry
+	// ${{ secrets.CALLER_NAME }} expressions is emitted instead.
+	Secrets *config.SecretsConfig
 }
 
 // BuildDependencyGraph creates a dependency graph from config
 // Uses prefixed job IDs to support same names in builds and deploys
 func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 	g := &DependencyGraph{
-		Nodes: make(map[string]CallbackInfo),
-		Edges: make(map[string][]string),
+		Nodes:         make(map[string]CallbackInfo),
+		Edges:         make(map[string][]string),
+		OptionalEdges: make(map[string][]string),
 	}
 
 	// Add validate if present
@@ -44,10 +73,17 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:    "Validate (validate)",
 			Type:           config.CallbackTypeValidate,
 			Workflow:       cfg.Validate.Workflow,
+			Run:            cfg.Validate.Run,
+			Shell:          cfg.Validate.Shell,
 			RunPolicy:      defaultString(cfg.Validate.RunPolicy, config.RunPolicyDefault),
 			OnFailure:      defaultString(cfg.Validate.OnFailure, config.OnFailureAbort),
 			Retries:        cfg.Validate.Retries,
 			TimeoutMinutes: cfg.Validate.TimeoutMinutes,
+			RunsOn:         cfg.Validate.RunsOn,
+			Permissions:    cfg.Validate.Permissions,
+			Concurrency:    cfg.Validate.Concurrency,
+			SupportsDryRun: cfg.Validate.SupportsDryRun,
+			Secrets:        cfg.Validate.Secrets,
 		}
 		g.Edges[jobID] = nil
 	}
@@ -56,16 +92,23 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 	for _, b := range cfg.Builds {
 		jobID := config.JobID(config.CallbackTypeBuild, b.Name)
 		g.Nodes[jobID] = CallbackInfo{
-			Name:           b.Name,
-			JobID:          jobID,
-			DisplayName:    config.DisplayName(config.CallbackTypeBuild, b.Name),
-			Type:           config.CallbackTypeBuild,
-			Workflow:       b.Workflow,
-			RunPolicy:      defaultString(b.RunPolicy, config.RunPolicyDefault),
-			OnFailure:      defaultString(b.OnFailure, config.OnFailureAbort),
-			Retries:        b.Retries,
-			TimeoutMinutes: b.TimeoutMinutes,
-			Matrix:         b.Matrix,
+			Name:                b.Name,
+			JobID:               jobID,
+			DisplayName:         config.DisplayName(config.CallbackTypeBuild, b.Name),
+			Type:                config.CallbackTypeBuild,
+			Workflow:            b.Workflow,
+			Run:                 b.Run,
+			Shell:               b.Shell,
+			RunPolicy:           defaultString(b.RunPolicy, config.RunPolicyDefault),
+			OnFailure:           defaultString(b.OnFailure, config.OnFailureAbort),
+			Retries:             b.Retries,
+			TimeoutMinutes:      b.TimeoutMinutes,
+			Matrix:              b.Matrix,
+			RunsOn:              b.RunsOn,
+			Permissions:         b.Permissions,
+			Concurrency:         b.Concurrency,
+			PassthroughArtifact: b.PassthroughArtifact,
+			Secrets:             b.Secrets,
 		}
 
 		// Resolve dependencies to job IDs
@@ -80,21 +123,38 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			deps = ensureValidateDependency(deps)
 		}
 		g.Edges[jobID] = deps
+
+		// Optional dependencies: ordering-only edges (sequence after, no skip-gate).
+		var optDeps []string
+		for _, dep := range b.OptionalDependsOn {
+			if resolved, err := cfg.ResolveDependency(dep, config.CallbackTypeBuild); err == nil {
+				optDeps = append(optDeps, resolved)
+			}
+		}
+		g.OptionalEdges[jobID] = optDeps
 	}
 
 	// Add deploys
 	for _, d := range cfg.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
 		g.Nodes[jobID] = CallbackInfo{
-			Name:           d.Name,
-			JobID:          jobID,
-			DisplayName:    config.DisplayName(config.CallbackTypeDeploy, d.Name),
-			Type:           config.CallbackTypeDeploy,
-			Workflow:       d.Workflow,
-			RunPolicy:      defaultString(d.RunPolicy, config.RunPolicyDefault),
-			OnFailure:      defaultString(d.OnFailure, config.OnFailureAbort),
-			Retries:        d.Retries,
-			TimeoutMinutes: d.TimeoutMinutes,
+			Name:                d.Name,
+			JobID:               jobID,
+			DisplayName:         config.DisplayName(config.CallbackTypeDeploy, d.Name),
+			Type:                config.CallbackTypeDeploy,
+			Workflow:            d.Workflow,
+			Run:                 d.Run,
+			Shell:               d.Shell,
+			RunPolicy:           defaultString(d.RunPolicy, config.RunPolicyDefault),
+			OnFailure:           defaultString(d.OnFailure, config.OnFailureAbort),
+			Retries:             d.Retries,
+			TimeoutMinutes:      d.TimeoutMinutes,
+			RunsOn:              d.RunsOn,
+			Permissions:         d.Permissions,
+			Concurrency:         d.Concurrency,
+			PassthroughArtifact: d.PassthroughArtifact,
+			SupportsDryRun:      d.SupportsDryRun,
+			Secrets:             d.Secrets,
 		}
 
 		// Resolve dependencies to job IDs
@@ -109,6 +169,15 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			deps = ensureValidateDependency(deps)
 		}
 		g.Edges[jobID] = deps
+
+		// Optional dependencies: ordering-only edges (sequence after, no skip-gate).
+		var optDeps []string
+		for _, dep := range d.OptionalDependsOn {
+			if resolved, err := cfg.ResolveDependency(dep, config.CallbackTypeDeploy); err == nil {
+				optDeps = append(optDeps, resolved)
+			}
+		}
+		g.OptionalEdges[jobID] = optDeps
 	}
 
 	return g
@@ -170,9 +239,15 @@ func (g *DependencyGraph) GetAllDependencies(node string) []string {
 	return deps
 }
 
-// GetDirectDependencies returns only direct dependencies for a node
+// GetDirectDependencies returns only direct (hard) dependencies for a node
 func (g *DependencyGraph) GetDirectDependencies(node string) []string {
 	return g.Edges[node]
+}
+
+// GetOptionalDependencies returns the optional_depends_on dependencies for a
+// node. These add to needs: for ordering only; they do not skip-gate the job.
+func (g *DependencyGraph) GetOptionalDependencies(node string) []string {
+	return g.OptionalEdges[node]
 }
 
 func defaultString(s, def string) string {

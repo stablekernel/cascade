@@ -96,11 +96,16 @@ steps:
       mode: default
     expect:
       state:
+        # Single-env repos publish via the Release workflow, which writes the
+        # ci.latest_release pointer (surfaced here as state[release]) rather than
+        # a state[release] env. It does not wipe the trunk-tracking env, so prod
+        # legitimately still holds the latest RC it was orchestrated to.
         release:
           sha: commit2
           version: "v0.1.0"
         prod:
-          wiped: true
+          sha: commit2
+          version: "v0.1.0-rc.1"
       releases:
         - tag: "v0.1.0"
           prerelease: false

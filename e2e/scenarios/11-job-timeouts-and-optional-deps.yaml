@@ -1,0 +1,58 @@
+name: "Owned-job timeouts and optional dependencies"
+description: |
+  Verifies two generator features in the emitted orchestrate.yaml:
+
+  #37: cascade-owned jobs (setup, finalize) carry a timeout-minutes from the
+  config-level job_timeout_minutes (here 20), so cascade's own jobs do not
+  inherit GHA's 360-minute default. Reusable-workflow callbacks (jobs.<id>.uses)
+  get no timeout; the called workflow owns its own.
+
+  #18: optional_depends_on sequences a deploy AFTER a build (adds it to needs:)
+  but does NOT skip-gate it: a skipped optional dep must not skip the deploy.
+  The emitted shape that yields this is the optional dep present in needs: and
+  absent from the if: skip-gate, while a hard depends_on still gates.
+
+  This is a generator-output verification scenario. Assertions run on the staged
+  repo after StageRepoFromConfig generates workflows. We don't run orchestrate
+  because act does not honor timeout-minutes on `uses:` callers; real
+  timeout-firing belongs to real-GHA validation.
+
+config:
+  trunk_branch: main
+  environments: []
+  job_timeout_minutes: 20
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+    - name: migrations
+      workflow: build.yaml
+      triggers: ["db/**"]
+  deploys:
+    - name: deploy-app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+      depends_on: ["build:app"]
+      optional_depends_on: ["build:migrations"]
+
+steps:
+  - name: "Commit triggers workflow generation; assert timeouts and optional-dep wiring"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # #37: cascade-owned jobs carry the configured timeout.
+            - "timeout-minutes: 20"
+            # #18: optional dep is in needs: (ordering) and the hard dep still gates.
+            - "needs: [setup, build-app, build-migrations]"
+            - "needs.build-app.result == 'success'"
+          not_contains:
+            # #18: optional dep must NOT contribute a skip-gate condition.
+            - "needs.build-migrations.result == 'success'"

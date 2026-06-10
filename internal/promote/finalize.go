@@ -1,9 +1,11 @@
 package promote
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -30,6 +32,7 @@ type Finalizer struct {
 	deployResults   map[string]string // deploy name -> conclusion ("success", "failure", "skipped")
 	promotionResult *PromotionResult
 	actor           string
+	overrideSHA     string // non-empty when an auto-committing callback advanced HEAD
 }
 
 // NewFinalizer creates a new Finalizer instance.
@@ -74,6 +77,18 @@ func (f *Finalizer) SetActor(actor string) {
 	f.actor = actor
 }
 
+// SetHeadSHA overrides the SHA written to state.<env>.sha during finalization.
+// Call this when one or more callbacks declared auto_commits: true, meaning they
+// pushed additional commits after the workflow started. Passing the post-callback
+// HEAD ensures the recorded state matches what was actually built/deployed rather
+// than the triggering commit.
+//
+// When sha is empty (the default) the SHA from the promotion result is used
+// unchanged, preserving existing behavior for runs without auto-committing callbacks.
+func (f *Finalizer) SetHeadSHA(sha string) {
+	f.overrideSHA = sha
+}
+
 // Run executes the finalization logic:
 // 1. Updates environment state for all promoted environments
 // 2. Updates per-deploy state for successful deploys only
@@ -104,7 +119,14 @@ func (f *Finalizer) updateState() {
 				f.cicdFile.State[promo.Environment] = &config.EnvState{}
 			}
 			state := f.cicdFile.State[promo.Environment]
-			state.SHA = promo.SHA
+			// When an auto-committing callback ran, overrideSHA holds the
+			// post-callback HEAD; use it so the recorded state points at the
+			// commit that was actually built/deployed rather than the triggering SHA.
+			if f.overrideSHA != "" {
+				state.SHA = f.overrideSHA
+			} else {
+				state.SHA = promo.SHA
+			}
 			state.Version = promo.Version
 			state.CommittedAt = timestamp
 			state.CommittedBy = f.actor
@@ -135,7 +157,7 @@ func (f *Finalizer) updateState() {
 
 		for _, promo := range f.promotionResult.Promotions {
 			if promo.Environment == "" || promo.Environment == "release" {
-				// Skip the release marker — it tracks publish state, not deploys.
+				// Skip the release marker; it tracks publish state, not deploys.
 				continue
 			}
 			if promo.SHA == "" {
@@ -152,7 +174,20 @@ func (f *Finalizer) updateState() {
 			}
 
 			ds := f.cicdFile.State[promo.Environment].Deploys[name]
-			ds.SHA = promo.SHA
+			if f.overrideSHA != "" {
+				ds.SHA = f.overrideSHA
+			} else {
+				ds.SHA = promo.SHA
+			}
+			// Record the version this deployable deployed, mirroring the
+			// env-level Version write above. This is what lets state answer
+			// "which version of <name> is live in <env>" per deployable,
+			// independent of the env-level version (the data foundation for
+			// per-deployable rollback). Empty promo.Version leaves the prior
+			// value untouched so non-versioned promotions stay non-breaking.
+			if promo.Version != "" {
+				ds.Version = promo.Version
+			}
 			ds.DeployedAt = timestamp
 			ds.DeployedBy = f.actor
 		}
@@ -208,14 +243,15 @@ func (f *Finalizer) WriteConfig() error {
 	return nil
 }
 
-// CommitAndPush commits the manifest changes and pushes to the remote repository.
-// This should be called after Run() to persist state changes to git.
+// CommitAndPush persists the manifest changes back to the trunk branch.
 //
-// It performs the following steps:
-// 1. Checks if there are any changes to commit
-// 2. Configures git user (if not external mode)
-// 3. Commits the manifest with [skip ci] to avoid triggering workflows
-// 4. Pushes the commit to the remote
+// On real GitHub the write goes through the Contents REST API (via the gh CLI):
+// API-created commits are signed by GitHub (shown as Verified) and, when made
+// with a bypass-capable token, update the trunk even when a required status
+// check protects the branch. In the act/gitea e2e environment there is no
+// GitHub API, so the change is committed and pushed with plain git. The
+// environment is detected exactly as the generated dispatch steps do, by
+// GITHUB_SERVER_URL != https://github.com.
 //
 // Note: We skip git pull because the workflow just checked out the repo,
 // so it should already be at the latest state. The finalize job runs after
@@ -231,8 +267,69 @@ func (f *Finalizer) CommitAndPush() error {
 		return nil // No changes
 	}
 
+	message := fmt.Sprintf("chore: update state after promotion to %s [skip ci]", f.targetEnv)
+
+	if isRealGitHub() {
+		return f.writeStateViaAPI(message)
+	}
+	return f.commitAndPushGit(message)
+}
+
+// isRealGitHub reports whether the workflow is running on github.com rather than
+// an act/gitea e2e environment. This mirrors the "Only dispatch on real GitHub"
+// detection used by the generated workflows.
+func isRealGitHub() bool {
+	server := os.Getenv("GITHUB_SERVER_URL")
+	return server == "" || server == "https://github.com"
+}
+
+// writeStateViaAPI writes the manifest file to the trunk branch through the
+// GitHub Contents REST API using the gh CLI. This produces a signed (Verified)
+// commit and, with a bypass-capable token, can update a protected branch.
+func (f *Finalizer) writeStateViaAPI(message string) error {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
+	}
+	branch := trunkBranchFromEnv()
+
+	data, err := os.ReadFile(f.configPath)
+	if err != nil {
+		return fmt.Errorf("read manifest failed: %w", err)
+	}
+	contentB64 := base64.StdEncoding.EncodeToString(data)
+
+	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, f.configPath)
+
+	// Fetch the current blob SHA so the API performs an update rather than a
+	// create. An empty result means the file does not yet exist on the branch.
+	shaCmd := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha")
+	shaOut, _ := shaCmd.Output()
+	currentSHA := strings.TrimSpace(string(shaOut))
+
+	args := []string{
+		"api", apiPath, "-X", "PUT",
+		"-f", "message=" + message,
+		"-f", "content=" + contentB64,
+		"-f", "branch=" + branch,
+	}
+	if currentSHA != "" {
+		args = append(args, "-f", "sha="+currentSHA)
+	}
+
+	cmd := exec.Command("gh", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// commitAndPushGit commits the manifest and pushes with plain git. Used in the
+// act/gitea e2e environment, which enforces neither branch protection nor
+// commit signatures.
+func (f *Finalizer) commitAndPushGit(message string) error {
 	// Configure git (use default bot identity)
-	cmd = exec.Command("git", "config", "user.name", "github-actions[bot]")
+	cmd := exec.Command("git", "config", "user.name", "github-actions[bot]")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git config user.name failed: %w", err)
 	}
@@ -248,20 +345,31 @@ func (f *Finalizer) CommitAndPush() error {
 		return fmt.Errorf("git add failed: %w", err)
 	}
 
-	// Commit with [skip ci] to avoid triggering workflows
-	message := fmt.Sprintf("chore: update state after promotion to %s [skip ci]", f.targetEnv)
 	cmd = exec.Command("git", "commit", "-m", message)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git commit failed: %w", err)
 	}
 
-	// Push to remote
 	cmd = exec.Command("git", "push")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git push failed: %w", err)
 	}
 
 	return nil
+}
+
+// trunkBranchFromEnv resolves the branch to write state to. Push events check
+// out in detached HEAD, so the branch is taken from GITHUB_REF when present,
+// falling back to "main".
+func trunkBranchFromEnv() string {
+	ref := os.Getenv("GITHUB_REF")
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return strings.TrimPrefix(ref, "refs/heads/")
+	}
+	if ref != "" {
+		return ref
+	}
+	return "main"
 }
 
 // isExternalDeploy checks if a deploy is an external deploy (from satellite repo)
@@ -310,8 +418,32 @@ func (f *Finalizer) updateExternalDeployState(name, timestamp string) {
 	es := f.cicdFile.State[f.targetEnv].External[name]
 	es.Repo = f.getExternalDeployRepo(name)
 	es.SHA = sha
+	// Carry the satellite-reported version forward alongside the SHA so the
+	// external deployable's per-env state records which version is live, in
+	// parity with internal per-deploy version tracking. Empty version (older
+	// satellites that report SHA only) leaves the prior value untouched.
+	if version := f.getExternalDeployVersion(name); version != "" {
+		es.Version = version
+	}
 	es.DeployedAt = timestamp
 	es.DeployedBy = f.actor
+}
+
+// getExternalDeployVersion retrieves the version for an external deploy from
+// the source environment state (mirrors getExternalDeploySHA).
+func (f *Finalizer) getExternalDeployVersion(name string) string {
+	if f.promotionResult == nil || len(f.promotionResult.Promotions) == 0 {
+		return ""
+	}
+
+	sourceEnv := f.promotionResult.Promotions[0].SourceEnv
+
+	if state := f.cicdFile.State[sourceEnv]; state != nil {
+		if es := state.External[name]; es != nil {
+			return es.Version
+		}
+	}
+	return ""
 }
 
 // getExternalDeploySHA retrieves the SHA for an external deploy from the source environment state

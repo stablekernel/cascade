@@ -107,6 +107,14 @@ func runGenerateWorkflow(opts generateOptions) error {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 
+	// Parse the full manifest (including state) so generators can resolve
+	// cascade-owned ${{ state.<env>.<field> }} input references at generation
+	// time. State is optional; absence is not an error.
+	var manifestState map[string]*config.EnvState
+	if full, ferr := config.ParseManifestFile(configPath, opts.manifestKey); ferr == nil {
+		manifestState = full.State
+	}
+
 	// Override action folder if specified on command line
 	if opts.actionFolder != "" && opts.actionFolder != "manage-release" {
 		cfg.ActionFolder = opts.actionFolder
@@ -141,6 +149,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	var orchestrateGen *Generator
 	if generateOrchestrate {
 		orchestrateGen = NewGenerator(cfg, baseDir)
+		orchestrateGen.SetState(manifestState)
 		warnings := orchestrateGen.Validate()
 		for _, w := range warnings {
 			fmt.Fprintf(os.Stderr, "%s\n", w)
@@ -187,6 +196,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 		} else {
 			// Multi-environment projects get the full Promote workflow
 			promoteGen := NewPromoteGenerator(cfg, baseDir)
+			promoteGen.SetState(manifestState)
 			content, err = promoteGen.Generate()
 			workflowName = "promote"
 		}
@@ -231,6 +241,69 @@ func runGenerateWorkflow(opts generateOptions) error {
 			}
 			generatedFiles = append(generatedFiles, externalOutputPath)
 			fmt.Printf("Generated workflow: %s\n", externalOutputPath)
+		}
+	}
+
+	// Generate the opt-in manifest-validation PR check (validate_check.enabled).
+	validateCheckGen := NewValidateCheckGenerator(cfg, baseDir)
+	if validateCheckGen.Enabled() {
+		content, err := validateCheckGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating validate-check workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-validate.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-validate.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+	}
+
+	// Generate the opt-in merge-queue validation lane (merge_queue.enabled).
+	mergeQueueGen := NewMergeQueueGenerator(cfg, baseDir)
+	if mergeQueueGen.Enabled() {
+		content, err := mergeQueueGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating merge-queue workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-merge-queue.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-merge-queue.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+	}
+
+	// Generate the opt-in read-only PR plan-preview workflow (#40). Absent or
+	// disabled pr_preview emits nothing, so existing manifests are unaffected.
+	if cfg.PRPreview != nil && cfg.PRPreview.Enabled {
+		previewGen := NewPRPreviewGenerator(cfg, baseDir)
+		content, err := previewGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating pr-preview workflow: %w", err)
+		}
+
+		previewOutputPath := ".github/workflows/cascade-pr-preview.yaml"
+
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-pr-preview.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(previewOutputPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, previewOutputPath)
+			fmt.Printf("Generated workflow: %s\n", previewOutputPath)
 		}
 	}
 

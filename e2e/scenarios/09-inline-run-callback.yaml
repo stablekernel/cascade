@@ -1,0 +1,42 @@
+name: "Inline Run Callback"
+description: |
+  Verifies a callback declaring run: is emitted as a cascade-owned job with an
+  inline run: step in the generated orchestrate.yaml, while a sibling callback
+  declaring workflow: still emits a jobs.<id>.uses reusable-workflow call (#36).
+
+  This is a generator-output verification scenario. Assertion runs on the
+  staged repo after StageRepoFromConfig generates workflows but before any
+  orchestrate runs.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+    - name: smoke
+      run: |
+        echo "smoke check"
+      shell: bash
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit triggers workflow generation; assert inline run step + reusable uses"
+    action: commit
+    commit:
+      message: "feat: add app and inline smoke"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "build-app:"
+            - "uses: ./build.yaml"
+            - "build-smoke:"
+            - "shell: bash"
+            - 'echo "smoke check"'

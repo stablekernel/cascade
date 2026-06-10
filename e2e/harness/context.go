@@ -165,7 +165,7 @@ func (c *ExecutionContext) RecordState(env, sha, version string) {
 
 // ClearState removes all env state. Used by sync routines that need to
 // rebuild ctx from an authoritative source (the manifest), so deletions in
-// that source — e.g. finalize wiping state[prerelease] on publish — are
+// that source (e.g. finalize wiping state[prerelease] on publish) are
 // reflected rather than leaving stale ctx entries.
 func (c *ExecutionContext) ClearState() {
 	c.mu.Lock()

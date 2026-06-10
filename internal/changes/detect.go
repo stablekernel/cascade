@@ -1,9 +1,6 @@
 package changes
 
 import (
-	"path/filepath"
-	"strings"
-
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
 )
@@ -43,83 +40,19 @@ func Detect(cfg *config.TrunkConfig, baseSHA, headSHA string) (*DetectResult, er
 	return result, nil
 }
 
-// isTriggered checks if any changed file matches any trigger pattern
+// isTriggered reports whether any changed file is a trigger under the supplied
+// pattern list. It delegates to config.MatchAnyTrigger so the CLI-side change
+// detection honours negation ("!"-prefixed) patterns identically to the emitted
+// GitHub Actions paths filter, which is generated verbatim from the same list.
+// An empty pattern list means "always triggered".
 func isTriggered(triggers []string, changedFiles []string) bool {
-	// No triggers means always triggered
-	if len(triggers) == 0 {
-		return true
-	}
-
-	for _, pattern := range triggers {
-		for _, file := range changedFiles {
-			if matchGlob(pattern, file) {
-				return true
-			}
-		}
-	}
-
-	return false
+	return config.MatchAnyTrigger(triggers, changedFiles)
 }
 
-// matchGlob matches a file path against a glob pattern
-// Supports: * (single segment), ** (any segments), ? (single char)
+// matchGlob reports whether a single glob pattern matches a path. Negation is
+// handled at the pattern-list level by config.MatchTrigger; this helper matches
+// the bare glob and is retained for the existing unit coverage. A leading "!"
+// is stripped before matching.
 func matchGlob(pattern, path string) bool {
-	// Handle ** patterns by converting to a regex-like approach
-	if strings.Contains(pattern, "**") {
-		return matchDoublestar(pattern, path)
-	}
-
-	// For simple patterns, use filepath.Match
-	matched, _ := filepath.Match(pattern, path)
-	return matched
-}
-
-// matchDoublestar handles ** glob patterns
-func matchDoublestar(pattern, path string) bool {
-	// Split pattern and path into segments
-	patternParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(path, "/")
-
-	return matchParts(patternParts, pathParts)
-}
-
-func matchParts(pattern, path []string) bool {
-	pi, ppi := 0, 0
-
-	for pi < len(pattern) && ppi < len(path) {
-		if pattern[pi] == "**" {
-			// ** matches zero or more path segments
-			if pi == len(pattern)-1 {
-				// ** at end matches everything
-				return true
-			}
-
-			// Try matching remaining pattern at each position
-			for i := ppi; i <= len(path); i++ {
-				if matchParts(pattern[pi+1:], path[i:]) {
-					return true
-				}
-			}
-			return false
-		}
-
-		// Match single segment
-		matched, _ := filepath.Match(pattern[pi], path[ppi])
-		if !matched {
-			return false
-		}
-
-		pi++
-		ppi++
-	}
-
-	// Check if pattern is exhausted
-	for pi < len(pattern) {
-		if pattern[pi] != "**" {
-			return false
-		}
-		pi++
-	}
-
-	return ppi == len(path)
+	return config.MatchGlobPattern(pattern, path)
 }

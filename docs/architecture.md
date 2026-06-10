@@ -4,11 +4,11 @@ System design and internals of cascade.
 
 ## Design Principles
 
-1. **Build once, deploy everywhere** - Single artifact promoted through environments
-2. **Change-driven** - Only build/deploy what changed
-3. **Trunk-based** - Single main branch, short-lived feature branches
-4. **Callback contract** - Framework orchestrates, adopting repos own build/deploy
-5. **State tracking** - Manifest tracks what's deployed where
+1. Build once, deploy everywhere. One artifact is promoted through every environment.
+2. Change-driven. We build and deploy only what changed.
+3. Trunk-based. A single main branch backs short-lived feature branches.
+4. Callback contract. The framework orchestrates and adopting repos own build and deploy.
+5. State tracking. The manifest records what is deployed where.
 
 ## System Overview
 
@@ -552,6 +552,87 @@ For satellite repos with notify config:
 2. **Custom Release** - Override with `release.tag` for external tools
 3. **Custom Inputs** - Pass arbitrary inputs via `inputs`/`env_inputs`
 4. **Output Chaining** - Outputs auto-discovered and passed to dependents
+5. **GitHub Environments** - `environment_config` reserved shape; see [GitHub Deployments API and Environments REST](#github-deployments-api-and-environments-rest) below
+
+## GitHub Deployments API and Environments REST
+
+### What cascade does today
+
+The generator emits an `environment: <name>` key on each deploy job whenever the
+manifest includes an `environments` list. That single key is enough for GitHub
+Actions to attach deployment records, honour required-reviewer gates, apply
+wait timers, and scope environment secrets. You configure all of that inside
+GitHub, not in the manifest. No cascade code calls the Deployments REST API or
+the Environments REST API directly.
+
+### What is deferred
+
+Two capabilities are intentionally out of scope for v1:
+
+- Programmatic Deployments API status. cascade does not call
+  `POST /repos/{owner}/{repo}/deployments` or
+  `POST /repos/{owner}/{repo}/deployments/{id}/statuses`. GitHub Actions creates
+  these records automatically when a job carries `environment:`, so adopters get
+  deployment records without cascade owning that call.
+
+- Environments REST configuration sync. cascade does not read or write
+  environment protection rules (required reviewers, wait timers, branch policies)
+  via the REST API. That configuration lives in GitHub today.
+
+### Why deferred
+
+Keeping cascade out of these APIs in v1 bounds the surface area and avoids
+coupling the tool to GitHub API semantics that are still evolving. The
+auto-created deployment records from `environment:` already cover the common
+case. Adding programmatic control before an adopter needs it would buy
+complexity and nothing else. If those APIs change shape, cascade would have to
+track the change even though nothing in v1 depends on them.
+
+### How the design reserves the extension points
+
+The schema already carries the hooks needed to add both capabilities later
+without a breaking change:
+
+**`environment_config` reserved shape.** The manifest schema reserves an
+`environment_config` block at the `config:` level, keyed by environment name:
+
+```yaml
+config:
+  environments: [dev, test, prod]      # ordered list (source of truth), unchanged
+  environment_config:                  # reserved; omitting it is valid today
+    prod:
+      gha_environment: production      # maps to the GHA environment name
+      # future additive fields:
+      # required_reviewers: [team/ops]
+      # wait_timer: 10
+      # branch_policy: protected
+```
+
+The `environments` list stays a plain ordered `[]string`; the separate
+`environment_config` map carries per-env settings. Adding fields under
+`environment_config.<name>` is additive and never touches the ordering semantics
+of `environments`. A manifest that omits `environment_config` entirely is valid
+and equivalent to today's behaviour.
+
+**Single finalize seam.** The `orchestrate.Finalize` and `promote.Finalize`
+functions are the only places that write state after a deployment completes.
+A future Deployments API call attaches at one of those two points, not scattered
+across the generator. That code constraint is already in place.
+
+**Generator delegates environment semantics to GitHub.** Because the generator
+emits `environment:` and nothing more, it does not embed logic about what that
+environment means. Programmatic status reporting slots in at finalize time;
+Environments REST configuration sync is a separate operational concern that never
+needs to touch the generator.
+
+### Forward-compatibility guarantee
+
+Both capabilities, when they arrive, will follow the same additive-only policy
+described in [versioning.md](versioning.md): new optional fields under
+`environment_config.<name>`, new optional top-level blocks if needed, and no
+removal or re-typing of existing fields. Neither will require a `schema_version`
+bump. Manifests that do not opt in to the new fields continue to work exactly as
+they do today.
 
 ## Testing Strategy
 

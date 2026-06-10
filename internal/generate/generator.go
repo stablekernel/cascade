@@ -10,12 +10,42 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
+// DefaultJobTimeoutMinutes is the timeout-minutes applied to cascade-owned jobs
+// (setup, finalize, inline run: callbacks, retry shims, and passthrough
+// artifact helper jobs) when config.job_timeout_minutes is not set. GitHub
+// Actions defaults jobs to 360 minutes (6 hours); cascade's orchestration jobs
+// are meant to be fast, so a hung git push, CLI download, or API call should not
+// hold a runner for six hours. Override per manifest via config.job_timeout_minutes.
+const DefaultJobTimeoutMinutes = 30
+
 // normalizeWorkflowPath adds ./ prefix to local workflow paths (required by GitHub Actions)
 func normalizeWorkflowPath(path string) string {
 	if strings.HasPrefix(path, ".github/") {
 		return "./" + path
 	}
 	return path
+}
+
+// envGHAName returns the GitHub Environment name for a given cascade environment
+// name. When the config has an EnvironmentConfig entry for that env whose
+// GHAEnvironment field is non-empty, that value is returned; otherwise the
+// cascade env name itself is used as the GitHub Environment name.
+func envGHAName(cfg *config.TrunkConfig, cascadeEnvName string) string {
+	if ec, ok := cfg.EnvironmentConfig[cascadeEnvName]; ok && ec.GHAEnvironment != "" {
+		return ec.GHAEnvironment
+	}
+	return cascadeEnvName
+}
+
+// anyEnvHasGHAConfig reports whether any environment in the config has an
+// EnvironmentConfig entry with a non-empty GHAEnvironment field.
+func anyEnvHasGHAConfig(cfg *config.TrunkConfig) bool {
+	for _, ec := range cfg.EnvironmentConfig {
+		if ec.GHAEnvironment != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // writeGitConfigSteps writes git configuration steps based on config.git settings
@@ -54,6 +84,10 @@ type Generator struct {
 	requiredInputs map[string][]string // callback name -> required input names
 	graph          *DependencyGraph
 	warnings       []string
+	// state is the manifest state block, used to resolve cascade-owned
+	// ${{ state.<env>.<field> }} references in callback inputs at generation
+	// time. Optional: nil when no state is threaded (e.g. unit tests).
+	state map[string]*config.EnvState
 }
 
 // NewGenerator creates a new workflow generator
@@ -65,6 +99,62 @@ func NewGenerator(cfg *config.TrunkConfig, baseDir string) *Generator {
 		inputs:         make(map[string][]string),
 		requiredInputs: make(map[string][]string),
 	}
+}
+
+// getStateTokenRef returns the token expression used to write manifest state to
+// the trunk branch. Users configure the full expression via the state_token
+// config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
+func (g *Generator) getStateTokenRef() string {
+	return g.config.GetStateToken()
+}
+
+// ownedJobTimeoutMinutes returns the timeout-minutes to emit on cascade-owned
+// jobs: the manifest's config.job_timeout_minutes when set (>0), otherwise
+// DefaultJobTimeoutMinutes. Reusable-workflow callbacks (jobs.<id>.uses) own
+// their own timeout and are never bounded by this value.
+func (g *Generator) ownedJobTimeoutMinutes() int {
+	if g.config.JobTimeoutMinutes > 0 {
+		return g.config.JobTimeoutMinutes
+	}
+	return DefaultJobTimeoutMinutes
+}
+
+// writeOwnedTimeout emits the timeout-minutes line for a cascade-owned job at
+// the given indent.
+func (g *Generator) writeOwnedTimeout(sb *strings.Builder, indent string) {
+	fmt.Fprintf(sb, "%stimeout-minutes: %d\n", indent, g.ownedJobTimeoutMinutes())
+}
+
+// SetState threads the manifest state block into the generator so
+// ${{ state.<env>.<field> }} input references resolve at generation time.
+func (g *Generator) SetState(state map[string]*config.EnvState) {
+	g.state = state
+}
+
+// anyAutoCommits reports whether any build or deploy callback (including
+// external deploys) has auto_commits: true. When true, the finalize step must
+// re-resolve HEAD after the callbacks complete, because at least one of them
+// may have pushed additional commits (e.g. a formatter/codegen step), meaning
+// the triggering SHA no longer matches what was actually built or deployed.
+func (g *Generator) anyAutoCommits() bool {
+	for _, b := range g.config.Builds {
+		if b.AutoCommits {
+			return true
+		}
+	}
+	for _, d := range g.config.Deploys {
+		if d.AutoCommits {
+			return true
+		}
+	}
+	for _, ext := range g.config.External {
+		for _, d := range ext.Deploys {
+			if d.AutoCommits {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getCLIRef returns the Git ref to use for the cascade actions.
@@ -201,7 +291,47 @@ func (g *Generator) Validate() []string {
 				"to retag artifacts on release.")
 	}
 
+	// Warn when an input value looks like an expression the operator forgot to
+	// wrap in ${{ }} (e.g. a bare vars.X or state.prod.sha). Such values are
+	// emitted as dead literals; the operator likely intended passthrough.
+	g.warnings = append(g.warnings, g.unwrappedExpressionWarnings()...)
+
 	return g.warnings
+}
+
+// unwrappedExpressionWarnings scans all callback inputs/env_inputs for literal
+// values that resemble an unwrapped expression (bare context.path) and returns
+// a warning for each, so operators catch a forgotten ${{ }} wrapper.
+func (g *Generator) unwrappedExpressionWarnings() []string {
+	var warnings []string
+	check := func(callback string, inputs map[string]interface{}, envInputs map[string]map[string]interface{}) {
+		report := func(key string, v interface{}) {
+			if s, ok := v.(string); ok && looksLikeUnwrappedExpression(s) {
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: %s input %q value %q looks like an expression missing its ${{ }} wrapper; "+
+						"it will be emitted as a literal. Wrap it as ${{ %s }} for passthrough.",
+					callback, key, s, strings.TrimSpace(s)))
+			}
+		}
+		for k, v := range inputs {
+			report(k, v)
+		}
+		for _, env := range envInputs {
+			for k, v := range env {
+				report(k, v)
+			}
+		}
+	}
+	for i := range g.config.Builds {
+		check("build "+g.config.Builds[i].Name, g.config.Builds[i].Inputs, g.config.Builds[i].EnvInputs)
+	}
+	for i := range g.config.Deploys {
+		check("deploy "+g.config.Deploys[i].Name, g.config.Deploys[i].Inputs, g.config.Deploys[i].EnvInputs)
+	}
+	if g.config.Validate != nil {
+		check("validate", g.config.Validate.Inputs, g.config.Validate.EnvInputs)
+	}
+	return warnings
 }
 
 // validateRequiredInputs checks that all required workflow inputs can be provided
@@ -210,6 +340,10 @@ func (g *Generator) validateRequiredInputs() error {
 	standardInputs := map[string]bool{
 		"environment": true,
 		"sha":         true,
+	}
+	// Operator dispatch_inputs are available to any callback that declares them.
+	for name := range g.config.DispatchInputs {
+		standardInputs[name] = true
 	}
 
 	var errors []string
@@ -260,6 +394,8 @@ func (g *Generator) discoverOutputsAndInputs() error {
 		jobID    string
 		name     string
 		workflow string
+		run      string
+		inputs   map[string]interface{}
 	}{}
 
 	if g.config.Validate != nil {
@@ -267,7 +403,9 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-		}{"validate", "validate", g.config.Validate.Workflow})
+			run      string
+			inputs   map[string]interface{}
+		}{"validate", "validate", g.config.Validate.Workflow, g.config.Validate.Run, g.config.Validate.Inputs})
 	}
 	for _, b := range g.config.Builds {
 		jobID := config.JobID(config.CallbackTypeBuild, b.Name)
@@ -275,7 +413,9 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-		}{jobID, b.Name, b.Workflow})
+			run      string
+			inputs   map[string]interface{}
+		}{jobID, b.Name, b.Workflow, b.Run, b.Inputs})
 	}
 	for _, d := range g.config.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
@@ -283,10 +423,21 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-		}{jobID, d.Name, d.Workflow})
+			run      string
+			inputs   map[string]interface{}
+		}{jobID, d.Name, d.Workflow, d.Run, d.Inputs})
 	}
 
 	for _, cb := range allCallbacks {
+		// Inline run: callbacks have no reusable-workflow file. Their inputs come
+		// from the manifest (declared inputs keys); they emit no outputs.
+		if cb.run != "" {
+			g.outputs[cb.jobID] = nil
+			g.inputs[cb.jobID] = inputKeys(cb.inputs)
+			g.requiredInputs[cb.jobID] = nil
+			continue
+		}
+
 		path := filepath.Join(g.baseDir, cb.workflow)
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -356,6 +507,39 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("        type: boolean\n")
 	sb.WriteString("        default: false\n")
 
+	// Emit operator-defined dispatch_inputs (sorted for determinism).
+	if len(g.config.DispatchInputs) > 0 {
+		names := make([]string, 0, len(g.config.DispatchInputs))
+		for name := range g.config.DispatchInputs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			di := g.config.DispatchInputs[name]
+			fmt.Fprintf(sb, "      %s:\n", name)
+			if di.Description != "" {
+				fmt.Fprintf(sb, "        description: %q\n", di.Description)
+			}
+			inputType := di.Type
+			if inputType == "" {
+				inputType = config.DispatchInputTypeString
+			}
+			fmt.Fprintf(sb, "        type: %s\n", inputType)
+			if inputType == config.DispatchInputTypeChoice && len(di.Options) > 0 {
+				sb.WriteString("        options:\n")
+				for _, opt := range di.Options {
+					fmt.Fprintf(sb, "          - %s\n", opt)
+				}
+			}
+			if di.Default != nil {
+				fmt.Fprintf(sb, "        default: '%v'\n", di.Default)
+			}
+			if di.Required {
+				sb.WriteString("        required: true\n")
+			}
+		}
+	}
+
 	// Emit extra triggers when configured.
 	if et := g.config.ExtraTriggers; et != nil {
 		g.writeExtraTriggers(sb, et)
@@ -407,7 +591,7 @@ func (g *Generator) writeExtraTriggers(sb *strings.Builder, et *config.ExtraTrig
 // writeConcurrency emits a top-level concurrency: block. Two rapid pushes to
 // trunk used to fire concurrent orchestrate runs, which raced on state writes
 // and produced duplicate RC tags + non-fast-forward push failures (#92).
-// Default: cancel an older in-progress run when a newer push lands —
+// Default: cancel an older in-progress run when a newer push lands.
 // the older run's work is obsolete. Override via config.concurrency.
 func (g *Generator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
@@ -459,6 +643,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("  setup:\n")
 	sb.WriteString("    name: Setup\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    outputs:\n")
 
 	// All outputs come from the CLI setup command
@@ -482,7 +667,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	}
 
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
@@ -514,20 +699,75 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
+// writeSecretsBlock emits the secrets: line for a reusable-workflow job.
+// When s is nil or s.Inherit is true the default "secrets: inherit" is emitted.
+// When s carries an explicit Map each entry is emitted as
+//
+//	secrets:
+//	  CALLED_NAME: ${{ secrets.CALLER_NAME }}
+//
+// The trailing newline that terminates the job block is always written by the
+// caller, so this function writes a trailing "\n" after the last entry only in
+// the map form (matching the blank-line separation written by the inherit path).
+func writeSecretsBlock(sb *strings.Builder, s *config.SecretsConfig) {
+	if s == nil || s.Inherit || len(s.Map) == 0 {
+		sb.WriteString("    secrets: inherit\n\n")
+		return
+	}
+	sb.WriteString("    secrets:\n")
+	keys := make([]string, 0, len(s.Map))
+	for k := range s.Map {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(sb, "      %s: ${{ secrets.%s }}\n", k, s.Map[k])
+	}
+	sb.WriteString("\n")
+}
+
 func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, workflow string) {
+	// For reusable-workflow callbacks that declare passthrough artifact downloads,
+	// emit a cascade-owned pre-job that fetches the artifacts before the callback
+	// runs. The pre-job depends on the same upstream jobs as the callback itself so
+	// it can start as soon as the producers finish.
+	downloadPreJobID := ""
+	if info.Run == "" && info.PassthroughArtifact != nil && len(info.PassthroughArtifact.Downloads) > 0 {
+		downloadPreJobID = fmt.Sprintf("%s-download", info.JobID)
+		g.writePassthroughDownloadJob(sb, info, downloadPreJobID)
+	}
+
 	fmt.Fprintf(sb, "  %s:\n", info.JobID)
 	fmt.Fprintf(sb, "    name: %s\n", info.DisplayName)
 
-	// needs: always includes setup, plus dependencies (already stored as job IDs)
+	// needs: always includes setup, plus hard dependencies (already stored as job
+	// IDs). optional_depends_on adds ordering-only edges: they go into needs: so
+	// this job waits for them, but they are excluded from the if: skip-gate below
+	// (#18) so a skipped optional dep does not skip this job.
+	hardDeps := g.graph.GetDirectDependencies(info.JobID)
 	needs := []string{"setup"}
-	needs = append(needs, g.graph.GetDirectDependencies(info.JobID)...)
+	needs = append(needs, hardDeps...)
+	needs = append(needs, g.graph.GetOptionalDependencies(info.JobID)...)
+	// When a pre-download job was emitted, make the callback depend on it so the
+	// downloaded artifacts are available in the runner's workspace.
+	if downloadPreJobID != "" {
+		needs = append(needs, downloadPreJobID)
+	}
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
 
-	// if: condition based on run_policy
+	// if: condition based on run_policy. Optional deps are intentionally not
+	// passed here; they sequence the job without gating it.
 	g.writeIfCondition(sb, info, needs)
 
-	if info.TimeoutMinutes > 0 {
+	switch {
+	case info.TimeoutMinutes > 0:
+		// Explicit per-callback timeout always wins.
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
+	case info.Run != "":
+		// Inline run: callbacks are cascade-owned jobs, so they inherit the
+		// cascade-owned-job timeout default (#37). Reusable-workflow callbacks
+		// (jobs.<id>.uses) own their own timeout and get nothing here.
+		g.writeOwnedTimeout(sb, "    ")
 	}
 
 	// strategy: emitted only for build callbacks that declare matrix:
@@ -535,17 +775,162 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		g.writeStrategyBlock(sb, info.Matrix)
 	}
 
-	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
+	// environment: emitted on deploy jobs when the config declares a
+	// gha_environment for at least one environment. The job-level environment:
+	// key wires the job to a GitHub Environment so that the environment's
+	// protection rules (required reviewers, wait timers, deployment branch
+	// policy, scoped secrets) apply at runtime. Actual protection configuration
+	// lives in GitHub's Environment settings, not in the manifest.
+	//
+	// For orchestrate, the target environment is chosen at run time via the
+	// workflow_dispatch input, so we emit an expression that resolves to the
+	// cascade environment name. When gha_environment differs from the cascade
+	// env name, users should align their GitHub Environment names accordingly.
+	if info.Type == config.CallbackTypeDeploy && len(g.config.Environments) > 0 && anyEnvHasGHAConfig(g.config) {
+		defaultEnv := g.config.Environments[0]
+		fmt.Fprintf(sb, "    environment: ${{ github.event.inputs.environment || '%s' }}\n", defaultEnv)
+	}
 
-	// with: pass outputs from dependencies
-	g.writeWithInputs(sb, info)
+	// continue-on-error: a callback with on_failure: continue is one the operator
+	// has explicitly marked as tolerable. Emitting continue-on-error keeps the
+	// overall run green when only such callbacks fail, while the result is still
+	// recorded (the failure check below never gates on continue callbacks).
+	if info.OnFailure == config.OnFailureContinue {
+		sb.WriteString("    continue-on-error: true\n")
+	}
 
-	sb.WriteString("    secrets: inherit\n\n")
+	// Inline run: callback. Emit a cascade-owned job with an inline run: step
+	// instead of a jobs.<id>.uses reusable-workflow call. Standard inputs reach
+	// the step as env: variables rather than reusable-workflow with: inputs.
+	if info.Run != "" {
+		g.writeInlineRunBody(sb, info)
+	} else {
+		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
+
+		// with: pass outputs from dependencies
+		g.writeWithInputs(sb, info)
+
+		writeSecretsBlock(sb, info.Secrets)
+	}
 
 	// Generate retry jobs if retries > 0
 	for i := 1; i <= info.Retries; i++ {
 		g.writeRetryJob(sb, info, workflow, i)
 	}
+
+	// For reusable-workflow callbacks that declare a passthrough artifact upload,
+	// emit a cascade-owned post-job that uploads the artifact after the callback
+	// completes. Inline-run callbacks handle upload inline (see writeInlineRunBody).
+	if info.Run == "" && info.PassthroughArtifact != nil && info.PassthroughArtifact.Upload != "" {
+		g.writePassthroughUploadJob(sb, info)
+	}
+}
+
+// writeInlineRunBody emits the runs-on / steps body of a cascade-owned inline
+// run: callback job. The standard inputs that a reusable-workflow callback would
+// receive via with: are surfaced to the inline step as env: variables (uppercased,
+// e.g. ENVIRONMENT, SHA, and any dependency outputs the callback declares).
+// When info.PassthroughArtifact is set, download steps are injected before the
+// run step and an upload step is appended after it.
+func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
+	// Per-callback job attributes (inline-run jobs only): runner selection (#12),
+	// permissions incl. id-token: write OIDC (#35/#15), and concurrency (#17). The
+	// config-level runs_on default applies when the callback sets no runner.
+	writeRunsOn(sb, "    ", info.RunsOn, g.config.RunsOn)
+	writeJobPermissions(sb, "    ", info.Permissions)
+	writeJobConcurrency(sb, "    ", info.Concurrency)
+	sb.WriteString("    steps:\n")
+
+	// Inject download-artifact steps before the run step so the artifacts are
+	// present in the workspace when the inline command executes.
+	g.writePassthroughDownloadSteps(sb, info)
+
+	fmt.Fprintf(sb, "      - name: %s\n", info.DisplayName)
+
+	envVars := g.inlineEnvInputs(info)
+	if len(envVars) > 0 {
+		sb.WriteString("        env:\n")
+		for _, ev := range envVars {
+			sb.WriteString(ev + "\n")
+		}
+	}
+
+	shell := info.Shell
+	if shell == "" {
+		shell = "bash"
+	}
+	fmt.Fprintf(sb, "        shell: %s\n", shell)
+
+	sb.WriteString("        run: |\n")
+	for _, line := range strings.Split(strings.TrimRight(info.Run, "\n"), "\n") {
+		fmt.Fprintf(sb, "          %s\n", line)
+	}
+	sb.WriteString("\n")
+
+	// Inject upload-artifact step after the run step.
+	g.writePassthroughUploadStep(sb, info)
+}
+
+// inlineEnvInputs returns the env: lines that surface the standard callback
+// inputs (environment, sha, and declared dependency outputs) to an inline run:
+// step. It mirrors writeWithInputs but renders to env: rather than with:.
+func (g *Generator) inlineEnvInputs(info CallbackInfo) []string {
+	deps := g.graph.GetDirectDependencies(info.JobID)
+
+	var envVars []string
+	// Track emitted env-var names so a dependency output named "sha" doesn't
+	// emit a second SHA: alongside the standard one (GHA rejects duplicate keys).
+	seen := map[string]bool{}
+	emit := func(name, value string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		envVars = append(envVars, fmt.Sprintf("          %s: %s", name, value))
+	}
+
+	// Only pass environment if there are environments configured
+	if len(g.config.Environments) > 0 {
+		emit("ENVIRONMENT", fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0]))
+	}
+
+	// Optional standard inputs - only passed if callback declares them
+	if g.jobHasInput(info.JobID, "sha") {
+		emit("SHA", "${{ needs.setup.outputs.head_sha }}")
+	}
+
+	// For build callbacks with a matrix, surface each dimension's current value.
+	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
+		keys := make([]string, 0, len(info.Matrix.Dimensions))
+		for k := range info.Matrix.Dimensions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if g.jobHasInput(info.JobID, k) {
+				emit(envVarName(k), fmt.Sprintf("${{ matrix.%s }}", k))
+			}
+		}
+	}
+
+	// Pass outputs from dependencies the callback declares as inputs.
+	for _, depJobID := range deps {
+		depInfo := g.graph.Nodes[depJobID]
+		for _, out := range g.outputs[depInfo.JobID] {
+			if g.jobHasInput(info.JobID, out) {
+				emit(envVarName(out), fmt.Sprintf("${{ needs.%s.outputs.%s }}", depJobID, out))
+			}
+		}
+	}
+
+	return envVars
+}
+
+// envVarName converts an input key to a shell-safe env-var name: uppercased with
+// hyphens translated to underscores (e.g. "image-tag" -> "IMAGE_TAG", reachable
+// in the run step as $IMAGE_TAG).
+func envVarName(key string) string {
+	return strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
 }
 
 // writeStrategyBlock emits the GHA strategy: block for a build matrix.
@@ -662,6 +1047,21 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 	}
 }
 
+// inputKeys returns the sorted keys of a manifest inputs map. Used to seed the
+// declared-input set for inline run: callbacks, which have no reusable-workflow
+// file to parse inputs from.
+func inputKeys(m map[string]interface{}) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // jobHasInput checks if a job declares a specific input
 func (g *Generator) jobHasInput(jobID, inputName string) bool {
 	for _, input := range g.inputs[jobID] {
@@ -687,6 +1087,12 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		inputs = append(inputs, "      sha: ${{ needs.setup.outputs.head_sha }}")
 	}
 
+	// When a callback opts in to dry-run emulation, pass the dry_run dispatch
+	// input through so the callback can emulate internally instead of being skipped.
+	if info.SupportsDryRun {
+		inputs = append(inputs, "      dry_run: ${{ inputs.dry_run }}")
+	}
+
 	// For build callbacks with a matrix, pass each dimension's current value to
 	// the reusable workflow via `with:` so the callback can act on it. Dimension
 	// keys are passed through only when the callback workflow declares a matching
@@ -704,6 +1110,20 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		}
 	}
 
+	// Pass operator dispatch_inputs to callbacks that declare a matching input.
+	if len(g.config.DispatchInputs) > 0 {
+		names := make([]string, 0, len(g.config.DispatchInputs))
+		for name := range g.config.DispatchInputs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if g.jobHasInput(info.JobID, name) {
+				inputs = append(inputs, fmt.Sprintf("      %s: ${{ inputs.%s }}", name, name))
+			}
+		}
+	}
+
 	// Pass outputs from dependencies
 	// Only pass if the callback declares the input
 	for _, depJobID := range deps {
@@ -716,6 +1136,17 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		}
 	}
 
+	// Operator-authored inputs from the manifest (inputs:/env_inputs:). These
+	// carry per-callback config. Expression values survive verbatim:
+	//   - passthrough expressions (${{ vars.X }}, ${{ secrets.Y }}, ...) emit
+	//     as-is for GitHub Actions to evaluate at run time.
+	//   - cascade-owned ${{ state.<env>.<field> }} refs resolve at generation
+	//     time from the manifest state.
+	//   - literals emit as-is.
+	// Standard inputs (environment, sha, dependency outputs) already handled
+	// above take precedence and are not duplicated here.
+	inputs = append(inputs, g.operatorInputLines(info, seen(inputs))...)
+
 	// Only write with: block if there are inputs
 	if len(inputs) > 0 {
 		sb.WriteString("    with:\n")
@@ -723,6 +1154,84 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 			sb.WriteString(input + "\n")
 		}
 	}
+}
+
+// seen extracts the set of input keys already present in the given "      key: value"
+// lines, so operator inputs don't duplicate standard ones.
+func seen(lines []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(lines))
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if i := strings.Index(trimmed, ":"); i > 0 {
+			out[trimmed[:i]] = struct{}{}
+		}
+	}
+	return out
+}
+
+// callbackInputs returns the manifest-declared default inputs for a callback,
+// looked up by name and type.
+func (g *Generator) callbackInputs(info CallbackInfo) map[string]interface{} {
+	switch info.Type {
+	case config.CallbackTypeDeploy:
+		for i := range g.config.Deploys {
+			if g.config.Deploys[i].Name == info.Name {
+				return g.config.Deploys[i].Inputs
+			}
+		}
+	case config.CallbackTypeBuild:
+		for i := range g.config.Builds {
+			if g.config.Builds[i].Name == info.Name {
+				return g.config.Builds[i].Inputs
+			}
+		}
+	case config.CallbackTypeValidate:
+		if g.config.Validate != nil {
+			return g.config.Validate.Inputs
+		}
+	}
+	return nil
+}
+
+// operatorInputLines builds the "      key: value" with: lines for an
+// orchestrate callback's manifest-declared inputs. Passthrough expressions
+// survive verbatim; ${{ state.* }} references resolve at generation time;
+// literals emit as-is. Keys already present in skip (standard inputs) are
+// omitted. Output is sorted for deterministic generation.
+func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct{}) []string {
+	declared := g.callbackInputs(info)
+	if len(declared) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(declared))
+	for k := range declared {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var lines []string
+	for _, k := range keys {
+		if _, ok := skip[k]; ok {
+			continue
+		}
+		// Only emit inputs the callback actually declares as workflow inputs.
+		if !g.jobHasInput(info.JobID, k) {
+			continue
+		}
+		s, ok := declared[k].(string)
+		if !ok {
+			lines = append(lines, fmt.Sprintf("      %s: %v", k, declared[k]))
+			continue
+		}
+		val, err := resolveInputValue(s, g.state)
+		if err != nil {
+			// Unresolved state ref: emit verbatim so the failure is visible in
+			// the generated workflow rather than silently dropped.
+			val = s
+		}
+		lines = append(lines, fmt.Sprintf("      %s: %s", k, val))
+	}
+	return lines
 }
 
 func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workflow string, retryNum int) {
@@ -736,12 +1245,29 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	fmt.Fprintf(sb, "    name: %s - Retry %d\n", info.DisplayName, retryNum)
 	fmt.Fprintf(sb, "    needs: [setup, %s]\n", prevJobName)
 	fmt.Fprintf(sb, "    if: needs.%s.result == 'failure'\n", prevJobName)
-	if info.TimeoutMinutes > 0 {
+	switch {
+	case info.TimeoutMinutes > 0:
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
+	case info.Run != "":
+		// Inline run: retry shims are cascade-owned (#37).
+		g.writeOwnedTimeout(sb, "    ")
+	}
+
+	// Propagate the matrix strategy to the retry job so that ${{ matrix.* }}
+	// references in the reusable workflow's inputs remain bound. Without this,
+	// the retry job runs in a matrix-less context and GHA treats the expressions
+	// as unresolved empty strings.
+	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
+		g.writeStrategyBlock(sb, info.Matrix)
+	}
+
+	if info.Run != "" {
+		g.writeInlineRunBody(sb, info)
+		return
 	}
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 	g.writeWithInputs(sb, info)
-	sb.WriteString("    secrets: inherit\n\n")
+	writeSecretsBlock(sb, info.Secrets)
 }
 
 func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
@@ -759,10 +1285,15 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	sb.WriteString("  finalize:\n")
 	sb.WriteString("    name: Finalize\n")
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(allJobs, ", "))
-	// Run finalize if setup succeeded, regardless of callback results
-	// This allows recording state even when callbacks fail
+	// Run finalize whenever setup succeeded, regardless of how the callbacks
+	// ended. always() makes finalize fire even when a callback failed OR was
+	// cancelled, so the run that progressed partway before being superseded
+	// still records the state it actually reached instead of leaving the
+	// manifest stuck at a stale value. A cancelled setup, by contrast, means no
+	// state was produced yet, so finalize correctly stays gated on setup success.
 	sb.WriteString("    if: always() && needs.setup.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
 
 	// Output all callback outputs (sorted for deterministic output)
 	// g.outputs is keyed by job ID (e.g., "build-app")
@@ -786,7 +1317,7 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	}
 
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - uses: actions/checkout@v4\n")
+	writeActionStep(sb, g.config, "      ", actionCheckout)
 	// Need full git history for changelog generation
 	if g.config.ChangelogEnabled() {
 		sb.WriteString("        with:\n")
@@ -894,6 +1425,7 @@ func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
 func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string) {
 	sb.WriteString("      - name: Update Manifest\n")
 	sb.WriteString("        env:\n")
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	sb.WriteString("          HEAD_SHA: ${{ needs.setup.outputs.head_sha }}\n")
 	sb.WriteString("          VERSION: ${{ needs.setup.outputs.version }}\n")
 
@@ -910,7 +1442,7 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	}
 
 	// Add env vars for build artifact IDs. Only emitted when the build
-	// workflow declares an `artifact_id` output — the generator discovers
+	// workflow declares an `artifact_id` output. The generator discovers
 	// this via discoverOutputsAndInputs. When present, finalize captures
 	// the immutable identifier (e.g., a Docker image digest) so it can be
 	// stored in state and later passed to the publish callback on release.
@@ -939,6 +1471,17 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	// HEAD by default, so we resolve the branch from $GITHUB_REF.
 	sb.WriteString("          BRANCH=\"${GITHUB_REF##refs/heads/}\"\n")
 	sb.WriteString("          \n")
+
+	// When any callback has auto_commits: true it may have pushed commits after
+	// the workflow started, so HEAD is now ahead of the triggering SHA. Re-resolve
+	// HEAD here so apply_state_edits() writes the post-callback commit to
+	// state.<env>.sha rather than the stale triggering SHA.
+	if g.anyAutoCommits() {
+		sb.WriteString("          # One or more callbacks declared auto_commits: true; re-read HEAD\n")
+		sb.WriteString("          # so state records the post-callback commit, not the triggering SHA.\n")
+		sb.WriteString("          HEAD_SHA=\"$(git rev-parse HEAD)\"\n")
+		sb.WriteString("          \n")
+	}
 
 	// Define apply_state_edits() so the retry loop can re-apply yq edits after
 	// each rebase. This avoids merge conflicts on concurrent runs: the slower
@@ -988,33 +1531,22 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	sb.WriteString("          }\n")
 	sb.WriteString("          \n")
 
-	// Retry loop: fetch + reset + reapply + commit + push, up to 5 attempts.
-	// Concurrent orchestrate runs racing to push state used to fail with
-	// non-fast-forward; this loop keeps the slower run trying with a fresh
-	// commit on the latest tip.
-	sb.WriteString("          for attempt in 1 2 3 4 5; do\n")
-	sb.WriteString("            git fetch origin \"$BRANCH\"\n")
-	sb.WriteString("            git reset --hard \"origin/$BRANCH\"\n")
-	sb.WriteString("            apply_state_edits\n")
-	sb.WriteString("            if git diff --quiet \"$MANIFEST_FILE\"; then\n")
-	sb.WriteString("              echo \"No state changes\"\n")
-	sb.WriteString("              exit 0\n")
-	sb.WriteString("            fi\n")
-	sb.WriteString("            git add \"$MANIFEST_FILE\"\n")
+	// Persist the manifest state to the trunk branch. On real GitHub this writes
+	// through the Contents REST API so the commit is signed (Verified) and can
+	// bypass branch protection with a capable token; in act/gitea it pushes with
+	// the existing fetch/reset/reapply/commit/push retry loop. Concurrent
+	// orchestrate runs racing to write state are handled by retrying on top of
+	// the latest tip in both paths.
+	commitMessage := "chore: update state [skip ci]"
 	if len(g.config.Environments) > 0 {
-		sb.WriteString("            git commit -m \"chore: update state for $ENVIRONMENT [skip ci]\"\n")
-	} else {
-		sb.WriteString("            git commit -m \"chore: update state [skip ci]\"\n")
+		commitMessage = "chore: update state for $ENVIRONMENT [skip ci]"
 	}
-	sb.WriteString("            if git push origin \"HEAD:$BRANCH\"; then\n")
-	sb.WriteString("              echo \"Pushed state on attempt $attempt\"\n")
-	sb.WriteString("              exit 0\n")
-	sb.WriteString("            fi\n")
-	sb.WriteString("            echo \"Push attempt $attempt rejected (likely concurrent run); retrying...\" >&2\n")
-	sb.WriteString("            sleep $((RANDOM % 5 + 2))\n")
-	sb.WriteString("          done\n")
-	sb.WriteString("          echo \"::error::Failed to push state after 5 attempts\" >&2\n")
-	sb.WriteString("          exit 1\n")
+	writeStateCommitPush(sb, "          ", stateWriteParams{
+		applyFn:       "apply_state_edits",
+		commitMessage: commitMessage,
+		noChangeLabel: "No state changes",
+		successLabel:  "Pushed state",
+	})
 }
 
 func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
@@ -1035,7 +1567,7 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	if len(g.config.Environments) > 0 {
 		fmt.Fprintf(sb, "        if: github.event.inputs.environment == '%s' || github.event.inputs.environment == ''\n", g.config.Environments[0])
 	}
-	sb.WriteString("        uses: actions/github-script@v7\n")
+	writeActionUses(sb, g.config, "        ", actionGithubScript)
 	sb.WriteString("        with:\n")
 	fmt.Fprintf(sb, "          github-token: %s\n", g.config.Notify.GetToken())
 	sb.WriteString("          script: |\n")
@@ -1101,16 +1633,27 @@ func (g *Generator) writeFailureCheckStep(sb *strings.Builder, sorted []string) 
 
 	sb.WriteString("      - name: Check for Failures\n")
 
-	// Build condition that only checks abort callbacks
+	// Build condition that only checks abort callbacks. A cancelled predecessor
+	// (e.g. a run superseded by a newer push under cancel-in-progress) is treated
+	// the same as a failure so a mid-flight cancellation is not silently tolerated.
 	var conditions []string
 	for _, jobName := range abortCallbacks {
-		conditions = append(conditions, fmt.Sprintf("needs.%s.result == 'failure'", jobName))
+		conditions = append(conditions, failureOrCancelledCond(jobName))
 	}
 
 	fmt.Fprintf(sb, "        if: %s\n", strings.Join(conditions, " || "))
 	sb.WriteString("        run: |\n")
-	sb.WriteString("          echo \"One or more critical callbacks failed\"\n")
+	sb.WriteString("          echo \"One or more critical callbacks failed or were cancelled\"\n")
 	sb.WriteString("          exit 1\n")
+}
+
+// failureOrCancelledCond builds a GitHub Actions condition that matches when the
+// named job ended in either the 'failure' or 'cancelled' state. Cancellation is
+// an actionable, non-success outcome: under cancel-in-progress, a deploy
+// superseded mid-flight reports 'cancelled' rather than 'failure', and treating
+// it as a non-event would leave recorded state out of sync with reality.
+func failureOrCancelledCond(jobName string) string {
+	return fmt.Sprintf("contains(fromJSON('[\"failure\", \"cancelled\"]'), needs.%s.result)", jobName)
 }
 
 func (g *Generator) writeChangelogStep(sb *strings.Builder) {
@@ -1197,7 +1740,7 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 
 func (g *Generator) writeArtifactDownloadStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Download Release Artifacts\n")
-	sb.WriteString("        uses: actions/download-artifact@v4\n")
+	writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          pattern: release-*\n")
 	sb.WriteString("          path: release-artifacts\n")
@@ -1237,4 +1780,101 @@ func (g *Generator) writeArtifactUploadStep(sb *strings.Builder) {
 			sb.WriteString("          \n")
 		}
 	}
+}
+
+// passthroughArtifactName returns the canonical GHA artifact name for a build
+// job's passthrough upload: "build-{name}". Consumers reference the same name.
+func passthroughArtifactName(buildName string) string {
+	return fmt.Sprintf("build-%s", buildName)
+}
+
+// writePassthroughDownloadSteps emits one download-artifact step per entry in
+// info.PassthroughArtifact.Downloads. Each step downloads the artifact produced
+// by the named upstream build job and places it in a directory named after the
+// artifact so multiple downloads do not collide.
+func (g *Generator) writePassthroughDownloadSteps(sb *strings.Builder, info CallbackInfo) {
+	if info.PassthroughArtifact == nil || len(info.PassthroughArtifact.Downloads) == 0 {
+		return
+	}
+	for _, src := range info.PassthroughArtifact.Downloads {
+		name := passthroughArtifactName(src)
+		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
+		writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
+		sb.WriteString("        with:\n")
+		fmt.Fprintf(sb, "          name: %s\n", name)
+		fmt.Fprintf(sb, "          path: %s\n", name)
+		sb.WriteString("\n")
+	}
+}
+
+// writePassthroughUploadStep emits an upload-artifact step for
+// info.PassthroughArtifact.Upload when set. The artifact is named
+// "build-{job-name}" so downstream jobs can reference it by name.
+// Used only for inline-run callbacks where the step is injected inside the
+// cascade-owned job's steps list.
+func (g *Generator) writePassthroughUploadStep(sb *strings.Builder, info CallbackInfo) {
+	if info.PassthroughArtifact == nil || info.PassthroughArtifact.Upload == "" {
+		return
+	}
+	name := passthroughArtifactName(info.Name)
+	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
+	writeActionUses(sb, g.config, "        ", actionUploadArtifact)
+	sb.WriteString("        with:\n")
+	fmt.Fprintf(sb, "          name: %s\n", name)
+	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)
+	sb.WriteString("\n")
+}
+
+// writePassthroughDownloadJob emits a cascade-owned job (jobID) that runs
+// actions/download-artifact for each entry in info.PassthroughArtifact.Downloads.
+// Used for reusable-workflow callbacks where steps cannot be injected into the
+// jobs.<id>.uses block. The download job has the same needs/if as the callback
+// so it runs under the same conditions.
+func (g *Generator) writePassthroughDownloadJob(sb *strings.Builder, info CallbackInfo, jobID string) {
+	fmt.Fprintf(sb, "  %s:\n", jobID)
+	fmt.Fprintf(sb, "    name: Download artifacts for %s\n", info.DisplayName)
+
+	needs := []string{"setup"}
+	needs = append(needs, g.graph.GetDirectDependencies(info.JobID)...)
+	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
+
+	// Mirror the callback's if: condition so this job is skipped when the
+	// callback would be skipped (same run_policy).
+	g.writeIfCondition(sb, info, needs)
+
+	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
+	sb.WriteString("    steps:\n")
+	for _, src := range info.PassthroughArtifact.Downloads {
+		name := passthroughArtifactName(src)
+		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
+		writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
+		sb.WriteString("        with:\n")
+		fmt.Fprintf(sb, "          name: %s\n", name)
+		fmt.Fprintf(sb, "          path: %s\n", name)
+		sb.WriteString("\n")
+	}
+}
+
+// writePassthroughUploadJob emits a cascade-owned post-job that runs
+// actions/upload-artifact after info's reusable-workflow callback completes.
+// The artifact is named "build-{job-name}".
+// Used for reusable-workflow callbacks where steps cannot be injected into the
+// jobs.<id>.uses block.
+func (g *Generator) writePassthroughUploadJob(sb *strings.Builder, info CallbackInfo) {
+	postJobID := fmt.Sprintf("%s-upload", info.JobID)
+	name := passthroughArtifactName(info.Name)
+	fmt.Fprintf(sb, "  %s:\n", postJobID)
+	fmt.Fprintf(sb, "    name: Upload artifact %s\n", name)
+	fmt.Fprintf(sb, "    needs: [%s]\n", info.JobID)
+	fmt.Fprintf(sb, "    if: needs.%s.result == 'success'\n", info.JobID)
+	sb.WriteString("    runs-on: ubuntu-latest\n")
+	g.writeOwnedTimeout(sb, "    ")
+	sb.WriteString("    steps:\n")
+	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
+	writeActionUses(sb, g.config, "        ", actionUploadArtifact)
+	sb.WriteString("        with:\n")
+	fmt.Fprintf(sb, "          name: %s\n", name)
+	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)
+	sb.WriteString("\n")
 }

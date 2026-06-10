@@ -4,7 +4,7 @@ description: |
   fetch+reset+reapply+push retry loop (#101) instead of a single git push.
 
   Generator-output verification. Reproducing the actual concurrent-push race
-  needs real GHA — out of scope for the act+gitea harness.
+  needs real GHA and is out of scope for the act+gitea harness.
 
 config:
   trunk_branch: main

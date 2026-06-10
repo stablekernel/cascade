@@ -20,7 +20,7 @@ var (
 	// Per Conventional Commits, `BREAKING CHANGE:` is a footer that appears
 	// at the start of a line. Anchor with `(?m)^` and use `[ \t]+` between
 	// BREAKING and CHANGE so word-wrapped narrative (`...BREAKING\nCHANGE:...`)
-	// doesn't match — earlier `\s+` accepted newlines and flagged unrelated
+	// doesn't match. Earlier `\s+` accepted newlines and flagged unrelated
 	// commits as breaking.
 	breakingBodyPattern = regexp.MustCompile(`(?im)^BREAKING[ \t]+CHANGE\s*:`)
 	// Matches PR references like (#123) or (org/repo#123)
@@ -268,7 +268,7 @@ func formatCommitLine(c ConventionalCommit, repo string) string {
 	// Build attribution
 	var attribution string
 	if c.GitHubUsername != "" {
-		attribution = fmt.Sprintf(" — @%s", c.GitHubUsername)
+		attribution = fmt.Sprintf(" (@%s)", c.GitHubUsername)
 	}
 
 	// Escape @branch patterns to prevent GitHub from treating them as user mentions
@@ -291,7 +291,7 @@ func formatOtherCommitLine(c git.Commit, repo string) string {
 
 	var attribution string
 	if c.GitHubUsername != "" {
-		attribution = fmt.Sprintf(" — @%s", c.GitHubUsername)
+		attribution = fmt.Sprintf(" (@%s)", c.GitHubUsername)
 	}
 
 	// Escape @branch patterns to prevent GitHub from treating them as user mentions

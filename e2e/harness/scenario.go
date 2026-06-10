@@ -27,11 +27,18 @@ type Setup struct {
 
 // Config mirrors trunk-config.yaml structure
 type Config struct {
-	TrunkBranch  string         `yaml:"trunk_branch"`
-	Environments []string       `yaml:"environments"`
-	Builds       []BuildConfig  `yaml:"builds"`
-	Deploys      []DeployConfig `yaml:"deploys"`
-	Publish      *PublishConfig `yaml:"publish,omitempty"`
+	TrunkBranch       string         `yaml:"trunk_branch"`
+	Environments      []string       `yaml:"environments"`
+	JobTimeoutMinutes int            `yaml:"job_timeout_minutes,omitempty"`
+	Builds            []BuildConfig  `yaml:"builds"`
+	Deploys           []DeployConfig `yaml:"deploys"`
+	Publish           *PublishConfig `yaml:"publish,omitempty"`
+	// DispatchInputs carries operator-facing workflow_dispatch inputs through to
+	// the generated manifest untouched. A generic map (rather than a typed
+	// struct) is used so the harness stays decoupled from the generator's
+	// DispatchInput shape while preserving every key (type, options, default,
+	// description, required) across the marshal round-trip.
+	DispatchInputs map[string]map[string]any `yaml:"dispatch_inputs,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published
@@ -41,20 +48,38 @@ type PublishConfig struct {
 
 // BuildConfig defines a build component
 type BuildConfig struct {
-	Name           string   `yaml:"name"`
-	Workflow       string   `yaml:"workflow"`
-	Triggers       []string `yaml:"triggers"`
-	DependsOn      []string `yaml:"depends_on"`
-	TimeoutMinutes int      `yaml:"timeout_minutes,omitempty"`
+	Name              string            `yaml:"name"`
+	Workflow          string            `yaml:"workflow,omitempty"`
+	Run               string            `yaml:"run,omitempty"`
+	Shell             string            `yaml:"shell,omitempty"`
+	Triggers          []string          `yaml:"triggers"`
+	DependsOn         []string          `yaml:"depends_on"`
+	OptionalDependsOn []string          `yaml:"optional_depends_on,omitempty"`
+	TimeoutMinutes    int               `yaml:"timeout_minutes,omitempty"`
+	RunsOn            any               `yaml:"runs_on,omitempty"`
+	Permissions       map[string]string `yaml:"permissions,omitempty"`
+	Concurrency       *ConcurrencySpec  `yaml:"concurrency,omitempty"`
 }
 
 // DeployConfig defines a deploy component
 type DeployConfig struct {
-	Name           string   `yaml:"name"`
-	Workflow       string   `yaml:"workflow"`
-	Triggers       []string `yaml:"triggers"`
-	DependsOn      []string `yaml:"depends_on"`
-	TimeoutMinutes int      `yaml:"timeout_minutes,omitempty"`
+	Name              string            `yaml:"name"`
+	Workflow          string            `yaml:"workflow,omitempty"`
+	Run               string            `yaml:"run,omitempty"`
+	Shell             string            `yaml:"shell,omitempty"`
+	Triggers          []string          `yaml:"triggers"`
+	DependsOn         []string          `yaml:"depends_on"`
+	OptionalDependsOn []string          `yaml:"optional_depends_on,omitempty"`
+	TimeoutMinutes    int               `yaml:"timeout_minutes,omitempty"`
+	RunsOn            any               `yaml:"runs_on,omitempty"`
+	Permissions       map[string]string `yaml:"permissions,omitempty"`
+	Concurrency       *ConcurrencySpec  `yaml:"concurrency,omitempty"`
+}
+
+// ConcurrencySpec defines the per-callback concurrency block written to trunk-config.yaml.
+type ConcurrencySpec struct {
+	Group            string `yaml:"group"`
+	CancelInProgress bool   `yaml:"cancel_in_progress"`
 }
 
 // Commit defines a commit to create

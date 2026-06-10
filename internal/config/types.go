@@ -98,6 +98,7 @@ type TrunkConfig struct {
 	CLIVersion    string               `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
 	TagPrefix     string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
 	ReleaseToken  string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
+	StateToken    string               `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
 	ManifestFile  string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
 	ManifestKey   string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
 	ActionFolder  string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
@@ -167,8 +168,8 @@ func (c *TrunkConfig) GetSchemaVersion() int {
 // validateSchemaVersion is the testable core of the compatibility check. It
 // evaluates v against the provided min and current bounds and returns a warning
 // string (non-empty means warn-and-accept) or an error (means reject). Callers
-// that need to exercise the full matrix — including branches that are currently
-// unreachable when min == current — should call this directly.
+// that need to exercise the full matrix (including branches that are currently
+// unreachable when min == current) should call this directly.
 //
 // Rules:
 //
@@ -189,7 +190,7 @@ func validateSchemaVersion(v, min, current int) (warning string, err error) {
 	case v > current:
 		return "", fmt.Errorf(
 			"manifest requires schema version %d but this CLI supports schema versions up to %d; "+
-				"upgrade the CLI (cli_version) — see docs/versioning.md", v, current)
+				"upgrade the CLI (cli_version); see docs/versioning.md", v, current)
 	case v < min:
 		return "", fmt.Errorf(
 			"manifest schema version %d is no longer supported (minimum %d); "+
@@ -253,6 +254,20 @@ func (c *TrunkConfig) GetReleaseToken() string {
 		return "${{ secrets.GITHUB_TOKEN }}"
 	}
 	return c.ReleaseToken
+}
+
+// GetStateToken returns the configured state-write token expression or
+// "${{ secrets.GITHUB_TOKEN }}" if not specified. This token is used to write
+// the manifest state back to the trunk branch. On real GitHub the write goes
+// through the REST API, so a token with permission to bypass branch protection
+// (for example a GitHub App or bot token) can be supplied here to update a
+// protected trunk and produce a verified, signed commit.
+// Users should provide the full GitHub Actions expression, e.g. "${{ secrets.MY_TOKEN }}".
+func (c *TrunkConfig) GetStateToken() string {
+	if c.StateToken == "" {
+		return "${{ secrets.GITHUB_TOKEN }}"
+	}
+	return c.StateToken
 }
 
 // GetManifestFile returns the configured manifest file path or ".github/manifest.yaml" if not specified
@@ -340,7 +355,7 @@ type ValidateConfig struct {
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
 	// The validate gate is a singleton, so the spec scopes optional_depends_on
-	// (§2.11) and auto_commits (§5.5) to builds/deploys only — not here.
+	// (§2.11) and auto_commits (§5.5) to builds/deploys only; not here.
 	Secrets     *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Permissions map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	RunsOn      *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
@@ -365,13 +380,14 @@ type BuildConfig struct {
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
-	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
-	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
-	Matrix            *MatrixConfig      `yaml:"matrix,omitempty" json:"matrix,omitempty"` // Build fan-out (builds only)
-	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
-	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	Secrets             *SecretsConfig       `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions         map[string]string    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn              *RunsOn              `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency         *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Matrix              *MatrixConfig        `yaml:"matrix,omitempty" json:"matrix,omitempty"` // Build fan-out (builds only)
+	OptionalDependsOn   []string             `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits         bool                 `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	PassthroughArtifact *PassthroughArtifact `yaml:"artifact,omitempty" json:"artifact,omitempty"` // GHA artifact passing within an orchestrate run (#16)
 }
 
 // ArtifactConfig defines a release artifact produced by a build
@@ -380,6 +396,30 @@ type ArtifactConfig struct {
 	Name     string `yaml:"name" json:"name"`                             // Artifact identifier (e.g., "linux-amd64", "checksums")
 	Path     string `yaml:"path" json:"path"`                             // Glob pattern for files to include (e.g., "dist/*.tar.gz")
 	Required bool   `yaml:"required,omitempty" json:"required,omitempty"` // Fail release if artifact missing (default: true)
+}
+
+// PassthroughArtifact declares GHA artifacts passed between jobs within a single
+// orchestrate run via actions/upload-artifact and actions/download-artifact.
+// The uploaded artifact is named "build-{build-name}" so consumers can reference it.
+//
+// Example:
+//
+//	builds:
+//	  - name: compile
+//	    artifact:
+//	      upload: dist/
+//	  - name: sign
+//	    depends_on: [compile]
+//	    artifact:
+//	      downloads: [compile]   # downloads "build-compile" before running
+//	      upload: dist-signed/
+type PassthroughArtifact struct {
+	// Upload is the path glob to upload after this job completes (via upload-artifact).
+	// The artifact is named "build-{this-job-name}".
+	Upload string `yaml:"upload,omitempty" json:"upload,omitempty"`
+	// Downloads lists the names of upstream build jobs whose artifacts to download
+	// before this job runs (each downloads "build-{name}").
+	Downloads []string `yaml:"downloads,omitempty" json:"downloads,omitempty"`
 }
 
 // DeployConfig defines a deployment target
@@ -400,14 +440,15 @@ type DeployConfig struct {
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
-	Secrets           *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Permissions       map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	RunsOn            *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
-	Concurrency       *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
-	Rollout           *RolloutConfig     `yaml:"rollout,omitempty" json:"rollout,omitempty"` // Deploy rollout strategy (deploys only)
-	DeployTarget      *DeployTarget      `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
-	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
-	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	Secrets             *SecretsConfig       `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Permissions         map[string]string    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	RunsOn              *RunsOn              `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	Concurrency         *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Rollout             *RolloutConfig       `yaml:"rollout,omitempty" json:"rollout,omitempty"` // Deploy rollout strategy (deploys only)
+	DeployTarget        *DeployTarget        `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
+	OptionalDependsOn   []string             `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
+	AutoCommits         bool                 `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+	PassthroughArtifact *PassthroughArtifact `yaml:"artifact,omitempty" json:"artifact,omitempty"` // GHA artifact passing within an orchestrate run (#16)
 }
 
 // PublishConfig defines a publish callback invoked after a release is published.

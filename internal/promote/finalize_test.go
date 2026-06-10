@@ -61,7 +61,109 @@ func TestFinalize_UpdatesStateForSuccessfulDeploys(t *testing.T) {
 	require.NotNil(t, testState.Deploys)
 	require.NotNil(t, testState.Deploys["infra"], "infra deploy should be recorded (success)")
 	require.Equal(t, "abc123", testState.Deploys["infra"].SHA)
+	require.Equal(t, "v1.0.0-1", testState.Deploys["infra"].Version, "per-deployable version should be recorded on finalize")
 	require.Nil(t, testState.Deploys["app"], "app deploy should not be recorded (failure)")
+}
+
+func TestFinalize_RecordsPerDeployableVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, test, uat, prod]
+    deploys:
+      - name: svc-a
+        workflow: .github/workflows/deploy-svc-a.yaml
+      - name: svc-b
+        workflow: .github/workflows/deploy-svc-b.yaml
+  state:
+    dev:
+      sha: abc123
+      version: v1.2.0
+    test: {}
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	fin, err := NewFinalizer(configPath, "test")
+	require.NoError(t, err)
+	fin.SetActor("deployer")
+
+	fin.SetDeployResult("svc-a", "success")
+	fin.SetDeployResult("svc-b", "success")
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "test",
+			SHA:         "abc123",
+			Version:     "v1.2.0",
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	testState := cicdFile.State["test"]
+	require.NotNil(t, testState)
+
+	// Each deployable records the version it deployed, not just the env SHA.
+	require.NotNil(t, testState.Deploys["svc-a"])
+	require.Equal(t, "v1.2.0", testState.Deploys["svc-a"].Version)
+	require.Equal(t, "abc123", testState.Deploys["svc-a"].SHA)
+	require.Equal(t, "deployer", testState.Deploys["svc-a"].DeployedBy)
+
+	require.NotNil(t, testState.Deploys["svc-b"])
+	require.Equal(t, "v1.2.0", testState.Deploys["svc-b"].Version)
+}
+
+// TestFinalize_NonVersionedPromotionPreservesPriorDeployVersion verifies that a
+// promotion carrying no version (older/non-versioned flows) does not clobber a
+// previously recorded per-deployable version, keeping the field non-breaking.
+func TestFinalize_NonVersionedPromotionPreservesPriorDeployVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, test, uat, prod]
+    deploys:
+      - name: svc-a
+        workflow: .github/workflows/deploy-svc-a.yaml
+  state:
+    test:
+      sha: oldsha
+      deploys:
+        svc-a:
+          sha: oldsha
+          version: v1.0.0
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	fin, err := NewFinalizer(configPath, "test")
+	require.NoError(t, err)
+	fin.SetActor("deployer")
+
+	fin.SetDeployResult("svc-a", "success")
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "test",
+			SHA:         "newsha",
+			// No Version on this promotion.
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	ds := cicdFile.State["test"].Deploys["svc-a"]
+	require.NotNil(t, ds)
+	require.Equal(t, "newsha", ds.SHA, "SHA should advance")
+	require.Equal(t, "v1.0.0", ds.Version, "prior version should be preserved when promotion carries none")
 }
 
 func TestFinalize_UpdatesLatestReleaseOnPublish(t *testing.T) {
@@ -299,6 +401,31 @@ func TestFinalize_SetActor(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "custom-user", cicdFile.State["test"].CommittedBy)
+}
+
+// TestIsRealGitHub verifies the act/gitea vs real GitHub detection that decides
+// whether CommitAndPush writes via the REST API or plain git push.
+func TestIsRealGitHub(t *testing.T) {
+	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
+	require.True(t, isRealGitHub(), "github.com must be detected as real GitHub")
+
+	t.Setenv("GITHUB_SERVER_URL", "")
+	require.True(t, isRealGitHub(), "unset server URL defaults to real GitHub")
+
+	t.Setenv("GITHUB_SERVER_URL", "http://gitea:3000")
+	require.False(t, isRealGitHub(), "gitea server URL must take the git-push path")
+}
+
+// TestTrunkBranchFromEnv verifies branch resolution for the API state write.
+func TestTrunkBranchFromEnv(t *testing.T) {
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	require.Equal(t, "main", trunkBranchFromEnv())
+
+	t.Setenv("GITHUB_REF", "develop")
+	require.Equal(t, "develop", trunkBranchFromEnv())
+
+	t.Setenv("GITHUB_REF", "")
+	require.Equal(t, "main", trunkBranchFromEnv())
 }
 
 // TestFinalize_SkippedDeploys tests that skipped deploys don't update deploy state.

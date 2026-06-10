@@ -127,7 +127,7 @@ func (g *GiteaContainer) setupAdmin(ctx context.Context) error {
 
 	// The CLI writes the user to SQLite directly while the gitea API server
 	// runs in a separate process. /api/v1/version (used as the readiness probe)
-	// returns OK before the API can authenticate the freshly-written admin —
+	// returns OK before the API can authenticate the freshly-written admin.
 	// observed in CI as "401 user does not exist [uid: 0, name: testadmin]"
 	// on the first request. Poll an authenticated endpoint until it succeeds.
 	return g.waitForAdminAuth(ctx, 30*time.Second)

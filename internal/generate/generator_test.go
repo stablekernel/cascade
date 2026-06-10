@@ -215,8 +215,10 @@ func TestGenerator_CallbackTimeoutMinutes(t *testing.T) {
 }
 
 // TestGenerator_CallbackTimeoutOmittedWhenZero asserts no timeout-minutes is
-// emitted when the field is unset/zero — fall back to the GHA default rather
-// than emitting an explicit `timeout-minutes: 0` (which would be invalid).
+// emitted on a reusable-workflow callback (jobs.<id>.uses) when its
+// timeout_minutes is unset; those callers own their own timeout. Cascade-owned
+// jobs (setup/finalize) still receive the owned-job default (#37), so the check
+// is scoped to the callback job block, not the whole workflow.
 func TestGenerator_CallbackTimeoutOmittedWhenZero(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
@@ -234,7 +236,8 @@ func TestGenerator_CallbackTimeoutOmittedWhenZero(t *testing.T) {
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.NotContains(t, result, "timeout-minutes:", "no timeout-minutes when unset")
+	block := jobBlock(t, result, "build-app")
+	assert.NotContains(t, block, "timeout-minutes:", "no timeout-minutes on reusable-workflow callback when unset")
 }
 
 func TestGenerator_GenerateWithRetries(t *testing.T) {
@@ -389,11 +392,13 @@ on:
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	// Verify failure check only includes abort callbacks
+	// Verify failure check only includes abort callbacks. The condition now
+	// matches both failure and cancelled outcomes.
 	assert.Contains(t, result, "Check for Failures")
-	assert.Contains(t, result, "needs.build-app.result == 'failure'")
-	// Should NOT include notifications in failure check
-	assert.NotContains(t, result, "needs.build-notifications.result == 'failure'")
+	assert.Contains(t, result, `contains(fromJSON('["failure", "cancelled"]'), needs.build-app.result)`)
+	// Should NOT include notifications in failure check (it still appears in the
+	// summary table and finalize needs:, so scope to the guard's condition form).
+	assert.NotContains(t, result, `needs.build-notifications.result)`)
 }
 
 func TestGenerator_GenerateWithAllContinue(t *testing.T) {
@@ -1384,7 +1389,7 @@ on:
 }
 
 // =============================================================================
-// Publish callback (#39) — artifact_id tracking in orchestrate finalize
+// Publish callback (#39): artifact_id tracking in orchestrate finalize
 // =============================================================================
 
 func TestGenerator_BuildArtifactIDTracked(t *testing.T) {
@@ -1598,7 +1603,7 @@ func TestGenerator_ExtraTriggers_MergeGroup(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, result, "  merge_group:\n", "merge_group trigger must be emitted when MergeGroup is non-nil")
-	// Lane behavior is a separate issue — no merge_queue: config involved here.
+	// Lane behavior is a separate issue; no merge_queue: config involved here.
 	assert.NotContains(t, result, "merge_queue:", "lane behavior config must not appear from trigger emission alone")
 }
 
@@ -1707,7 +1712,7 @@ func TestGenerator_BuildMatrix_MaxParallelOmittedWhenZero(t *testing.T) {
 				Triggers: []string{"src/**"},
 				Matrix: &config.MatrixConfig{
 					Dimensions: map[string][]string{"os": {"linux"}},
-					// MaxParallel zero and FailFast nil — neither should appear.
+					// MaxParallel zero and FailFast nil: neither should appear.
 				},
 			},
 		},
@@ -1742,4 +1747,551 @@ func TestGenerator_BuildMatrix_NoMatrixNoStrategy(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotContains(t, result, "strategy:", "no matrix → no strategy block")
+}
+
+// TestGenerator_PassthroughArtifact_InlineUpload asserts that an inline-run
+// build declaring artifact.upload gets an upload-artifact step injected after
+// the run step in the same cascade-owned job.
+func TestGenerator_PassthroughArtifact_InlineUpload(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Run:      "make build",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The job must contain the upload-artifact step.
+	assert.Contains(t, result, "uses: actions/upload-artifact@v4",
+		"inline build with artifact.upload must emit upload-artifact step")
+	// The artifact name must be "build-compile".
+	assert.Contains(t, result, "name: build-compile",
+		"uploaded artifact must be named build-{build-name}")
+	// The path must match the declared upload path.
+	assert.Contains(t, result, "path: dist/",
+		"upload step must set path to artifact.upload value")
+	// No download step; this build has no downloads configured.
+	assert.NotContains(t, result, "uses: actions/download-artifact@v4",
+		"build without artifact.downloads must not emit download-artifact step")
+}
+
+// TestGenerator_PassthroughArtifact_InlineDownload asserts that an inline-run
+// build declaring artifact.downloads gets one download-artifact step per declared
+// source injected before the run step.
+func TestGenerator_PassthroughArtifact_InlineDownload(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Run:      "make build",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+			{
+				Name:      "sign",
+				Run:       "make sign",
+				DependsOn: []string{"compile"},
+				Triggers:  []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Downloads: []string{"compile"},
+					Upload:    "dist-signed/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The sign job must contain a download-artifact step referencing the
+	// compile job's artifact.
+	assert.Contains(t, result, "uses: actions/download-artifact@v4",
+		"build with artifact.downloads must emit download-artifact step")
+	assert.Contains(t, result, "name: build-compile",
+		"download step must reference the producer's artifact name")
+	// And it still uploads its own artifact.
+	assert.Contains(t, result, "name: build-sign",
+		"sign job must upload its own artifact named build-sign")
+}
+
+// TestGenerator_PassthroughArtifact_NoArtifactNoSteps asserts that a build
+// without artifact: produces neither upload-artifact nor download-artifact steps
+// (non-breaking for existing configs).
+func TestGenerator_PassthroughArtifact_NoArtifactNoSteps(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The finalize job uses download-artifact for release assets; ensure we do
+	// not accidentally count that. Check that neither passthrough action appears
+	// outside the finalize/release context by verifying they are absent entirely
+	// (no release config is set, so the finalize job emits no artifact steps either).
+	assert.NotContains(t, result, "actions/upload-artifact@v4",
+		"build without artifact: must not emit upload-artifact")
+	// download-artifact only appears in finalize when HasReleaseArtifacts. It is
+	// absent here because no release artifacts are declared and no passthrough is set.
+	assert.NotContains(t, result, "actions/download-artifact@v4",
+		"build without artifact: must not emit download-artifact")
+}
+
+// TestGenerator_PassthroughArtifact_ReusableWorkflowUploadJob asserts that a
+// reusable-workflow build declaring artifact.upload gets a cascade-owned
+// post-job ({job-id}-upload) that runs upload-artifact after the callback.
+func TestGenerator_PassthroughArtifact_ReusableWorkflowUploadJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Workflow: ".github/workflows/build.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// A post-upload job must be emitted.
+	assert.Contains(t, result, "build-compile-upload:",
+		"reusable-workflow build with artifact.upload must emit a post-upload job")
+	assert.Contains(t, result, "uses: actions/upload-artifact@v4",
+		"post-upload job must use upload-artifact action")
+	assert.Contains(t, result, "name: build-compile",
+		"uploaded artifact must be named build-{build-name}")
+	// The post-upload job must depend on the callback job.
+	assert.Contains(t, result, "needs: [build-compile]",
+		"post-upload job must declare needs: [build-compile]")
+}
+
+// TestGenerator_PassthroughArtifact_ReusableWorkflowDownloadJob asserts that a
+// reusable-workflow build declaring artifact.downloads gets a cascade-owned
+// pre-job ({job-id}-download) that fetches the artifacts, and the callback job
+// depends on it.
+func TestGenerator_PassthroughArtifact_ReusableWorkflowDownloadJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/compile.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/sign.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Workflow: ".github/workflows/compile.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+			{
+				Name:      "sign",
+				Workflow:  ".github/workflows/sign.yaml",
+				DependsOn: []string{"compile"},
+				Triggers:  []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Downloads: []string{"compile"},
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// A pre-download job must be emitted for the sign callback.
+	assert.Contains(t, result, "build-sign-download:",
+		"reusable-workflow build with artifact.downloads must emit a pre-download job")
+	assert.Contains(t, result, "uses: actions/download-artifact@v4",
+		"pre-download job must use download-artifact action")
+	assert.Contains(t, result, "name: build-compile",
+		"pre-download step must reference the producer's artifact name build-compile")
+	// The sign callback job must depend on the pre-download job.
+	assert.Contains(t, result, "build-sign-download",
+		"sign callback job needs must include the pre-download job")
+
+	// The compile callback must also emit its post-upload job.
+	assert.Contains(t, result, "build-compile-upload:",
+		"compile build with artifact.upload must emit its post-upload job")
+}
+
+// TestGenerator_PassthroughArtifact_E2E_OrchestrateYAML exercises the full
+// parse → generate pipeline with a manifest that declares a three-stage inline
+// build pipeline: compile → sign → package. It asserts that the generated
+// orchestrate.yaml carries the correct upload-artifact and download-artifact
+// steps so the artifact flows from compile through sign to package without any
+// external registry workaround.
+func TestGenerator_PassthroughArtifact_E2E_OrchestrateYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write a manifest file that exercises the full artifact-passing path.
+	manifest := `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+    builds:
+      - name: compile
+        run: make build
+        triggers:
+          - "src/**"
+        artifact:
+          upload: dist/
+      - name: sign
+        run: make sign
+        depends_on: [compile]
+        triggers:
+          - "src/**"
+        artifact:
+          downloads: [compile]
+          upload: dist-signed/
+      - name: package
+        run: make package
+        depends_on: [sign]
+        triggers:
+          - "src/**"
+        artifact:
+          downloads: [sign]
+`
+	manifestPath := filepath.Join(tmpDir, "manifest.yaml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(manifest), 0644))
+
+	cfg, err := config.Parse(manifestPath)
+	require.NoError(t, err)
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// compile: uploads dist/
+	assert.Contains(t, result, "name: build-compile",
+		"compile job must upload artifact named build-compile")
+	assert.Contains(t, result, "path: dist/",
+		"compile upload step must reference dist/")
+
+	// sign: downloads build-compile and uploads dist-signed/
+	assert.Contains(t, result, "name: build-compile",
+		"sign job must download the compile artifact")
+	assert.Contains(t, result, "name: build-sign",
+		"sign job must upload artifact named build-sign")
+	assert.Contains(t, result, "path: dist-signed/",
+		"sign upload step must reference dist-signed/")
+
+	// package: downloads build-sign
+	assert.Contains(t, result, "name: build-sign",
+		"package job must download the sign artifact")
+
+	// The generated workflow must be valid YAML (no stray tabs or bad indentation
+	// introduced by the artifact step injection). Count action references as a
+	// proxy: 3 upload steps (compile, sign) + package has no upload so 2 uploads,
+	// and 2 download steps (sign downloads compile, package downloads sign).
+	uploadCount := strings.Count(result, "uses: actions/upload-artifact@v4")
+	downloadCount := strings.Count(result, "uses: actions/download-artifact@v4")
+	assert.Equal(t, 2, uploadCount,
+		"expected 2 upload-artifact steps (compile and sign)")
+	assert.Equal(t, 2, downloadCount,
+		"expected 2 download-artifact steps (sign and package)")
+}
+
+// TestGenerator_DispatchInputs_StringType asserts that a string dispatch_input
+// is emitted correctly in the workflow_dispatch.inputs block.
+func TestGenerator_DispatchInputs_StringType(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"deploy_tag": {
+				Type:        config.DispatchInputTypeString,
+				Description: "Override image tag",
+				Required:    false,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      deploy_tag:\n")
+	assert.Contains(t, result, "        type: string\n")
+	assert.Contains(t, result, `        description: "Override image tag"`)
+	// required: omitted when false
+	assert.NotContains(t, result, "        required: true\n")
+}
+
+// TestGenerator_DispatchInputs_BooleanType asserts a boolean dispatch_input is
+// emitted with type: boolean.
+func TestGenerator_DispatchInputs_BooleanType(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"force_rebuild": {
+				Type:    config.DispatchInputTypeBoolean,
+				Default: false,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      force_rebuild:\n")
+	assert.Contains(t, result, "        type: boolean\n")
+	assert.Contains(t, result, "        default: 'false'\n")
+}
+
+// TestGenerator_DispatchInputs_ChoiceType asserts a choice dispatch_input emits
+// type: choice and all options.
+func TestGenerator_DispatchInputs_ChoiceType(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"target_region": {
+				Type:    config.DispatchInputTypeChoice,
+				Options: []string{"us-east-1", "eu-west-1"},
+				Default: "us-east-1",
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      target_region:\n")
+	assert.Contains(t, result, "        type: choice\n")
+	assert.Contains(t, result, "        options:\n")
+	assert.Contains(t, result, "          - us-east-1\n")
+	assert.Contains(t, result, "          - eu-west-1\n")
+	assert.Contains(t, result, "        default: 'us-east-1'\n")
+}
+
+// TestGenerator_DispatchInputs_RequiredFlag asserts required: true is emitted
+// when the DispatchInput has Required: true.
+func TestGenerator_DispatchInputs_RequiredFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"release_notes": {
+				Type:     config.DispatchInputTypeString,
+				Required: true,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "      release_notes:\n")
+	assert.Contains(t, result, "        required: true\n")
+}
+
+// TestGenerator_DispatchInputs_OmittedWhenEmpty asserts the dispatch_inputs
+// block produces no extra entries when DispatchInputs is nil.
+func TestGenerator_DispatchInputs_OmittedWhenEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// Only the generator-owned inputs should appear.
+	assert.Contains(t, result, "      environment:\n")
+	assert.Contains(t, result, "      dry_run:\n")
+}
+
+// TestGenerator_DispatchInputs_RoutedToCallback asserts that when a callback
+// workflow declares a dispatch input by name, the generator threads
+// ${{ inputs.<name> }} into the job's with: block.
+func TestGenerator_DispatchInputs_RoutedToCallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+
+	// Build workflow that declares the dispatch input as one of its inputs.
+	buildWorkflow := `
+on:
+  workflow_call:
+    inputs:
+      target_region:
+        type: string
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte(buildWorkflow), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"target_region": {
+				Type:    config.DispatchInputTypeChoice,
+				Options: []string{"us-east-1", "eu-west-1"},
+				Default: "us-east-1",
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The dispatch input must appear in the on: block.
+	assert.Contains(t, result, "      target_region:\n")
+	// The build job must receive ${{ inputs.target_region }} via with:.
+	assert.Contains(t, result, "      target_region: ${{ inputs.target_region }}\n")
+}
+
+// TestGenerator_DispatchInputs_NotRoutedWhenCallbackOmitsIt asserts that
+// dispatch inputs are NOT added to a callback's with: block when the callback
+// workflow does not declare that input.
+func TestGenerator_DispatchInputs_NotRoutedWhenCallbackOmitsIt(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	// Build workflow that does NOT declare target_region.
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"target_region": {
+				Type:    config.DispatchInputTypeChoice,
+				Options: []string{"us-east-1", "eu-west-1"},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The dispatch input must appear in the on: block.
+	assert.Contains(t, result, "      target_region:\n")
+	// But must NOT be threaded into the build job's with: (callback doesn't declare it).
+	assert.NotContains(t, result, "target_region: ${{ inputs.target_region }}")
+}
+
+// TestGenerator_DispatchInputs_SortedDeterministic asserts multiple dispatch
+// inputs are emitted in alphabetical order for stable diffs.
+func TestGenerator_DispatchInputs_SortedDeterministic(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"zzz_last":  {Type: config.DispatchInputTypeString},
+			"aaa_first": {Type: config.DispatchInputTypeString},
+			"mmm_mid":   {Type: config.DispatchInputTypeString},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	idxFirst := strings.Index(result, "      aaa_first:\n")
+	idxMid := strings.Index(result, "      mmm_mid:\n")
+	idxLast := strings.Index(result, "      zzz_last:\n")
+	require.Greater(t, idxFirst, 0)
+	require.Greater(t, idxMid, 0)
+	require.Greater(t, idxLast, 0)
+	assert.Less(t, idxFirst, idxMid, "aaa_first must appear before mmm_mid")
+	assert.Less(t, idxMid, idxLast, "mmm_mid must appear before zzz_last")
 }

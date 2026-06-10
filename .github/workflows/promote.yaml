@@ -53,6 +53,10 @@ permissions:
   contents: write
   actions: write
 
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: false
+
 jobs:
   preflight:
     name: Pre-flight Check
@@ -255,7 +259,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-data.outputs.sem_version }}
         run: |
-          # Only dispatch on real GitHub — in act/gitea e2e environments
+          # Only dispatch on real GitHub. In act/gitea e2e environments
           # GITHUB_SERVER_URL is http://gitea:3000 and the Release workflow
           # doesn't exist, so skip silently.
           if [[ "$GITHUB_SERVER_URL" != "https://github.com" ]]; then
@@ -269,6 +273,7 @@ jobs:
       - name: Finalize Promotion
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}
         run: |

@@ -31,6 +31,23 @@ runs:
           echo "installed=false" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Resolve version tag
+      if: steps.check.outputs.installed != 'true'
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        # Resolve "latest" to the concrete release tag so the cache key is
+        # stable across version bumps and never aliases multiple releases.
+        if [[ "$VERSION" == "latest" ]]; then
+          TAG=$(gh release list -R stablekernel/cascade -L 1 --json tagName -q '.[0].tagName')
+        else
+          TAG="$VERSION"
+        fi
+        printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+
     - name: Determine archive name
       if: steps.check.outputs.installed != 'true'
       id: binary
@@ -51,22 +68,16 @@ runs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /usr/local/bin/cascade
-        key: cascade-${{ steps.binary.outputs.name }}-${{ inputs.version }}
+        key: cascade-${{ steps.binary.outputs.name }}-${{ steps.resolve.outputs.tag }}
 
     - name: Download and extract CLI
       if: steps.check.outputs.installed != 'true' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
-        VERSION: ${{ inputs.version }}
+        TAG: ${{ steps.resolve.outputs.tag }}
         ARCHIVE_PATTERN: ${{ steps.binary.outputs.pattern }}
       run: |
-        if [[ "$VERSION" == "latest" ]]; then
-          TAG=$(gh release list -R stablekernel/cascade -L 1 --json tagName -q '.[0].tagName')
-        else
-          TAG="$VERSION"
-        fi
-
         echo "Downloading archive matching $ARCHIVE_PATTERN from release $TAG..."
         TMPDIR=$(mktemp -d)
         gh release download "$TAG" \
@@ -85,8 +96,8 @@ runs:
         # Robustly capture a single-line version, sanitized for GHA's output
         # file format. Older form `echo "version=$RAW" >> $GITHUB_OUTPUT`
         # produced `##[error]Invalid format 'unknown'` against the v1.1.0
-        # binary — likely a GHA file-command parser quirk where certain
-        # values get mis-interpreted as a format directive. Strip CR/newlines
+        # binary (likely a GHA file-command parser quirk where certain
+        # values get mis-interpreted as a format directive). Strip CR/newlines
         # and non-printable characters, fall back to "unknown" on empty/error,
         # cap length, and use printf instead of echo to avoid backslash
         # interpretation surprises.

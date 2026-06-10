@@ -24,7 +24,7 @@ go install github.com/stablekernel/cascade/cmd/cascade@v2.0.4
 cascade version
 ```
 
-In GitHub Actions, generated workflows install the CLI for you via the setup action — you don't need to add it explicitly. To pin a version, set `cli_version` in your manifest.
+In GitHub Actions, generated workflows install the CLI for you via the setup action, so you don't need to add it explicitly. To pin a version, set `cli_version` in your manifest.
 
 If you need to invoke it manually:
 
@@ -83,7 +83,7 @@ ci:
     prod: {}
 ```
 
-The framework owns `state:` and `latest_release:`. The `state: { dev: {}, ... }` skeleton is enough — the workflows fill in details on every run.
+The framework owns `state:` and `latest_release:`. The `state: { dev: {}, ... }` skeleton is enough. The workflows fill in the details on every run.
 
 See [Configuration Reference](configuration.md) for every field.
 
@@ -260,8 +260,8 @@ cascade generate-workflow --force
 ```
 
 This creates:
-- `.github/workflows/orchestrate.yaml` — runs on merge to trunk
-- `.github/workflows/promote.yaml` — manual promotion between environments
+- `.github/workflows/orchestrate.yaml` runs on merge to trunk
+- `.github/workflows/promote.yaml` handles manual promotion between environments
 
 ## Step 5: Validate
 

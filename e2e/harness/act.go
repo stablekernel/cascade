@@ -75,7 +75,7 @@ func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string,
 		return nil, fmt.Errorf("failed to install act: %w", err)
 	}
 
-	// Network override is passed on the CLI as `--network=<name>` — act's
+	// Network override is passed on the CLI as `--network=<name>`. Act's
 	// dedicated flag drives ContainerNetworkMode; --container-options is
 	// appended after docker create and cannot override the network mode.
 	actrc := `mkdir -p /root/.config/act && cat > /root/.config/act/actrc <<'EOF'
@@ -91,7 +91,7 @@ EOF`
 	// Pre-pull the act job-container image into the host docker daemon (via
 	// the bind-mounted docker socket). Without this, every parallel scenario
 	// triggers its own `docker pull` and races to fetch from registry-1.docker.io
-	// — under proxied or rate-limited connections (e.g., Docker Desktop on
+	// Under proxied or rate-limited connections (e.g., Docker Desktop on
 	// macOS) those pulls intermittently time out and fail the workflow.
 	// The pull is best-effort: if it fails (offline, image already present,
 	// proxy hiccup), we proceed; act will retry on its own when needed.
@@ -282,7 +282,7 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 // that targeted a specific workflow file but produced zero parsed jobs is also
 // a failure: act emitted no job events because it could not find or load the
 // workflow (e.g. a missing orchestrate.yaml). Without this, such a run
-// masqueraded as Conclusion="success" with 0 jobs — a missing workflow showing
+// masqueraded as Conclusion="success" with 0 jobs. A missing workflow showing
 // up as a green-but-empty scenario (#25).
 func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string, exitCode int) {
 	if exitCode != 0 {

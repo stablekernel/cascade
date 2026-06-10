@@ -82,6 +82,58 @@ func TestIsTriggered(t *testing.T) {
 			changedFiles: []string{"README.md", "src/main.go"},
 			want:         true,
 		},
+
+		// Negation ("!") patterns: a path triggers when it matches at least
+		// one positive pattern AND no negation pattern. This mirrors the
+		// emitted GitHub Actions paths filter so CLI detection agrees with GHA.
+		{
+			name:         "docs-only change excluded by negation does not trigger",
+			triggers:     []string{"**", "!**/*.md", "!docs/**"},
+			changedFiles: []string{"docs/README.md"},
+			want:         false,
+		},
+		{
+			name:         "source change triggers despite negation",
+			triggers:     []string{"**", "!**/*.md", "!docs/**"},
+			changedFiles: []string{"src/main.go"},
+			want:         true,
+		},
+		{
+			name:         "mixed changeset triggers when a non-excluded file is present",
+			triggers:     []string{"**", "!**/*.md", "!docs/**"},
+			changedFiles: []string{"docs/README.md", "src/main.go"},
+			want:         true,
+		},
+		{
+			name:         "negation excludes a file that matches a positive pattern",
+			triggers:     []string{"src/**", "!src/**/*.md"},
+			changedFiles: []string{"src/docs.md"},
+			want:         false,
+		},
+		{
+			name:         "negation-only list triggers any non-excluded file",
+			triggers:     []string{"!**/*.md"},
+			changedFiles: []string{"src/main.go"},
+			want:         true,
+		},
+		{
+			name:         "negation-only list excludes a matching file",
+			triggers:     []string{"!**/*.md"},
+			changedFiles: []string{"README.md"},
+			want:         false,
+		},
+		{
+			name:         "ordering does not matter: negation before positive still excludes",
+			triggers:     []string{"!**/*.md", "**"},
+			changedFiles: []string{"docs/README.md"},
+			want:         false,
+		},
+		{
+			name:         "positive-only behaviour is unchanged by negation support",
+			triggers:     []string{"src/**", "Dockerfile"},
+			changedFiles: []string{"Dockerfile"},
+			want:         true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -350,9 +350,9 @@ func Validate(cfg *TrunkConfig) []string {
 				}
 			}
 			prefix := fmt.Sprintf("external[%d].deploys[%d]", i, j)
-			errors = append(errors, validateWorkflowRunXOR(prefix, d.Workflow, d.Run, d.Shell)...)
-			isReusable := d.Workflow != ""
-			errors = append(errors, validateJobControlFields(prefix, isReusable, d.RunsOn, d.Concurrency)...)
+			errors = append(errors, validateExternalDeployWorkflowOnly(prefix, d.Workflow, d.Run, d.Shell)...)
+			// External deploys are always reusable-workflow callbacks.
+			errors = append(errors, validateJobControlFields(prefix, true, d.RunsOn, d.Concurrency)...)
 			errors = append(errors, validatePermissions(prefix, d.Permissions)...)
 			errors = append(errors, validateSecrets(prefix, d.Secrets)...)
 			errors = append(errors, validateRollout(prefix, d.Rollout, cfg.Environments)...)
