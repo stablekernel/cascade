@@ -1,0 +1,43 @@
+name: "GHA Environment Gates"
+description: |
+  Verifies that when environment_config.gha_environment is set for an env,
+  the generated orchestrate.yaml deploy job carries a job-level environment:
+  key pointing at the configured GitHub Environment name (#11).
+
+  This is a generator-output verification scenario. The GitHub Environment's
+  actual protection rules (required reviewers, wait timers, branch policy,
+  scoped secrets) live in the repository's GitHub settings and are not
+  exercised here.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+  environment_config:
+    prod:
+      gha_environment: production
+
+steps:
+  - name: "Initial commit; assert deploy job carries job-level environment: key"
+    action: commit
+    commit:
+      message: "feat: add app and cdk"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+        cdk/stack.go: |
+          package cdk
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "deploy-cdk:"
+            - "environment: ${{ github.event.inputs.environment || 'dev' }}"

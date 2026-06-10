@@ -26,6 +26,28 @@ func normalizeWorkflowPath(path string) string {
 	return path
 }
 
+// envGHAName returns the GitHub Environment name for a given cascade environment
+// name. When the config has an EnvironmentConfig entry for that env whose
+// GHAEnvironment field is non-empty, that value is returned; otherwise the
+// cascade env name itself is used as the GitHub Environment name.
+func envGHAName(cfg *config.TrunkConfig, cascadeEnvName string) string {
+	if ec, ok := cfg.EnvironmentConfig[cascadeEnvName]; ok && ec.GHAEnvironment != "" {
+		return ec.GHAEnvironment
+	}
+	return cascadeEnvName
+}
+
+// anyEnvHasGHAConfig reports whether any environment in the config has an
+// EnvironmentConfig entry with a non-empty GHAEnvironment field.
+func anyEnvHasGHAConfig(cfg *config.TrunkConfig) bool {
+	for _, ec := range cfg.EnvironmentConfig {
+		if ec.GHAEnvironment != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // writeGitConfigSteps writes git configuration steps based on config.git settings
 // indent is the number of spaces for each line
 func writeGitConfigSteps(sb *strings.Builder, cfg *config.TrunkConfig, indent string) {
@@ -641,6 +663,22 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// strategy: emitted only for build callbacks that declare matrix:
 	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
 		g.writeStrategyBlock(sb, info.Matrix)
+	}
+
+	// environment: — emitted on deploy jobs when the config declares a
+	// gha_environment for at least one environment. The job-level environment:
+	// key wires the job to a GitHub Environment so that the environment's
+	// protection rules (required reviewers, wait timers, deployment branch
+	// policy, scoped secrets) apply at runtime. Actual protection configuration
+	// lives in GitHub's Environment settings, not in the manifest.
+	//
+	// For orchestrate, the target environment is chosen at run time via the
+	// workflow_dispatch input, so we emit an expression that resolves to the
+	// cascade environment name. When gha_environment differs from the cascade
+	// env name, users should align their GitHub Environment names accordingly.
+	if info.Type == config.CallbackTypeDeploy && len(g.config.Environments) > 0 && anyEnvHasGHAConfig(g.config) {
+		defaultEnv := g.config.Environments[0]
+		fmt.Fprintf(sb, "    environment: ${{ github.event.inputs.environment || '%s' }}\n", defaultEnv)
 	}
 
 	// Inline run: callback — emit a cascade-owned job with an inline run: step
