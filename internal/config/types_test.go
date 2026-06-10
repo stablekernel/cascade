@@ -420,6 +420,16 @@ func TestGetReleaseToken(t *testing.T) {
 	assert.Equal(t, "${{ secrets.CUSTOM_RELEASE_TOKEN }}", cfg.GetReleaseToken())
 }
 
+func TestGetStateToken(t *testing.T) {
+	// Default when not set
+	cfg := &TrunkConfig{}
+	assert.Equal(t, "${{ secrets.GITHUB_TOKEN }}", cfg.GetStateToken())
+
+	// Configured value (full expression)
+	cfg.StateToken = "${{ secrets.CASCADE_BOT_TOKEN }}"
+	assert.Equal(t, "${{ secrets.CASCADE_BOT_TOKEN }}", cfg.GetStateToken())
+}
+
 func TestGetGitMode(t *testing.T) {
 	// Default when no git config
 	cfg := &TrunkConfig{}

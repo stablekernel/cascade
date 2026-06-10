@@ -403,6 +403,31 @@ func TestFinalize_SetActor(t *testing.T) {
 	require.Equal(t, "custom-user", cicdFile.State["test"].CommittedBy)
 }
 
+// TestIsRealGitHub verifies the act/gitea vs real GitHub detection that decides
+// whether CommitAndPush writes via the REST API or plain git push.
+func TestIsRealGitHub(t *testing.T) {
+	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
+	require.True(t, isRealGitHub(), "github.com must be detected as real GitHub")
+
+	t.Setenv("GITHUB_SERVER_URL", "")
+	require.True(t, isRealGitHub(), "unset server URL defaults to real GitHub")
+
+	t.Setenv("GITHUB_SERVER_URL", "http://gitea:3000")
+	require.False(t, isRealGitHub(), "gitea server URL must take the git-push path")
+}
+
+// TestTrunkBranchFromEnv verifies branch resolution for the API state write.
+func TestTrunkBranchFromEnv(t *testing.T) {
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	require.Equal(t, "main", trunkBranchFromEnv())
+
+	t.Setenv("GITHUB_REF", "develop")
+	require.Equal(t, "develop", trunkBranchFromEnv())
+
+	t.Setenv("GITHUB_REF", "")
+	require.Equal(t, "main", trunkBranchFromEnv())
+}
+
 // TestFinalize_SkippedDeploys tests that skipped deploys don't update deploy state.
 func TestFinalize_SkippedDeploys(t *testing.T) {
 	tmpDir := t.TempDir()

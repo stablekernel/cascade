@@ -101,6 +101,13 @@ func NewGenerator(cfg *config.TrunkConfig, baseDir string) *Generator {
 	}
 }
 
+// getStateTokenRef returns the token expression used to write manifest state to
+// the trunk branch. Users configure the full expression via the state_token
+// config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
+func (g *Generator) getStateTokenRef() string {
+	return g.config.GetStateToken()
+}
+
 // ownedJobTimeoutMinutes returns the timeout-minutes to emit on cascade-owned
 // jobs: the manifest's config.job_timeout_minutes when set (>0), otherwise
 // DefaultJobTimeoutMinutes. Reusable-workflow callbacks (jobs.<id>.uses) own
@@ -1418,6 +1425,7 @@ func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
 func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string) {
 	sb.WriteString("      - name: Update Manifest\n")
 	sb.WriteString("        env:\n")
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	sb.WriteString("          HEAD_SHA: ${{ needs.setup.outputs.head_sha }}\n")
 	sb.WriteString("          VERSION: ${{ needs.setup.outputs.version }}\n")
 
@@ -1523,33 +1531,22 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	sb.WriteString("          }\n")
 	sb.WriteString("          \n")
 
-	// Retry loop: fetch + reset + reapply + commit + push, up to 5 attempts.
-	// Concurrent orchestrate runs racing to push state used to fail with
-	// non-fast-forward; this loop keeps the slower run trying with a fresh
-	// commit on the latest tip.
-	sb.WriteString("          for attempt in 1 2 3 4 5; do\n")
-	sb.WriteString("            git fetch origin \"$BRANCH\"\n")
-	sb.WriteString("            git reset --hard \"origin/$BRANCH\"\n")
-	sb.WriteString("            apply_state_edits\n")
-	sb.WriteString("            if git diff --quiet \"$MANIFEST_FILE\"; then\n")
-	sb.WriteString("              echo \"No state changes\"\n")
-	sb.WriteString("              exit 0\n")
-	sb.WriteString("            fi\n")
-	sb.WriteString("            git add \"$MANIFEST_FILE\"\n")
+	// Persist the manifest state to the trunk branch. On real GitHub this writes
+	// through the Contents REST API so the commit is signed (Verified) and can
+	// bypass branch protection with a capable token; in act/gitea it pushes with
+	// the existing fetch/reset/reapply/commit/push retry loop. Concurrent
+	// orchestrate runs racing to write state are handled by retrying on top of
+	// the latest tip in both paths.
+	commitMessage := "chore: update state [skip ci]"
 	if len(g.config.Environments) > 0 {
-		sb.WriteString("            git commit -m \"chore: update state for $ENVIRONMENT [skip ci]\"\n")
-	} else {
-		sb.WriteString("            git commit -m \"chore: update state [skip ci]\"\n")
+		commitMessage = "chore: update state for $ENVIRONMENT [skip ci]"
 	}
-	sb.WriteString("            if git push origin \"HEAD:$BRANCH\"; then\n")
-	sb.WriteString("              echo \"Pushed state on attempt $attempt\"\n")
-	sb.WriteString("              exit 0\n")
-	sb.WriteString("            fi\n")
-	sb.WriteString("            echo \"Push attempt $attempt rejected (likely concurrent run); retrying...\" >&2\n")
-	sb.WriteString("            sleep $((RANDOM % 5 + 2))\n")
-	sb.WriteString("          done\n")
-	sb.WriteString("          echo \"::error::Failed to push state after 5 attempts\" >&2\n")
-	sb.WriteString("          exit 1\n")
+	writeStateCommitPush(sb, "          ", stateWriteParams{
+		applyFn:       "apply_state_edits",
+		commitMessage: commitMessage,
+		noChangeLabel: "No state changes",
+		successLabel:  "Pushed state",
+	})
 }
 
 func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
