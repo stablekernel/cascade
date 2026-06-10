@@ -660,7 +660,13 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 // deploy callback would receive via with: (environment, sha, and image_tag when
 // the callback declares it) are surfaced to the inline step as env: variables.
 func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig, environment, sha, imageTag string) {
-	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// Per-callback job attributes (inline-run deploy jobs only): runner selection
+	// (#12), permissions incl. id-token: write OIDC (#35/#15), and concurrency
+	// (#17). The config-level runs_on default applies when the deploy sets no
+	// runner.
+	writeRunsOn(sb, "    ", d.RunsOn, g.config.RunsOn)
+	writeJobPermissions(sb, "    ", d.Permissions)
+	writeJobConcurrency(sb, "    ", d.Concurrency)
 	sb.WriteString("    steps:\n")
 	fmt.Fprintf(sb, "      - name: Deploy %s\n", d.Name)
 
