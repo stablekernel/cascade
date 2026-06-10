@@ -205,6 +205,84 @@ func TestPromoteGenerator_InlineRunDeployEmitsStep(t *testing.T) {
 	assert.NotContains(t, prodJob, "uses:")
 }
 
+// TestPromoteGenerator_InlineRunDeployImageTag asserts an inline deploy that
+// declares an image_tag input gets IMAGE_TAG in its env (the input-seeding fix
+// for inline deploys, which have no reusable-workflow file to discover from).
+func TestPromoteGenerator_InlineRunDeployImageTag(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		Deploys: []config.DeployConfig{
+			{
+				Name:     "notify",
+				Run:      "echo $IMAGE_TAG",
+				Triggers: []string{"deploy/**"},
+				Inputs:   map[string]interface{}{"image_tag": nil},
+			},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	deployJob := jobSection(content, "deploy-notify:")
+	require.NotEmpty(t, deployJob)
+	assert.Contains(t, deployJob, "IMAGE_TAG: ${{ needs.preflight.outputs.source_image_tag }}")
+
+	prodJob := jobSection(content, "deploy-notify-prod:")
+	require.NotEmpty(t, prodJob)
+	assert.Contains(t, prodJob, "IMAGE_TAG: ${{ needs.preflight.outputs.prod_version }}")
+}
+
+// TestGenerator_InlineRunDepOutputEnvNameMangled asserts a hyphenated dependency
+// output (e.g. image-tag) is surfaced as a shell-safe env var IMAGE_TAG, and a
+// dep output named sha does not duplicate the standard SHA: env entry.
+func TestGenerator_InlineRunDepOutputEnvNameMangled(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	// Build workflow that emits image-tag and sha outputs.
+	buildWorkflow := `
+on:
+  workflow_call:
+    outputs:
+      image-tag:
+        value: x
+      sha:
+        value: y
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte(buildWorkflow), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "app",
+				Workflow: ".github/workflows/build.yaml",
+				Triggers: []string{"src/**"},
+			},
+			{
+				Name:      "smoke",
+				Run:       "echo $IMAGE_TAG $SHA",
+				Triggers:  []string{"src/**"},
+				DependsOn: []string{"app"},
+				Inputs:    map[string]interface{}{"image-tag": nil, "sha": nil},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	job := jobSection(result, "build-smoke:")
+	require.NotEmpty(t, job)
+	assert.Contains(t, job, "IMAGE_TAG: ${{ needs.build-app.outputs.image-tag }}")
+	// SHA must appear exactly once (standard input), not duplicated by the dep output.
+	assert.Equal(t, 1, strings.Count(job, "SHA:"))
+}
+
 // jobSection returns the text of the job whose header line (e.g. "build-app:")
 // starts the section, up to the next top-level (two-space-indented) job header.
 func jobSection(yaml, header string) string {

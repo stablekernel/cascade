@@ -609,15 +609,25 @@ func (g *Generator) inlineEnvInputs(info CallbackInfo) []string {
 	deps := g.graph.GetDirectDependencies(info.JobID)
 
 	var envVars []string
+	// Track emitted env-var names so a dependency output named "sha" doesn't
+	// emit a second SHA: alongside the standard one (GHA rejects duplicate keys).
+	seen := map[string]bool{}
+	emit := func(name, value string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		envVars = append(envVars, fmt.Sprintf("          %s: %s", name, value))
+	}
 
 	// Only pass environment if there are environments configured
 	if len(g.config.Environments) > 0 {
-		envVars = append(envVars, fmt.Sprintf("          ENVIRONMENT: ${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0]))
+		emit("ENVIRONMENT", fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0]))
 	}
 
 	// Optional standard inputs - only passed if callback declares them
 	if g.jobHasInput(info.JobID, "sha") {
-		envVars = append(envVars, "          SHA: ${{ needs.setup.outputs.head_sha }}")
+		emit("SHA", "${{ needs.setup.outputs.head_sha }}")
 	}
 
 	// For build callbacks with a matrix, surface each dimension's current value.
@@ -629,7 +639,7 @@ func (g *Generator) inlineEnvInputs(info CallbackInfo) []string {
 		sort.Strings(keys)
 		for _, k := range keys {
 			if g.jobHasInput(info.JobID, k) {
-				envVars = append(envVars, fmt.Sprintf("          %s: ${{ matrix.%s }}", strings.ToUpper(k), k))
+				emit(envVarName(k), fmt.Sprintf("${{ matrix.%s }}", k))
 			}
 		}
 	}
@@ -639,12 +649,19 @@ func (g *Generator) inlineEnvInputs(info CallbackInfo) []string {
 		depInfo := g.graph.Nodes[depJobID]
 		for _, out := range g.outputs[depInfo.JobID] {
 			if g.jobHasInput(info.JobID, out) {
-				envVars = append(envVars, fmt.Sprintf("          %s: ${{ needs.%s.outputs.%s }}", strings.ToUpper(out), depJobID, out))
+				emit(envVarName(out), fmt.Sprintf("${{ needs.%s.outputs.%s }}", depJobID, out))
 			}
 		}
 	}
 
 	return envVars
+}
+
+// envVarName converts an input key to a shell-safe env-var name: uppercased with
+// hyphens translated to underscores (e.g. "image-tag" -> "IMAGE_TAG", reachable
+// in the run step as $IMAGE_TAG).
+func envVarName(key string) string {
+	return strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
 }
 
 // writeStrategyBlock emits the GHA strategy: block for a build matrix.

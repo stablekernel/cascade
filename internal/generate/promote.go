@@ -102,8 +102,10 @@ func (g *PromoteGenerator) Generate() (string, error) {
 // discoverDeployInputs parses deploy workflow files to discover their inputs
 func (g *PromoteGenerator) discoverDeployInputs() error {
 	for _, d := range g.config.Deploys {
-		// Inline run: deploys have no reusable-workflow file to parse inputs from.
+		// Inline run: deploys have no reusable-workflow file to parse inputs from;
+		// their declared-input set comes from the manifest inputs: keys instead.
 		if d.Run != "" {
+			g.inputs[d.Name] = inputKeys(d.Inputs)
 			continue
 		}
 		workflowPath := filepath.Join(g.baseDir, d.Workflow)
@@ -577,8 +579,9 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 		if d.Run != "" {
 			// Inline run: deploy callback — cascade-owned job with an inline run:
-			// step. Inline callbacks don't take with:/inputs (so never matrix);
-			// the standard environment/sha inputs reach the step as env: vars.
+			// step. Inline callbacks declare their inputs via the manifest inputs:
+			// keys (no reusable-workflow with: matrix); the standard environment/
+			// sha/image_tag inputs reach the step as env: vars.
 			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
 			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
