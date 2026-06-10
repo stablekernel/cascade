@@ -39,7 +39,7 @@ jobs:
       changelog_base_sha: ${{ steps.setup.outputs.changelog_base_sha }}
       base_build_cli: ${{ steps.setup.outputs.base_build_cli }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Setup CLI
@@ -80,7 +80,7 @@ jobs:
       cli_result: ${{ needs.build-cli.outputs.result }}
       validate_result: ${{ needs.validate.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Generate Summary
