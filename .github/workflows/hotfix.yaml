@@ -4,6 +4,9 @@ name: Hotfix
 # by trusted calling workflows, not by external users. All dynamic values are
 # passed through env variables where they are used in run commands.
 
+permissions:
+  contents: write
+
 on:
   workflow_call:
     inputs:
@@ -65,7 +68,7 @@ jobs:
       deploy_names: ${{ steps.names.outputs.deploy_names }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.hotfix_branch }}
           fetch-depth: 0
@@ -176,7 +179,7 @@ jobs:
       fail-fast: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.hotfix_branch }}
 
@@ -223,7 +226,7 @@ jobs:
       max-parallel: 3
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.hotfix_branch }}
 
@@ -261,7 +264,7 @@ jobs:
       release_url: ${{ steps.release.outputs.html_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.hotfix_branch }}
           fetch-depth: 0
