@@ -176,9 +176,15 @@ func Validate(cfg *TrunkConfig) []string {
 		} else {
 			buildNames[b.Name] = true
 		}
-		if b.Workflow == "" {
-			errors = append(errors, fmt.Sprintf("builds[%d].workflow is required", i))
-		}
+		// workflow XOR run: exactly one must be set.
+		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("builds[%d]", i), b.Workflow, b.Run, b.Shell)...)
+
+		// Reusable-workflow callbacks cannot carry job-control fields that GHA
+		// rejects on a jobs.<id>.uses call. matrix: is builds-only.
+		isReusable := b.Workflow != ""
+		errors = append(errors, validateJobControlFields(fmt.Sprintf("builds[%d]", i), isReusable, b.RunsOn, b.Concurrency)...)
+		errors = append(errors, validatePermissions(fmt.Sprintf("builds[%d]", i), b.Permissions)...)
+		errors = append(errors, validateSecrets(fmt.Sprintf("builds[%d]", i), b.Secrets)...)
 
 		// Validate run_policy
 		if b.RunPolicy != "" && b.RunPolicy != RunPolicyDefault && b.RunPolicy != RunPolicyAlways && b.RunPolicy != RunPolicyForce {
@@ -202,6 +208,13 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 
+		// optional_depends_on resolves exactly like depends_on (ordering-only).
+		for _, dep := range b.OptionalDependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err != nil {
+				errors = append(errors, fmt.Sprintf("builds[%d].optional_depends_on: %s", i, err.Error()))
+			}
+		}
+
 		// Validate env_inputs keys match top-level environments
 		for envKey := range b.EnvInputs {
 			if !envSet[envKey] {
@@ -219,9 +232,17 @@ func Validate(cfg *TrunkConfig) []string {
 		} else {
 			deployNames[d.Name] = true
 		}
-		if d.Workflow == "" {
-			errors = append(errors, fmt.Sprintf("deploys[%d].workflow is required", i))
-		}
+		// workflow XOR run: exactly one must be set.
+		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("deploys[%d]", i), d.Workflow, d.Run, d.Shell)...)
+
+		// Reusable-workflow callbacks cannot carry job-control fields that GHA
+		// rejects on a jobs.<id>.uses call. rollout: is deploys-only.
+		isReusable := d.Workflow != ""
+		errors = append(errors, validateJobControlFields(fmt.Sprintf("deploys[%d]", i), isReusable, d.RunsOn, d.Concurrency)...)
+		errors = append(errors, validatePermissions(fmt.Sprintf("deploys[%d]", i), d.Permissions)...)
+		errors = append(errors, validateSecrets(fmt.Sprintf("deploys[%d]", i), d.Secrets)...)
+		errors = append(errors, validateRollout(fmt.Sprintf("deploys[%d]", i), d.Rollout, cfg.Environments)...)
+		errors = append(errors, validateDeployTarget(fmt.Sprintf("deploys[%d]", i), d.DeployTarget)...)
 
 		// Validate run_policy
 		if d.RunPolicy != "" && d.RunPolicy != RunPolicyDefault && d.RunPolicy != RunPolicyAlways && d.RunPolicy != RunPolicyForce {
@@ -246,6 +267,13 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 
+		// optional_depends_on resolves exactly like depends_on (ordering-only).
+		for _, dep := range d.OptionalDependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeDeploy); err != nil {
+				errors = append(errors, fmt.Sprintf("deploys[%d].optional_depends_on: %s", i, err.Error()))
+			}
+		}
+
 		// Validate env_inputs keys match top-level environments
 		for envKey := range d.EnvInputs {
 			if !envSet[envKey] {
@@ -253,6 +281,24 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 	}
+
+	// Validate the validate callback structural rules.
+	if cfg.Validate != nil {
+		v := cfg.Validate
+		errors = append(errors, validateWorkflowRunXOR("validate", v.Workflow, v.Run, v.Shell)...)
+		isReusable := v.Workflow != ""
+		errors = append(errors, validateJobControlFields("validate", isReusable, v.RunsOn, v.Concurrency)...)
+		errors = append(errors, validatePermissions("validate", v.Permissions)...)
+		errors = append(errors, validateSecrets("validate", v.Secrets)...)
+		for _, dep := range v.OptionalDependsOn {
+			if _, err := cfg.ResolveDependency(dep, CallbackTypeValidate); err != nil {
+				errors = append(errors, fmt.Sprintf("validate.optional_depends_on: %s", err.Error()))
+			}
+		}
+	}
+
+	// Config-level structural validation for v1 reserved fields.
+	errors = append(errors, validateConfigLevel(cfg)...)
 
 	// Validate release.tag reference
 	if cfg.Release != nil && cfg.Release.Tag != "" {
