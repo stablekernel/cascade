@@ -731,6 +731,14 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		fmt.Fprintf(sb, "    environment: ${{ github.event.inputs.environment || '%s' }}\n", defaultEnv)
 	}
 
+	// continue-on-error: a callback with on_failure: continue is one the operator
+	// has explicitly marked as tolerable. Emitting continue-on-error keeps the
+	// overall run green when only such callbacks fail, while the result is still
+	// recorded (the failure check below never gates on continue callbacks).
+	if info.OnFailure == config.OnFailureContinue {
+		sb.WriteString("    continue-on-error: true\n")
+	}
+
 	// Inline run: callback — emit a cascade-owned job with an inline run: step
 	// instead of a jobs.<id>.uses reusable-workflow call. Standard inputs reach
 	// the step as env: variables rather than reusable-workflow with: inputs.
@@ -1217,8 +1225,12 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	sb.WriteString("  finalize:\n")
 	sb.WriteString("    name: Finalize\n")
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(allJobs, ", "))
-	// Run finalize if setup succeeded, regardless of callback results
-	// This allows recording state even when callbacks fail
+	// Run finalize whenever setup succeeded, regardless of how the callbacks
+	// ended. always() makes finalize fire even when a callback failed OR was
+	// cancelled, so the run that progressed partway before being superseded
+	// still records the state it actually reached instead of leaving the
+	// manifest stuck at a stale value. A cancelled setup, by contrast, means no
+	// state was produced yet, so finalize correctly stays gated on setup success.
 	sb.WriteString("    if: always() && needs.setup.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	g.writeOwnedTimeout(sb, "    ")
@@ -1560,16 +1572,27 @@ func (g *Generator) writeFailureCheckStep(sb *strings.Builder, sorted []string) 
 
 	sb.WriteString("      - name: Check for Failures\n")
 
-	// Build condition that only checks abort callbacks
+	// Build condition that only checks abort callbacks. A cancelled predecessor
+	// (e.g. a run superseded by a newer push under cancel-in-progress) is treated
+	// the same as a failure so a mid-flight cancellation is not silently tolerated.
 	var conditions []string
 	for _, jobName := range abortCallbacks {
-		conditions = append(conditions, fmt.Sprintf("needs.%s.result == 'failure'", jobName))
+		conditions = append(conditions, failureOrCancelledCond(jobName))
 	}
 
 	fmt.Fprintf(sb, "        if: %s\n", strings.Join(conditions, " || "))
 	sb.WriteString("        run: |\n")
-	sb.WriteString("          echo \"One or more critical callbacks failed\"\n")
+	sb.WriteString("          echo \"One or more critical callbacks failed or were cancelled\"\n")
 	sb.WriteString("          exit 1\n")
+}
+
+// failureOrCancelledCond builds a GitHub Actions condition that matches when the
+// named job ended in either the 'failure' or 'cancelled' state. Cancellation is
+// an actionable, non-success outcome: under cancel-in-progress, a deploy
+// superseded mid-flight reports 'cancelled' rather than 'failure', and treating
+// it as a non-event would leave recorded state out of sync with reality.
+func failureOrCancelledCond(jobName string) string {
+	return fmt.Sprintf("contains(fromJSON('[\"failure\", \"cancelled\"]'), needs.%s.result)", jobName)
 }
 
 func (g *Generator) writeChangelogStep(sb *strings.Builder) {
