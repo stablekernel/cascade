@@ -1178,6 +1178,15 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 		// Inline run: retry shims are cascade-owned (#37).
 		g.writeOwnedTimeout(sb, "    ")
 	}
+
+	// Propagate the matrix strategy to the retry job so that ${{ matrix.* }}
+	// references in the reusable workflow's inputs remain bound. Without this,
+	// the retry job runs in a matrix-less context and GHA treats the expressions
+	// as unresolved empty strings.
+	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
+		g.writeStrategyBlock(sb, info.Matrix)
+	}
+
 	if info.Run != "" {
 		g.writeInlineRunBody(sb, info)
 		return
