@@ -23,7 +23,8 @@ type CallbackInfo struct {
 	RunPolicy      string
 	OnFailure      string
 	Retries        int
-	TimeoutMinutes int // Job-level timeout-minutes (omitted when 0)
+	TimeoutMinutes int                  // Job-level timeout-minutes (omitted when 0)
+	Matrix         *config.MatrixConfig // Build fan-out; nil for deploys and validate
 }
 
 // BuildDependencyGraph creates a dependency graph from config
@@ -64,6 +65,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			OnFailure:      defaultString(b.OnFailure, config.OnFailureAbort),
 			Retries:        b.Retries,
 			TimeoutMinutes: b.TimeoutMinutes,
+			Matrix:         b.Matrix,
 		}
 
 		// Resolve dependencies to job IDs

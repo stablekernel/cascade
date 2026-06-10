@@ -1639,3 +1639,107 @@ func TestGenerator_ExtraTriggers_AllCombined(t *testing.T) {
 	assert.Contains(t, result, "  push:\n")
 	assert.Contains(t, result, "  workflow_dispatch:\n")
 }
+
+// TestGenerator_BuildMatrix_TwoDimensions asserts that a build callback with a
+// two-dimension matrix emits strategy.matrix with both axes.
+func TestGenerator_BuildMatrix_TwoDimensions(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	// Workflow declares os and arch inputs so they are passed through.
+	buildWorkflow := `on:
+  workflow_call:
+    inputs:
+      os:
+        type: string
+      arch:
+        type: string
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte(buildWorkflow), 0644))
+
+	ptrFalse := false
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "app",
+				Workflow: ".github/workflows/build.yaml",
+				Triggers: []string{"src/**"},
+				Matrix: &config.MatrixConfig{
+					Dimensions:  map[string][]string{"arch": {"amd64", "arm64"}, "os": {"linux", "darwin"}},
+					MaxParallel: 2,
+					FailFast:    &ptrFalse,
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "    strategy:\n", "build job must have strategy block")
+	assert.Contains(t, result, "      matrix:\n", "strategy must contain matrix key")
+	// Both dimensions must appear.
+	assert.Contains(t, result, `        arch: ["amd64", "arm64"]`, "arch dimension must be emitted")
+	assert.Contains(t, result, `        os: ["linux", "darwin"]`, "os dimension must be emitted")
+	assert.Contains(t, result, "      max-parallel: 2", "max-parallel must be emitted when set")
+	assert.Contains(t, result, "      fail-fast: false", "fail-fast must be emitted when explicitly false")
+	// Matrix values must be forwarded to the reusable workflow via with:.
+	assert.Contains(t, result, "      os: ${{ matrix.os }}", "os dimension value must be passed in with:")
+	assert.Contains(t, result, "      arch: ${{ matrix.arch }}", "arch dimension value must be passed in with:")
+}
+
+// TestGenerator_BuildMatrix_MaxParallelOmittedWhenZero asserts that max-parallel
+// is not emitted when unset (zero value).
+func TestGenerator_BuildMatrix_MaxParallelOmittedWhenZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "app",
+				Workflow: ".github/workflows/build.yaml",
+				Triggers: []string{"src/**"},
+				Matrix: &config.MatrixConfig{
+					Dimensions: map[string][]string{"os": {"linux"}},
+					// MaxParallel zero and FailFast nil — neither should appear.
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "    strategy:\n", "strategy block must be present")
+	assert.NotContains(t, result, "max-parallel", "max-parallel must be absent when zero")
+	assert.NotContains(t, result, "fail-fast", "fail-fast must be absent when nil")
+}
+
+// TestGenerator_BuildMatrix_NoMatrixNoStrategy asserts that a build without
+// matrix: produces no strategy block (non-breaking for existing single builds).
+func TestGenerator_BuildMatrix_NoMatrixNoStrategy(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.NotContains(t, result, "strategy:", "no matrix → no strategy block")
+}
