@@ -348,11 +348,11 @@ jobs:
           HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
         run: |
           # Merge hotfix back to trunk
-          git fetch origin master
-          git checkout master
+          git fetch origin main
+          git checkout main
           git merge "$HOTFIX_BRANCH" -m "Merge hotfix back to trunk"
-          git push origin master
-          echo "::notice::Merged hotfix back to master"
+          git push origin main
+          echo "::notice::Merged hotfix back to main"
 
       - name: Finalize Summary
         env:
@@ -429,5 +429,5 @@ jobs:
             echo "#### After deployment:"
             echo "- Create release v$VERSION"
             echo "- Create git tag v$VERSION"
-            echo "- Merge hotfix back to master"
+            echo "- Merge hotfix back to main"
           } >> "$GITHUB_STEP_SUMMARY"

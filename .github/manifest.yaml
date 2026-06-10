@@ -1,6 +1,6 @@
 ci:
   config:
-    trunk_branch: master
+    trunk_branch: main
     triggers:
       - cmd/**
       - internal/**
