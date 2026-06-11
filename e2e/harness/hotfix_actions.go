@@ -169,7 +169,17 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	short8 := short
 	script := strings.Join([]string{
 		"set +e",
+		// Abort any half-finished cherry-pick left in the shared /tmp/repo by a
+		// prior apply in this scenario, then drop any stale local hotfix branch so
+		// the re-create below always anchors on the freshly-fetched remote tip.
+		"git cherry-pick --abort >/dev/null 2>&1 || true",
+		// Force-update the env tracking ref so a second apply onto an env branch
+		// the first finalize already advanced (squash-merge) anchors on the
+		// current tip rather than a stale ref, otherwise the cherry-pick replays
+		// an already-merged change and the push is rejected non-fast-forward.
+		fmt.Sprintf("git fetch origin %q --tags >/dev/null 2>&1", "+refs/heads/"+envBranch+":refs/remotes/origin/"+envBranch),
 		"git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags >/dev/null 2>&1",
+		fmt.Sprintf("git branch -D %q >/dev/null 2>&1 || true", hotfixBranch),
 		fmt.Sprintf("git switch -c %q %q", hotfixBranch, "origin/"+envBranch),
 		fmt.Sprintf("git cherry-pick -x %q", commit),
 		"CP_EXIT=$?",
@@ -181,7 +191,11 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 		"else",
 		"  echo \"CONFLICT_FILES=\"",
 		"fi",
-		fmt.Sprintf("git push %q %q", pushURL, hotfixBranch+":"+hotfixBranch),
+		// Force-push the uniquely-named, per-apply throwaway hotfix branch. The
+		// branch name embeds the source short SHA, so a force-push only ever
+		// overwrites this apply's own prior attempt (e.g. a retried sync), never a
+		// shared branch.
+		fmt.Sprintf("git push --force %q %q", pushURL, hotfixBranch+":"+hotfixBranch),
 		"echo \"PUSH_EXIT=$?\"",
 	}, "\n")
 
