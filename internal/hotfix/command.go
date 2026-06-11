@@ -43,7 +43,6 @@ func newFinalizeCommand() *cobra.Command {
 		fixSHA      string
 		baseSHA     string
 		actor       string
-		repo        string
 		dryRun      bool
 		deployFlags []string
 		buildFlags  []string
@@ -102,7 +101,6 @@ records the merge SHA is a no-op.`,
 	cmd.Flags().StringVar(&fixSHA, "fix-sha", "", "Trunk commit the hotfix carries (required)")
 	cmd.Flags().StringVar(&baseSHA, "base-sha", "", "Trunk anchor the integration branch diverged from (required)")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the state (default: $GITHUB_ACTOR)")
-	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo (unused placeholder for parity with plan)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate and compute without writing state, tags, or releases")
 	cmd.Flags().StringArrayVar(&deployFlags, "deploy-result", nil, "Deploy result as name=result (repeatable)")
 	cmd.Flags().StringArrayVar(&buildFlags, "build-result", nil, "Build result as name=result (repeatable)")

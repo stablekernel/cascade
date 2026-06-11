@@ -220,6 +220,9 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 			short(mergeSHA), branch, short(tip))
 	}
 
+	// Capture the base version before prior.Version is overwritten below.
+	baseVersion := prior.Version
+
 	// Allocate the next free hotfix version over the prior version.
 	hotfixVersion, err := f.allocateVersion(prior.Version)
 	if err != nil {
@@ -265,7 +268,7 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 	}
 
 	// Create the hotfix tag and release object.
-	if err := f.createRelease(cfg, targetEnv, mergeSHA, hotfixVersion, fixSHA, prior.Version); err != nil {
+	if err := f.createRelease(cfg, targetEnv, mergeSHA, hotfixVersion, fixSHA, baseVersion); err != nil {
 		return err
 	}
 

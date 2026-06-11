@@ -179,8 +179,11 @@ func TestFinalize_WritesDivergedState(t *testing.T) {
 	if create.SHA != merge {
 		t.Errorf("release SHA = %q, want merge SHA %q", create.SHA, merge)
 	}
-	if !strings.Contains(create.Changelog, "v1.4.0-rc.2") {
-		t.Errorf("release body should reference the base version: %q", create.Changelog)
+	if !strings.Contains(create.Changelog, "based on v1.4.0-rc.2,") {
+		t.Errorf("release body should reference the base version with exact phrase: %q", create.Changelog)
+	}
+	if strings.Contains(create.Changelog, "based on v1.4.0-rc.2.hotfix.1") {
+		t.Errorf("release body must not use the hotfix version as the base version: %q", create.Changelog)
 	}
 	if !strings.Contains(create.Changelog, short(fix)) {
 		t.Errorf("release body should reference the carried trunk commit: %q", create.Changelog)
