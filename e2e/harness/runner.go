@@ -576,6 +576,12 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 			// it bypasses the no-op promotion guard.
 			inputs["force"] = "true"
 		}
+		if promote.RollbackOnFailure {
+			// Workflow input is named "rollback_on_failure"; preflight surfaces it
+			// to the rollback-<name> jobs, which re-deploy each successful deploy at
+			// the target env's previously deployed SHA when any deploy fails.
+			inputs["rollback_on_failure"] = "true"
+		}
 		if promote.AllowBreaking {
 			// Workflow input is named allow_breaking_changes (see internal/generate
 			// promote.go); the workflow forwards it to the CLI's --allow-breaking

@@ -1,0 +1,61 @@
+name: "Promote force bypasses the no-op guard"
+description: |
+  Proves the promote workflow's force input bypasses the no-op promotion guard.
+  A commit is orchestrated into dev, then promoted dev-to-test (success). A
+  second promote of the same dev SHA is rejected by the no-op guard (test
+  already holds that SHA), so it fails. A third promote of the same SHA with
+  force=true bypasses the guard and succeeds, leaving test on the dev SHA.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Commit app source on trunk"
+    action: commit
+    commit:
+      message: "feat: add app source"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Orchestrate to populate dev state"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote dev to test succeeds"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          sha: commit1
+
+  - name: "Re-promote same SHA is rejected by the no-op guard"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+      expect_failure: true
+
+  - name: "Force re-promote of the same SHA bypasses the guard"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+      force: true
+    expect:
+      state:
+        test:
+          sha: commit1
