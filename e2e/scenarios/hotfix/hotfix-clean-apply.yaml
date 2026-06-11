@@ -119,6 +119,13 @@ steps:
     hotfix_merged:
       target_env: test
     expect:
+      # The e2e backend is gitea, so this step asserts only the gitea-observable
+      # boundary: the merged commit on env/test, the finalize job's success
+      # conclusion, and the finalized hotfix state (written via the gitea
+      # contents/git push path). The release-object lifecycle and the hotfix tag
+      # materialization are GitHub-only behaviors (the tag is never cut and the
+      # release object is never created against a non-GitHub host), so they are
+      # exercised by the real-GitHub validation fleet rather than asserted here.
       state:
         test:
           ref: "env/test"
@@ -128,5 +135,3 @@ steps:
           sha: commit1
         prod:
           sha: commit1
-      tags:
-        exist: ["v0.1.0-rc.0.hotfix.1"]
