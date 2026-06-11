@@ -97,11 +97,23 @@ steps:
 
   # Rejoin: promoting dev into the diverged test env, where the incoming SHA
   # contains every recorded patch, ends the divergence. The product clears the
-  # divergence fields and deletes env/test on the remote.
+  # divergence fields (ref/base_sha/patches) and deletes env/test on the remote.
+  # prod is untouched by this default-mode dev-to-test promotion.
+  #
+  # The harness does not expose a "ref must be absent" assertion (an empty-string
+  # ref in StateExpect is skipped per assert.go:242); the branch deletion is the
+  # observable side effect of rejoin that the harness CAN verify. The manifest-
+  # level clearing of ref/base_sha/patches is covered by the finalize unit tests
+  # in internal/promote.
   - name: "Promote a containing SHA into test triggers rejoin"
     action: promote
     promote:
       mode: default
     expect:
+      state:
+        dev:
+          unchanged: true
+        prod:
+          unchanged: true
       branches:
         deleted: ["env/test"]

@@ -1,13 +1,14 @@
 name: "Hotfix Stacked"
 description: |
-  Verifies that two sequential hotfixes applied to the same environment stack:
-  the second finalize appends to the existing patches slice rather than
-  replacing it, and carries the original base anchor forward. After both
-  hotfixes, test still tracks env/test and its patches slice contains both
-  recorded trunk commits.
+  Verifies two behaviours around successive hotfixes on the same environment:
 
-  The single-flight ordering rule (merge_pr before hotfix_merged, each preceded
-  by its hotfix_apply) is respected by the step order below.
+  1. Single-flight guard: a second hotfix_plan dispatched while the first
+     hotfix PR is still open fails with re-dispatch guidance (resolved
+     decision Q4).
+
+  2. Sequential stacking: after the first hotfix finishes, a second hotfix
+     goes through a full plan-apply-merge-merged cycle and appends its patch
+     to the existing patches slice, carrying the original base anchor forward.
 
 config:
   trunk_branch: main
@@ -66,6 +67,24 @@ steps:
       target_env: test
       commit_ref: commit2
 
+  # Single-flight guard: dispatching a second hotfix_plan while the first
+  # hotfix PR is still open must fail with re-dispatch guidance (Q4).
+  - name: "Commit a second trunk fix (staged for later)"
+    action: commit
+    commit:
+      message: "fix: second hotfix"
+      files:
+        src/fix2.go: |
+          package main
+          func fix2() {}
+
+  - name: "Single-flight: second hotfix_plan while first PR is open fails"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit3
+      expect_failure: true
+
   - name: "Merge the first hotfix pull request"
     action: merge_pr
     merge_pr:
@@ -80,16 +99,10 @@ steps:
         test:
           ref: "env/test"
 
-  - name: "Commit the second trunk fix"
-    action: commit
-    commit:
-      message: "fix: second hotfix"
-      files:
-        src/fix2.go: |
-          package main
-          func fix2() {}
-
-  - name: "Plan second hotfix for test"
+  # commit3 (the second fix) was already committed above for the single-flight
+  # test. Now that the first hotfix is finalized, dispatch the second hotfix
+  # using commit3 - the single-flight guard no longer blocks it.
+  - name: "Plan second hotfix for test (first PR now closed)"
     action: hotfix_plan
     hotfix_plan:
       target_env: test
