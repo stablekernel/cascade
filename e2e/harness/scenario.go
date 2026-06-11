@@ -45,6 +45,18 @@ type Config struct {
 	// job-level environment: key. Mirrors internal/config EnvironmentConfig.
 	// Keyed by env name so future per-env keys extend additively.
 	EnvironmentConfig map[string]EnvEnvironmentConfig `yaml:"environment_config,omitempty"`
+	// Validate, ValidateCheck, MergeQueue, PRPreview, Notify, and External carry
+	// the optional generator features through to the generated manifest untouched.
+	// Each uses a generic map (rather than a typed struct) so the harness stays
+	// decoupled from the generator's struct shapes while preserving every key
+	// across the marshal round-trip. As the generator gains new keys under any of
+	// these blocks, scenarios can exercise them without a harness change.
+	Validate      map[string]any   `yaml:"validate,omitempty"`
+	ValidateCheck map[string]any   `yaml:"validate_check,omitempty"`
+	MergeQueue    map[string]any   `yaml:"merge_queue,omitempty"`
+	PRPreview     map[string]any   `yaml:"pr_preview,omitempty"`
+	Notify        map[string]any   `yaml:"notify,omitempty"`
+	External      []map[string]any `yaml:"external,omitempty"`
 }
 
 // EnvEnvironmentConfig mirrors internal/config.EnvironmentConfig's gha_environment

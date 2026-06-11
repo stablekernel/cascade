@@ -70,15 +70,18 @@ type StepExpect struct {
 }
 
 // WorkflowFileExpect asserts a generated workflow file contains/excludes
-// specific substrings. Verifies manifest fields make it into the emitted
-// YAML, orthogonal to behavior checks (state/jobs/etc.) which observe the
-// run outcome. Used for features whose effect is purely the generated
-// workflow shape (#92 concurrency, #97 timeout-minutes, #101/#102 push
-// retry loops).
+// specific substrings, or asserts the file is absent entirely. Verifies
+// manifest fields make it into the emitted YAML, orthogonal to behavior
+// checks (state/jobs/etc.) which observe the run outcome. NotExists covers
+// the conditional-generation case where a feature suppresses a whole file
+// (for example the hotfix workflow when fewer than two environments exist).
+// Used for features whose effect is purely the generated workflow shape
+// (#92 concurrency, #97 timeout-minutes, #101/#102 push retry loops).
 type WorkflowFileExpect struct {
 	Path        string   `yaml:"path"`                   // Path inside the test repo (e.g., ".github/workflows/orchestrate.yaml")
 	Contains    []string `yaml:"contains,omitempty"`     // Substrings that must appear
 	NotContains []string `yaml:"not_contains,omitempty"` // Substrings that must NOT appear
+	NotExists   bool     `yaml:"not_exists,omitempty"`   // When true, the file must NOT exist
 }
 
 // StateExpect defines expected state for an environment

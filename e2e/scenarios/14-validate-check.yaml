@@ -1,0 +1,38 @@
+name: "Validate Check Workflow"
+description: |
+  Verifies that enabling validate_check emits the standalone
+  cascade-validate.yaml workflow that runs the manifest parse on pull
+  requests touching the manifest file (#90).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  validate_check:
+    enabled: true
+
+steps:
+  - name: "Initial commit; assert cascade-validate.yaml is generated"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-validate.yaml"
+          contains:
+            - "name: Validate Manifest"
+            - "pull_request:"
+            - "paths:"
+            - ".github/manifest.yaml"
+            - "validate-manifest:"
+            - "cascade parse-config"
