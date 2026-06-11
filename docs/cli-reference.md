@@ -368,6 +368,88 @@ cascade promote finalize \
 | `--run-id` | string | No | Workflow run ID for job query |
 | `--commit-push` | bool | No | Commit and push state changes |
 
+### hotfix
+
+Apply a trunk commit onto an environment pinned to an older base. A hotfix targets one environment on its `env/<env>` integration branch. The fix must already be on trunk; cascade refuses to apply a commit that is not an ancestor of trunk tip. The subcommands compute and validate the hotfix and write its final state; the cherry-pick, build, and deploy run in the generated `cascade-hotfix.yaml` workflow. See the Hotfix section of [workflows.md](workflows.md) for the full flow.
+
+#### hotfix plan
+
+Validate a hotfix request and compute the integration-branch plan. It enforces, in order: trunk ancestry of the fix, target-environment eligibility (a configured environment that is not the first; prod is allowed), no-op detection when the fix is already in the target, the single-flight open-pull-request gate, and `env/<env>` branch reconciliation. With `--dry-run` nothing is mutated (the env branch is planned but not created).
+
+```bash
+cascade hotfix plan \
+  --commit abc1234 \
+  --target-env test \
+  --gha-output
+```
+
+##### Flags
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--config`, `-c` | string | No | Path to manifest file (default: `.github/manifest.yaml`) |
+| `--key` | string | No | Top-level manifest key (default: `ci`) |
+| `--commit` | string | Yes | Trunk commit (SHA or ref) carrying the fix |
+| `--target-env` | string | Yes | Environment to hotfix |
+| `--actor` | string | No | Actor recorded on the plan (default: `$GITHUB_ACTOR`) |
+| `--remote` | string | No | Git remote env branches live on (default: `origin`) |
+| `--repo` | string | No | `owner/repo` for single-flight pull-request lookup via `gh` (default: skip the check) |
+| `--dry-run` | bool | No | Compute the plan without mutating anything |
+| `--json` | bool | No | Output the plan as JSON |
+| `--gha-output` | bool | No | Write outputs to `$GITHUB_OUTPUT` for workflow consumption |
+
+##### Output
+
+With `--json`:
+
+```json
+{
+  "target_env": "test",
+  "fix_sha": "abc1234...",
+  "branch": "env/test",
+  "base_sha": "def5678...",
+  "no_op": false,
+  "branch_created": true,
+  "hotfix_version_candidate": "v1.4.0-rc.2.hotfix.1",
+  "conflict_expected": false,
+  "protection_suggestions": ["gh api -X PUT repos/{owner}/{repo}/branches/env/test/protection ..."],
+  "dry_run": false
+}
+```
+
+The GHA output writes `target_env`, `fix_sha`, `branch`, `base_sha`, `no_op`, `branch_created`, `hotfix_version_candidate`, `conflict_expected`, `dry_run`, and the `protection_suggestions` commands (as JSON and as multiline text).
+
+#### hotfix finalize
+
+Write the diverged state, tag, and release for a merged hotfix. Run after the resolution pull request merges and the build and deploy succeed. It cross-checks the merge SHA against the `env/<target>` branch tip, allocates the next free hotfix version, snapshots the prior state into the rollback ring, writes the divergence fields and substates, commits the manifest to trunk with the rebase-retry push, and creates the hotfix tag and release object. The verb is idempotent on identical inputs: a rerun after the state already records the merge SHA is a no-op.
+
+```bash
+cascade hotfix finalize \
+  --target-env test \
+  --merge-sha 1234abc \
+  --fix-sha abc1234 \
+  --base-sha def5678 \
+  --build-result app=success \
+  --deploy-result app=success
+```
+
+##### Flags
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--config`, `-c` | string | No | Path to manifest file (default: `.github/manifest.yaml`) |
+| `--key` | string | No | Top-level manifest key (default: `ci`) |
+| `--target-env` | string | Yes | Environment to finalize |
+| `--merge-sha` | string | Yes | Tip of `env/<target>` after the resolution pull request merged |
+| `--fix-sha` | string | Yes | Trunk commit the hotfix carries |
+| `--base-sha` | string | Yes | Trunk anchor the integration branch diverged from |
+| `--actor` | string | No | Actor recorded on the state (default: `$GITHUB_ACTOR`) |
+| `--dry-run` | bool | No | Validate and compute without writing state, tags, or releases |
+| `--build-result` | string | No | Build result as `name=result` (repeatable) |
+| `--deploy-result` | string | No | Deploy result as `name=result` (repeatable) |
+
+Only successful build and deploy results update the per-build and per-deploy substates. For a prerelease-environment target the hotfix release is promoted to a GitHub prerelease, superseding that environment's current prerelease object; for other environments it stays a draft.
+
 ### next-version
 
 Calculate the next semantic version.
