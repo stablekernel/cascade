@@ -40,7 +40,10 @@ func TestMultiRepoScenarios(t *testing.T) {
 }
 
 func runMultiRepoScenario(t *testing.T, scenario *harness.MultiRepoScenario) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Real per-repo workflow generation (clone + build + generate + push +
+	// converge for each repo) plus the external-update run under act is heavy;
+	// give scenarios a generous ceiling under the outer go test -timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
 	h := harness.NewMultiRepoHarness(t)

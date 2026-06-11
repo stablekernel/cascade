@@ -93,6 +93,16 @@ func TestExternalUpdateWorkflow_Generation(t *testing.T) {
 	assert.Contains(t, content, "--deploy-name")
 	assert.Contains(t, content, "--environment")
 	assert.Contains(t, content, "--sha")
+
+	// Should configure a git identity before the verb runs. `cascade external
+	// update` commits and pushes the manifest state via git, which aborts on a
+	// clean runner with no identity, so the workflow must set one first.
+	assert.Contains(t, content, "Configure Git")
+	assert.Contains(t, content, "git config user.name")
+	assert.Contains(t, content, "git config user.email")
+	assert.Less(t, strings.Index(content, "Configure Git"),
+		strings.Index(content, "cascade external update"),
+		"git identity must be configured before the update verb commits")
 }
 
 // TestSatelliteNotifyPrimary_Generation tests that satellite repos generate
