@@ -1,0 +1,137 @@
+name: "Hotfix Clean Apply"
+description: |
+  Verifies the full hotfix lifecycle for a clean cherry-pick (no conflicts)
+  across a three-environment pipeline.
+
+  Covers:
+  - hotfix_plan validates a reachable trunk commit for a non-first env
+  - hotfix_apply cherry-picks cleanly onto env/test, opens a cascade-hotfix PR
+  - merge_pr squash-merges the PR
+  - hotfix_merged records the finalized hotfix state
+  - dev and prod state are untouched throughout
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial app commit"
+    action: commit
+    commit:
+      message: "feat: initial app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate dev at commit1"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+
+  - name: "Promote dev to test"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+        dev:
+          sha: commit1
+
+  - name: "Promote test to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+
+  - name: "Promote release to prod"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit1
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+
+  - name: "Hotfix commit"
+    action: commit
+    commit:
+      message: "fix: apply critical patch"
+      files:
+        src/fix.go: |
+          package main
+          // patch applied
+
+  - name: "Plan hotfix for test at commit2"
+    action: hotfix_plan
+    hotfix_plan:
+      commit_ref: commit2
+      target_env: test
+      dry_run: true
+
+  - name: "Apply hotfix to test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+    expect:
+      branches:
+        exist: ["env/test"]
+      prs:
+        open_with_label: "cascade-hotfix"
+
+  - name: "Merge hotfix PR"
+    action: merge_pr
+    merge_pr:
+      label: "cascade-hotfix"
+
+  - name: "Finalize hotfix for test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      # The e2e backend is gitea, so this step asserts only the gitea-observable
+      # boundary: the merged commit on env/test, the finalize job's success
+      # conclusion, and the finalized hotfix state (written via the gitea
+      # contents/git push path). The release-object lifecycle and the hotfix tag
+      # materialization are GitHub-only behaviors (the tag is never cut and the
+      # release object is never created against a non-GitHub host), so they are
+      # exercised by the real-GitHub validation fleet rather than asserted here.
+      state:
+        test:
+          ref: "env/test"
+          base_sha: commit1
+          patches: [commit2]
+        dev:
+          sha: commit1
+        prod:
+          sha: commit1

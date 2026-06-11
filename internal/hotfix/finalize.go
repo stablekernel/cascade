@@ -1,8 +1,11 @@
 package hotfix
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -28,17 +31,34 @@ type tagLister interface {
 	ListTags() ([]string, error)
 }
 
-// statePusher commits the manifest change to trunk and pushes it with the
-// rebase-retry behavior promote uses. The default implementation reuses the
-// shared git helper; tests inject a recorder.
+// statePusher commits the manifest change and lands it on the given trunk
+// branch. The default implementation writes via the GitHub Contents API on real
+// GitHub and plain git under act; tests inject a recorder.
 type statePusher interface {
-	CommitAndPush(path, message string) error
+	CommitAndPush(path, branch, message string) error
 }
 
-// gitTipReader resolves the tip SHA of a local branch. The default implementation
+// gitTipReader resolves the tip SHA of an env branch. The default implementation
 // shells out to git; tests reuse the planner's execGitRunner.
 type gitTipReader interface {
 	LocalBranchSHA(name string) (string, error)
+}
+
+// envTipReader resolves an env branch tip in a CI checkout. The finalize job
+// checks out trunk and fetches env/* into refs/remotes/origin/*, so the branch
+// is usually a remote-tracking ref rather than a local one. It resolves the
+// local ref first (preserving local-clone behavior) and falls back to the
+// remote-tracking ref so the env-branch cross-check works on a fresh runner.
+type envTipReader struct{}
+
+func (envTipReader) LocalBranchSHA(name string) (string, error) {
+	for _, ref := range []string{"refs/heads/" + name, "refs/remotes/origin/" + name} {
+		out, err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+	return "", fmt.Errorf("git rev-parse env branch %q: not found as a local or origin-tracking ref", name)
 }
 
 // execTagLister lists local git tags.
@@ -52,11 +72,90 @@ func (execTagLister) ListTags() ([]string, error) {
 	return tags, nil
 }
 
-// gitStatePusher commits and pushes the manifest with the promote rebase-retry.
+// gitStatePusher commits the manifest change and lands it on the trunk branch.
+//
+// On real GitHub the write goes through the Contents REST API (signed commit,
+// branch-protection bypass with a capable token), mirroring promote finalize.
+// In the act/gitea e2e environment there is no GitHub API, so the change is
+// committed and pushed with plain git. The finalize job runs on a pull_request
+// (closed) event, which checks out in detached HEAD, so the push targets the
+// trunk branch explicitly (git push origin HEAD:<trunk>) rather than relying on
+// an upstream tracking branch.
 type gitStatePusher struct{}
 
-func (gitStatePusher) CommitAndPush(path, message string) error {
-	return git.CommitAndPushWithRetry(path, message)
+func (gitStatePusher) CommitAndPush(path, branch, message string) error {
+	if isRealGitHub() {
+		return writeStateViaAPI(path, branch, message)
+	}
+	return commitAndPushGit(path, branch, message)
+}
+
+// isRealGitHub reports whether the workflow runs on github.com rather than an
+// act/gitea e2e environment, detected by GITHUB_SERVER_URL as the generated
+// dispatch steps do.
+func isRealGitHub() bool {
+	server := os.Getenv("GITHUB_SERVER_URL")
+	return server == "" || server == "https://github.com"
+}
+
+// writeStateViaAPI writes the manifest to the trunk branch through the GitHub
+// Contents REST API using the gh CLI, producing a signed (Verified) commit.
+func writeStateViaAPI(path, branch, message string) error {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read manifest failed: %w", err)
+	}
+	contentB64 := base64.StdEncoding.EncodeToString(data)
+	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, path)
+
+	shaOut, _ := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha").Output()
+	currentSHA := strings.TrimSpace(string(shaOut))
+
+	args := []string{
+		"api", apiPath, "-X", "PUT",
+		"-f", "message=" + message,
+		"-f", "content=" + contentB64,
+		"-f", "branch=" + branch,
+	}
+	if currentSHA != "" {
+		args = append(args, "-f", "sha="+currentSHA)
+	}
+	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// commitAndPushGit commits the manifest and pushes it to the trunk branch with
+// plain git. Used in the act/gitea e2e environment, which enforces neither
+// branch protection nor commit signatures. The push refspec is explicit so it
+// works from the detached-HEAD checkout of a pull_request event.
+func commitAndPushGit(path, branch, message string) error {
+	if out, err := exec.Command("git", "config", "user.name", "github-actions[bot]").CombinedOutput(); err != nil {
+		return fmt.Errorf("git config user.name failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("git", "config", "user.email", "github-actions[bot]@users.noreply.github.com").CombinedOutput(); err != nil {
+		return fmt.Errorf("git config user.email failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("git", "add", path).CombinedOutput(); err != nil {
+		return fmt.Errorf("git add failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("git", "commit", "-m", message).CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "nothing to commit") {
+			return nil
+		}
+		return fmt.Errorf("git commit failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	refspec := "HEAD:refs/heads/" + branch
+	if out, err := exec.Command("git", "push", "origin", refspec).CombinedOutput(); err != nil {
+		return fmt.Errorf("git push origin %s failed: %s: %w", refspec, strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // Finalizer writes the diverged state, tag, and release object for a completed
@@ -153,7 +252,7 @@ func NewFinalizer(opts FinalizerOptions, options ...FinalizeOption) (*Finalizer,
 		buildResults:  make(map[string]string),
 		tagLister:     execTagLister{},
 		pusher:        gitStatePusher{},
-		tipReader:     execGitRunner{},
+		tipReader:     envTipReader{},
 	}
 	for _, o := range options {
 		o(f)
@@ -262,8 +361,12 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		return err
 	}
 
+	trunk := cfg.TrunkBranch
+	if trunk == "" {
+		trunk = "main"
+	}
 	message := fmt.Sprintf("chore: record hotfix %s on %s [skip ci]", hotfixVersion, targetEnv)
-	if err := f.pusher.CommitAndPush(f.configPath, message); err != nil {
+	if err := f.pusher.CommitAndPush(f.configPath, trunk, message); err != nil {
 		return fmt.Errorf("committing hotfix state: %w", err)
 	}
 
@@ -408,12 +511,16 @@ func (f *Finalizer) resolveReleaseManager() (releaseManager, error) {
 }
 
 // releaseToken resolves the GitHub token for release operations from the
-// environment, preferring an explicit RELEASE_TOKEN.
+// environment, preferring an explicit RELEASE_TOKEN, then GITHUB_TOKEN, then
+// GH_TOKEN. GH_TOKEN is the reliable fallback in workflows: GITHUB_TOKEN is a
+// reserved name that the runner does not always propagate as a step env var.
 func releaseToken() string {
-	if t := os.Getenv("RELEASE_TOKEN"); t != "" {
-		return t
+	for _, key := range []string{"RELEASE_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
+		if t := os.Getenv(key); t != "" {
+			return t
+		}
 	}
-	return os.Getenv("GITHUB_TOKEN")
+	return ""
 }
 
 // isPrereleaseEnv reports whether env is the prerelease env (second from top),

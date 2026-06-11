@@ -145,6 +145,12 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 			return fmt.Errorf("create env branch %s: %w", envBranch, err)
 		}
 		r.t.Logf("  HotfixApply: created %s at %s", envBranch, truncateSHA(anchor))
+		// Gitea's branch-list endpoint lags a create: wait until the new branch
+		// is listed so a later branches.exist assertion (which lists branches)
+		// observes it rather than racing the create.
+		if err := r.waitForBranchListed(ctx, envBranch, 30*time.Second); err != nil {
+			return fmt.Errorf("waiting for env branch %s to be listed: %w", envBranch, err)
+		}
 	}
 
 	baseSHA, err := r.harness.gitea.GetBranchSHA(ctx, r.harness.repo, envBranch)
@@ -394,6 +400,28 @@ func (r *Runner) waitForBranch(ctx context.Context, branch string, timeout time.
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("branch %s not visible before timeout", branch)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// waitForBranchListed polls Gitea's branch-list endpoint until the given branch
+// appears or the timeout elapses. GetBranchSHA can resolve a freshly created
+// branch before the list endpoint reflects it, so assertions that enumerate
+// branches need this stronger wait.
+func (r *Runner) waitForBranchListed(ctx context.Context, branch string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		branches, err := r.harness.gitea.ListBranches(ctx, r.harness.repo)
+		if err == nil && containsString(branches, branch) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("branch %s not listed before timeout", branch)
 		}
 		select {
 		case <-ctx.Done():

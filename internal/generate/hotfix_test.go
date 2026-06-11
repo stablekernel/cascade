@@ -509,3 +509,94 @@ func writeReusableWorkflowStubs(t *testing.T, root, content string) {
 		require.NoError(t, os.WriteFile(stubPath, []byte(reusableWorkflowStub), 0644))
 	}
 }
+
+// TestHotfixGenerator_PlanAndFinalizePassConfig guards the regression where the
+// plan and finalize invocations ran without --config and resolved the manifest
+// from an implicit default that does not exist in the runner. Both CLI calls
+// must thread the explicit manifest path so they parse the same config the
+// workflow was generated from. The assertions are scoped per job so a --config
+// that appears only in one job cannot mask a missing flag in the other.
+func TestHotfixGenerator_PlanAndFinalizePassConfig(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	planJob := extractJobSection(t, content, "plan:")
+	require.NotEmpty(t, planJob, "plan job section should be present")
+	assert.Contains(t, planJob, "cascade hotfix plan",
+		"plan job should invoke cascade hotfix plan")
+	assert.Contains(t, planJob, "--config ",
+		"plan job must pass --config so the verb parses the generated manifest")
+
+	finalizeJob := extractJobSection(t, content, "finalize:")
+	require.NotEmpty(t, finalizeJob, "finalize job section should be present")
+	assert.Contains(t, finalizeJob, "cascade hotfix finalize",
+		"finalize job should invoke cascade hotfix finalize")
+	assert.Contains(t, finalizeJob, "--config ",
+		"finalize job must pass --config so the verb parses the generated manifest")
+}
+
+// TestHotfixGenerator_ApplyMaterializesAbsentEnvBranch guards the first-hotfix
+// regression where the apply job branched from origin/env/<env>, a remote ref
+// that does not exist until an env branch has been pushed. The plan verb creates
+// env/<env> only locally, so the first hotfix into an environment must
+// materialize and push it from the validated base SHA before cherry-picking.
+func TestHotfixGenerator_ApplyMaterializesAbsentEnvBranch(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	applyJob := extractJobSection(t, content, "apply:")
+	require.NotEmpty(t, applyJob, "apply job section should be present")
+
+	// The hotfix branch must be cut from the plan's validated base SHA, not from
+	// a remote-tracking ref that may not exist on a first hotfix.
+	assert.Contains(t, applyJob, `git switch -c "$BRANCH" "$BASE_SHA"`,
+		"apply job must branch the hotfix from the validated BASE_SHA")
+	assert.NotContains(t, applyJob, `git switch -c "$BRANCH" "origin/env/${TARGET_ENV}"`,
+		"apply job must not branch from origin/env/<env>, which is absent on a first hotfix")
+
+	// When the remote env branch is absent the apply job must create and push it
+	// at BASE_SHA so the resolution PR has a base to target.
+	assert.Contains(t, applyJob, `refs/remotes/origin/env/${TARGET_ENV}`,
+		"apply job must probe for the remote env branch before relying on it")
+	assert.Contains(t, applyJob, `git push origin "${BASE_SHA}:refs/heads/env/${TARGET_ENV}"`,
+		"apply job must push env/<env> at BASE_SHA when it is absent")
+}
+
+// TestHotfixGenerator_ApplySkippedOnNoOp guards that the apply job does not run
+// when the planner reports a no-op (the fix is already contained in the target
+// state SHA): there is nothing to cherry-pick, and attempting one would fail.
+// The gate depends on the plan job exposing no_op as a job output.
+func TestHotfixGenerator_ApplySkippedOnNoOp(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	planJob := extractJobSection(t, content, "plan:")
+	require.NotEmpty(t, planJob, "plan job section should be present")
+	assert.Contains(t, planJob, "no_op: ${{ steps.plan.outputs.no_op }}",
+		"plan job must expose no_op so the apply job can gate on it")
+
+	applyJob := extractJobSection(t, content, "apply:")
+	require.NotEmpty(t, applyJob, "apply job section should be present")
+	assert.Contains(t, applyJob, "needs.plan.outputs.no_op != 'true'",
+		"apply job must skip when the plan reports a no-op")
+}
+
+// TestHotfixGenerator_FinalizeFetchesEnvBranches guards that the finalize job
+// fetches the env/* branches before running the verb. finalize cross-checks the
+// merge SHA against the env-branch tip; without the fetch the branch is absent
+// from the fresh checkout and the verb fails resolving it.
+func TestHotfixGenerator_FinalizeFetchesEnvBranches(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	finalizeJob := extractJobSection(t, content, "finalize:")
+	require.NotEmpty(t, finalizeJob, "finalize job section should be present")
+	assert.Contains(t, finalizeJob, "Fetch env branches and tags",
+		"finalize job must fetch env branches before the env-branch tip cross-check")
+	assert.Contains(t, finalizeJob, "refs/heads/env/*:refs/remotes/origin/env/*",
+		"finalize job must fetch the env/* refs into remote-tracking refs")
+}
