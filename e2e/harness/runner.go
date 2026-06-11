@@ -232,7 +232,7 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 	case "commit":
 		return r.executeCommit(ctx, step.Commit)
 	case "orchestrate":
-		return r.executeOrchestrate(ctx, config)
+		return r.executeOrchestrate(ctx, config, step.ExpectFailure)
 	case "promote":
 		return r.executePromote(ctx, step.Promote, config)
 	default:
@@ -265,8 +265,10 @@ func (r *Runner) executeCommit(ctx context.Context, commit *CommitStep) error {
 	return nil
 }
 
-// executeOrchestrate runs the orchestrate workflow via ActRunner
-func (r *Runner) executeOrchestrate(ctx context.Context, config Config) error {
+// executeOrchestrate runs the orchestrate workflow via ActRunner. When
+// expectFailure is set, a failure conclusion is the success path (mirrors
+// executePromote's ExpectFailure handling) and a success conclusion is an error.
+func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFailure bool) error {
 	if r.harness == nil || r.harness.act == nil {
 		r.t.Log("  Would execute orchestrate workflow (no harness)")
 		return nil
@@ -314,14 +316,23 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config) error {
 		return fmt.Errorf("failed to run orchestrate workflow: %w", err)
 	}
 
+	// Store workflow result for assertions
+	r.lastWorkflowResult = result
+
+	// Handle expected failures (mirrors executePromote's ExpectFailure path).
+	if expectFailure {
+		if result.Conclusion == "failure" {
+			r.t.Log("  Orchestrate: workflow failed as expected")
+			return nil
+		}
+		return fmt.Errorf("expected orchestrate to fail but it succeeded")
+	}
+
 	if result.Conclusion != "success" {
 		r.t.Logf("  Orchestrate failed with conclusion: %s", result.Conclusion)
 		r.t.Logf("  Workflow logs:\n%s", result.Logs)
 		return fmt.Errorf("orchestrate workflow failed: %s", result.Error)
 	}
-
-	// Store workflow result for assertions
-	r.lastWorkflowResult = result
 
 	// Debug: show what jobs were parsed
 	r.t.Logf("  Orchestrate: parsed %d jobs from output", len(result.Jobs))

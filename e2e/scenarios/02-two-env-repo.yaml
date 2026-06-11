@@ -72,9 +72,6 @@ steps:
         - tag: "v0.1.0-rc.1"
           prerelease: true
           draft: true
-          changelog:
-            - "feat: add CDK stack"
-            - "feat: add app feature"
       tags:
         exist: ["v0.1.0-rc.0", "v0.1.0-rc.1"]
 

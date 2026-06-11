@@ -3,6 +3,7 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,18 @@ type Config struct {
 	// DispatchInput shape while preserving every key (type, options, default,
 	// description, required) across the marshal round-trip.
 	DispatchInputs map[string]map[string]any `yaml:"dispatch_inputs,omitempty"`
+	// EnvironmentConfig carries per-environment passthrough settings (currently
+	// gha_environment) into the generated manifest so the generator emits the
+	// job-level environment: key. Mirrors internal/config EnvironmentConfig.
+	// Keyed by env name so future per-env keys extend additively.
+	EnvironmentConfig map[string]EnvEnvironmentConfig `yaml:"environment_config,omitempty"`
+}
+
+// EnvEnvironmentConfig mirrors internal/config.EnvironmentConfig's gha_environment
+// passthrough. Its own struct (not an inline map) so more per-env keys can be
+// added later without touching call sites.
+type EnvEnvironmentConfig struct {
+	GHAEnvironment string `yaml:"gha_environment,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published
@@ -160,6 +173,13 @@ func DiscoverScenarios(dir string) ([]*Scenario, error) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+
+		// Skip multi-step and multi-repo scenarios so single-step discovery stays
+		// exclusive. Mirrors DiscoverMultiStepScenarios' "repos:" skip and adds the
+		// "steps:" guard so a lifecycle scenario is never also parsed as single-step.
+		if strings.Contains(string(data), "\nsteps:") || strings.Contains(string(data), "\nrepos:") {
+			return nil
 		}
 
 		scenario, err := ParseScenario(data)
