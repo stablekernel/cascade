@@ -284,6 +284,26 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
+	// Generate the hotfix workflow when 2+ environments are configured (Q1).
+	hotfixGen := NewHotfixGenerator(cfg, baseDir)
+	if hotfixGen.Enabled() {
+		content, err := hotfixGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating hotfix workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-hotfix.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-hotfix.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+	}
+
 	// Generate the opt-in read-only PR plan-preview workflow (#40). Absent or
 	// disabled pr_preview emits nothing, so existing manifests are unaffected.
 	if cfg.PRPreview != nil && cfg.PRPreview.Enabled {
