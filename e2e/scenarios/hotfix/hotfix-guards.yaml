@@ -1,0 +1,126 @@
+name: "Hotfix Promote Guards"
+description: |
+  Exercises the promote-time guards that protect a diverged environment after a
+  hotfix has been applied to it.
+
+  The centerpiece is the diverged-source guard: once test carries a hotfix and
+  diverges from trunk, the default-mode cascade's test-to-prod leg sources from
+  test and must refuse to run, leaving test unchanged. That guard does not call
+  git ancestry, so it is deterministic.
+
+  Runtime protection-rule enforcement (environment approvals on prod) is a
+  real-GitHub-only concern and is not exercised by this harness; only the
+  promote-time guards that the generator and CLI enforce are covered here.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev/test"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a trunk fix to hotfix into test"
+    action: commit
+    commit:
+      message: "fix: patch for test env"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Plan hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Apply hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge the hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize hotfix; test diverges onto env/test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      # Robust minimal assertion: test now tracks its integration branch. The
+      # recorded patch is the original trunk commit SHA (commit2), not the
+      # cherry-pick SHA, so we assert the ref rather than a fragile patch SHA.
+      state:
+        test:
+          ref: "env/test"
+
+  # Guard 1 (deterministic centerpiece): a default-mode cascade now has a
+  # test-to-prod leg that would source from the diverged test env. The
+  # diverged-source guard fires and the promotion fails. test is untouched.
+  - name: "Guard: promote refuses to source from diverged test"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      state:
+        test:
+          unchanged: true
+
+  - name: "Advance trunk past the patch"
+    action: commit
+    commit:
+      message: "chore: trunk advance"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate so dev carries the patch's trunk ancestor"
+    action: orchestrate
+
+  # Force-override path. Because the recorded patch is the original trunk commit
+  # (commit2), every later trunk SHA (commit3 and beyond) already contains it as
+  # an ancestor, so the patch-containment "missing patch" failure case cannot be
+  # engineered with real linear git history here. This step instead exercises the
+  # force input: with force set, the promotion proceeds regardless of containment.
+  # The outcome state is left unasserted because a contained promotion also
+  # triggers rejoin, which clears divergence; that path is asserted in
+  # hotfix-rejoin.yaml.
+  - name: "Force override exercises the force input path"
+    action: promote
+    promote:
+      mode: default
+      force: true
