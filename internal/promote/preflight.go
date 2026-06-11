@@ -56,6 +56,10 @@ type PreflightResult struct {
 	CanProceed        bool   `json:"can_proceed"`
 	BreakingBlockedAt string `json:"breaking_blocked_at,omitempty"` // The transition that was blocked
 
+	// Warnings carries non-fatal advisories surfaced during preflight, for
+	// example a forced override of the diverged-env patch-containment guard.
+	Warnings []string `json:"warnings,omitempty"`
+
 	// Full promotion result for downstream use
 	PromotionResult *PromotionResult `json:"promotion_result"`
 }
@@ -70,6 +74,7 @@ type Preflighter struct {
 	deployChecks      map[string]bool // deploy name -> include in run
 	deploysFilter     []string        // Specific deploys to include (empty = all)
 	rollbackOnFailure bool            // Revert successful deploys if any fails
+	ancestor          AncestorFunc    // git-ancestry checker for divergence guards
 }
 
 // PreflighterOptions configures the Preflighter
@@ -83,12 +88,15 @@ type PreflighterOptions struct {
 	RollbackOnFailure bool     // Revert successful deploys if any fails
 }
 
-// NewPreflighter creates a new Preflighter instance
-func NewPreflighter(opts PreflighterOptions) *Preflighter {
+// NewPreflighter creates a new Preflighter instance. Optional behavior (such as
+// the git-ancestry checker used by the divergence guards) is supplied through
+// functional options so the required inputs stay positional.
+func NewPreflighter(opts PreflighterOptions, options ...Option) *Preflighter {
 	baseDir := opts.BaseDir
 	if baseDir == "" {
 		baseDir = "."
 	}
+	gc := newGuardConfig(options...)
 	return &Preflighter{
 		cicdFile:          opts.Config,
 		mode:              opts.Mode,
@@ -98,6 +106,7 @@ func NewPreflighter(opts PreflighterOptions) *Preflighter {
 		deployChecks:      make(map[string]bool),
 		deploysFilter:     opts.DeploysFilter,
 		rollbackOnFailure: opts.RollbackOnFailure,
+		ancestor:          gc.ancestor,
 	}
 }
 
@@ -108,12 +117,15 @@ func (p *Preflighter) SetDeployCheck(name string, include bool) {
 
 // Run executes the preflight checks and returns the result
 func (p *Preflighter) Run() (*PreflightResult, error) {
-	// 1. Calculate promotion plan using Promoter in dry-run mode
+	// 1. Calculate promotion plan using Promoter in dry-run mode. The promoter
+	// enforces the "never promote FROM a diverged env" and publish-path guards;
+	// it shares this preflighter's ancestry checker so behavior is consistent.
 	promoter := &Promoter{
 		cicdFile: p.cicdFile,
 		dryRun:   true, // Always dry run for preflight
 		actor:    "preflight",
 		force:    p.force,
+		ancestor: p.ancestor,
 	}
 
 	promoResult, err := promoter.Promote(p.mode, p.target)
@@ -224,7 +236,63 @@ func (p *Preflighter) Run() (*PreflightResult, error) {
 
 	result.CanProceed = !result.HasBreaking
 
+	// 7. Promotion INTO a diverged env: the incoming SHA must contain every
+	// recorded patch, otherwise the promotion would silently regress a fix that
+	// was deployed into that env. The force flag overrides with a loud warning.
+	// Inert for non-diverged targets (no manifest without divergence fields can
+	// enter this loop).
+	if err := p.checkPatchContainment(promoResult.Promotions, result); err != nil {
+		return nil, err
+	}
+
 	return result, nil
+}
+
+// checkPatchContainment enforces the "promote INTO a diverged env requires the
+// incoming SHA to contain every recorded patch" rule across the planned
+// promotions. For each target env that is diverged, every entry of its Patches
+// must be an ancestor of the incoming SHA. A missing patch fails the preflight
+// unless force is set, in which case it records a loud warning and proceeds.
+//
+// The check is fully additive: environments without divergence fields are
+// skipped, so a manifest that never diverges never invokes the ancestry checker.
+func (p *Preflighter) checkPatchContainment(promotions []EnvPromotion, result *PreflightResult) error {
+	for _, promo := range promotions {
+		target := p.cicdFile.State[promo.Environment]
+		if !target.IsDiverged() {
+			continue
+		}
+
+		incoming := promo.SHA
+		for _, patch := range target.Patches {
+			contained, err := p.ancestor(patch, incoming)
+			if err != nil {
+				return fmt.Errorf(
+					"failed to verify patch %s is contained in %s for diverged environment %q: %w",
+					patch, incoming, promo.Environment, err,
+				)
+			}
+			if contained {
+				continue
+			}
+
+			if !p.force {
+				return fmt.Errorf(
+					"cannot promote into diverged environment %q: incoming SHA %s does not contain patch %s. "+
+						"Promoting would regress a fix deployed in %q. "+
+						"Promote a trunk SHA at or after the patch, or pass --force to override",
+					promo.Environment, incoming, patch, promo.Environment,
+				)
+			}
+
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"FORCE OVERRIDE: promoting into diverged environment %q with incoming SHA %s that does NOT contain patch %s; "+
+					"this regresses a fix deployed in %q",
+				promo.Environment, incoming, patch, promo.Environment,
+			))
+		}
+	}
+	return nil
 }
 
 // detectDeployChanges determines which deploys need to run based on changes and deploy checks
