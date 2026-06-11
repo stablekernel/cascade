@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // GetChangedFiles returns the list of files changed between two commits
@@ -158,6 +159,51 @@ func GetLatestTag(prefix string) (string, string, error) {
 	}
 
 	return latestTag, strings.TrimSpace(string(output)), nil
+}
+
+// ListTags returns every tag in the repository. It returns an empty slice when
+// the repository has no tags.
+func ListTags() ([]string, error) {
+	cmd := exec.Command("git", "tag", "-l")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git tag -l: %w", err)
+	}
+	return parseLines(output), nil
+}
+
+// CommitAndPushWithRetry stages filePath, commits it with message, and pushes
+// to the current branch's upstream, retrying the push up to three times behind a
+// pull --rebase. A "nothing to commit" state is treated as success (no-op). This
+// is the manifest state-write path shared by promote and hotfix finalize: an
+// API-created commit on real GitHub goes through a different path, so this is the
+// plain-git fallback used when committing locally.
+func CommitAndPushWithRetry(filePath, message string) error {
+	cmd := exec.Command("git", "add", filePath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add failed: %s: %w", string(out), err)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", message)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "nothing to commit") {
+			return nil
+		}
+		return fmt.Errorf("git commit failed: %s: %w", string(out), err)
+	}
+
+	for i := 0; i < 3; i++ {
+		cmd = exec.Command("git", "push")
+		if _, err := cmd.CombinedOutput(); err == nil {
+			return nil
+		}
+
+		cmd = exec.Command("git", "pull", "--rebase")
+		_, _ = cmd.CombinedOutput() // ignore error - best effort
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("git push failed after 3 retries")
 }
 
 // CommitAndPush stages a file, commits with the given message, and pushes to origin.
