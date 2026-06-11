@@ -111,16 +111,26 @@ steps:
   - name: "Orchestrate so dev carries the patch's trunk ancestor"
     action: orchestrate
 
-  # Force-override path. Because the recorded patch is the original trunk commit
-  # (commit2), every later trunk SHA (commit3 and beyond) already contains it as
-  # an ancestor, so the patch-containment "missing patch" failure case cannot be
-  # engineered with real linear git history here. This step instead exercises the
-  # force input: with force set, the promotion proceeds regardless of containment.
-  # The outcome state is left unasserted because a contained promotion also
-  # triggers rejoin, which clears divergence; that path is asserted in
-  # hotfix-rejoin.yaml.
-  - name: "Force override exercises the force input path"
+  # Guard 2 (patch-containment passing branch): a promote INTO a diverged test
+  # env checks that every recorded patch is an ancestor of the incoming SHA.
+  # The recorded patch is commit2 - an ancestor of the current dev SHA (which
+  # carries commit3 > commit2 > commit1). Containment passes, so the promote
+  # succeeds and divergence clears via rejoin. The full rejoin-side assertions
+  # (cleared fields, branch deletion) live in hotfix-rejoin.yaml.
+  #
+  # The guard's failure branch (recorded patch is not an ancestor of the
+  # incoming SHA) and the force-override branch are covered by internal/promote
+  # unit tests:
+  #   TestPromote_IntoDivergedEnv_MissingPatch_Blocked
+  #   TestPromote_IntoDivergedEnv_Force_OverridesWithWarning
+  # Engineering a real non-ancestor patch at the e2e level requires a
+  # side-branch commit step not present in the harness; those paths are
+  # exercised directly in the promote unit tests against the git ancestry logic.
+  - name: "Promote a containing SHA into diverged test passes the containment guard"
     action: promote
     promote:
       mode: default
-      force: true
+    expect:
+      state:
+        dev:
+          unchanged: true

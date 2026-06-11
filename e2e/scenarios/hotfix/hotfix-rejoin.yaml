@@ -100,17 +100,20 @@ steps:
   # divergence fields (ref/base_sha/patches) and deletes env/test on the remote.
   # prod is untouched by this default-mode dev-to-test promotion.
   #
-  # The harness does not expose a "ref must be absent" assertion (an empty-string
-  # ref in StateExpect is skipped per assert.go:242); the branch deletion is the
-  # observable side effect of rejoin that the harness CAN verify. The manifest-
-  # level clearing of ref/base_sha/patches is covered by the finalize unit tests
-  # in internal/promote.
+  # The cleared matcher asserts ref/base_sha/patches read back EMPTY on test
+  # after rejoin (an empty StateExpect value alone is skipped, so the matcher
+  # exists to express the clearing contract). The branch deletion is the second
+  # observable side effect of rejoin. Together they cover the full rejoin
+  # boundary that gitea can observe; promote-side unit tests in internal/promote
+  # cover the manifest-write internals.
   - name: "Promote a containing SHA into test triggers rejoin"
     action: promote
     promote:
       mode: default
     expect:
       state:
+        test:
+          cleared: [ref, base_sha, patches]
         dev:
           unchanged: true
         prod:

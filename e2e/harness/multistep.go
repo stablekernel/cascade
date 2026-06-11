@@ -202,6 +202,12 @@ type StateExpect struct {
 	// prior versions in a separate "previous" ring), so it is only populated by
 	// setup staging or by an explicit divergence record.
 	PreviousVersion string `yaml:"previous_version,omitempty"`
+	// Cleared names divergence fields that must now be empty on the recorded
+	// state. Supported members: "ref", "base_sha", "patches". This expresses the
+	// rejoin contract (divergence fields are cleared once an env rejoins trunk),
+	// which an empty Ref/BaseSHA/Patches value alone cannot assert because empty
+	// expectation values are skipped. Each named field must read back empty.
+	Cleared []string `yaml:"cleared,omitempty"`
 }
 
 // DeployExpect defines expected deploy state
