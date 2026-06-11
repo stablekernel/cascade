@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -180,6 +181,69 @@ func CommitAndPush(filePath, message string) error {
 	}
 
 	return nil
+}
+
+// IsAncestor reports whether ancestor is an ancestor of descendant by running
+// "git merge-base --is-ancestor". An exit code of 0 means true, an exit code of 1
+// means false, and any other exit code or execution failure is returned as an error.
+//
+// Both commits must be present in the local object store. In a shallow clone the
+// relevant history may be missing, so callers that rely on this must ensure full
+// history is fetched (for example fetch-depth: 0).
+func IsAncestor(ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+	}
+
+	return false, fmt.Errorf("git merge-base --is-ancestor: %w", err)
+}
+
+// BranchExists reports whether the remote-tracking ref refs/remotes/<remote>/<name>
+// exists by running "git rev-parse --verify". An exit code of 0 means the ref
+// exists, a non-zero exit code means it does not, and an execution failure is
+// returned as an error.
+//
+// This checks remote-tracking refs, so the remote must have been fetched first.
+// A shallow or partial fetch that omits the branch will cause this to report false.
+func BranchExists(remote, name string) (bool, error) {
+	ref := fmt.Sprintf("refs/remotes/%s/%s", remote, name)
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("git rev-parse --verify %s: %w", ref, err)
+}
+
+// RemoteBranchSHA returns the SHA of the remote-tracking ref
+// refs/remotes/<remote>/<name> by running "git rev-parse". The returned SHA is
+// whitespace-trimmed. An error is returned if the ref cannot be resolved.
+//
+// This resolves a remote-tracking ref, so the remote must have been fetched first.
+// A shallow or partial fetch that omits the branch will cause this to fail.
+func RemoteBranchSHA(remote, name string) (string, error) {
+	ref := fmt.Sprintf("refs/remotes/%s/%s", remote, name)
+	cmd := exec.Command("git", "rev-parse", ref)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse %s: %w", ref, err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // GetLatestReleaseTag returns the most recent non-prerelease tag (no -rc suffix).

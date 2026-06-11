@@ -1,9 +1,68 @@
 package git
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// newScratchRepo initializes a git repository in a temp directory, changes the
+// working directory to it for the duration of the test, and returns the repo path.
+// The original working directory is restored via t.Cleanup.
+func newScratchRepo(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	runGit(t, "init")
+	runGit(t, "config", "user.email", "test@example.com")
+	runGit(t, "config", "user.name", "Test User")
+	runGit(t, "config", "commit.gpgsign", "false")
+
+	return dir
+}
+
+// runGit runs a git command in the current working directory and fails the test on error.
+func runGit(t *testing.T, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+// commitFile writes a file, stages it, commits with the given message, and
+// returns the resulting commit SHA.
+func commitFile(t *testing.T, name, content, message string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(".", name), []byte(content), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, "add", name)
+	runGit(t, "commit", "-m", message)
+
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
 
 func TestParseCommits(t *testing.T) {
 	tests := []struct {
@@ -116,6 +175,145 @@ func TestParseLines(t *testing.T) {
 			got := parseLines(tt.data)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseLines() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsAncestor_TrueFalseAndError(t *testing.T) {
+	newScratchRepo(t)
+
+	first := commitFile(t, "a.txt", "one", "first commit")
+	second := commitFile(t, "b.txt", "two", "second commit")
+
+	tests := []struct {
+		name       string
+		ancestor   string
+		descendant string
+		want       bool
+		wantErr    bool
+	}{
+		{name: "is ancestor", ancestor: first, descendant: second, want: true},
+		{name: "not ancestor", ancestor: second, descendant: first, want: false},
+		{name: "bad sha errors", ancestor: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", descendant: second, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IsAncestor(tt.ancestor, tt.descendant)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("IsAncestor() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("IsAncestor() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("IsAncestor() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBranchExists(t *testing.T) {
+	dir := newScratchRepo(t)
+
+	commitFile(t, "a.txt", "one", "first commit")
+	runGit(t, "branch", "-M", "main")
+	runGit(t, "branch", "feature")
+
+	// Create a second repo that uses the scratch repo as its origin remote.
+	clone := t.TempDir()
+	runGit(t, "clone", dir, clone)
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(clone); err != nil {
+		t.Fatalf("chdir clone: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	runGit(t, "fetch", "origin")
+
+	tests := []struct {
+		name   string
+		remote string
+		branch string
+		want   bool
+	}{
+		{name: "existing branch", remote: "origin", branch: "feature", want: true},
+		{name: "missing branch", remote: "origin", branch: "nope", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := BranchExists(tt.remote, tt.branch)
+			if err != nil {
+				t.Fatalf("BranchExists() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("BranchExists() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRemoteBranchSHA(t *testing.T) {
+	dir := newScratchRepo(t)
+
+	wantSHA := commitFile(t, "a.txt", "one", "first commit")
+	runGit(t, "branch", "-M", "main")
+	runGit(t, "branch", "feature")
+
+	clone := t.TempDir()
+	runGit(t, "clone", dir, clone)
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(clone); err != nil {
+		t.Fatalf("chdir clone: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	runGit(t, "fetch", "origin")
+
+	tests := []struct {
+		name    string
+		remote  string
+		branch  string
+		want    string
+		wantErr bool
+	}{
+		{name: "existing branch", remote: "origin", branch: "feature", want: wantSHA},
+		{name: "missing branch", remote: "origin", branch: "nope", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := RemoteBranchSHA(tt.remote, tt.branch)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("RemoteBranchSHA() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RemoteBranchSHA() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("RemoteBranchSHA() = %q, want %q", got, tt.want)
 			}
 		})
 	}
