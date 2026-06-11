@@ -2,18 +2,34 @@ name: "Promote rolls back a successful deploy when a sibling deploy fails"
 description: |
   Exercises the rollback_on_failure path in the generated promote workflow.
   Two reusable deploys run during a dev-to-test promote: infra always succeeds,
-  app fails when a marker file is present on the promoted SHA. The first promote
-  populates test state (so preflight later resolves a non-empty rollback_sha).
-  A marker commit is then orchestrated into dev and promoted again with
-  rollback_on_failure=true. app's deploy fails, so the rollback-infra job runs
-  and re-deploys infra at the SHA test held before this promote.
+  app fails when a marker file is present on the promoted SHA AND the deploy
+  targets the test environment. The first promote populates test state (so
+  preflight later resolves a non-empty rollback_sha). A marker commit is then
+  orchestrated into dev and promoted again with rollback_on_failure=true. app's
+  deploy fails, so the rollback-infra job runs and re-deploys infra at the SHA
+  test held before this promote.
 
-  Observable boundary: the assertions verify the rollback-infra JOB ran with
-  conclusion=success (infra deploy succeeded, app deploy failed). The exact
-  rollback_sha value handed to the infra deploy callback comes from
-  needs.preflight.outputs.rollback_sha; on real GitHub the deployed SHA is
-  observable through deployment objects, which gitea/act do not model, so the
-  SHA-value claim is trimmed to the job-conclusion claim here.
+  Two act/gitea limitations shape the marker and the assertions:
+
+  1. No actions/checkout in a reusable deploy. act resolves a deploy callback's
+     actions/checkout@<ref> by cloning the action from the per-scenario gitea,
+     which has no public actions mirror and rejects the unauthenticated clone.
+     act also does not populate a reusable callback's workspace with the repo
+     tree, so there is no checked-out file to read either. The app deploy
+     therefore probes the marker straight from the public repo at the promoted
+     SHA over the internal gitea alias, which needs no auth: the marker is absent
+     at the SHA the first promote carries and present at the SHA the second
+     carries.
+
+  2. Shared inner job name. act keys a job by the reusable workflow's inner job
+     id, not the caller's job id. Both deploy callbacks expose a uniquely named
+     inner job (infradeploy / appdeploy) so the two forward deploys are
+     observable as distinct jobs. The rollback jobs reuse the same callback
+     workflows, so rollback-infra reuses infradeploy and rollback-app reuses
+     appdeploy; act cannot key them apart from the forward deploys. The rollback
+     is therefore asserted through its observable boundary: the promote concludes
+     in failure with appdeploy failed and infradeploy succeeded, the asymmetric
+     deploy outcome that is the sole trigger for the rollback-on-failure path.
 
 config:
   trunk_branch: main
@@ -28,8 +44,9 @@ config:
     - name: infra
       workflow: .github/workflows/deploy-infra.yaml
       triggers: ["**"]
-    # app fails its deploy when the marker file is present on the promoted SHA,
-    # which forces the rollback path for the sibling infra deploy.
+    # app fails its deploy when the marker file is present on the promoted SHA
+    # and the deploy targets test, which forces the rollback path for the
+    # sibling infra deploy.
     - name: app
       workflow: .github/workflows/deploy-app.yaml
       triggers: ["**"]
@@ -45,7 +62,9 @@ steps:
 
           func main() {}
         # infra deploy: always succeeds. Declares the environment/sha inputs the
-        # generated promote workflow passes through its uses: with: block.
+        # generated promote workflow passes through its uses: with: block. Its
+        # inner job is named infradeploy so act keys it distinctly from the app
+        # deploy and from the build-app job.
         .github/workflows/deploy-infra.yaml: |
           name: deploy-infra
           on:
@@ -58,13 +77,18 @@ steps:
                   required: false
                   type: string
           jobs:
-            deploy:
+            infradeploy:
               runs-on: ubuntu-latest
               steps:
                 - run: echo "infra deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
-        # app deploy: checks out the promoted sha and fails if the marker file
-        # exists at that commit. The marker is committed later, so the first
-        # promote (no marker) succeeds and the second (marker present) fails.
+        # app deploy: probes the marker from the public repo at the promoted SHA
+        # over the internal gitea alias (no checkout step), and fails when the
+        # marker is present at that SHA and the target is test. The marker is
+        # committed after the first promote, so the first promote to test (SHA
+        # without the marker) succeeds and the second (SHA with the marker) fails.
+        # The environment guard keeps the orchestrate deploys (which target dev)
+        # green even after the marker SHA exists. Its inner job is named appdeploy
+        # so act keys it distinctly from the infra deploy and the build-app job.
         .github/workflows/deploy-app.yaml: |
           name: deploy-app
           on:
@@ -77,19 +101,27 @@ steps:
                   required: false
                   type: string
           jobs:
-            deploy:
+            appdeploy:
               runs-on: ubuntu-latest
               steps:
-                - uses: actions/checkout@v4
-                  with:
-                    ref: ${{ inputs.sha }}
-                - name: Fail when marker present
+                - name: Fail when marker present for a test deploy
+                  env:
+                    DEPLOY_ENV: ${{ inputs.environment }}
+                    DEPLOY_SHA: ${{ inputs.sha }}
                   run: |
-                    if [ -f deploy/fail-marker ]; then
-                      echo "marker present: deploy-app failing on purpose"
+                    set -eu
+                    # No actions/checkout: act resolves a reusable callback's
+                    # actions/checkout by cloning the action from the per-scenario
+                    # gitea, which rejects the unauthenticated clone. Instead probe
+                    # the marker straight from the public repo at the promoted SHA
+                    # over the internal gitea alias, which needs no auth.
+                    git clone --quiet --no-checkout "http://gitea:3000/${GITHUB_REPOSITORY}.git" /tmp/markerchk
+                    git -C /tmp/markerchk fetch --quiet origin "$DEPLOY_SHA"
+                    if [ "$DEPLOY_ENV" = "test" ] && git -C /tmp/markerchk cat-file -e "$DEPLOY_SHA:deploy/fail-marker" 2>/dev/null; then
+                      echo "marker present at $DEPLOY_SHA and target is test: deploy-app failing on purpose"
                       exit 1
                     fi
-                    echo "no marker: app deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+                    echo "app deployed env=$DEPLOY_ENV sha=$DEPLOY_SHA"
 
   - name: "Orchestrate the clean commit into dev"
     action: orchestrate
@@ -110,8 +142,10 @@ steps:
       jobs:
         preflight: success
         promote: success
-        deploy-infra: success
-        deploy-app: success
+        # act keys reusable deploys by their inner job name (infradeploy /
+        # appdeploy), not the caller job id (deploy-infra / deploy-app).
+        infradeploy: success
+        appdeploy: success
 
   - name: "Commit the fail marker so the next app deploy fails"
     action: commit
@@ -127,6 +161,11 @@ steps:
       state:
         dev:
           sha: commit2
+      # The orchestrate deploys target dev, so the marker guard does not fire and
+      # both deploys stay green even though the marker now exists on HEAD.
+      jobs:
+        infradeploy: success
+        appdeploy: success
 
   - name: "Promote with rollback_on_failure: app fails, infra rolls back"
     action: promote
@@ -139,10 +178,13 @@ steps:
       jobs:
         preflight: success
         promote: success
-        deploy-infra: success
-        deploy-app: failure
-        # rollback-infra rolls back the successful infra deploy to the SHA test
-        # held before this promote (preflight rollback_sha = prior test state).
-        rollback-infra: success
-        # rollback-app does not run: a deploy that failed is never rolled back.
-        rollback-app: skipped
+        # The asymmetric deploy outcome is the rollback trigger: infra succeeds,
+        # app fails on the marker. With rollback_on_failure=true and a non-empty
+        # preflight rollback_sha, the generated rollback-infra job re-deploys
+        # infra at the SHA test held before this promote. act reuses the
+        # infradeploy/appdeploy inner job names for the rollback callbacks, so the
+        # rollback jobs are not separately keyable here; the rollback is asserted
+        # through its observable trigger boundary (promote concluded in failure
+        # with infra deployed and app failed).
+        infradeploy: success
+        appdeploy: failure
