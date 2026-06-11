@@ -4,10 +4,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -254,6 +257,168 @@ func TestHotfixGeneratorE2E(t *testing.T) {
 	singleCfg, err := config.ParseWithKey(manifestPath, "ci")
 	require.NoError(t, err)
 	assert.False(t, NewHotfixGenerator(singleCfg, tmpDir).Enabled(), "single-env manifest emits nothing")
+}
+
+// hotfixFlagInvocation captures a single `cascade hotfix <subcommand> --flag`
+// pairing parsed from the generated workflow, for cross-checking against the
+// real cobra command tree.
+type hotfixFlagInvocation struct {
+	subcommand string
+	flag       string
+	line       string
+}
+
+// parseHotfixInvocations scans the generated workflow for every
+// `cascade hotfix <subcommand> ...` invocation and the long-form flags it
+// passes, returning one entry per (subcommand, flag) pair. It handles the
+// shell line-continuation style the generator emits (a leading verb line such
+// as `cascade hotfix finalize \` followed by `  --flag "..." \` lines).
+func parseHotfixInvocations(content string) []hotfixFlagInvocation {
+	var (
+		invocations []hotfixFlagInvocation
+		current     string
+	)
+	invokeRe := regexp.MustCompile(`cascade hotfix (\S+)`)
+	flagRe := regexp.MustCompile(`(?:^|\s)--([a-zA-Z][a-zA-Z0-9-]*)`)
+
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+
+		if m := invokeRe.FindStringSubmatch(line); m != nil {
+			current = m[1]
+			// A verb line can also carry flags on the same physical line.
+			for _, fm := range flagRe.FindAllStringSubmatch(line, -1) {
+				invocations = append(invocations, hotfixFlagInvocation{
+					subcommand: current,
+					flag:       fm[1],
+					line:       line,
+				})
+			}
+			continue
+		}
+
+		if current == "" {
+			continue
+		}
+
+		flags := flagRe.FindAllStringSubmatch(line, -1)
+		if len(flags) == 0 {
+			// A line with no flags that does not continue the command ends it.
+			if !strings.HasSuffix(line, `\`) {
+				current = ""
+			}
+			continue
+		}
+		for _, fm := range flags {
+			invocations = append(invocations, hotfixFlagInvocation{
+				subcommand: current,
+				flag:       fm[1],
+				line:       line,
+			})
+		}
+		if !strings.HasSuffix(line, `\`) {
+			current = ""
+		}
+	}
+	return invocations
+}
+
+// subcommandByName returns the named direct subcommand of root, or nil.
+func subcommandByName(root *cobra.Command, name string) *cobra.Command {
+	for _, c := range root.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// TestHotfixGenerator_EmittedFlagsExistOnCommands is a regression guard against
+// the whole class of "generated workflow passes a flag the CLI does not define"
+// bug: for every `cascade hotfix <subcommand> --flag` the generated YAML emits,
+// the flag must be a real registered flag on that subcommand's cobra command.
+// It builds the command tree from the same constructor the CLI wires up, so the
+// check tracks the real flag set rather than a hand-maintained list.
+func TestHotfixGenerator_EmittedFlagsExistOnCommands(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	root := hotfix.NewCommand()
+
+	invocations := parseHotfixInvocations(content)
+	require.NotEmpty(t, invocations, "expected to parse at least one cascade hotfix invocation")
+
+	// Sanity: the bug-prone subcommands are actually exercised by the workflow.
+	seen := map[string]bool{}
+	for _, inv := range invocations {
+		seen[inv.subcommand] = true
+	}
+	assert.True(t, seen["plan"], "workflow should invoke cascade hotfix plan")
+	assert.True(t, seen["finalize"], "workflow should invoke cascade hotfix finalize")
+
+	for _, inv := range invocations {
+		sub := subcommandByName(root, inv.subcommand)
+		require.NotNilf(t, sub, "generated workflow invokes unknown subcommand %q (line: %s)", inv.subcommand, inv.line)
+		assert.NotNilf(t, sub.Flags().Lookup(inv.flag),
+			"generated `cascade hotfix %s` passes --%s, which is not a registered flag on that command (line: %s)",
+			inv.subcommand, inv.flag, inv.line)
+	}
+}
+
+// TestHotfixGenerator_FinalizeRequiredFlags asserts the finalize invocation
+// supplies every flag the command marks required, threaded from upstream job
+// outputs and the workflow context.
+func TestHotfixGenerator_FinalizeRequiredFlags(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	for _, flag := range []string{"--target-env", "--merge-sha", "--fix-sha", "--base-sha"} {
+		assert.Contains(t, content, flag,
+			"finalize invocation must pass the required %s flag", flag)
+	}
+	// The retired alias must not reappear.
+	assert.NotContains(t, content, "cascade hotfix finalize \\\n            --sha ",
+		"finalize must not pass the nonexistent --sha flag")
+
+	// The plan job must expose fix_sha as a job output (the planner emits it),
+	// matching the planner's GHA output key.
+	assert.Contains(t, content, "fix_sha: ${{ steps.plan.outputs.fix_sha }}",
+		"plan job must expose fix_sha as a job output")
+
+	// On the merged-PR finalize path the plan job does not run, so fix-sha and
+	// base-sha are recovered by the context job (from the resolution PR-body
+	// trailers) and finalize consumes them via needs.context.outputs.
+	assert.Contains(t, content, "fix_sha: ${{ steps.ctx.outputs.fix_sha }}",
+		"context job must expose fix_sha for finalize to consume")
+	assert.Contains(t, content, "needs.context.outputs.fix_sha",
+		"finalize must thread fix-sha from the context job output")
+	assert.Contains(t, content, "needs.context.outputs.base_sha",
+		"finalize must thread base-sha from the context job output")
+}
+
+// TestHotfixGenerator_PlanJobOutputsMatchPlannerKeys guards the plan job's
+// declared outputs against the GHA output keys the planner actually writes:
+// referencing a steps.plan.outputs.<key> that the CLI never sets silently
+// yields an empty value at runtime.
+func TestHotfixGenerator_PlanJobOutputsMatchPlannerKeys(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// Keys the planner emits via writePlanGHAOutput.
+	refRe := regexp.MustCompile(`steps\.plan\.outputs\.([a-zA-Z0-9_]+)`)
+	plannerKeys := map[string]bool{
+		"target_env": true, "fix_sha": true, "branch": true, "base_sha": true,
+		"no_op": true, "branch_created": true, "hotfix_version_candidate": true,
+		"conflict_expected": true, "dry_run": true,
+		"protection_suggestions": true, "protection_suggestions_text": true,
+	}
+	for _, m := range refRe.FindAllStringSubmatch(content, -1) {
+		assert.Truef(t, plannerKeys[m[1]],
+			"plan job references steps.plan.outputs.%s, which the planner never sets", m[1])
+	}
 }
 
 // TestHotfixGenerator_Actionlint runs actionlint over the generated workflow

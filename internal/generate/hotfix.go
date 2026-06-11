@@ -181,9 +181,10 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    outputs:\n")
 	sb.WriteString("      branch: ${{ steps.plan.outputs.branch }}\n")
+	sb.WriteString("      fix_sha: ${{ steps.plan.outputs.fix_sha }}\n")
 	sb.WriteString("      base_sha: ${{ steps.plan.outputs.base_sha }}\n")
-	sb.WriteString("      hotfix_version: ${{ steps.plan.outputs.hotfix_version }}\n")
-	sb.WriteString("      expect_conflicts: ${{ steps.plan.outputs.expect_conflicts }}\n")
+	sb.WriteString("      hotfix_version_candidate: ${{ steps.plan.outputs.hotfix_version_candidate }}\n")
+	sb.WriteString("      conflict_expected: ${{ steps.plan.outputs.conflict_expected }}\n")
 	sb.WriteString("    steps:\n")
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
@@ -321,8 +322,11 @@ func (g *HotfixGenerator) writeCheckJob(sb *strings.Builder) {
 }
 
 // writeContextJob derives the merged-hotfix target environment from the PR base
-// ref and exposes it (plus a rollback sha) as outputs for the build, deploy, and
-// finalize stages.
+// ref and recovers the fix and base SHAs from the resolution PR body trailers
+// (Cascade-Hotfix-Source / Cascade-Hotfix-Base, stamped by the apply job). It
+// exposes these plus a rollback sha as outputs for the build, deploy, and
+// finalize stages. The plan job does not run on the pull_request (merged) path,
+// so its job outputs are unavailable here; the PR-body trailers are the carrier.
 func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	sb.WriteString("  context:\n")
 	sb.WriteString("    name: Hotfix Context\n")
@@ -330,16 +334,29 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    outputs:\n")
 	sb.WriteString("      target_env: ${{ steps.ctx.outputs.target_env }}\n")
+	sb.WriteString("      fix_sha: ${{ steps.ctx.outputs.fix_sha }}\n")
+	sb.WriteString("      base_sha: ${{ steps.ctx.outputs.base_sha }}\n")
 	sb.WriteString("      rollback_sha: ${{ steps.ctx.outputs.rollback_sha }}\n")
 	sb.WriteString("    steps:\n")
-	sb.WriteString("      - name: Derive target environment\n")
+	sb.WriteString("      - name: Derive target environment and hotfix SHAs\n")
 	sb.WriteString("        id: ctx\n")
 	sb.WriteString("        env:\n")
 	sb.WriteString("          BASE_REF: ${{ github.event.pull_request.base.ref }}\n")
+	sb.WriteString("          PR_BODY: ${{ github.event.pull_request.body }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          TARGET_ENV=\"${BASE_REF#env/}\"\n")
-	sb.WriteString("          echo \"target_env=${TARGET_ENV}\" >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"rollback_sha=\" >> \"$GITHUB_OUTPUT\"\n")
+	// Recover the trunk fix commit and the trunk base anchor from the trailers
+	// the apply job stamped into the resolution PR body. grep tolerates absent
+	// trailers (the || true) so the step never hard-fails here; the finalize
+	// command enforces that the required SHAs are present.
+	sb.WriteString("          FIX_SHA=$(printf '%s\\n' \"$PR_BODY\" | grep -m1 '^Cascade-Hotfix-Source:' | sed 's/^Cascade-Hotfix-Source:[[:space:]]*//' || true)\n")
+	sb.WriteString("          BASE_SHA=$(printf '%s\\n' \"$PR_BODY\" | grep -m1 '^Cascade-Hotfix-Base:' | sed 's/^Cascade-Hotfix-Base:[[:space:]]*//' || true)\n")
+	sb.WriteString("          {\n")
+	sb.WriteString("            echo \"target_env=${TARGET_ENV}\"\n")
+	sb.WriteString("            echo \"fix_sha=${FIX_SHA}\"\n")
+	sb.WriteString("            echo \"base_sha=${BASE_SHA}\"\n")
+	sb.WriteString("            echo \"rollback_sha=\"\n")
+	sb.WriteString("          } >> \"$GITHUB_OUTPUT\"\n")
 }
 
 // mergedHotfixGuard is the if-condition gating the post-merge stages: the PR
@@ -485,6 +502,12 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    env:\n")
 	sb.WriteString("      TARGET_ENV: ${{ needs.context.outputs.target_env }}\n")
+	// merge-sha is the tip of env/<target> after the resolution PR merged.
+	sb.WriteString("      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}\n")
+	// fix-sha and base-sha are recovered by the context job from the PR-body
+	// trailers the apply job stamped (the plan job does not run on this event).
+	sb.WriteString("      FIX_SHA: ${{ needs.context.outputs.fix_sha }}\n")
+	sb.WriteString("      BASE_SHA: ${{ needs.context.outputs.base_sha }}\n")
 	sb.WriteString("    steps:\n")
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
@@ -496,7 +519,9 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix finalize \\\n")
 	sb.WriteString("            --target-env \"$TARGET_ENV\" \\\n")
-	sb.WriteString("            --sha \"${{ github.event.pull_request.merge_commit_sha }}\"\n")
+	sb.WriteString("            --merge-sha \"$MERGE_SHA\" \\\n")
+	sb.WriteString("            --fix-sha \"$FIX_SHA\" \\\n")
+	sb.WriteString("            --base-sha \"$BASE_SHA\"\n")
 }
 
 // writeSetupCLI emits the setup-cli step, mirroring the merge-queue generator.
