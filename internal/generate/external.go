@@ -127,6 +127,17 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
 	sb.WriteString("\n")
 
+	// Configure git identity so the verb's commit/push of the manifest state
+	// works on a clean runner. `cascade external update` commits and pushes the
+	// updated ci.state.<env>.external.<name> via git; without an identity the
+	// underlying `git commit` aborts. This mirrors the git-config step the
+	// orchestrate/promote/hotfix workflows emit before their state writes, and
+	// honors the same git mode + GPG settings.
+	sb.WriteString("      - name: Configure Git\n")
+	sb.WriteString("        run: |\n")
+	writeGitConfigSteps(sb, g.config, "          ")
+	sb.WriteString("\n")
+
 	// Run external update
 	sb.WriteString("      - name: Update External State\n")
 	sb.WriteString("        run: |\n")
