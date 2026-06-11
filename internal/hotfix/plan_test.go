@@ -321,6 +321,11 @@ func TestPlan_SingleFlight_OpenPRBlocks(t *testing.T) {
 	if !strings.Contains(err.Error(), "42") {
 		t.Errorf("error %q should reference the open PR number", err.Error())
 	}
+	// A blocked plan must leave no git state: env/test must NOT have been
+	// created by the aborted reconciliation.
+	if err := exec.Command("git", "rev-parse", "--verify", "env/test").Run(); err == nil {
+		t.Error("single-flight block created env/test branch; a blocked plan must mutate nothing")
+	}
 }
 
 func TestPlan_SingleFlight_NoOpenPRAllows(t *testing.T) {

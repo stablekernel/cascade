@@ -204,8 +204,9 @@ type PlanResult struct {
 //
 // fixRef is the trunk commit (or ref/short SHA) to apply; targetEnv is the
 // environment to hotfix. It enforces, in order: trunk ancestry of the fix,
-// target-env eligibility, no-op detection, env-branch reconciliation, and the
-// single-flight open-PR gate.
+// target-env eligibility, no-op detection, the single-flight open-PR gate, and
+// env-branch reconciliation. The single-flight gate runs before any branch
+// mutation, so a blocked plan leaves no git state changes.
 func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 	cfg := p.cicd.Config
 	if cfg == nil {
@@ -273,14 +274,8 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 	}
 	result.HotfixVersionCandidate = candidate
 
-	// 4. env/<target> branch reconciliation.
-	created, err := p.reconcileBranch(branch, baseSHA)
-	if err != nil {
-		return nil, err
-	}
-	result.BranchCreated = created
-
-	// 5. Single-flight: refuse if a hotfix PR already targets env/<target>.
+	// 4. Single-flight: refuse if a hotfix PR already targets env/<target>. This
+	// runs before any branch mutation so a blocked plan leaves no git state.
 	openPRs, err := p.prChecker.OpenHotfixPRs(branch)
 	if err != nil {
 		return nil, fmt.Errorf("checking for open hotfix PRs: %w", err)
@@ -290,6 +285,14 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 		return nil, fmt.Errorf("a hotfix PR (#%d %s) labeled %q already targets %s; resolve and finalize it, then re-dispatch this hotfix",
 			pr.Number, pr.URL, hotfixPRLabel, branch)
 	}
+
+	// 5. env/<target> branch reconciliation. Only after the single-flight gate
+	// passes do we create or validate the env branch.
+	created, err := p.reconcileBranch(branch, baseSHA)
+	if err != nil {
+		return nil, err
+	}
+	result.BranchCreated = created
 
 	return result, nil
 }
