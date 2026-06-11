@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/network"
 	"gopkg.in/yaml.v3"
 )
@@ -481,7 +482,13 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 			"echo PUSHED_SHA=$(git rev-parse HEAD)",
 	}
 
-	exitCode, reader, err = h.act.Container().Exec(ctx, commitCmd)
+	// Request a demultiplexed stream. Without tcexec.Multiplexed the reader
+	// carries Docker's hijacked-attach framing (an 8-byte header per chunk:
+	// stream type, padding, then a big-endian uint32 length), so the
+	// PUSHED_SHA marker line arrives prefixed with binary header bytes and
+	// parsePushedSHA cannot match it. Multiplexed() strips that framing and
+	// merges stdout/stderr into clean text.
+	exitCode, reader, err = h.act.Container().Exec(ctx, commitCmd, tcexec.Multiplexed())
 	var output bytes.Buffer
 	if reader != nil {
 		_, _ = io.Copy(&output, reader)
@@ -518,11 +525,19 @@ const pushedSHAMarker = "PUSHED_SHA="
 // It returns "" when no well-formed marker is present.
 func parsePushedSHA(output string) string {
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, pushedSHAMarker) {
+		// Locate the marker anywhere in the line rather than only as a
+		// leading prefix. Docker's multiplexed exec stream frames each chunk
+		// with an 8-byte binary header (stream type, padding, big-endian
+		// length); if that framing reaches us the marker is preceded by
+		// header bytes that may themselves be printable (the length byte can
+		// land in the ASCII range), so a leading-prefix check fails. Slicing
+		// from the marker recovers the SHA whether or not the stream was
+		// demultiplexed upstream.
+		idx := strings.Index(line, pushedSHAMarker)
+		if idx < 0 {
 			continue
 		}
-		sha := strings.TrimSpace(strings.TrimPrefix(line, pushedSHAMarker))
+		sha := strings.TrimSpace(line[idx+len(pushedSHAMarker):])
 		if isHexSHA(sha) {
 			return sha
 		}
