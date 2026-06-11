@@ -30,8 +30,9 @@ const (
 	BumpMajor
 )
 
-// semverRegex matches versions like v1.2.3 or v1.2.3-rc.4
-var semverRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
+// semverRegex matches versions like v1.2.3, v1.2.3-rc.4, or v1.2.3-rc.4.hotfix.5.
+// The hotfix segment is only valid nested after an rc segment.
+var semverRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+)(?:\.hotfix\.(\d+))?)?$`)
 
 // Parse parses a version string into a Version struct
 func Parse(s string) (*Version, error) {
@@ -49,11 +50,17 @@ func Parse(s string) (*Version, error) {
 		preRelease, _ = strconv.Atoi(matches[5])
 	}
 
+	hotfix := -1
+	if matches[6] != "" {
+		hotfix, _ = strconv.Atoi(matches[6])
+	}
+
 	return &Version{
 		Major:      major,
 		Minor:      minor,
 		Patch:      patch,
 		PreRelease: preRelease,
+		Hotfix:     hotfix,
 		Prefix:     matches[1],
 	}, nil
 }
@@ -62,7 +69,11 @@ func Parse(s string) (*Version, error) {
 func (v *Version) String() string {
 	base := fmt.Sprintf("%s%d.%d.%d", v.Prefix, v.Major, v.Minor, v.Patch)
 	if v.PreRelease >= 0 {
-		return fmt.Sprintf("%s-rc.%d", base, v.PreRelease)
+		rc := fmt.Sprintf("%s-rc.%d", base, v.PreRelease)
+		if v.Hotfix >= 0 {
+			return fmt.Sprintf("%s.hotfix.%d", rc, v.Hotfix)
+		}
+		return rc
 	}
 	return base
 }
@@ -79,6 +90,7 @@ func (v *Version) BaseVersion() *Version {
 		Minor:      v.Minor,
 		Patch:      v.Patch,
 		PreRelease: -1,
+		Hotfix:     -1,
 		Prefix:     v.Prefix,
 	}
 }
@@ -90,6 +102,7 @@ func (v *Version) WithRC(rc int) *Version {
 		Minor:      v.Minor,
 		Patch:      v.Patch,
 		PreRelease: rc,
+		Hotfix:     -1,
 		Prefix:     v.Prefix,
 	}
 }
@@ -101,6 +114,7 @@ func (v *Version) Bump(bump BumpType) *Version {
 		Minor:      v.Minor,
 		Patch:      v.Patch,
 		PreRelease: -1,
+		Hotfix:     -1,
 		Prefix:     v.Prefix,
 	}
 
@@ -182,6 +196,7 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 			Minor:      0,
 			Patch:      0,
 			PreRelease: -1,
+			Hotfix:     -1,
 			Prefix:     c.prefix,
 		}
 	} else {
@@ -267,19 +282,89 @@ func GetLatestRelease(tags []string) (*Version, error) {
 	return latest, nil
 }
 
-// WithHotfix is a stub pending implementation.
+// WithHotfix returns a copy of the version with the given hotfix number,
+// preserving the major, minor, patch, pre-release, and prefix.
 func (v *Version) WithHotfix(m int) *Version {
-	return v
+	return &Version{
+		Major:      v.Major,
+		Minor:      v.Minor,
+		Patch:      v.Patch,
+		PreRelease: v.PreRelease,
+		Hotfix:     m,
+		Prefix:     v.Prefix,
+	}
 }
 
-// NextHotfix is a stub pending implementation.
+// NextHotfix returns a copy of the version with its hotfix number incremented.
+// If the version has no hotfix segment yet, the result is hotfix 1, so an
+// rc.2 version becomes rc.2.hotfix.1.
 func (v *Version) NextHotfix() *Version {
-	return v
+	next := 1
+	if v.Hotfix >= 0 {
+		next = v.Hotfix + 1
+	}
+	return v.WithHotfix(next)
 }
 
-// Compare is a stub pending implementation.
+// Compare returns -1, 0, or +1 reporting whether v sorts before, equal to, or
+// after other under semver precedence. It compares major, minor, and patch
+// numerically; then a version with a pre-release sorts before one without; then
+// pre-release numbers compare numerically; then a version without a hotfix
+// segment sorts before one with a hotfix; then hotfix numbers compare
+// numerically.
 func (v *Version) Compare(other *Version) int {
-	return 0
+	if c := compareInt(v.Major, other.Major); c != 0 {
+		return c
+	}
+	if c := compareInt(v.Minor, other.Minor); c != 0 {
+		return c
+	}
+	if c := compareInt(v.Patch, other.Patch); c != 0 {
+		return c
+	}
+
+	// A pre-release version has lower precedence than the associated release.
+	vPre := v.PreRelease >= 0
+	oPre := other.PreRelease >= 0
+	switch {
+	case vPre && !oPre:
+		return -1
+	case !vPre && oPre:
+		return 1
+	case !vPre && !oPre:
+		return 0
+	}
+
+	if c := compareInt(v.PreRelease, other.PreRelease); c != 0 {
+		return c
+	}
+
+	// No-hotfix sorts before any hotfix on the same rc.
+	vHot := v.Hotfix >= 0
+	oHot := other.Hotfix >= 0
+	switch {
+	case !vHot && oHot:
+		return -1
+	case vHot && !oHot:
+		return 1
+	case !vHot && !oHot:
+		return 0
+	}
+
+	return compareInt(v.Hotfix, other.Hotfix)
+}
+
+// compareInt returns -1, 0, or +1 reporting whether a is less than, equal to,
+// or greater than b.
+func compareInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // StripRC removes the pre-release suffix for publishing

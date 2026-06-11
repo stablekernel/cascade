@@ -109,23 +109,30 @@ func TestVersion_String(t *testing.T) {
 		{
 			name: "with RC",
 			version: &Version{
-				Major: 1, Minor: 2, Patch: 3, PreRelease: 4, Prefix: "v",
+				Major: 1, Minor: 2, Patch: 3, PreRelease: 4, Hotfix: -1, Prefix: "v",
 			},
 			want: "v1.2.3-rc.4",
 		},
 		{
 			name: "without RC",
 			version: &Version{
-				Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Prefix: "v",
+				Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Hotfix: -1, Prefix: "v",
 			},
 			want: "v1.2.3",
 		},
 		{
 			name: "RC 0",
 			version: &Version{
-				Major: 2, Minor: 0, Patch: 0, PreRelease: 0, Prefix: "v",
+				Major: 2, Minor: 0, Patch: 0, PreRelease: 0, Hotfix: -1, Prefix: "v",
 			},
 			want: "v2.0.0-rc.0",
+		},
+		{
+			name: "with RC and hotfix",
+			version: &Version{
+				Major: 1, Minor: 4, Patch: 0, PreRelease: 2, Hotfix: 1, Prefix: "v",
+			},
+			want: "v1.4.0-rc.2.hotfix.1",
 		},
 	}
 
