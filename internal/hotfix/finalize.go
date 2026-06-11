@@ -1,6 +1,7 @@
 package hotfix
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,11 +72,108 @@ func (execTagLister) ListTags() ([]string, error) {
 	return tags, nil
 }
 
-// gitStatePusher commits and pushes the manifest with the promote rebase-retry.
+// gitStatePusher commits the manifest change and lands it on the trunk branch.
+//
+// On real GitHub the write goes through the Contents REST API (signed commit,
+// branch-protection bypass with a capable token), mirroring promote finalize.
+// In the act/gitea e2e environment there is no GitHub API, so the change is
+// committed and pushed with plain git. The finalize job runs on a pull_request
+// (closed) event, which checks out in detached HEAD, so the push targets the
+// trunk branch explicitly (git push origin HEAD:<trunk>) rather than relying on
+// an upstream tracking branch.
 type gitStatePusher struct{}
 
 func (gitStatePusher) CommitAndPush(path, message string) error {
-	return git.CommitAndPushWithRetry(path, message)
+	if isRealGitHub() {
+		return writeStateViaAPI(path, message)
+	}
+	return commitAndPushGit(path, message)
+}
+
+// isRealGitHub reports whether the workflow runs on github.com rather than an
+// act/gitea e2e environment, detected by GITHUB_SERVER_URL as the generated
+// dispatch steps do.
+func isRealGitHub() bool {
+	server := os.Getenv("GITHUB_SERVER_URL")
+	return server == "" || server == "https://github.com"
+}
+
+// trunkBranch resolves the branch to write state to. The pull_request (closed)
+// checkout is detached, so the branch is taken from GITHUB_BASE_REF (the PR
+// base, i.e. trunk) or GITHUB_REF when present, falling back to "main".
+func trunkBranch() string {
+	if base := os.Getenv("GITHUB_BASE_REF"); base != "" {
+		return base
+	}
+	ref := os.Getenv("GITHUB_REF")
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return strings.TrimPrefix(ref, "refs/heads/")
+	}
+	if ref != "" {
+		return ref
+	}
+	return "main"
+}
+
+// writeStateViaAPI writes the manifest to the trunk branch through the GitHub
+// Contents REST API using the gh CLI, producing a signed (Verified) commit.
+func writeStateViaAPI(path, message string) error {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
+	}
+	branch := trunkBranch()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read manifest failed: %w", err)
+	}
+	contentB64 := base64.StdEncoding.EncodeToString(data)
+	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, path)
+
+	shaOut, _ := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha").Output()
+	currentSHA := strings.TrimSpace(string(shaOut))
+
+	args := []string{
+		"api", apiPath, "-X", "PUT",
+		"-f", "message=" + message,
+		"-f", "content=" + contentB64,
+		"-f", "branch=" + branch,
+	}
+	if currentSHA != "" {
+		args = append(args, "-f", "sha="+currentSHA)
+	}
+	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// commitAndPushGit commits the manifest and pushes it to the trunk branch with
+// plain git. Used in the act/gitea e2e environment, which enforces neither
+// branch protection nor commit signatures. The push refspec is explicit so it
+// works from the detached-HEAD checkout of a pull_request event.
+func commitAndPushGit(path, message string) error {
+	if out, err := exec.Command("git", "config", "user.name", "github-actions[bot]").CombinedOutput(); err != nil {
+		return fmt.Errorf("git config user.name failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("git", "config", "user.email", "github-actions[bot]@users.noreply.github.com").CombinedOutput(); err != nil {
+		return fmt.Errorf("git config user.email failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("git", "add", path).CombinedOutput(); err != nil {
+		return fmt.Errorf("git add failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("git", "commit", "-m", message).CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "nothing to commit") {
+			return nil
+		}
+		return fmt.Errorf("git commit failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	refspec := "HEAD:refs/heads/" + trunkBranch()
+	if out, err := exec.Command("git", "push", "origin", refspec).CombinedOutput(); err != nil {
+		return fmt.Errorf("git push origin %s failed: %s: %w", refspec, strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // Finalizer writes the diverged state, tag, and release object for a completed
