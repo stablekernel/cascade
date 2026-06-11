@@ -264,7 +264,17 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          SHORT_SHA=$(echo \"$COMMIT\" | cut -c1-8)\n")
 	sb.WriteString("          BRANCH=\"hotfix/${TARGET_ENV}/${SHORT_SHA}\"\n")
-	sb.WriteString("          git switch -c \"$BRANCH\" \"origin/env/${TARGET_ENV}\"\n")
+	// The first hotfix into an environment runs before env/<env> has ever been
+	// pushed: the plan verb creates it locally at the recorded state SHA but does
+	// not push, so origin/env/<env> may not exist yet. Materialize it at BASE_SHA
+	// (the plan's validated base) and push so the resolution PR has a base branch,
+	// then branch the hotfix from BASE_SHA. When the env branch already exists its
+	// tip equals BASE_SHA (the plan enforces this), so this is a no-op create.
+	sb.WriteString("          if ! git rev-parse --verify --quiet \"refs/remotes/origin/env/${TARGET_ENV}\" >/dev/null; then\n")
+	sb.WriteString("            git push origin \"${BASE_SHA}:refs/heads/env/${TARGET_ENV}\"\n")
+	sb.WriteString("            git fetch origin \"+refs/heads/env/${TARGET_ENV}:refs/remotes/origin/env/${TARGET_ENV}\"\n")
+	sb.WriteString("          fi\n")
+	sb.WriteString("          git switch -c \"$BRANCH\" \"$BASE_SHA\"\n")
 	sb.WriteString("          BODY=$(printf 'Cascade-Hotfix-Target: %s\\nCascade-Hotfix-Source: %s\\nCascade-Hotfix-Base: %s\\n' \"$TARGET_ENV\" \"$COMMIT\" \"$BASE_SHA\")\n")
 	sb.WriteString("          if git cherry-pick -x \"$COMMIT\"; then\n")
 	sb.WriteString("            echo \"clean cherry-pick\"\n")
