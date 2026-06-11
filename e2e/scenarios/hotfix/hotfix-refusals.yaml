@@ -56,7 +56,18 @@ steps:
         dev:
           sha: commit1
 
-  - name: "Promote test to prod"
+  - name: "Promote test to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+
+  - name: "Promote release to prod"
     action: promote
     promote:
       mode: default
@@ -100,7 +111,7 @@ steps:
         test:
           sha: commit1
         dev:
-          sha: commit2
+          sha: commit1
 
   - name: "Dry run: commit2 targeting test, no branch or PR created"
     action: hotfix_plan
@@ -113,6 +124,6 @@ steps:
         test:
           sha: commit1
         dev:
-          sha: commit2
+          sha: commit1
       branches:
         deleted: ["env/test"]
