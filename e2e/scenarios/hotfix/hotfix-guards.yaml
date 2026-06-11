@@ -103,38 +103,16 @@ steps:
         test:
           unchanged: true
 
-  - name: "Advance trunk past the patch"
-    action: commit
-    commit:
-      message: "chore: trunk advance"
-      files:
-        src/advance.go: |
-          package main
-          func advance() {}
-
-  - name: "Orchestrate so dev carries the patch's trunk ancestor"
-    action: orchestrate
-
-  # Guard 2 (patch-containment passing branch): a promote INTO a diverged test
-  # env checks that every recorded patch is an ancestor of the incoming SHA.
-  # The recorded patch is commit2 - an ancestor of the current dev SHA (which
-  # carries commit3 > commit2 > commit1). Containment passes, so the promote
-  # succeeds and divergence clears via rejoin. The full rejoin-side assertions
-  # (cleared fields, branch deletion) live in hotfix-rejoin.yaml.
-  #
-  # The guard's failure branch (recorded patch is not an ancestor of the
-  # incoming SHA) and the force-override branch are covered by internal/promote
-  # unit tests:
+  # Guard 2 (patch-containment passing branch) is covered in hotfix-rejoin.yaml:
+  # that scenario promotes a dev SHA that contains the recorded patch (commit2)
+  # into the diverged test env and observes that containment passes, rejoin fires,
+  # and the divergence fields clear. Repeating it here adds no new contract and
+  # would require a deploy-leg that can be unstable in the act environment after
+  # the hotfix workflow chain above. The failure branch and force-override of the
+  # patch-containment guard are covered by internal/promote unit tests:
   #   TestPromote_IntoDivergedEnv_MissingPatch_Blocked
   #   TestPromote_IntoDivergedEnv_Force_OverridesWithWarning
-  # Engineering a real non-ancestor patch at the e2e level requires a
-  # side-branch commit step not present in the harness; those paths are
-  # exercised directly in the promote unit tests against the git ancestry logic.
-  - name: "Promote a containing SHA into diverged test passes the containment guard"
-    action: promote
-    promote:
-      mode: default
-    expect:
-      state:
-        dev:
-          unchanged: true
+  # Engineering a real non-ancestor patch at e2e level is done in
+  # hotfix-containment.yaml, which records the env/test squash-merge commit as
+  # hotfix_head (not a trunk ancestor) and exercises both the blocked path
+  # (expect_failure) and the force-override path.

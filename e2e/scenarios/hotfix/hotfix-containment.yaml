@@ -101,26 +101,29 @@ steps:
     action: orchestrate
 
   # Containment failure: dev's SHA does not contain hotfix_head (an env/test-only
-  # squash-merge commit), so the promote into diverged test is blocked. test is
-  # left untouched. The exact ancestry message ("does not contain patch") is
-  # asserted by internal/promote unit tests; the e2e contract is that the
-  # promotion is observably blocked.
+  # squash-merge commit). The targeted dev-to-test promote hits the
+  # patch-containment guard directly (dev is not diverged, so the diverged-source
+  # guard does not interfere). test is left untouched.
+  # The exact ancestry message ("does not contain patch") is asserted by
+  # internal/promote unit tests; the e2e contract is that promotion is blocked.
   - name: "Guard: promote blocked - dev SHA does not contain off-trunk patch"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: test
       expect_failure: true
     expect:
       state:
         test:
           unchanged: true
 
-  # Force override: the same promotion with force: true bypasses the containment
-  # guard and proceeds. dev is the promotion source and stays unchanged.
+  # Force override: the same targeted promote with force: true bypasses the
+  # patch-containment guard and proceeds. dev is the source and stays unchanged.
   - name: "Force: promote overrides containment guard with force=true"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: test
       force: true
     expect:
       state:
