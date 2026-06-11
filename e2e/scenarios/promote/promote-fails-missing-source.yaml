@@ -1,51 +1,36 @@
-name: "Promotion fails with missing source"
-description: "Validates that promotion fails when source environment has no deployment"
+name: "Promote fails on missing source env"
+description: |
+  Drives a real promote preflight failure under act: a commit lands on trunk
+  but is never orchestrated, so dev has no deployment. Promoting dev-to-test
+  then fails preflight because the source env is empty. expect_failure on the
+  promote step makes that failure the success path, proving the harness
+  observes a genuinely failing promote rather than a simulated outcome.
 
-setup:
-  config:
-    trunk_branch: main
-    environments:
-      - dev
-      - test
-      - prod
-    builds:
-      - name: app
-        workflow: ""
-        triggers:
-          - "src/**"
-    deploys:
-      - name: services
-        workflow: ""
-        triggers: []
-        depends_on:
-          - app
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
 
-  commits:
-    - message: "feat: initial application"
+steps:
+  - name: "Commit source but never orchestrate, leaving dev empty"
+    action: commit
+    commit:
+      message: "feat: add app source"
       files:
-        src/main.go: |
+        src/app.go: |
           package main
+          func main() {}
 
-          func main() {
-              println("Hello World")
-          }
-
-  manifest:
-    ci:
-      state:
-        dev: {}
-        test: {}
-        prod: {}
-
-trigger:
-  workflow: promote.yaml
-  event: workflow_dispatch
-  inputs:
-    mode: "dev-to-test"
-
-expect:
-  workflow:
-    conclusion: failure
-    jobs:
-      preflight:
-        conclusion: failure
+  - name: "Promote dev to test fails because dev has no deployment"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+      expect_failure: true

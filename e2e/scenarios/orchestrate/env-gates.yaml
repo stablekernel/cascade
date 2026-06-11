@@ -40,4 +40,8 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             - "deploy-cdk:"
-            - "environment: ${{ github.event.inputs.environment || 'dev' }}"
+            # Newline-anchored so it matches ONLY the 4-space job-level key and
+            # never the 6-space reusable-workflow with: input (which also ends
+            # in "environment: ..."). Without the leading \n, "    environment:"
+            # is a substring of the 6-space "      environment:" line.
+            - "\n    environment: ${{ github.event.inputs.environment || 'dev' }}"

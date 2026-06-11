@@ -50,46 +50,6 @@ func TestMultiStepScenarios(t *testing.T) {
 	}
 }
 
-// TestScenarios runs legacy single-step scenarios for backward compatibility
-func TestScenarios(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping E2E tests")
-	}
-
-	scenarios, err := harness.DiscoverScenarios("scenarios")
-	require.NoError(t, err)
-
-	if len(scenarios) == 0 {
-		t.Log("No scenarios found")
-		return
-	}
-
-	for _, s := range scenarios {
-		scenario := s // capture range variable
-		t.Run(scenario.Name, func(t *testing.T) {
-			t.Parallel()
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
-
-			h := harness.New(t)
-			defer h.Cleanup()
-
-			err := h.SetupInfra(ctx)
-			require.NoError(t, err, "failed to setup infrastructure")
-
-			err = h.StageRepo(ctx, scenario.Setup)
-			require.NoError(t, err, "failed to stage repo")
-
-			result, err := h.RunWorkflowWithSetup(ctx, scenario.Setup, scenario.Trigger)
-			require.NoError(t, err, "failed to run workflow")
-
-			err = h.Assert(ctx, scenario.Expect, result)
-			require.NoError(t, err, "assertions failed")
-		})
-	}
-}
-
 // DefaultParallelism returns recommended parallel test count
 func DefaultParallelism() int {
 	cpus := runtime.NumCPU()

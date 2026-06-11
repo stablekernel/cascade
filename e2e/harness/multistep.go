@@ -37,6 +37,12 @@ type Step struct {
 	Commit  *CommitStep  `yaml:"commit,omitempty"`
 	Promote *PromoteStep `yaml:"promote,omitempty"`
 	Expect  *StepExpect  `yaml:"expect,omitempty"`
+	// ExpectFailure marks a step whose workflow is expected to conclude in
+	// failure (for example an orchestrate run whose build exits non-zero). When
+	// set, a failure conclusion is the success path and a success conclusion is
+	// the error. Mirrors PromoteStep.ExpectFailure so orchestrate and promote
+	// share one operator-facing knob.
+	ExpectFailure bool `yaml:"expect_failure,omitempty"`
 }
 
 // CommitStep defines a commit action
@@ -91,12 +97,11 @@ type DeployExpect struct {
 
 // ReleaseExpectStep defines expected release state
 type ReleaseExpectStep struct {
-	Tag        string   `yaml:"tag"`
-	Prerelease bool     `yaml:"prerelease,omitempty"`
-	Draft      bool     `yaml:"draft,omitempty"`
-	Latest     bool     `yaml:"latest,omitempty"`
-	Deleted    bool     `yaml:"deleted,omitempty"`   // Tag should be deleted
-	Changelog  []string `yaml:"changelog,omitempty"` // Commits that should appear
+	Tag        string `yaml:"tag"`
+	Prerelease bool   `yaml:"prerelease,omitempty"`
+	Draft      bool   `yaml:"draft,omitempty"`
+	Latest     bool   `yaml:"latest,omitempty"`
+	Deleted    bool   `yaml:"deleted,omitempty"` // Tag should be deleted
 }
 
 // TagsExpect defines expected tag state

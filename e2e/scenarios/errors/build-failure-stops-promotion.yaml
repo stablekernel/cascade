@@ -1,32 +1,31 @@
-name: "Build failure stops pipeline"
-description: "Validates that a build failure prevents subsequent deploys"
+name: "Build failure stops orchestrate"
+description: |
+  Drives a real build failure under act: the app build runs an inline
+  "exit 1" step, so the generated build-app job fails and the orchestrate run
+  concludes in failure. expect_failure on the orchestrate step makes that
+  failure the success path, proving the harness observes a genuinely failing
+  workflow rather than a simulated outcome.
 
-setup:
-  config:
-    trunk_branch: main
-    environments:
-      - dev
-      - prod
-    builds:
-      - name: app
-        triggers:
-          - "src/**"
-    deploys:
-      - name: services
-        depends_on:
-          - app
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      run: "exit 1"
+      shell: bash
+      triggers: ["src/**"]
+  deploys: []
 
-  commits:
-    - message: "feat: broken code"
+steps:
+  - name: "Commit source that triggers the failing build"
+    action: commit
+    commit:
+      message: "feat: add source that fails to build"
       files:
-        src/main.go: |
+        src/app.go: |
           package main
-          func main() { syntax error here }
+          func main() {}
 
-trigger:
-  workflow: orchestrate.yaml
-  event: push
-
-expect:
-  workflow:
-    conclusion: failure
+  - name: "Orchestrate fails because the build exits non-zero"
+    action: orchestrate
+    expect_failure: true
