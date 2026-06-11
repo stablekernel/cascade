@@ -65,6 +65,7 @@ type Promoter struct {
 	dryRun     bool
 	actor      string
 	force      bool // For default mode: continue on failure
+	ancestor   AncestorFunc
 }
 
 // PromoterOptions configures the Promoter
@@ -75,8 +76,10 @@ type PromoterOptions struct {
 	Force      bool // For default mode: continue on failure
 }
 
-// NewPromoter creates a new Promoter
-func NewPromoter(opts PromoterOptions) (*Promoter, error) {
+// NewPromoter creates a new Promoter. Optional behavior (such as the
+// git-ancestry checker used by the divergence guards) is supplied through
+// functional options so the required inputs stay positional.
+func NewPromoter(opts PromoterOptions, options ...Option) (*Promoter, error) {
 	cicdFile, err := config.ParseManifestFile(opts.ConfigPath, config.DefaultManifestKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
@@ -87,12 +90,15 @@ func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 		actor = "github-actions[bot]"
 	}
 
+	gc := newGuardConfig(options...)
+
 	return &Promoter{
 		configPath: opts.ConfigPath,
 		cicdFile:   cicdFile,
 		dryRun:     opts.DryRun,
 		actor:      actor,
 		force:      opts.Force,
+		ancestor:   gc.ancestor,
 	}, nil
 }
 
@@ -195,6 +201,15 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 			continue
 		}
 
+		// Guard: never promote FROM a diverged env. Its SHA is not on trunk and
+		// must not propagate upward. Only fires when divergence fields are set,
+		// so non-diverged manifests never reach this branch.
+		if sourceState.IsDiverged() {
+			result.Success = false
+			result.Error = divergedSourceError(sourceEnv, sourceState).Error()
+			return result, nil
+		}
+
 		targetState := preState[targetEnv]
 
 		// Skip if already in sync (no-op)
@@ -286,6 +301,14 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 	if releaseIdx > 0 && prereleaseEnv != "" {
 		sourceState := preState[prereleaseEnv]
 		if sourceState != nil && sourceState.SHA != "" {
+			// Publish-path assertion: the SHA reaching the release marker (and
+			// thus publish) must come from a non-diverged source. Inert unless
+			// the prerelease env carries divergence fields.
+			if sourceState.IsDiverged() {
+				result.Success = false
+				result.Error = divergedSourceError(prereleaseEnv, sourceState).Error()
+				return result, nil
+			}
 			releaseState := preState["release"]
 			if releaseState == nil || releaseState.SHA != sourceState.SHA {
 				if !p.dryRun {
@@ -390,6 +413,16 @@ func (p *Promoter) noEnvironmentPromotion() (*PromotionResult, error) {
 		}, nil
 	}
 
+	// Publish-path assertion: a diverged prerelease holds a non-trunk SHA and
+	// must never be published. Inert unless divergence fields are set.
+	if sourceState.IsDiverged() {
+		return &PromotionResult{
+			Success: false,
+			Mode:    ModeDefault,
+			Error:   divergedSourceError("prerelease", sourceState).Error(),
+		}, nil
+	}
+
 	// Check if already released (release state matches prerelease)
 	releaseState := p.cicdFile.State["release"]
 	if releaseState != nil && releaseState.SHA == sourceState.SHA {
@@ -476,6 +509,18 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 			Target:    target,
 			IsCascade: true,
 			Error:     fmt.Sprintf("source environment '%s' has no deployments", sourceEnv),
+		}, nil
+	}
+
+	// Guard: never cascade FROM a diverged env. Inert unless divergence fields
+	// are set on the source state.
+	if sourceState.IsDiverged() {
+		return &PromotionResult{
+			Success:   false,
+			Mode:      ModeCascade,
+			Target:    target,
+			IsCascade: true,
+			Error:     divergedSourceError(sourceEnv, sourceState).Error(),
 		}, nil
 	}
 
