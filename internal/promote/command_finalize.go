@@ -61,8 +61,19 @@ func runFinalize() error {
 		targetEnv = promotionResult.Promotions[len(promotionResult.Promotions)-1].Environment
 	}
 
-	// Create finalizer
-	fin, err := NewFinalizer(configPath, targetEnv)
+	// Create finalizer. When the workflow committed state back to trunk (a real
+	// promotion run, not a dry run), wire the divergence-end lifecycle cleanup so
+	// a promotion that rejoins a diverged env removes its integration branch,
+	// hotfix tags, and drafts. Without GitHub context the no-op default is kept,
+	// so non-diverged promotions and unit-test runs are unaffected.
+	var finalizeOpts []FinalizeOption
+	if commitPush {
+		if cleaner := newFinalizeCleaner(); cleaner != nil {
+			finalizeOpts = append(finalizeOpts, WithLifecycleCleaner(cleaner))
+		}
+	}
+
+	fin, err := NewFinalizer(configPath, targetEnv, finalizeOpts...)
 	if err != nil {
 		return err
 	}

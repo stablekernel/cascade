@@ -292,6 +292,69 @@ func RemoteBranchSHA(remote, name string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+// ListRemoteBranches returns the branch names known for the given remote via the
+// remote-tracking refs refs/remotes/<remote>/*. The remote prefix and the symbolic
+// HEAD pointer are stripped, so "refs/remotes/origin/env/test" is returned as
+// "env/test". The remote must have been fetched first; a shallow or partial fetch
+// that omits branches will leave them out of the result.
+func ListRemoteBranches(remote string) ([]string, error) {
+	prefix := fmt.Sprintf("refs/remotes/%s/", remote)
+	cmd := exec.Command("git", "for-each-ref", "--format=%(refname)", prefix)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git for-each-ref %s: %w", prefix, err)
+	}
+
+	var branches []string
+	for _, ref := range parseLines(output) {
+		name := strings.TrimPrefix(ref, prefix)
+		if name == "" || name == "HEAD" {
+			continue
+		}
+		branches = append(branches, name)
+	}
+	return branches, nil
+}
+
+// DeleteRemoteBranch deletes the named branch on the given remote by running
+// "git push <remote> --delete <name>". Deleting a branch that does not exist on
+// the remote is treated as success so the operation is idempotent: re-running a
+// rejoin cleanup after a partial failure does not error on an already-deleted
+// branch.
+func DeleteRemoteBranch(remote, name string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", name)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if remoteRefAlreadyGone(out) {
+		return nil
+	}
+	return fmt.Errorf("git push %s --delete %s: %w\n%s", remote, name, err, out)
+}
+
+// DeleteRemoteTag deletes the named tag on the given remote by running
+// "git push <remote> --delete refs/tags/<name>". Deleting a tag that does not
+// exist on the remote is treated as success so the operation is idempotent.
+func DeleteRemoteTag(remote, name string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", "refs/tags/"+name)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if remoteRefAlreadyGone(out) {
+		return nil
+	}
+	return fmt.Errorf("git push %s --delete refs/tags/%s: %w\n%s", remote, name, err, out)
+}
+
+// remoteRefAlreadyGone reports whether a failed delete-push is because the ref
+// does not exist on the remote, which we treat as success. Git emits "remote ref
+// does not exist" (newer) or "unable to delete ... remote ref does not exist".
+func remoteRefAlreadyGone(out []byte) bool {
+	return strings.Contains(string(out), "remote ref does not exist")
+}
+
 // GetLatestReleaseTag returns the most recent non-prerelease tag (no -rc suffix).
 // This is used to find the base version for calculating next release versions.
 func GetLatestReleaseTag(prefix string) (string, string, error) {
