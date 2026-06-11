@@ -1,0 +1,141 @@
+name: "Hotfix Stacked"
+description: |
+  Verifies two behaviours around successive hotfixes on the same environment:
+
+  1. Single-flight guard: a second hotfix_plan dispatched while the first
+     hotfix PR is still open fails with re-dispatch guidance (resolved
+     decision Q4).
+
+  2. Sequential stacking: after the first hotfix finishes, a second hotfix
+     goes through a full plan-apply-merge-merged cycle and appends its patch
+     to the existing patches slice, carrying the original base anchor forward.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev/test"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit the first trunk fix"
+    action: commit
+    commit:
+      message: "fix: first hotfix"
+      files:
+        src/fix1.go: |
+          package main
+          func fix1() {}
+
+  - name: "Plan first hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+      # Plan only: the harness's hotfix_apply step performs the real cherry-pick
+      # and PR via the gitea API. Running the workflow's apply job here would call
+      # the GitHub gh CLI, which is absent from the act runner image.
+      dry_run: true
+
+  - name: "Apply first hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  # Single-flight guard: dispatching a second hotfix_plan while the first
+  # hotfix PR is still open must fail with re-dispatch guidance (Q4).
+  - name: "Commit a second trunk fix (staged for later)"
+    action: commit
+    commit:
+      message: "fix: second hotfix"
+      files:
+        src/fix2.go: |
+          package main
+          func fix2() {}
+
+  - name: "Single-flight: second hotfix_plan while first PR is open fails"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit3
+      expect_failure: true
+
+  - name: "Merge the first hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize first hotfix; test diverges onto env/test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+
+  # commit3 (the second fix) was already committed above for the single-flight
+  # test. Now that the first hotfix is finalized, dispatch the second hotfix
+  # using commit3 - the single-flight guard no longer blocks it.
+  - name: "Plan second hotfix for test (first PR now closed)"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit3
+      # Plan only (see first plan step): the apply job's gh CLI is absent from
+      # the act image; the harness applies via the gitea API in the next step.
+      dry_run: true
+
+  - name: "Apply second hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit3
+
+  - name: "Merge the second hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  # The second finalize appends commit3 to the existing patches slice (which
+  # already holds commit2) and carries the original base anchor forward. The
+  # recorded fix_sha for each hotfix is the original trunk commit SHA, so both
+  # entries resolve via the execution context to commit2 and commit3.
+  - name: "Finalize second hotfix; patches stack on test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3]

@@ -1,0 +1,131 @@
+name: "Hotfix Containment Guard"
+description: |
+  Exercises the patch-containment guard at e2e level using a real off-trunk SHA.
+
+  After a hotfix is squash-merged onto env/test, the merge-commit SHA is recorded
+  as hotfix_head. That commit lives only on env/test; trunk never merges it back,
+  so it is not an ancestor of any trunk commit. A mid-scenario stage_divergence
+  step re-wires test's patches to [hotfix_head]. Promoting the current dev SHA
+  (which only knows trunk) into test then finds hotfix_head is not an ancestor of
+  the incoming SHA, so the guard fires and blocks the promotion. A subsequent
+  force: true promote overrides the guard and proceeds.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a trunk fix to cherry-pick"
+    action: commit
+    commit:
+      message: "fix: patch to cherry-pick"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Plan hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+      # Plan only: the harness's hotfix_apply step performs the real cherry-pick
+      # and PR via the gitea API. Running the workflow's apply job here would call
+      # the GitHub gh CLI, which is absent from the act runner image.
+      dry_run: true
+
+  - name: "Apply hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge the hotfix pull request (records hotfix_head)"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  # hotfix_head is now the squash-merge commit on env/test. It is not an ancestor
+  # of trunk. Re-stage test's divergence with patches=[hotfix_head] so the next
+  # promote sees a patch the incoming dev SHA cannot contain.
+  - name: "Stage test divergence with off-trunk patch (hotfix_head)"
+    action: stage_divergence
+    stage_divergence:
+      env: test
+      ref: "env/test"
+      base_sha: "commit1"
+      patches:
+        - "hotfix_head"
+
+  - name: "Advance trunk so dev has a new SHA to promote"
+    action: commit
+    commit:
+      message: "chore: trunk advance after hotfix"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate so dev carries the advance"
+    action: orchestrate
+
+  # Containment failure: dev's SHA does not contain hotfix_head (an env/test-only
+  # squash-merge commit). The targeted dev-to-test promote hits the
+  # patch-containment guard directly (dev is not diverged, so the diverged-source
+  # guard does not interfere). test is left untouched.
+  # The exact ancestry message ("does not contain patch") is asserted by
+  # internal/promote unit tests; the e2e contract is that promotion is blocked.
+  - name: "Guard: promote blocked - dev SHA does not contain off-trunk patch"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+      expect_failure: true
+    expect:
+      state:
+        test:
+          unchanged: true
+
+  # Force override: the same targeted promote with force: true bypasses the
+  # patch-containment guard and proceeds. dev is the source and stays unchanged.
+  - name: "Force: promote overrides containment guard with force=true"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+      force: true
+    expect:
+      state:
+        dev:
+          unchanged: true

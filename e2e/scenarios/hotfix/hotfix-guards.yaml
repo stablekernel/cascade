@@ -1,0 +1,118 @@
+name: "Hotfix Promote Guards"
+description: |
+  Exercises the promote-time guards that protect a diverged environment after a
+  hotfix has been applied to it.
+
+  The centerpiece is the diverged-source guard: once test carries a hotfix and
+  diverges from trunk, the default-mode cascade's test-to-prod leg sources from
+  test and must refuse to run, leaving test unchanged. That guard does not call
+  git ancestry, so it is deterministic.
+
+  Runtime protection-rule enforcement (environment approvals on prod) is a
+  real-GitHub-only concern and is not exercised by this harness; only the
+  promote-time guards that the generator and CLI enforce are covered here.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev/test"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a trunk fix to hotfix into test"
+    action: commit
+    commit:
+      message: "fix: patch for test env"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Plan hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+      # Plan only: the harness's hotfix_apply step performs the real cherry-pick
+      # and PR via the gitea API. Running the workflow's apply job here would call
+      # the GitHub gh CLI, which is absent from the act runner image.
+      dry_run: true
+
+  - name: "Apply hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge the hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize hotfix; test diverges onto env/test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      # Robust minimal assertion: test now tracks its integration branch. The
+      # recorded patch is the original trunk commit SHA (commit2), not the
+      # cherry-pick SHA, so we assert the ref rather than a fragile patch SHA.
+      state:
+        test:
+          ref: "env/test"
+
+  # Guard 1 (deterministic centerpiece): a default-mode cascade now has a
+  # test-to-prod leg that would source from the diverged test env. The
+  # diverged-source guard fires and the promotion fails. test is untouched.
+  - name: "Guard: promote refuses to source from diverged test"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      state:
+        test:
+          unchanged: true
+
+  # Guard 2 (patch-containment passing branch) is covered in hotfix-rejoin.yaml:
+  # that scenario promotes a dev SHA that contains the recorded patch (commit2)
+  # into the diverged test env and observes that containment passes, rejoin fires,
+  # and the divergence fields clear. Repeating it here adds no new contract and
+  # would require a deploy-leg that can be unstable in the act environment after
+  # the hotfix workflow chain above. The failure branch and force-override of the
+  # patch-containment guard are covered by internal/promote unit tests:
+  #   TestPromote_IntoDivergedEnv_MissingPatch_Blocked
+  #   TestPromote_IntoDivergedEnv_Force_OverridesWithWarning
+  # Engineering a real non-ancestor patch at e2e level is done in
+  # hotfix-containment.yaml, which records the env/test squash-merge commit as
+  # hotfix_head (not a trunk ancestor) and exercises both the blocked path
+  # (expect_failure) and the force-override path.

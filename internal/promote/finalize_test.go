@@ -2,6 +2,7 @@ package promote
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -684,4 +685,70 @@ func TestFinalize_RealWorldManifest(t *testing.T) {
 
 	require.NotNil(t, cicdFile.State["test"])
 	require.Equal(t, "5cb540d63e94b158f798a3b5af3caee80e6a1290", cicdFile.State["test"].SHA)
+}
+
+// gitRun runs a git command in dir and fails the test on error, surfacing the
+// combined output for diagnosis.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+// TestCommitAndPushGit_DetachedHeadPushesToTrunk reproduces the finalize-job
+// environment: the working tree is checked out at the triggering SHA, so HEAD is
+// detached. A bare "git push" fails there with exit 128 (no upstream tracking
+// branch). This verifies commitAndPushGit instead pushes HEAD explicitly to the
+// trunk branch resolved from GITHUB_REF, so the state commit lands on trunk.
+func TestCommitAndPushGit_DetachedHeadPushesToTrunk(t *testing.T) {
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "remote.git")
+	work := filepath.Join(tmp, "work")
+
+	// Bare remote acts as origin's trunk host.
+	gitRun(t, tmp, "init", "--bare", "--initial-branch=main", bare)
+
+	// Working clone with an initial commit on main, then push to seed origin/main.
+	gitRun(t, tmp, "clone", bare, work)
+	gitRun(t, work, "config", "user.name", "seed")
+	gitRun(t, work, "config", "user.email", "seed@example.com")
+	manifest := filepath.Join(work, "manifest.yaml")
+	require.NoError(t, os.WriteFile(manifest, []byte("ci:\n  state: {}\n"), 0644))
+	gitRun(t, work, "add", "manifest.yaml")
+	gitRun(t, work, "commit", "-m", "seed")
+	gitRun(t, work, "push", "origin", "main")
+
+	// Detach HEAD onto the seed commit, mirroring the finalize checkout.
+	gitRun(t, work, "checkout", "--detach", "HEAD")
+
+	// Sanity: a bare push from detached HEAD must fail, proving the scenario.
+	bareDetached := exec.Command("git", "push")
+	bareDetached.Dir = work
+	require.Error(t, bareDetached.Run(),
+		"bare git push from detached HEAD is expected to fail; the explicit ref is what fixes it")
+
+	// Mutate the manifest so commitAndPushGit has something to commit.
+	require.NoError(t, os.WriteFile(manifest, []byte("ci:\n  state:\n    test: {}\n"), 0644))
+
+	t.Setenv("GITHUB_SERVER_URL", "http://gitea:3000") // force the plain-git path
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+
+	f := &Finalizer{configPath: manifest, targetEnv: "test"}
+
+	// Run from the working tree so the relative configPath resolves.
+	restore, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(work))
+	defer func() { _ = os.Chdir(restore) }()
+
+	require.NoError(t, f.commitAndPushGit("chore: update state after promotion to test [skip ci]"))
+
+	// origin/main on the bare remote must now point at the new state commit.
+	logCmd := exec.Command("git", "--git-dir", bare, "log", "-1", "--pretty=%s", "main")
+	out, err := logCmd.CombinedOutput()
+	require.NoError(t, err, "reading remote main log: %s", out)
+	require.Contains(t, string(out), "update state after promotion to test")
 }

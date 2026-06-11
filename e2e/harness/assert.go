@@ -284,6 +284,32 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 			env, expect.PreviousVersion, actual.PreviousVersion))
 	}
 
+	// Check cleared divergence fields: each named field must read back empty.
+	// Expresses the rejoin contract, which an empty expectation value alone
+	// cannot assert (empty Ref/BaseSHA/Patches expectations are skipped above).
+	for _, field := range expect.Cleared {
+		switch field {
+		case "ref":
+			if actual.Ref != "" {
+				errs = append(errs, fmt.Errorf("state[%s].ref expected cleared but got %s",
+					env, actual.Ref))
+			}
+		case "base_sha":
+			if actual.BaseSHA != "" {
+				errs = append(errs, fmt.Errorf("state[%s].base_sha expected cleared but got %s",
+					env, actual.BaseSHA))
+			}
+		case "patches":
+			if len(actual.Patches) > 0 {
+				errs = append(errs, fmt.Errorf("state[%s].patches expected cleared but got %v",
+					env, actual.Patches))
+			}
+		default:
+			errs = append(errs, fmt.Errorf("state[%s].cleared lists unsupported field %q (want ref|base_sha|patches)",
+				env, field))
+		}
+	}
+
 	// Check deploys
 	for deployName, deployExpect := range expect.Deploys {
 		actualDeploy := actual.Deploys[deployName]

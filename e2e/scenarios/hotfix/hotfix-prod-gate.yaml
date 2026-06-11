@@ -1,0 +1,49 @@
+name: "Hotfix Prod Gate"
+description: |
+  Verifies that the generated cascade-hotfix.yaml binds each hotfix deploy and
+  rollback job to the target environment via
+  "environment: ${{ needs.context.outputs.target_env }}", so that an
+  environment's configured protection rules apply to the hotfix deploy.
+
+  Runtime protection-rule (environment approval) enforcement is a
+  real-GitHub-only concern and is not exercised by the act-based harness; this
+  scenario verifies only that the environment binding is emitted.
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit; assert hotfix deploy/rollback bind the target env"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          contains:
+            - "environment: ${{ needs.context.outputs.target_env }}"
+            - "deploy-deploy-prod:"
+            - "rollback-deploy-prod:"
+            - "deploy-deploy-test:"
+            - "rollback-deploy-test:"
