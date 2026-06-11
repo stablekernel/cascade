@@ -583,3 +583,20 @@ func TestHotfixGenerator_ApplySkippedOnNoOp(t *testing.T) {
 	assert.Contains(t, applyJob, "needs.plan.outputs.no_op != 'true'",
 		"apply job must skip when the plan reports a no-op")
 }
+
+// TestHotfixGenerator_FinalizeFetchesEnvBranches guards that the finalize job
+// fetches the env/* branches before running the verb. finalize cross-checks the
+// merge SHA against the env-branch tip; without the fetch the branch is absent
+// from the fresh checkout and the verb fails resolving it.
+func TestHotfixGenerator_FinalizeFetchesEnvBranches(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	finalizeJob := extractJobSection(t, content, "finalize:")
+	require.NotEmpty(t, finalizeJob, "finalize job section should be present")
+	assert.Contains(t, finalizeJob, "Fetch env branches and tags",
+		"finalize job must fetch env branches before the env-branch tip cross-check")
+	assert.Contains(t, finalizeJob, "refs/heads/env/*:refs/remotes/origin/env/*",
+		"finalize job must fetch the env/* refs into remote-tracking refs")
+}

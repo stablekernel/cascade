@@ -3,6 +3,8 @@ package hotfix
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -35,10 +37,27 @@ type statePusher interface {
 	CommitAndPush(path, message string) error
 }
 
-// gitTipReader resolves the tip SHA of a local branch. The default implementation
+// gitTipReader resolves the tip SHA of an env branch. The default implementation
 // shells out to git; tests reuse the planner's execGitRunner.
 type gitTipReader interface {
 	LocalBranchSHA(name string) (string, error)
+}
+
+// envTipReader resolves an env branch tip in a CI checkout. The finalize job
+// checks out trunk and fetches env/* into refs/remotes/origin/*, so the branch
+// is usually a remote-tracking ref rather than a local one. It resolves the
+// local ref first (preserving local-clone behavior) and falls back to the
+// remote-tracking ref so the env-branch cross-check works on a fresh runner.
+type envTipReader struct{}
+
+func (envTipReader) LocalBranchSHA(name string) (string, error) {
+	for _, ref := range []string{"refs/heads/" + name, "refs/remotes/origin/" + name} {
+		out, err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+	return "", fmt.Errorf("git rev-parse env branch %q: not found as a local or origin-tracking ref", name)
 }
 
 // execTagLister lists local git tags.
@@ -153,7 +172,7 @@ func NewFinalizer(opts FinalizerOptions, options ...FinalizeOption) (*Finalizer,
 		buildResults:  make(map[string]string),
 		tagLister:     execTagLister{},
 		pusher:        gitStatePusher{},
-		tipReader:     execGitRunner{},
+		tipReader:     envTipReader{},
 	}
 	for _, o := range options {
 		o(f)

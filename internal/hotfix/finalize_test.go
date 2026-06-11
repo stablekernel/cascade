@@ -473,3 +473,51 @@ func TestFinalize_PrereleaseEnv_ReplacesPrerelease(t *testing.T) {
 		t.Errorf("prerelease-env hotfix should promote the release to a prerelease; calls=%+v", rm.calls)
 	}
 }
+
+// TestEnvTipReader_ResolvesLocalAndRemoteRefs verifies the finalize tip reader
+// resolves an env branch from a local ref when present and falls back to the
+// origin-tracking ref otherwise (the shape the finalize job's checkout has,
+// where env/<target> is fetched into refs/remotes/origin/* but not checked out
+// as a local branch).
+func TestEnvTipReader_ResolvesLocalAndRemoteRefs(t *testing.T) {
+	reader := envTipReader{}
+
+	t.Run("local ref", func(t *testing.T) {
+		newScratchRepo(t)
+		sha := commitFile(t, "a.txt", "one", "first commit")
+		runGit(t, "branch", "env/test")
+
+		got, err := reader.LocalBranchSHA("env/test")
+		if err != nil {
+			t.Fatalf("LocalBranchSHA(local): %v", err)
+		}
+		if got != sha {
+			t.Errorf("LocalBranchSHA(local) = %q, want %q", got, sha)
+		}
+	})
+
+	t.Run("origin-tracking ref only", func(t *testing.T) {
+		newScratchRepo(t)
+		sha := commitFile(t, "a.txt", "one", "first commit")
+		// Simulate the finalize-job checkout: env/test exists only as a
+		// remote-tracking ref, not as a local branch.
+		runGit(t, "update-ref", "refs/remotes/origin/env/test", sha)
+
+		got, err := reader.LocalBranchSHA("env/test")
+		if err != nil {
+			t.Fatalf("LocalBranchSHA(remote): %v", err)
+		}
+		if got != sha {
+			t.Errorf("LocalBranchSHA(remote) = %q, want %q", got, sha)
+		}
+	})
+
+	t.Run("missing ref errors", func(t *testing.T) {
+		newScratchRepo(t)
+		commitFile(t, "a.txt", "one", "first commit")
+
+		if _, err := reader.LocalBranchSHA("env/absent"); err == nil {
+			t.Fatalf("LocalBranchSHA(absent) expected error, got nil")
+		}
+	})
+}

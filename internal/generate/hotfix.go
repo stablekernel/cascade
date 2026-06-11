@@ -529,6 +529,9 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          fetch-depth: 0\n")
 
 	g.writeSetupCLI(sb)
+	// Finalize cross-checks the merge SHA against the env-branch tip, so the env
+	// branches must be fetched into the checkout before the verb runs.
+	g.writeFetchEnvBranches(sb)
 
 	sb.WriteString("      - name: Finalize hotfix\n")
 	sb.WriteString("        run: |\n")
