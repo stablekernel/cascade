@@ -616,3 +616,28 @@ func TestNewCommand(t *testing.T) {
 	tokenFlag := cmd.Flags().Lookup("token")
 	assert.NotNil(t, tokenFlag)
 }
+
+// TestCreateGitTag_GiteaMethodNotAllowedIsTolerated verifies that a 405 from the
+// git-data refs API (which Gitea does not implement) is treated as success: the
+// release create that follows materializes the tag from target_commitish.
+func TestCreateGitTag_GiteaMethodNotAllowedIsTolerated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && strings.Contains(r.URL.Path, "/git/refs") {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL,
+		token:   "test-token",
+		repo:    "owner/repo",
+	}
+
+	if err := manager.createGitTag("v1.0.0-rc.0.hotfix.1", "abc123"); err != nil {
+		t.Fatalf("createGitTag should tolerate Gitea 405, got: %v", err)
+	}
+}

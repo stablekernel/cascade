@@ -146,6 +146,13 @@ func (m *Manager) createGitTag(tagName, sha string) error {
 		// Tag already exists - this is fine
 		return nil
 	}
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		// The git-data refs API (POST /git/refs) is a GitHub endpoint that Gitea
+		// does not implement, so it answers 405. The release create that follows
+		// materializes the tag from target_commitish, so the explicit ref create
+		// is unnecessary there and a 405 is not fatal.
+		return nil
+	}
 
 	body, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("create tag failed with status %d: %s", resp.StatusCode, string(body))
