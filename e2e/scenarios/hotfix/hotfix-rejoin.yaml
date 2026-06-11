@@ -1,0 +1,107 @@
+name: "Hotfix Rejoin"
+description: |
+  Verifies the rejoin path: once a diverged environment is promoted a trunk SHA
+  that contains every recorded patch, the divergence ends. The product clears
+  the env's divergence fields and deletes its env/<env> integration branch on the
+  remote.
+
+  Because the recorded patch is the original trunk commit SHA, landing that same
+  trunk ancestor on dev and cascading it into test satisfies containment and
+  triggers the rejoin.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev/test"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a trunk fix to hotfix into test"
+    action: commit
+    commit:
+      message: "fix: patch for test env"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Plan hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Apply hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge the hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize hotfix; test diverges onto env/test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+
+  # Land a normal trunk commit. Trunk now contains commit2 (the recorded patch)
+  # as an ancestor, so a promotion of any later trunk SHA into test will satisfy
+  # patch containment.
+  - name: "Advance trunk normally past the patch"
+    action: commit
+    commit:
+      message: "chore: trunk advance"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate so dev carries the patch's trunk ancestor"
+    action: orchestrate
+
+  # Rejoin: promoting dev into the diverged test env, where the incoming SHA
+  # contains every recorded patch, ends the divergence. The product clears the
+  # divergence fields and deletes env/test on the remote.
+  - name: "Promote a containing SHA into test triggers rejoin"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      branches:
+        deleted: ["env/test"]
