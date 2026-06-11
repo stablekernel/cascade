@@ -17,6 +17,14 @@ type Runner struct {
 	ctx                *ExecutionContext
 	harness            *Harness // The existing harness for infra
 	lastWorkflowResult *ExtendedWorkflowResult
+	// Hotfix apply bookkeeping, carried across steps so merge_pr,
+	// resolve_conflict, and hotfix_merged can act on the most recent apply.
+	lastPRIndex      int64            // PR index opened by the most recent hotfix_apply
+	lastPRConflict   bool             // whether that apply hit a cherry-pick conflict
+	lastHotfixBranch string           // head branch of that apply
+	lastHotfixEnv    string           // target env of that apply
+	lastHotfixBody   string           // PR body (with trailers) of that apply
+	prByLabel        map[string]int64 // label -> most recent PR index opened with it
 }
 
 // NewRunner creates a new scenario runner
@@ -57,6 +65,47 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			}
 			if step.Promote.Mode == "cascade" && step.Promote.Target == "" {
 				return fmt.Errorf("step %d (%s): cascade promote requires target", i, step.Name)
+			}
+		case "hotfix_plan":
+			if step.HotfixPlan == nil {
+				return fmt.Errorf("step %d (%s): hotfix_plan action requires hotfix_plan config", i, step.Name)
+			}
+			if step.HotfixPlan.TargetEnv == "" {
+				return fmt.Errorf("step %d (%s): hotfix_plan requires target_env", i, step.Name)
+			}
+			if step.HotfixPlan.CommitRef == "" {
+				return fmt.Errorf("step %d (%s): hotfix_plan requires commit_ref", i, step.Name)
+			}
+		case "hotfix_apply":
+			if step.HotfixApply == nil {
+				return fmt.Errorf("step %d (%s): hotfix_apply action requires hotfix_apply config", i, step.Name)
+			}
+			if step.HotfixApply.TargetEnv == "" {
+				return fmt.Errorf("step %d (%s): hotfix_apply requires target_env", i, step.Name)
+			}
+			if step.HotfixApply.CommitRef == "" {
+				return fmt.Errorf("step %d (%s): hotfix_apply requires commit_ref", i, step.Name)
+			}
+		case "merge_pr":
+			if step.MergePR == nil {
+				return fmt.Errorf("step %d (%s): merge_pr action requires merge_pr config", i, step.Name)
+			}
+			if step.MergePR.Label == "" && step.MergePR.Index <= 0 {
+				return fmt.Errorf("step %d (%s): merge_pr requires label or index", i, step.Name)
+			}
+		case "resolve_conflict":
+			if step.ResolveConflict == nil {
+				return fmt.Errorf("step %d (%s): resolve_conflict action requires resolve_conflict config", i, step.Name)
+			}
+			if len(step.ResolveConflict.Files) == 0 {
+				return fmt.Errorf("step %d (%s): resolve_conflict requires at least one file", i, step.Name)
+			}
+		case "hotfix_merged":
+			if step.HotfixMerged == nil {
+				return fmt.Errorf("step %d (%s): hotfix_merged action requires hotfix_merged config", i, step.Name)
+			}
+			if step.HotfixMerged.TargetEnv == "" {
+				return fmt.Errorf("step %d (%s): hotfix_merged requires target_env", i, step.Name)
 			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
@@ -116,6 +165,23 @@ func (r *Runner) applySetup(ctx context.Context, setup *SetupState) error {
 	// Apply initial state
 	for env, state := range setup.State {
 		r.ctx.RecordState(env, state.SHA, state.Version)
+		// Stage integration-branch divergence when any divergence field is set.
+		// base_sha/patches may be commit references; resolve to literal SHAs.
+		if state.Ref != "" || state.BaseSHA != "" || len(state.Patches) > 0 || state.PreviousVersion != "" {
+			baseSHA := r.ctx.ResolveSHA(state.BaseSHA)
+			if baseSHA == "" {
+				baseSHA = state.BaseSHA
+			}
+			patches := make([]string, 0, len(state.Patches))
+			for _, p := range state.Patches {
+				if resolved := r.ctx.ResolveSHA(p); resolved != "" {
+					patches = append(patches, resolved)
+				} else {
+					patches = append(patches, p)
+				}
+			}
+			r.ctx.RecordStateDivergence(env, state.Ref, baseSHA, patches, state.PreviousVersion)
+		}
 	}
 
 	// Apply initial tags
@@ -193,6 +259,32 @@ func (r *Runner) materializeManifestState(ctx context.Context, state map[string]
 		case defaultSHA != "":
 			entry["sha"] = defaultSHA
 		}
+		// Stage integration-branch divergence into the manifest using the
+		// product's exact yaml tags (ref/base_sha/patches), so a diverged env
+		// exists without a full hotfix run. base_sha/patches may be commit
+		// references; resolve to literal SHAs. There is no previous_version
+		// manifest key, so PreviousVersion is harness-side only.
+		if s.Ref != "" {
+			entry["ref"] = s.Ref
+		}
+		if s.BaseSHA != "" {
+			base := r.ctx.ResolveSHA(s.BaseSHA)
+			if base == "" {
+				base = s.BaseSHA
+			}
+			entry["base_sha"] = base
+		}
+		if len(s.Patches) > 0 {
+			patches := make([]string, 0, len(s.Patches))
+			for _, p := range s.Patches {
+				if resolved := r.ctx.ResolveSHA(p); resolved != "" {
+					patches = append(patches, resolved)
+				} else {
+					patches = append(patches, p)
+				}
+			}
+			entry["patches"] = patches
+		}
 		stateMap[env] = entry
 	}
 
@@ -235,6 +327,16 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeOrchestrate(ctx, config, step.ExpectFailure)
 	case "promote":
 		return r.executePromote(ctx, step.Promote, config)
+	case "hotfix_plan":
+		return r.executeHotfixPlan(ctx, step.HotfixPlan)
+	case "hotfix_apply":
+		return r.executeHotfixApply(ctx, step.HotfixApply)
+	case "merge_pr":
+		return r.executeMergePR(ctx, step.MergePR)
+	case "resolve_conflict":
+		return r.executeResolveConflict(ctx, step.ResolveConflict)
+	case "hotfix_merged":
+		return r.executeHotfixMerged(ctx, step.HotfixMerged, config)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -416,6 +518,12 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 		inputs = map[string]string{
 			"mode": mode,
 		}
+		if promote.Force {
+			// Workflow input is named "force" (env PROMOTION_FORCE), forwarded to
+			// the CLI's --force flag. Only meaningful for default-mode promotions;
+			// it bypasses the no-op promotion guard.
+			inputs["force"] = "true"
+		}
 		if promote.AllowBreaking {
 			// Workflow input is named allow_breaking_changes (see internal/generate
 			// promote.go); the workflow forwards it to the CLI's --allow-breaking
@@ -550,6 +658,13 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 			Deploys map[string]struct {
 				SHA string `yaml:"sha"`
 			} `yaml:"deploys"`
+			// Divergence fields written by the real hotfix finalize step. Tags
+			// match the product's config.EnvState (ref/base_sha/patches). The
+			// product has no previous_version manifest key, so divergence's
+			// PreviousVersion is left unset on sync.
+			Ref     string   `yaml:"ref"`
+			BaseSHA string   `yaml:"base_sha"`
+			Patches []string `yaml:"patches"`
 		} `yaml:"state"`
 		// LatestRelease is the single-environment Release workflow's published
 		// pointer (ci.latest_release). Single-env repos publish via the Release
@@ -580,6 +695,15 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	for env, state := range ciData.State {
 		r.ctx.RecordState(env, state.SHA, state.Version)
 		r.t.Logf("  Synced state[%s] = %s @ %s", env, truncateSHA(state.SHA), state.Version)
+
+		// Record integration-branch divergence so divergence assertions can see
+		// a hotfixed environment. PreviousVersion has no manifest key (the
+		// product tracks prior versions separately), so it stays empty here.
+		if state.Ref != "" || state.BaseSHA != "" || len(state.Patches) > 0 {
+			r.ctx.RecordStateDivergence(env, state.Ref, state.BaseSHA, state.Patches, "")
+			r.t.Logf("  Synced state[%s] divergence ref=%s base=%s patches=%d",
+				env, state.Ref, truncateSHA(state.BaseSHA), len(state.Patches))
+		}
 
 		// Also record per-deploy state
 		for deployName, deployState := range state.Deploys {
@@ -701,7 +825,68 @@ func (r *Runner) assertStep(ctx context.Context, step *Step, preState *Execution
 		allErrs = append(allErrs, errs...)
 	}
 
+	// Assert branch presence/absence in Gitea (live).
+	if expect.Branches != nil {
+		errs := r.assertBranches(ctx, expect.Branches)
+		allErrs = append(allErrs, errs...)
+	}
+
+	// Assert open pull requests in Gitea (live).
+	if expect.PRs != nil {
+		errs := r.assertPRs(ctx, expect.PRs)
+		allErrs = append(allErrs, errs...)
+	}
+
 	return allErrs
+}
+
+// assertBranches checks branch existence in Gitea against the expectation.
+// Returns nil in unit-test mode (no harness).
+func (r *Runner) assertBranches(ctx context.Context, expect *BranchesExpect) []error {
+	if r.harness == nil || r.harness.gitea == nil || r.harness.repo == nil {
+		return nil
+	}
+	branches, err := r.harness.gitea.ListBranches(ctx, r.harness.repo)
+	if err != nil {
+		return []error{fmt.Errorf("list branches: %w", err)}
+	}
+	var errs []error
+	for _, want := range expect.Exist {
+		if !containsString(branches, want) {
+			errs = append(errs, fmt.Errorf("branch %s expected to exist but not found", want))
+		}
+	}
+	for _, gone := range expect.Deleted {
+		if containsString(branches, gone) {
+			errs = append(errs, fmt.Errorf("branch %s expected to be deleted but exists", gone))
+		}
+	}
+	return errs
+}
+
+// assertPRs checks open pull requests in Gitea against the expectation. When
+// OpenCount is set the count must match exactly; otherwise at least one matching
+// PR must be open. Returns nil in unit-test mode (no harness).
+func (r *Runner) assertPRs(ctx context.Context, expect *PRsExpect) []error {
+	if r.harness == nil || r.harness.gitea == nil || r.harness.repo == nil {
+		return nil
+	}
+	indices, err := r.harness.gitea.ListOpenPRs(ctx, r.harness.repo, "", expect.OpenWithLabel)
+	if err != nil {
+		return []error{fmt.Errorf("list open PRs: %w", err)}
+	}
+	var errs []error
+	if expect.OpenCount != nil {
+		if len(indices) != *expect.OpenCount {
+			errs = append(errs, fmt.Errorf("expected %d open PR(s) with label %q, got %d",
+				*expect.OpenCount, expect.OpenWithLabel, len(indices)))
+		}
+		return errs
+	}
+	if len(indices) == 0 {
+		errs = append(errs, fmt.Errorf("expected at least one open PR with label %q, got none", expect.OpenWithLabel))
+	}
+	return errs
 }
 
 // assertWorkflowFile reads a workflow file from the test repo (in /tmp/repo

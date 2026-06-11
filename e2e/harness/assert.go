@@ -238,6 +238,52 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 			env, expect.Version, actual.Version))
 	}
 
+	// Check integration-branch ref (exact match).
+	if expect.Ref != "" && actual.Ref != expect.Ref {
+		errs = append(errs, fmt.Errorf("state[%s].ref expected %s, got %s",
+			env, expect.Ref, actual.Ref))
+	}
+
+	// Check base SHA (resolve commit references, falling back to literal).
+	if expect.BaseSHA != "" {
+		expectedBase := ctx.ResolveSHA(expect.BaseSHA)
+		if expectedBase == "" {
+			expectedBase = expect.BaseSHA
+		}
+		if actual.BaseSHA != expectedBase {
+			errs = append(errs, fmt.Errorf("state[%s].base_sha expected %s, got %s",
+				env, expectedBase, actual.BaseSHA))
+		}
+	}
+
+	// Check patches: every listed patch (resolved via reference, falling back to
+	// literal) must be present in the recorded patches slice.
+	for _, p := range expect.Patches {
+		want := ctx.ResolveSHA(p)
+		if want == "" {
+			want = p
+		}
+		if !containsString(actual.Patches, want) {
+			errs = append(errs, fmt.Errorf("state[%s].patches missing %s, got %v",
+				env, want, actual.Patches))
+		}
+	}
+
+	// Check patches_contain: each entry must match at least one recorded patch
+	// by substring (no reference resolution).
+	for _, frag := range expect.PatchesContain {
+		if !anyContains(actual.Patches, frag) {
+			errs = append(errs, fmt.Errorf("state[%s].patches has no entry containing %q, got %v",
+				env, frag, actual.Patches))
+		}
+	}
+
+	// Check pre-divergence version (exact match).
+	if expect.PreviousVersion != "" && actual.PreviousVersion != expect.PreviousVersion {
+		errs = append(errs, fmt.Errorf("state[%s].previous_version expected %s, got %s",
+			env, expect.PreviousVersion, actual.PreviousVersion))
+	}
+
 	// Check deploys
 	for deployName, deployExpect := range expect.Deploys {
 		actualDeploy := actual.Deploys[deployName]
@@ -259,6 +305,26 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 	}
 
 	return errs
+}
+
+// containsString reports whether s appears exactly in list.
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// anyContains reports whether any element of list contains substr.
+func anyContains(list []string, substr string) bool {
+	for _, v := range list {
+		if strings.Contains(v, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 // AssertJobs validates job conclusions against expectations (used internally)
