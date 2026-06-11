@@ -57,6 +57,89 @@ jobs:
 	assert.Contains(t, result.Logs, "Hello from act")
 }
 
+func TestEventFileArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		eventPath string
+		want      []string
+	}{
+		{
+			name:      "no event path yields no flag",
+			eventPath: "",
+			want:      nil,
+		},
+		{
+			name:      "event path yields -e flag",
+			eventPath: eventFilePath,
+			want:      []string{"-e", eventFilePath},
+		},
+		{
+			name:      "custom event path is passed through",
+			eventPath: "/tmp/other-event.json",
+			want:      []string{"-e", "/tmp/other-event.json"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, eventFileArgs(tt.eventPath))
+		})
+	}
+}
+
+// TestBuildActArgs_EventFlag verifies the act command picks up `-e <file>` when
+// an event payload was written, and omits it otherwise, without requiring a
+// real act run or container.
+func TestBuildActArgs_EventFlag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		opts         RunOpts
+		eventPath    string
+		wantContains []string
+		wantOmits    []string
+	}{
+		{
+			name:         "event payload adds -e flag",
+			opts:         RunOpts{},
+			eventPath:    eventFilePath,
+			wantContains: []string{"-e " + eventFilePath},
+		},
+		{
+			name:      "no event payload omits -e flag",
+			opts:      RunOpts{},
+			eventPath: "",
+			wantOmits: []string{"-e"},
+		},
+		{
+			name:         "event flag coexists with env and inputs",
+			opts:         RunOpts{Env: map[string]string{"FOO": "bar"}, Inputs: map[string]string{"k": "v"}},
+			eventPath:    eventFilePath,
+			wantContains: []string{"-e " + eventFilePath, "--env FOO=bar", "--input k=v"},
+		},
+	}
+
+	a := &ActRunner{}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			args := a.buildActArgs(tt.opts, tt.eventPath)
+			for _, want := range tt.wantContains {
+				assert.Contains(t, args, want)
+			}
+			for _, omit := range tt.wantOmits {
+				assert.NotContains(t, args, omit)
+			}
+		})
+	}
+}
+
 func TestNormalizeWorkflowResult(t *testing.T) {
 	t.Parallel()
 
