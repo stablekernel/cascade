@@ -29,7 +29,97 @@ state write run in the generated workflow.`,
 	}
 
 	cmd.AddCommand(newPlanCommand())
+	cmd.AddCommand(newFinalizeCommand())
 	return cmd
+}
+
+// newFinalizeCommand creates the `cascade hotfix finalize` subcommand.
+func newFinalizeCommand() *cobra.Command {
+	var (
+		configPath  string
+		manifestKey string
+		targetEnv   string
+		mergeSHA    string
+		fixSHA      string
+		baseSHA     string
+		actor       string
+		dryRun      bool
+		deployFlags []string
+		buildFlags  []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "finalize",
+		Short: "Write diverged state, tag, and release for a merged hotfix",
+		Long: `Finalize a completed hotfix.
+
+After the resolution PR merges and the build and deploy succeed, this command:
+  1. Cross-checks the merge SHA equals the env/<target> branch tip
+  2. Allocates the next free hotfix version over the env's current version
+  3. Snapshots the prior env state into the rollback ring
+  4. Writes the diverged state (sha, version, ref, base_sha, patches) and substates
+  5. Commits the manifest to trunk with the rebase-retry push
+  6. Creates the hotfix tag and release object
+
+The verb is idempotent on identical inputs: a rerun after the state already
+records the merge SHA is a no-op.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts := []FinalizeOption{WithFinalizeDryRun(dryRun)}
+
+			finalizer, err := NewFinalizer(FinalizerOptions{
+				ConfigPath:  configPath,
+				ManifestKey: manifestKey,
+				Actor:       actor,
+			}, opts...)
+			if err != nil {
+				return err
+			}
+
+			for _, df := range deployFlags {
+				name, result, ok := splitResultFlag(df)
+				if !ok {
+					return fmt.Errorf("invalid --deploy-result %q: want name=result", df)
+				}
+				finalizer.SetDeployResult(name, result)
+			}
+			for _, bf := range buildFlags {
+				name, result, ok := splitResultFlag(bf)
+				if !ok {
+					return fmt.Errorf("invalid --build-result %q: want name=result", bf)
+				}
+				finalizer.SetBuildResult(name, result)
+			}
+
+			return finalizer.Finalize(targetEnv, mergeSHA, fixSHA, baseSHA)
+		},
+	}
+
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to manifest file (default: .github/manifest.yaml)")
+	cmd.Flags().StringVar(&manifestKey, "key", config.DefaultManifestKey, "Top-level manifest key")
+	cmd.Flags().StringVar(&targetEnv, "target-env", "", "Environment to finalize (required)")
+	cmd.Flags().StringVar(&mergeSHA, "merge-sha", "", "Tip of env/<target> after the resolution PR merged (required)")
+	cmd.Flags().StringVar(&fixSHA, "fix-sha", "", "Trunk commit the hotfix carries (required)")
+	cmd.Flags().StringVar(&baseSHA, "base-sha", "", "Trunk anchor the integration branch diverged from (required)")
+	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the state (default: $GITHUB_ACTOR)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate and compute without writing state, tags, or releases")
+	cmd.Flags().StringArrayVar(&deployFlags, "deploy-result", nil, "Deploy result as name=result (repeatable)")
+	cmd.Flags().StringArrayVar(&buildFlags, "build-result", nil, "Build result as name=result (repeatable)")
+
+	_ = cmd.MarkFlagRequired("target-env")
+	_ = cmd.MarkFlagRequired("merge-sha")
+	_ = cmd.MarkFlagRequired("fix-sha")
+	_ = cmd.MarkFlagRequired("base-sha")
+
+	return cmd
+}
+
+// splitResultFlag parses a "name=result" job-result flag value.
+func splitResultFlag(s string) (name, result string, ok bool) {
+	idx := strings.IndexByte(s, '=')
+	if idx <= 0 || idx == len(s)-1 {
+		return "", "", false
+	}
+	return s[:idx], s[idx+1:], true
 }
 
 // newPlanCommand creates the `cascade hotfix plan` subcommand.

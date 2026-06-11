@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/git"
 	"gopkg.in/yaml.v3"
 )
 
@@ -684,38 +684,11 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 	return result, nil
 }
 
-// CommitAndPush commits the state change and pushes to remote
+// CommitAndPush commits the state change and pushes to remote. It delegates to
+// the shared git rebase-retry helper so promote and hotfix finalize write
+// manifest state identically.
 func (p *Promoter) CommitAndPush(message string) error {
-	// Git add
-	cmd := exec.Command("git", "add", p.configPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git add failed: %s: %w", string(out), err)
-	}
-
-	// Git commit
-	cmd = exec.Command("git", "commit", "-m", message)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Check if nothing to commit
-		if strings.Contains(string(out), "nothing to commit") {
-			return nil
-		}
-		return fmt.Errorf("git commit failed: %s: %w", string(out), err)
-	}
-
-	// Git push with retry
-	for i := 0; i < 3; i++ {
-		cmd = exec.Command("git", "push")
-		if _, err := cmd.CombinedOutput(); err == nil {
-			return nil
-		}
-
-		// Pull and retry
-		cmd = exec.Command("git", "pull", "--rebase")
-		_, _ = cmd.CombinedOutput() // ignore error - best effort
-		time.Sleep(2 * time.Second)
-	}
-
-	return fmt.Errorf("git push failed after 3 retries")
+	return git.CommitAndPushWithRetry(p.configPath, message)
 }
 
 func (p *Promoter) saveConfig() error {
