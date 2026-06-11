@@ -129,17 +129,23 @@ func (h *MultiRepoHarness) CreateRepo(ctx context.Context, setup MultiRepoSetup)
 		// the external update verb.
 		initialFiles[".github/manifest.yaml"] = string(configYAML)
 
-		// Create stub workflow files for builds and deploys, tagged with the
-		// repo name so multi-repo scenarios running in parallel don't collide
-		// on shared act container names.
+		// Create stub workflow files for local builds and deploys, tagged with
+		// the repo name so multi-repo scenarios running in parallel don't collide
+		// on shared act container names. generate-workflow reads each local
+		// reusable workflow at its literal path (e.g. .github/workflows/deploy.yaml)
+		// to discover inputs/outputs, so a stub must exist there; the previous
+		// guard skipped any path containing a slash, which dropped every
+		// .github/workflows/*.yaml stub and broke generation. External (cross-repo)
+		// deploys live under config.External and are intentionally not stubbed
+		// here - they are referenced, not run, in the primary's repo.
 		repoTag := scenarioTagFromTestName(setup.Name)
 		for _, build := range setup.Config.Builds {
-			if build.Workflow != "" && !strings.Contains(build.Workflow, "/") {
+			if isLocalWorkflowPath(build.Workflow) {
 				initialFiles[build.Workflow] = generateStubWorkflow(build.Name, repoTag)
 			}
 		}
 		for _, deploy := range setup.Config.Deploys {
-			if deploy.Workflow != "" && !strings.Contains(deploy.Workflow, "/") {
+			if isLocalWorkflowPath(deploy.Workflow) {
 				initialFiles[deploy.Workflow] = generateStubWorkflow(deploy.Name, repoTag)
 			}
 		}
@@ -206,6 +212,14 @@ func (h *MultiRepoHarness) CreateRepo(ctx context.Context, setup MultiRepoSetup)
 	}
 
 	return repoCtx, nil
+}
+
+// isLocalWorkflowPath reports whether a build/deploy workflow reference is a
+// local reusable workflow in this repo (under .github/workflows/) that needs a
+// stub file, as opposed to an empty value or a cross-repo `owner/repo/...`
+// reference.
+func isLocalWorkflowPath(workflow string) bool {
+	return workflow != "" && strings.HasPrefix(workflow, ".github/")
 }
 
 // extractManifestState pulls the `state` submap out of a scenario's Manifest
