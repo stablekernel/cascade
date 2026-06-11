@@ -1,10 +1,19 @@
-name: "Promote force bypasses the no-op guard"
+name: "Promote force bypasses the patch-containment guard"
 description: |
-  Proves the promote workflow's force input bypasses the no-op promotion guard.
-  A commit is orchestrated into dev, then promoted dev-to-test (success). A
-  second promote of the same dev SHA is rejected by the no-op guard (test
-  already holds that SHA), so it fails. A third promote of the same SHA with
-  force=true bypasses the guard and succeeds, leaving test on the dev SHA.
+  Proves the promote workflow's force input bypasses the patch-containment guard
+  that protects a diverged environment, the one guard force genuinely overrides.
+
+  Setup keeps dev behind trunk: commit1 is orchestrated into dev and promoted to
+  establish a test baseline, then commit2 lands on trunk but is never
+  orchestrated, so dev and test both stay at commit1. A stage_divergence step
+  marks test as diverged with patches=[commit2]. commit2 is a later trunk commit,
+  so it is NOT an ancestor of commit1; promoting dev (commit1) into the diverged
+  test env finds the recorded patch is not contained in the incoming SHA.
+
+  The non-force promote hits the patch-containment guard and fails, leaving test
+  untouched. The same promote with force=true overrides the guard and proceeds.
+  Ancestry is decided by real git on fully fetched history, so both legs are
+  deterministic.
 
 config:
   trunk_branch: main
@@ -12,6 +21,10 @@ config:
   builds:
     - name: app
       workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-test
+      workflow: deploy.yaml
       triggers: ["src/**"]
 
 steps:
@@ -32,7 +45,7 @@ steps:
         dev:
           sha: commit1
 
-  - name: "Promote dev to test succeeds"
+  - name: "Promote to establish a test baseline at commit1"
     action: promote
     promote:
       mode: cascade
@@ -42,14 +55,50 @@ steps:
         test:
           sha: commit1
 
-  - name: "Re-promote same SHA is rejected by the no-op guard"
+  # Advance trunk past dev. dev/test are never re-orchestrated, so both stay at
+  # commit1 while commit2 exists only ahead of them on trunk.
+  - name: "Advance trunk so a later SHA exists ahead of dev"
+    action: commit
+    commit:
+      message: "chore: trunk advance after baseline"
+      files:
+        src/advance.go: |
+          package main
+
+          func advance() {}
+
+  # Mark test diverged with patches=[commit2]. commit2 is a later trunk commit
+  # than dev's commit1, so it is not an ancestor of the incoming SHA. base_sha is
+  # commit1 (test's recorded SHA) so the divergence fields are internally
+  # consistent.
+  - name: "Stage test divergence with an unreachable patch (commit2)"
+    action: stage_divergence
+    stage_divergence:
+      env: test
+      ref: "env/test"
+      base_sha: "commit1"
+      patches:
+        - "commit2"
+
+  # Containment failure: dev's commit1 does not contain patch commit2. The
+  # targeted dev-to-test promote hits the patch-containment guard directly (dev
+  # is not diverged, so the diverged-source guard does not interfere). test is
+  # left untouched. The exact ancestry message is asserted by internal/promote
+  # unit tests; the e2e contract is that promotion is blocked.
+  - name: "Promote into diverged test is blocked by the containment guard"
     action: promote
     promote:
       mode: cascade
       target: test
       expect_failure: true
+    expect:
+      state:
+        test:
+          unchanged: true
 
-  - name: "Force re-promote of the same SHA bypasses the guard"
+  # Force override: the same promote with force=true bypasses the
+  # patch-containment guard and proceeds. dev is the source and stays unchanged.
+  - name: "Force re-promote bypasses the containment guard"
     action: promote
     promote:
       mode: cascade
@@ -57,5 +106,5 @@ steps:
       force: true
     expect:
       state:
-        test:
-          sha: commit1
+        dev:
+          unchanged: true
