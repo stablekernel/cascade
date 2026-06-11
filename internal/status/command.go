@@ -41,6 +41,7 @@ When no subcommand is given, all environments are summarised together with lates
 	cmd.AddCommand(newEnvCommand(&configPath, &manifestKey, &jsonOutput))
 	cmd.AddCommand(newBuildCommand(&configPath, &manifestKey, &jsonOutput))
 	cmd.AddCommand(newDeployCommand(&configPath, &manifestKey, &jsonOutput))
+	cmd.AddCommand(newConsistencyCommand(&configPath, &manifestKey, &jsonOutput))
 
 	return cmd
 }

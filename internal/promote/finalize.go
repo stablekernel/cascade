@@ -33,17 +33,28 @@ type Finalizer struct {
 	promotionResult *PromotionResult
 	actor           string
 	overrideSHA     string // non-empty when an auto-committing callback advanced HEAD
+
+	// cleaner performs the divergence-end side effects (delete env branch, hotfix
+	// tags, drafts) when a promotion rejoins a diverged env to trunk. The default
+	// is a no-op so non-diverged promotions are unaffected.
+	cleaner LifecycleCleaner
+	// pendingRejoins collects the diverged environments that rejoined trunk during
+	// the in-memory state update, to be cleaned up after the manifest is written.
+	pendingRejoins []rejoinEvent
 }
 
 // NewFinalizer creates a new Finalizer instance.
 // It loads the manifest from configPath and prepares for state updates.
 // The manifest must have the ci: key at the top level.
-func NewFinalizer(configPath, targetEnv string) (*Finalizer, error) {
-	return NewFinalizerWithKey(configPath, targetEnv, config.DefaultManifestKey)
+//
+// Optional, additive behavior (such as the divergence-end lifecycle cleanup) is
+// supplied through functional options so the required inputs stay positional.
+func NewFinalizer(configPath, targetEnv string, opts ...FinalizeOption) (*Finalizer, error) {
+	return NewFinalizerWithKey(configPath, targetEnv, config.DefaultManifestKey, opts...)
 }
 
 // NewFinalizerWithKey creates a Finalizer with a custom manifest key.
-func NewFinalizerWithKey(configPath, targetEnv, manifestKey string) (*Finalizer, error) {
+func NewFinalizerWithKey(configPath, targetEnv, manifestKey string, opts ...FinalizeOption) (*Finalizer, error) {
 	cicdFile, err := config.ParseManifestFile(configPath, manifestKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse manifest: %w", err)
@@ -51,13 +62,18 @@ func NewFinalizerWithKey(configPath, targetEnv, manifestKey string) (*Finalizer,
 
 	actor := getEnv("GITHUB_ACTOR", "github-actions[bot]")
 
-	return &Finalizer{
+	f := &Finalizer{
 		configPath:    configPath,
 		targetEnv:     targetEnv,
 		cicdFile:      cicdFile,
 		deployResults: make(map[string]string),
 		actor:         actor,
-	}, nil
+		cleaner:       noopLifecycleCleaner{},
+	}
+	for _, opt := range opts {
+		opt(f)
+	}
+	return f, nil
 }
 
 // SetDeployResult records the result of a deploy job.
@@ -99,7 +115,31 @@ func (f *Finalizer) SetHeadSHA(sha string) {
 // Call this only when you want to persist changes.
 func (f *Finalizer) Run() error {
 	f.updateState()
-	return f.WriteConfig()
+	if err := f.WriteConfig(); err != nil {
+		return err
+	}
+	return f.runLifecycleCleanup()
+}
+
+// runLifecycleCleanup performs the divergence-end side effects for every env
+// that rejoined trunk during this finalization. It runs only after the manifest
+// is persisted, so the source of truth is updated before any branch, tag, or
+// draft is removed; a cleanup failure then leaves the manifest correct and the
+// operation re-runnable. When no env rejoined (the common, non-diverged case)
+// this is a no-op and the injected cleaner is never called.
+func (f *Finalizer) runLifecycleCleanup() error {
+	for _, ev := range f.pendingRejoins {
+		if err := f.cleaner.DeleteEnvBranch(ev.env); err != nil {
+			return fmt.Errorf("rejoin cleanup for %s: %w", ev.env, err)
+		}
+		if err := f.cleaner.CleanHotfixReleases(CleanReleasesRequest{
+			Environment: ev.env,
+			BaseVersion: ev.baseVersion,
+		}); err != nil {
+			return fmt.Errorf("rejoin cleanup for %s: %w", ev.env, err)
+		}
+	}
+	return nil
 }
 
 // updateState performs the in-memory state updates.
@@ -119,6 +159,16 @@ func (f *Finalizer) updateState() {
 				f.cicdFile.State[promo.Environment] = &config.EnvState{}
 			}
 			state := f.cicdFile.State[promo.Environment]
+			// Capture whether this env was diverged BEFORE overwriting its state.
+			// A promotion into a diverged env that reaches finalize has already
+			// passed the preflight patch-containment gate (the incoming trunk SHA
+			// contains every recorded patch), so the env is rejoining trunk: its
+			// divergence fields must be cleared and its integration branch, tags,
+			// and drafts cleaned up. The base version to clean is the version the
+			// env held while diverged, captured here before it is overwritten.
+			wasDiverged := state.IsDiverged()
+			priorVersion := state.Version
+
 			// When an auto-committing callback ran, overrideSHA holds the
 			// post-callback HEAD; use it so the recorded state points at the
 			// commit that was actually built/deployed rather than the triggering SHA.
@@ -130,6 +180,19 @@ func (f *Finalizer) updateState() {
 			state.Version = promo.Version
 			state.CommittedAt = timestamp
 			state.CommittedBy = f.actor
+
+			// Rejoin: clear divergence fields and schedule cleanup. This is gated
+			// on the env having been diverged, so a normal promotion into a
+			// non-diverged env touches none of the lifecycle logic.
+			if wasDiverged {
+				state.Ref = ""
+				state.BaseSHA = ""
+				state.Patches = nil
+				f.pendingRejoins = append(f.pendingRejoins, rejoinEvent{
+					env:         promo.Environment,
+					baseVersion: priorVersion,
+				})
+			}
 
 			// Initialize deploys map if needed
 			if state.Deploys == nil {
