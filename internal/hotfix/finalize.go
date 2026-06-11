@@ -31,11 +31,11 @@ type tagLister interface {
 	ListTags() ([]string, error)
 }
 
-// statePusher commits the manifest change to trunk and pushes it with the
-// rebase-retry behavior promote uses. The default implementation reuses the
-// shared git helper; tests inject a recorder.
+// statePusher commits the manifest change and lands it on the given trunk
+// branch. The default implementation writes via the GitHub Contents API on real
+// GitHub and plain git under act; tests inject a recorder.
 type statePusher interface {
-	CommitAndPush(path, message string) error
+	CommitAndPush(path, branch, message string) error
 }
 
 // gitTipReader resolves the tip SHA of an env branch. The default implementation
@@ -83,11 +83,11 @@ func (execTagLister) ListTags() ([]string, error) {
 // an upstream tracking branch.
 type gitStatePusher struct{}
 
-func (gitStatePusher) CommitAndPush(path, message string) error {
+func (gitStatePusher) CommitAndPush(path, branch, message string) error {
 	if isRealGitHub() {
-		return writeStateViaAPI(path, message)
+		return writeStateViaAPI(path, branch, message)
 	}
-	return commitAndPushGit(path, message)
+	return commitAndPushGit(path, branch, message)
 }
 
 // isRealGitHub reports whether the workflow runs on github.com rather than an
@@ -98,31 +98,13 @@ func isRealGitHub() bool {
 	return server == "" || server == "https://github.com"
 }
 
-// trunkBranch resolves the branch to write state to. The pull_request (closed)
-// checkout is detached, so the branch is taken from GITHUB_BASE_REF (the PR
-// base, i.e. trunk) or GITHUB_REF when present, falling back to "main".
-func trunkBranch() string {
-	if base := os.Getenv("GITHUB_BASE_REF"); base != "" {
-		return base
-	}
-	ref := os.Getenv("GITHUB_REF")
-	if strings.HasPrefix(ref, "refs/heads/") {
-		return strings.TrimPrefix(ref, "refs/heads/")
-	}
-	if ref != "" {
-		return ref
-	}
-	return "main"
-}
-
 // writeStateViaAPI writes the manifest to the trunk branch through the GitHub
 // Contents REST API using the gh CLI, producing a signed (Verified) commit.
-func writeStateViaAPI(path, message string) error {
+func writeStateViaAPI(path, branch, message string) error {
 	repo := os.Getenv("GITHUB_REPOSITORY")
 	if repo == "" {
 		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
 	}
-	branch := trunkBranch()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -153,7 +135,7 @@ func writeStateViaAPI(path, message string) error {
 // plain git. Used in the act/gitea e2e environment, which enforces neither
 // branch protection nor commit signatures. The push refspec is explicit so it
 // works from the detached-HEAD checkout of a pull_request event.
-func commitAndPushGit(path, message string) error {
+func commitAndPushGit(path, branch, message string) error {
 	if out, err := exec.Command("git", "config", "user.name", "github-actions[bot]").CombinedOutput(); err != nil {
 		return fmt.Errorf("git config user.name failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -169,7 +151,7 @@ func commitAndPushGit(path, message string) error {
 		}
 		return fmt.Errorf("git commit failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	refspec := "HEAD:refs/heads/" + trunkBranch()
+	refspec := "HEAD:refs/heads/" + branch
 	if out, err := exec.Command("git", "push", "origin", refspec).CombinedOutput(); err != nil {
 		return fmt.Errorf("git push origin %s failed: %s: %w", refspec, strings.TrimSpace(string(out)), err)
 	}
@@ -379,8 +361,12 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		return err
 	}
 
+	trunk := cfg.TrunkBranch
+	if trunk == "" {
+		trunk = "main"
+	}
 	message := fmt.Sprintf("chore: record hotfix %s on %s [skip ci]", hotfixVersion, targetEnv)
-	if err := f.pusher.CommitAndPush(f.configPath, message); err != nil {
+	if err := f.pusher.CommitAndPush(f.configPath, trunk, message); err != nil {
 		return fmt.Errorf("committing hotfix state: %w", err)
 	}
 

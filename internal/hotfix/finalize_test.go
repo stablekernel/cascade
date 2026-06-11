@@ -37,11 +37,13 @@ func (s stubTagLister) ListTags() ([]string, error) { return s.tags, nil }
 type recordingPusher struct {
 	calls    int
 	messages []string
+	branches []string
 }
 
-func (r *recordingPusher) CommitAndPush(path, message string) error {
+func (r *recordingPusher) CommitAndPush(path, branch, message string) error {
 	r.calls++
 	r.messages = append(r.messages, message)
+	r.branches = append(r.branches, branch)
 	return nil
 }
 
@@ -359,6 +361,54 @@ func TestFinalize_Idempotent_Rerun(t *testing.T) {
 	}
 	if len(st2.Previous) != 1 {
 		t.Errorf("rerun double-snapshotted Previous: %d entries", len(st2.Previous))
+	}
+}
+
+// TestFinalize_StateWriteTargetsTrunkBranch guards that the manifest state write
+// targets the configured trunk branch, not the env branch the hotfix PR merged
+// into. The finalize job runs on the merged pull_request event whose base is
+// env/<target>, so deriving the push branch from the event would write state to
+// the wrong branch.
+func TestFinalize_StateWriteTargetsTrunkBranch(t *testing.T) {
+	newScratchRepo(t)
+	runGit(t, "branch", "-m", "trunk")
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cp")
+	runGit(t, "checkout", "trunk")
+
+	var b strings.Builder
+	b.WriteString("ci:\n  config:\n    trunk_branch: trunk\n    environments:\n")
+	for _, e := range []string{"dev", "test", "prod"} {
+		b.WriteString("      - " + e + "\n")
+	}
+	b.WriteString("  state:\n")
+	for _, e := range []string{"dev", "test", "prod"} {
+		sha := base
+		if e == "dev" {
+			sha = fix
+		}
+		b.WriteString("    " + e + ":\n      sha: " + sha + "\n      version: v1.4.0-rc.2\n")
+	}
+	path := filepath.Join(".", "manifest.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	pusher := &recordingPusher{}
+	f := newFinalizer(t, path,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(pusher),
+	)
+	if err := f.Finalize("test", merge, fix, base); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if len(pusher.branches) != 1 || pusher.branches[0] != "trunk" {
+		t.Errorf("state write branch = %v, want [trunk]", pusher.branches)
 	}
 }
 
