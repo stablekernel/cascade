@@ -1,0 +1,121 @@
+name: "Hotfix Stacked"
+description: |
+  Verifies that two sequential hotfixes applied to the same environment stack:
+  the second finalize appends to the existing patches slice rather than
+  replacing it, and carries the original base anchor forward. After both
+  hotfixes, test still tracks env/test and its patches slice contains both
+  recorded trunk commits.
+
+  The single-flight ordering rule (merge_pr before hotfix_merged, each preceded
+  by its hotfix_apply) is respected by the step order below.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev/test"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit the first trunk fix"
+    action: commit
+    commit:
+      message: "fix: first hotfix"
+      files:
+        src/fix1.go: |
+          package main
+          func fix1() {}
+
+  - name: "Plan first hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Apply first hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge the first hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize first hotfix; test diverges onto env/test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+
+  - name: "Commit the second trunk fix"
+    action: commit
+    commit:
+      message: "fix: second hotfix"
+      files:
+        src/fix2.go: |
+          package main
+          func fix2() {}
+
+  - name: "Plan second hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit3
+
+  - name: "Apply second hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit3
+
+  - name: "Merge the second hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  # The second finalize appends commit3 to the existing patches slice (which
+  # already holds commit2) and carries the original base anchor forward. The
+  # recorded fix_sha for each hotfix is the original trunk commit SHA, so both
+  # entries resolve via the execution context to commit2 and commit3.
+  - name: "Finalize second hotfix; patches stack on test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3]
