@@ -31,9 +31,25 @@ type EnvState struct {
 	Builds      map[string]*BuildState          `yaml:"builds,omitempty" json:"builds,omitempty"`
 	Deploys     map[string]*DeployState         `yaml:"deploys,omitempty" json:"deploys,omitempty"`
 	External    map[string]*ExternalDeployState `yaml:"external,omitempty" json:"external,omitempty"` // External repo deploy states
+	// Ref is the integration branch this environment tracks instead of trunk
+	// (e.g., a hotfix branch). Empty means the environment tracks trunk.
+	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	// BaseSHA is the trunk commit the integration branch diverged from.
+	BaseSHA string `yaml:"base_sha,omitempty" json:"base_sha,omitempty"`
+	// Patches lists the patch commit SHAs applied on top of BaseSHA.
+	Patches []string `yaml:"patches,omitempty" json:"patches,omitempty"`
 	// Previous is the reserved "roll back to N-1" ring (#23). Reserved-shape,
 	// optional: populated only if deterministic history-walking is wired later.
 	Previous []EnvStateSnapshot `yaml:"previous,omitempty" json:"previous,omitempty"`
+}
+
+// IsDiverged reports whether the environment is on an integration branch rather
+// than tracking trunk: true when it has a custom Ref or has Patches applied.
+func (s *EnvState) IsDiverged() bool {
+	if s == nil {
+		return false
+	}
+	return s.Ref != "" || len(s.Patches) > 0
 }
 
 // EnvStateSnapshot is a single prior env-state entry in the reserved rollback
