@@ -116,6 +116,23 @@ func (r *Runner) applySetup(ctx context.Context, setup *SetupState) error {
 	// Apply initial state
 	for env, state := range setup.State {
 		r.ctx.RecordState(env, state.SHA, state.Version)
+		// Stage integration-branch divergence when any divergence field is set.
+		// base_sha/patches may be commit references; resolve to literal SHAs.
+		if state.Ref != "" || state.BaseSHA != "" || len(state.Patches) > 0 || state.PreviousVersion != "" {
+			baseSHA := r.ctx.ResolveSHA(state.BaseSHA)
+			if baseSHA == "" {
+				baseSHA = state.BaseSHA
+			}
+			patches := make([]string, 0, len(state.Patches))
+			for _, p := range state.Patches {
+				if resolved := r.ctx.ResolveSHA(p); resolved != "" {
+					patches = append(patches, resolved)
+				} else {
+					patches = append(patches, p)
+				}
+			}
+			r.ctx.RecordStateDivergence(env, state.Ref, baseSHA, patches, state.PreviousVersion)
+		}
 	}
 
 	// Apply initial tags
@@ -192,6 +209,32 @@ func (r *Runner) materializeManifestState(ctx context.Context, state map[string]
 			entry["sha"] = s.SHA
 		case defaultSHA != "":
 			entry["sha"] = defaultSHA
+		}
+		// Stage integration-branch divergence into the manifest using the
+		// product's exact yaml tags (ref/base_sha/patches), so a diverged env
+		// exists without a full hotfix run. base_sha/patches may be commit
+		// references; resolve to literal SHAs. There is no previous_version
+		// manifest key, so PreviousVersion is harness-side only.
+		if s.Ref != "" {
+			entry["ref"] = s.Ref
+		}
+		if s.BaseSHA != "" {
+			base := r.ctx.ResolveSHA(s.BaseSHA)
+			if base == "" {
+				base = s.BaseSHA
+			}
+			entry["base_sha"] = base
+		}
+		if len(s.Patches) > 0 {
+			patches := make([]string, 0, len(s.Patches))
+			for _, p := range s.Patches {
+				if resolved := r.ctx.ResolveSHA(p); resolved != "" {
+					patches = append(patches, resolved)
+				} else {
+					patches = append(patches, p)
+				}
+			}
+			entry["patches"] = patches
 		}
 		stateMap[env] = entry
 	}
@@ -416,6 +459,12 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 		inputs = map[string]string{
 			"mode": mode,
 		}
+		if promote.Force {
+			// Workflow input is named "force" (env PROMOTION_FORCE), forwarded to
+			// the CLI's --force flag. Only meaningful for default-mode promotions;
+			// it bypasses the no-op promotion guard.
+			inputs["force"] = "true"
+		}
 		if promote.AllowBreaking {
 			// Workflow input is named allow_breaking_changes (see internal/generate
 			// promote.go); the workflow forwards it to the CLI's --allow-breaking
@@ -550,6 +599,13 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 			Deploys map[string]struct {
 				SHA string `yaml:"sha"`
 			} `yaml:"deploys"`
+			// Divergence fields written by the real hotfix finalize step. Tags
+			// match the product's config.EnvState (ref/base_sha/patches). The
+			// product has no previous_version manifest key, so divergence's
+			// PreviousVersion is left unset on sync.
+			Ref     string   `yaml:"ref"`
+			BaseSHA string   `yaml:"base_sha"`
+			Patches []string `yaml:"patches"`
 		} `yaml:"state"`
 		// LatestRelease is the single-environment Release workflow's published
 		// pointer (ci.latest_release). Single-env repos publish via the Release
@@ -580,6 +636,15 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	for env, state := range ciData.State {
 		r.ctx.RecordState(env, state.SHA, state.Version)
 		r.t.Logf("  Synced state[%s] = %s @ %s", env, truncateSHA(state.SHA), state.Version)
+
+		// Record integration-branch divergence so divergence assertions can see
+		// a hotfixed environment. PreviousVersion has no manifest key (the
+		// product tracks prior versions separately), so it stays empty here.
+		if state.Ref != "" || state.BaseSHA != "" || len(state.Patches) > 0 {
+			r.ctx.RecordStateDivergence(env, state.Ref, state.BaseSHA, state.Patches, "")
+			r.t.Logf("  Synced state[%s] divergence ref=%s base=%s patches=%d",
+				env, state.Ref, truncateSHA(state.BaseSHA), len(state.Patches))
+		}
 
 		// Also record per-deploy state
 		for deployName, deployState := range state.Deploys {
