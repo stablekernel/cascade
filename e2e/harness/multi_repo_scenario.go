@@ -213,60 +213,7 @@ func (r *MultiRepoRunner) createRepo(ctx context.Context, name string, scenario 
 	r.varStore[name+".head_sha"] = repoCtx.HeadSHA
 	r.varStore[name+".name"] = name
 
-	// Load initial external state from manifest into ExecutionContext
-	r.loadInitialExternalState(repoCtx, scenario.Manifest)
-
 	return nil
-}
-
-// loadInitialExternalState loads external state from manifest into ExecutionContext
-func (r *MultiRepoRunner) loadInitialExternalState(repoCtx *RepoContext, manifest map[string]interface{}) {
-	if manifest == nil {
-		return
-	}
-
-	// Navigate to state key (could be at root or under "ci")
-	state, ok := manifest["state"].(map[string]interface{})
-	if !ok {
-		// Try nested under ci
-		if ci, ok := manifest["ci"].(map[string]interface{}); ok {
-			state, ok = ci["state"].(map[string]interface{})
-			if !ok {
-				return
-			}
-		} else {
-			return
-		}
-	}
-
-	// For each environment in state
-	for envName, envState := range state {
-		envMap, ok := envState.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Check for external state
-		external, ok := envMap["external"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Record each external deploy state
-		for deployName, deployState := range external {
-			deployMap, ok := deployState.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			sha, _ := deployMap["sha"].(string)
-			version, _ := deployMap["version"].(string)
-
-			if sha != "" || version != "" {
-				repoCtx.ExecCtx.RecordExternalDeployState(envName, deployName, sha, version)
-			}
-		}
-	}
 }
 
 // RunSteps executes all steps in the scenario
@@ -386,7 +333,7 @@ func (r *MultiRepoRunner) runDispatchStep(ctx context.Context, step ScenarioStep
 		inputs[k] = r.interpolate(v)
 	}
 
-	return r.harness.SimulateCrossRepoDispatch(ctx, step.Repo, step.Dispatch.TargetRepo, step.Dispatch.Workflow, inputs)
+	return r.harness.RealCrossRepoDispatch(ctx, step.Repo, step.Dispatch.TargetRepo, step.Dispatch.Workflow, inputs)
 }
 
 // runTagStep creates a tag in the specified repo
@@ -446,6 +393,18 @@ func (r *MultiRepoRunner) simulateWorkflow(ctx context.Context, repoName, workfl
 
 // AssertFinal runs final assertions after all steps complete
 func (r *MultiRepoRunner) AssertFinal(ctx context.Context) error {
+	// For every notifying satellite, assert its generated orchestrate.yaml
+	// carries the real Notify step that dispatches the primary's external-update
+	// workflow. This asserts the notify CONTENT; the live cross-repo dispatch is
+	// a documented gitea no-op and is bridged by RealCrossRepoDispatch.
+	for name, repoCtx := range r.harness.repos {
+		if repoCtx.Config != nil && repoCtx.Config.Notify != nil {
+			if err := r.harness.RunSatelliteOrchestrateAndAssertNotify(ctx, name); err != nil {
+				return fmt.Errorf("notify-content assertion failed for %s: %w", name, err)
+			}
+		}
+	}
+
 	for repoName, expect := range r.scenario.Expect.Repos {
 		// Check tags
 		if len(expect.Tags) > 0 {
@@ -479,12 +438,20 @@ func (r *MultiRepoRunner) AssertFinal(ctx context.Context) error {
 	return nil
 }
 
-// assertState checks expected state - uses ExecutionContext for external state
-// since we're simulating dispatch without actual workflow execution
+// assertState checks expected external state against the REAL manifest in
+// gitea. The `cascade external update` verb (driven under act by
+// RealCrossRepoDispatch) commits ci.state.<env>.external.<name> back to the
+// primary repo, so the source of truth is the committed .github/manifest.yaml,
+// not an in-process ExecutionContext.
 func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expected map[string]interface{}) error {
 	repo := r.harness.GetRepo(repoName)
 	if repo == nil {
 		return fmt.Errorf("repo %s not found", repoName)
+	}
+
+	state, err := r.readManifestState(ctx, repoName)
+	if err != nil {
+		return err
 	}
 
 	// For each environment in expected state
@@ -494,41 +461,103 @@ func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expe
 			continue
 		}
 
-		// Check external state from ExecutionContext (simulated dispatch)
-		if externalExpected, ok := envMap["external"].(map[string]interface{}); ok {
-			for deployName, deployExpected := range externalExpected {
-				deployMap, ok := deployExpected.(map[string]interface{})
-				if !ok {
-					continue
-				}
+		externalExpected, ok := envMap["external"].(map[string]interface{})
+		if !ok {
+			continue
+		}
 
-				actual := repo.ExecCtx.GetExternalDeployState(envName, deployName)
-				if actual == nil {
-					return fmt.Errorf("%s.external.%s: no state recorded", envName, deployName)
-				}
+		envState := mapAt(state, envName)
+		externalState := mapAt(envState, "external")
 
-				// Check SHA if expected
-				if expectedSHA, ok := deployMap["sha"].(string); ok {
-					expectedSHA = r.interpolate(expectedSHA)
-					if actual.SHA != expectedSHA {
-						return fmt.Errorf("%s.external.%s.sha: expected %s, got %s",
-							envName, deployName, expectedSHA, actual.SHA)
-					}
-				}
+		for deployName, deployExpected := range externalExpected {
+			deployMap, ok := deployExpected.(map[string]interface{})
+			if !ok {
+				continue
+			}
 
-				// Check version if expected
-				if expectedVersion, ok := deployMap["version"].(string); ok {
-					expectedVersion = r.interpolate(expectedVersion)
-					if actual.Version != expectedVersion {
-						return fmt.Errorf("%s.external.%s.version: expected %s, got %s",
-							envName, deployName, expectedVersion, actual.Version)
-					}
+			actual := mapAt(externalState, deployName)
+			if actual == nil {
+				return fmt.Errorf("%s.external.%s: no state recorded in manifest", envName, deployName)
+			}
+
+			if expectedSHA, ok := deployMap["sha"].(string); ok {
+				expectedSHA = r.interpolate(expectedSHA)
+				if got := stringAt(actual, "sha"); got != expectedSHA {
+					return fmt.Errorf("%s.external.%s.sha: expected %s, got %s",
+						envName, deployName, expectedSHA, got)
+				}
+			}
+
+			if expectedVersion, ok := deployMap["version"].(string); ok {
+				expectedVersion = r.interpolate(expectedVersion)
+				if got := stringAt(actual, "version"); got != expectedVersion {
+					return fmt.Errorf("%s.external.%s.version: expected %s, got %s",
+						envName, deployName, expectedVersion, got)
 				}
 			}
 		}
 	}
 
 	return nil
+}
+
+// readManifestState reads the repo's committed .github/manifest.yaml from gitea
+// and returns the ci.state map (env -> env-state). It returns an empty map (not
+// an error) when no state has been written yet.
+func (r *MultiRepoRunner) readManifestState(ctx context.Context, repoName string) (map[string]interface{}, error) {
+	content, err := r.harness.GetFileContentInRepo(ctx, repoName, ".github/manifest.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest for %s: %w", repoName, err)
+	}
+
+	var manifest map[string]interface{}
+	if err := yaml.Unmarshal([]byte(content), &manifest); err != nil {
+		return nil, fmt.Errorf("parsing manifest for %s: %w", repoName, err)
+	}
+
+	ci := mapAt(manifest, "ci")
+	if ci == nil {
+		return map[string]interface{}{}, nil
+	}
+	state := mapAt(ci, "state")
+	if state == nil {
+		return map[string]interface{}{}, nil
+	}
+	return state, nil
+}
+
+// mapAt returns m[key] coerced to a map[string]interface{}, or nil. It tolerates
+// the map[interface{}]interface{} shape that gopkg.in/yaml.v3 can still produce
+// for deeply nested untyped documents.
+func mapAt(m map[string]interface{}, key string) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	switch v := m[key].(type) {
+	case map[string]interface{}:
+		return v
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for k, val := range v {
+			if ks, ok := k.(string); ok {
+				out[ks] = val
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// stringAt returns m[key] as a string, or "".
+func stringAt(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	if s, ok := m[key].(string); ok {
+		return s
+	}
+	return ""
 }
 
 // interpolate replaces ${var} patterns with stored values

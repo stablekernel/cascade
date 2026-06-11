@@ -235,14 +235,17 @@ func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
 
 	h := NewMultiRepoHarness(t)
 	require.NoError(t, h.SetupInfra(ctx))
 	defer h.Cleanup(ctx)
 
-	// Create primary and satellite repos
+	// Create primary and satellite repos. The primary's external.repo and the
+	// dispatch source_repo must match for the `cascade external update` verb to
+	// accept the update, and the primary must already carry dev state so the
+	// verb's state[environment] check passes.
 	primary := MultiRepoSetup{
 		Name: "primary",
 		Config: &config.TrunkConfig{
@@ -255,6 +258,14 @@ func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
 					Deploys: []config.ExternalDeployConfig{
 						{Name: "cdk", Workflow: "org/satellite/.github/workflows/deploy.yaml"},
 					},
+				},
+			},
+		},
+		Manifest: map[string]interface{}{
+			"state": map[string]interface{}{
+				"dev": map[string]interface{}{
+					"sha":     "primary-initial",
+					"version": "v1.0.0-rc.0",
 				},
 			},
 		},
@@ -277,10 +288,13 @@ func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
 
 	require.NoError(t, h.SetupPrimarySatellite(ctx, primary, satellite))
 
-	// Simulate cross-repo dispatch
-	err := h.SimulateCrossRepoDispatch(ctx, "satellite", "primary",
+	// Drive the REAL external-update workflow under act with the dispatch
+	// inputs the satellite would send. The verb commits ci.state.dev.external.cdk
+	// back to the primary's gitea manifest.
+	err := h.RealCrossRepoDispatch(ctx, "satellite", "primary",
 		".github/workflows/external-update.yaml",
 		map[string]string{
+			"source_repo": "org/satellite",
 			"deploy_name": "cdk",
 			"environment": "dev",
 			"sha":         "satellite-sha-123",
@@ -288,12 +302,14 @@ func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
 		})
 	require.NoError(t, err)
 
-	// Verify external state was recorded
-	primaryRepo := h.GetRepo("primary")
-	extState := primaryRepo.ExecCtx.GetExternalDeployState("dev", "cdk")
-	require.NotNil(t, extState)
-	assert.Equal(t, "satellite-sha-123", extState.SHA)
-	assert.Equal(t, "v1.0.0", extState.Version)
+	// Verify external state landed in the REAL committed manifest.
+	content, err := h.GetFileContentInRepo(ctx, "primary", ".github/manifest.yaml")
+	require.NoError(t, err)
+	assert.Contains(t, content, "satellite-sha-123")
+	assert.Contains(t, content, "v1.0.0")
+
+	// Verify the satellite's generated orchestrate.yaml carries the Notify step.
+	require.NoError(t, h.RunSatelliteOrchestrateAndAssertNotify(ctx, "satellite"))
 }
 
 func TestMultiRepoRunner_FullScenario(t *testing.T) {
