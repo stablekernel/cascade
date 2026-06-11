@@ -3,6 +3,7 @@ package harness
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -128,6 +129,49 @@ func (a *ActRunner) Terminate(ctx context.Context) error {
 // RunOpts.EventJSON is set. act reads it via its -e flag to seed the
 // github.event context (e.g. a merged pull_request payload).
 const eventFilePath = "/tmp/cascade-event.json"
+
+// dispatchInputsEventJSON builds a minimal workflow_dispatch event payload that
+// embeds the run's inputs under the top-level "inputs" key, e.g.
+//
+//	{"inputs":{"commit":"<sha>","dry_run":"true","target_env":"test"}}
+//
+// act seeds the github.event.inputs context from the -e event file, but does NOT
+// reliably populate it from --input flags alone when --detect-event is set and no
+// event file carries an inputs key. A job gated on
+// github.event.inputs.dry_run (e.g. the hotfix apply job) therefore evaluates its
+// if: against an empty value and runs when it should be skipped. Writing this
+// payload as the event file makes github.event.inputs authoritative regardless of
+// act's --input handling.
+//
+// It returns "" when inputs is empty (no payload needed) or when marshaling fails
+// (caller falls back to the --input-only behavior). The map is encoded by
+// encoding/json, which emits keys in sorted order, so the output is deterministic.
+func dispatchInputsEventJSON(inputs map[string]string) string {
+	if len(inputs) == 0 {
+		return ""
+	}
+	payload := map[string]map[string]string{"inputs": inputs}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+// resolveEventJSON picks the event payload act should be pointed at for a run. An
+// explicitly supplied opts.EventJSON always wins (e.g. a merged pull_request
+// payload). Otherwise, for a workflow_dispatch carrying inputs, it synthesizes a
+// payload via dispatchInputsEventJSON so github.event.inputs is seeded. All other
+// runs get "" (no event file).
+func resolveEventJSON(opts RunOpts) string {
+	if opts.EventJSON != "" {
+		return opts.EventJSON
+	}
+	if opts.Event == "workflow_dispatch" {
+		return dispatchInputsEventJSON(opts.Inputs)
+	}
+	return ""
+}
 
 // writeEventFile writes the run's EventJSON payload to eventFilePath inside the
 // act container via CopyToContainer. It is a no-op (returning "" with no error)
@@ -271,11 +315,14 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 	if a.networkName != "" {
 		network = a.networkName
 	}
-	// When an event payload is supplied, write it into the container so
-	// buildActArgs can append the act -e flag pointing at it. This seeds the
-	// github.event context (e.g. the merged pull_request payload that drives the
-	// hotfix context/build/deploy/finalize jobs).
-	eventPath, err := a.writeEventFile(ctx, opts.EventJSON)
+	// Resolve the event payload to point act at. An explicit opts.EventJSON wins
+	// (e.g. the merged pull_request payload that drives the hotfix
+	// context/build/deploy/finalize jobs). For a workflow_dispatch carrying
+	// inputs, we synthesize a payload embedding those inputs so
+	// github.event.inputs is seeded; act does not reliably populate that context
+	// from --input flags alone, so a job gated on github.event.inputs (e.g. the
+	// hotfix apply job's dry_run check) would otherwise mis-evaluate its if:.
+	eventPath, err := a.writeEventFile(ctx, resolveEventJSON(opts))
 	if err != nil {
 		return nil, err
 	}

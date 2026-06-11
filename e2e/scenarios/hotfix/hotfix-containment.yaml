@@ -60,6 +60,10 @@ steps:
     hotfix_plan:
       target_env: test
       commit_ref: commit2
+      # Plan only: the harness's hotfix_apply step performs the real cherry-pick
+      # and PR via the gitea API. Running the workflow's apply job here would call
+      # the GitHub gh CLI, which is absent from the act runner image.
+      dry_run: true
 
   - name: "Apply hotfix onto env/test"
     action: hotfix_apply

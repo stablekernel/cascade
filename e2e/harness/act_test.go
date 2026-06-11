@@ -140,6 +140,99 @@ func TestBuildActArgs_EventFlag(t *testing.T) {
 	}
 }
 
+// TestDispatchInputsEventJSON verifies the synthesized workflow_dispatch payload
+// embeds the run's inputs under a top-level "inputs" key (the shape act reads to
+// seed github.event.inputs) and is empty when there are no inputs.
+func TestDispatchInputsEventJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		inputs map[string]string
+		want   string
+	}{
+		{
+			name:   "no inputs yields empty payload",
+			inputs: nil,
+			want:   "",
+		},
+		{
+			name:   "empty map yields empty payload",
+			inputs: map[string]string{},
+			want:   "",
+		},
+		{
+			name: "hotfix dry-run inputs are embedded under inputs key (keys sorted)",
+			inputs: map[string]string{
+				"commit":     "abc123",
+				"target_env": "test",
+				"dry_run":    "true",
+			},
+			want: `{"inputs":{"commit":"abc123","dry_run":"true","target_env":"test"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, dispatchInputsEventJSON(tt.inputs))
+		})
+	}
+}
+
+// TestResolveEventJSON verifies an explicit EventJSON always wins, a
+// workflow_dispatch with inputs synthesizes the inputs payload, and all other
+// runs resolve to no event file.
+func TestResolveEventJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts RunOpts
+		want string
+	}{
+		{
+			name: "explicit event json wins over synthesized payload",
+			opts: RunOpts{
+				Event:     "workflow_dispatch",
+				EventJSON: `{"action":"closed"}`,
+				Inputs:    map[string]string{"dry_run": "true"},
+			},
+			want: `{"action":"closed"}`,
+		},
+		{
+			name: "workflow_dispatch with inputs synthesizes inputs payload",
+			opts: RunOpts{
+				Event:  "workflow_dispatch",
+				Inputs: map[string]string{"dry_run": "true", "target_env": "test"},
+			},
+			want: `{"inputs":{"dry_run":"true","target_env":"test"}}`,
+		},
+		{
+			name: "workflow_dispatch without inputs yields no event file",
+			opts: RunOpts{Event: "workflow_dispatch"},
+			want: "",
+		},
+		{
+			name: "non-dispatch event without explicit json yields no event file",
+			opts: RunOpts{
+				Event:  "push",
+				Inputs: map[string]string{"dry_run": "true"},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, resolveEventJSON(tt.opts))
+		})
+	}
+}
+
 func TestNormalizeWorkflowResult(t *testing.T) {
 	t.Parallel()
 
