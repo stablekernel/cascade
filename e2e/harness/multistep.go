@@ -65,6 +65,10 @@ type Step struct {
 	// HotfixMerged configures a "hotfix_merged" action: replay the merged
 	// pull_request event so the context/build/deploy/finalize jobs run.
 	HotfixMerged *HotfixMergedStep `yaml:"hotfix_merged,omitempty"`
+	// StageDivergence configures a "stage_divergence" action: overwrite an
+	// environment's divergence fields in the live manifest mid-scenario without
+	// running any workflow.
+	StageDivergence *StageDivergenceStep `yaml:"stage_divergence,omitempty"`
 	// ExpectFailure marks a step whose workflow is expected to conclude in
 	// failure (for example an orchestrate run whose build exits non-zero). When
 	// set, a failure conclusion is the success path and a success conclusion is
@@ -108,6 +112,21 @@ type ResolveConflictStep struct {
 // pull_request event for the recorded hotfix PR of TargetEnv.
 type HotfixMergedStep struct {
 	TargetEnv string `yaml:"target_env"`
+}
+
+// StageDivergenceStep defines a stage_divergence action: it rewrites the
+// divergence fields (ref/base_sha/patches) for Env directly in the live
+// manifest, then records the same divergence in the execution context. No
+// workflow runs. Ref/BaseSHA/Patches entries may be commit references (resolved
+// via the execution context) or literal SHAs. Used to re-wire a diverged env's
+// patch set to an off-trunk SHA so a later promote exercises the
+// patch-containment guard.
+type StageDivergenceStep struct {
+	Env             string   `yaml:"env"`
+	Ref             string   `yaml:"ref,omitempty"`
+	BaseSHA         string   `yaml:"base_sha,omitempty"`
+	Patches         []string `yaml:"patches,omitempty"`
+	PreviousVersion string   `yaml:"previous_version,omitempty"`
 }
 
 // CommitStep defines a commit action

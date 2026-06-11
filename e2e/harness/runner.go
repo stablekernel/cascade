@@ -107,6 +107,13 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.HotfixMerged.TargetEnv == "" {
 				return fmt.Errorf("step %d (%s): hotfix_merged requires target_env", i, step.Name)
 			}
+		case "stage_divergence":
+			if step.StageDivergence == nil {
+				return fmt.Errorf("step %d (%s): stage_divergence action requires stage_divergence config", i, step.Name)
+			}
+			if step.StageDivergence.Env == "" {
+				return fmt.Errorf("step %d (%s): stage_divergence requires env", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -337,6 +344,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeResolveConflict(ctx, step.ResolveConflict)
 	case "hotfix_merged":
 		return r.executeHotfixMerged(ctx, step.HotfixMerged, config)
+	case "stage_divergence":
+		return r.executeStageDivergence(ctx, step.StageDivergence)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -364,6 +373,49 @@ func (r *Runner) executeCommit(ctx context.Context, commit *CommitStep) error {
 		r.ctx.RecordCommitMessage(sha, commit.Message)
 	}
 
+	return nil
+}
+
+// executeStageDivergence rewrites an environment's divergence fields directly in
+// the live manifest (via materializeManifestState) and records the same
+// divergence in the execution context. No workflow runs. Ref/BaseSHA/Patches
+// entries may be commit references (resolved via the execution context) or
+// literal SHAs. This lets a scenario re-wire a diverged env's patch set to an
+// off-trunk SHA so a later promote exercises the patch-containment guard at the
+// e2e level.
+func (r *Runner) executeStageDivergence(ctx context.Context, step *StageDivergenceStep) error {
+	setup := map[string]*EnvStateSetup{
+		step.Env: {
+			Ref:             step.Ref,
+			BaseSHA:         step.BaseSHA,
+			Patches:         step.Patches,
+			PreviousVersion: step.PreviousVersion,
+		},
+	}
+
+	if r.harness != nil && r.harness.gitea != nil && r.harness.repo != nil {
+		if err := r.materializeManifestState(ctx, setup); err != nil {
+			return fmt.Errorf("stage_divergence: %w", err)
+		}
+	}
+
+	// Mirror the staged divergence into the execution context, resolving any
+	// commit references to literal SHAs the same way applySetup does.
+	baseSHA := r.ctx.ResolveSHA(step.BaseSHA)
+	if baseSHA == "" {
+		baseSHA = step.BaseSHA
+	}
+	patches := make([]string, 0, len(step.Patches))
+	for _, p := range step.Patches {
+		if resolved := r.ctx.ResolveSHA(p); resolved != "" {
+			patches = append(patches, resolved)
+		} else {
+			patches = append(patches, p)
+		}
+	}
+	r.ctx.RecordStateDivergence(step.Env, step.Ref, baseSHA, patches, step.PreviousVersion)
+	r.t.Logf("  StageDivergence: env=%s ref=%s base=%s patches=%d",
+		step.Env, step.Ref, truncateSHA(baseSHA), len(patches))
 	return nil
 }
 

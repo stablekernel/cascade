@@ -218,6 +218,20 @@ func TestValidateScenarioHotfixActions(t *testing.T) {
 			step:    Step{Name: "h", Action: "hotfix_merged", HotfixMerged: &HotfixMergedStep{}},
 			wantErr: "requires target_env",
 		},
+		{
+			name: "stage_divergence valid",
+			step: Step{Name: "s", Action: "stage_divergence", StageDivergence: &StageDivergenceStep{Env: "test", Patches: []string{"hotfix_head"}}},
+		},
+		{
+			name:    "stage_divergence missing config",
+			step:    Step{Name: "s", Action: "stage_divergence"},
+			wantErr: "requires stage_divergence config",
+		},
+		{
+			name:    "stage_divergence missing env",
+			step:    Step{Name: "s", Action: "stage_divergence", StageDivergence: &StageDivergenceStep{Patches: []string{"x"}}},
+			wantErr: "requires env",
+		},
 	}
 
 	for _, tt := range tests {
@@ -303,6 +317,55 @@ func TestRunnerHotfixActionsNoHarness(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+// TestRunnerStageDivergenceNoHarness verifies stage_divergence records the
+// divergence into the execution context (resolving commit references to literal
+// SHAs) without a harness, and that the manifest write is skipped in that mode.
+func TestRunnerStageDivergenceNoHarness(t *testing.T) {
+	r := NewRunner(t, nil)
+	r.ctx.RecordCommit("commit1", "base0000")
+	r.ctx.RecordCommit("hotfix_head", "offtrunk9999")
+
+	err := r.executeStageDivergence(context.Background(), &StageDivergenceStep{
+		Env:     "test",
+		Ref:     "env/test",
+		BaseSHA: "commit1",
+		Patches: []string{"hotfix_head", "literalsha"},
+	})
+	require.NoError(t, err)
+
+	st := r.ctx.GetState("test")
+	assert.Equal(t, "env/test", st.Ref)
+	assert.Equal(t, "base0000", st.BaseSHA)                             // resolved from commit1
+	assert.Equal(t, []string{"offtrunk9999", "literalsha"}, st.Patches) // hotfix_head resolved, literal kept
+}
+
+// TestParseStageDivergenceStep verifies the stage_divergence step unmarshals
+// into the expected struct fields.
+func TestParseStageDivergenceStep(t *testing.T) {
+	yamlDoc := `
+name: "Stage divergence"
+config:
+  environments: [dev, test]
+steps:
+  - name: "Stage"
+    action: stage_divergence
+    stage_divergence:
+      env: test
+      ref: "env/test"
+      base_sha: commit1
+      patches: [hotfix_head]
+`
+	s, err := ParseMultiStepScenario([]byte(yamlDoc))
+	require.NoError(t, err)
+	require.Len(t, s.Steps, 1)
+	sd := s.Steps[0].StageDivergence
+	require.NotNil(t, sd)
+	assert.Equal(t, "test", sd.Env)
+	assert.Equal(t, "env/test", sd.Ref)
+	assert.Equal(t, "commit1", sd.BaseSHA)
+	assert.Equal(t, []string{"hotfix_head"}, sd.Patches)
 }
 
 // TestRunnerStateDivergenceSetupNoHarness verifies applySetup records divergence

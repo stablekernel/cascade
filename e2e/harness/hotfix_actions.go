@@ -258,6 +258,18 @@ func (r *Runner) executeMergePR(ctx context.Context, step *MergePRStep) error {
 	if err := r.harness.gitea.MergePR(ctx, r.harness.repo, index, "squash"); err != nil {
 		return fmt.Errorf("merge PR #%d: %w", index, err)
 	}
+
+	// Record the post-merge env branch tip as "hotfix_head". The squash merge
+	// produces a commit that lives only on env/<env>; trunk never merges that
+	// branch back, so this SHA is not an ancestor of any trunk commit. Scenarios
+	// reference it as an off-trunk patch to exercise the patch-containment guard.
+	if r.lastHotfixEnv != "" {
+		envBranch := "env/" + r.lastHotfixEnv
+		if branchSHA, err := r.harness.gitea.GetBranchSHA(ctx, r.harness.repo, envBranch); err == nil {
+			r.ctx.RecordCommit("hotfix_head", branchSHA)
+			r.t.Logf("  MergePR: recorded hotfix_head=%s (post-merge env/%s tip)", truncateSHA(branchSHA), r.lastHotfixEnv)
+		}
+	}
 	return nil
 }
 
