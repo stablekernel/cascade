@@ -29,7 +29,7 @@ on:
       parallel:
         description: 'Subtest parallelism (lower = slower but more reliable)'
         required: false
-        default: '2'
+        default: '1'
 
 permissions:
   contents: read
@@ -76,8 +76,10 @@ jobs:
           # RAM. Each scenario spins up gitea + act + N job containers; at
           # the default GOMAXPROCS=4, four scenarios concurrently exhaust
           # memory and the test process is OOM-killed (silent FAIL with no
-          # per-test output, see #104).
-          E2E_PARALLEL: ${{ github.event.inputs.parallel || '2' }}
+          # per-test output, see #104). Even at 2 the concurrent container
+          # load throttles gitea and destabilises act runs, so the default is
+          # serial (1); raise it per-dispatch only when chasing wall-clock.
+          E2E_PARALLEL: ${{ github.event.inputs.parallel || '1' }}
         run: |
           go test -v \
             -timeout "$E2E_TIMEOUT" \

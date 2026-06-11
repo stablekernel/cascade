@@ -183,6 +183,26 @@ func (g *GiteaContainer) Container() testcontainers.Container {
 	return g.container
 }
 
+// newJSONRequest builds an authenticated gitea API request carrying the given
+// JSON body. It is the request factory passed to doRetry: each call returns a
+// fresh *http.Request with an unread body so a throttled call can be replayed.
+// A nil body produces a request with no payload (used for GET/DELETE).
+func (g *GiteaContainer) newJSONRequest(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	if err != nil {
+		return nil, fmt.Errorf("build %s request: %w", method, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.SetBasicAuth(AdminUsername, AdminPassword)
+	return req, nil
+}
+
 // Terminate stops and removes the container
 func (g *GiteaContainer) Terminate(ctx context.Context) error {
 	return g.container.Terminate(ctx)
@@ -296,16 +316,10 @@ func (g *GiteaContainer) CreateCommitOnBranch(ctx context.Context, repo *Repo, b
 		return "", fmt.Errorf("marshal change-files payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/api/v1/repos/%s/%s/contents", g.url, AdminUsername, repo.Name),
-		bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("build change-files request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(AdminUsername, AdminPassword)
-
-	resp, err := http.DefaultClient.Do(req)
+	url := fmt.Sprintf("%s/api/v1/repos/%s/%s/contents", g.url, AdminUsername, repo.Name)
+	resp, err := doRetry(ctx, func() (*http.Request, error) {
+		return g.newJSONRequest(ctx, "POST", url, body)
+	})
 	if err != nil {
 		return "", fmt.Errorf("change-files request: %w", err)
 	}
@@ -410,16 +424,10 @@ func (g *GiteaContainer) CreateBranch(ctx context.Context, repo *Repo, name, fro
 		return fmt.Errorf("marshal create-branch payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/api/v1/repos/%s/%s/branches", g.url, AdminUsername, repo.Name),
-		bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build create-branch request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(AdminUsername, AdminPassword)
-
-	resp, err := http.DefaultClient.Do(req)
+	url := fmt.Sprintf("%s/api/v1/repos/%s/%s/branches", g.url, AdminUsername, repo.Name)
+	resp, err := doRetry(ctx, func() (*http.Request, error) {
+		return g.newJSONRequest(ctx, "POST", url, body)
+	})
 	if err != nil {
 		return fmt.Errorf("create-branch request: %w", err)
 	}
@@ -700,16 +708,10 @@ func (g *GiteaContainer) CreatePR(ctx context.Context, repo *Repo, head, base, t
 		return 0, fmt.Errorf("marshal create-pr payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/api/v1/repos/%s/%s/pulls", g.url, AdminUsername, repo.Name),
-		bytes.NewReader(reqBody))
-	if err != nil {
-		return 0, fmt.Errorf("build create-pr request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(AdminUsername, AdminPassword)
-
-	resp, err := http.DefaultClient.Do(req)
+	url := fmt.Sprintf("%s/api/v1/repos/%s/%s/pulls", g.url, AdminUsername, repo.Name)
+	resp, err := doRetry(ctx, func() (*http.Request, error) {
+		return g.newJSONRequest(ctx, "POST", url, reqBody)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("create-pr request: %w", err)
 	}
@@ -812,16 +814,10 @@ func (g *GiteaContainer) createLabel(ctx context.Context, repo *Repo, name strin
 		return 0, fmt.Errorf("marshal create-label payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/api/v1/repos/%s/%s/labels", g.url, AdminUsername, repo.Name),
-		bytes.NewReader(body))
-	if err != nil {
-		return 0, fmt.Errorf("build create-label request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(AdminUsername, AdminPassword)
-
-	resp, err := http.DefaultClient.Do(req)
+	url := fmt.Sprintf("%s/api/v1/repos/%s/%s/labels", g.url, AdminUsername, repo.Name)
+	resp, err := doRetry(ctx, func() (*http.Request, error) {
+		return g.newJSONRequest(ctx, "POST", url, body)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("create-label request: %w", err)
 	}
@@ -852,16 +848,10 @@ func (g *GiteaContainer) applyLabels(ctx context.Context, repo *Repo, index int6
 		return fmt.Errorf("marshal apply-labels payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d/labels", g.url, AdminUsername, repo.Name, index),
-		bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build apply-labels request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(AdminUsername, AdminPassword)
-
-	resp, err := http.DefaultClient.Do(req)
+	url := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d/labels", g.url, AdminUsername, repo.Name, index)
+	resp, err := doRetry(ctx, func() (*http.Request, error) {
+		return g.newJSONRequest(ctx, "POST", url, body)
+	})
 	if err != nil {
 		return fmt.Errorf("apply-labels request: %w", err)
 	}
@@ -893,16 +883,14 @@ func (g *GiteaContainer) MergePR(ctx context.Context, repo *Repo, index int64, s
 		return fmt.Errorf("marshal merge-pr payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/api/v1/repos/%s/%s/pulls/%d/merge", g.url, AdminUsername, repo.Name, index),
-		bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build merge-pr request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(AdminUsername, AdminPassword)
-
-	resp, err := http.DefaultClient.Do(req)
+	// The merge POST is the call most exposed to gitea's "Please try again
+	// later" throttle under load, so it is wrapped in the bounded transient
+	// retry. The retry is safe: gitea returns the 405 throttle BEFORE applying
+	// the merge, so a re-issue cannot double-merge.
+	url := fmt.Sprintf("%s/api/v1/repos/%s/%s/pulls/%d/merge", g.url, AdminUsername, repo.Name, index)
+	resp, err := doRetry(ctx, func() (*http.Request, error) {
+		return g.newJSONRequest(ctx, "POST", url, body)
+	})
 	if err != nil {
 		return fmt.Errorf("merge-pr request: %w", err)
 	}
