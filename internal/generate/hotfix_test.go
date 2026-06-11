@@ -563,3 +563,23 @@ func TestHotfixGenerator_ApplyMaterializesAbsentEnvBranch(t *testing.T) {
 	assert.Contains(t, applyJob, `git push origin "${BASE_SHA}:refs/heads/env/${TARGET_ENV}"`,
 		"apply job must push env/<env> at BASE_SHA when it is absent")
 }
+
+// TestHotfixGenerator_ApplySkippedOnNoOp guards that the apply job does not run
+// when the planner reports a no-op (the fix is already contained in the target
+// state SHA): there is nothing to cherry-pick, and attempting one would fail.
+// The gate depends on the plan job exposing no_op as a job output.
+func TestHotfixGenerator_ApplySkippedOnNoOp(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	planJob := extractJobSection(t, content, "plan:")
+	require.NotEmpty(t, planJob, "plan job section should be present")
+	assert.Contains(t, planJob, "no_op: ${{ steps.plan.outputs.no_op }}",
+		"plan job must expose no_op so the apply job can gate on it")
+
+	applyJob := extractJobSection(t, content, "apply:")
+	require.NotEmpty(t, applyJob, "apply job section should be present")
+	assert.Contains(t, applyJob, "needs.plan.outputs.no_op != 'true'",
+		"apply job must skip when the plan reports a no-op")
+}

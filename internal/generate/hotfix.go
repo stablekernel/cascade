@@ -185,6 +185,7 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("      base_sha: ${{ steps.plan.outputs.base_sha }}\n")
 	sb.WriteString("      hotfix_version_candidate: ${{ steps.plan.outputs.hotfix_version_candidate }}\n")
 	sb.WriteString("      conflict_expected: ${{ steps.plan.outputs.conflict_expected }}\n")
+	sb.WriteString("      no_op: ${{ steps.plan.outputs.no_op }}\n")
 	sb.WriteString("    steps:\n")
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
@@ -227,7 +228,10 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("  apply:\n")
 	sb.WriteString("    name: Apply Hotfix Cherry-Pick\n")
 	sb.WriteString("    needs: plan\n")
-	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true'\n")
+	// Skip the cherry-pick on a dry-run and on a no-op plan: when the fix is
+	// already contained in the target state SHA the planner reports no_op and
+	// there is nothing to cherry-pick, so attempting one would fail.
+	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true' && needs.plan.outputs.no_op != 'true'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    env:\n")
 	sb.WriteString("      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
