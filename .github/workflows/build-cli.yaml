@@ -61,4 +61,7 @@ jobs:
 
       - name: Run E2E tests
         working-directory: e2e
-        run: go test -v -parallel 4 -timeout 30m ./...
+        # Cap subtest parallelism at 2 to match e2e.yaml's E2E_PARALLEL. The
+        # 4-core / ~7.9GB runner is OOM-killed at 4 (silent FAIL, see #104), and
+        # the extra container load widens the gitea push-vs-Contents-API race.
+        run: go test -v -parallel 2 -timeout 30m ./...
