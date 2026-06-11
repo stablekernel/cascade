@@ -175,6 +175,50 @@ func TestRunEnv_KnownEnv(t *testing.T) {
 	assert.Contains(t, out, "services")
 }
 
+func TestStatus_PrintsDivergence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.yaml")
+	content := `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+  state:
+    dev:
+      sha: abc123
+      version: v1.2.3-rc.1
+      ref: hotfix/v1.2.3-integration
+      base_sha: base000aaa
+      patches:
+        - patch1sha
+        - patch2sha
+    prod:
+      sha: 111aaa
+      version: v1.2.2
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	// Diverged env surfaces the new fields.
+	devOut := captureOutput(t, func() {
+		err := runEnv(path, "ci", false, "dev")
+		require.NoError(t, err)
+	})
+	assert.Contains(t, devOut, "hotfix/v1.2.3-integration")
+	assert.Contains(t, devOut, "base000aaa")
+	assert.Contains(t, devOut, "patch1sha")
+	assert.Contains(t, devOut, "patch2sha")
+
+	// Non-diverged env does not print ref/base_sha/patches labels at all.
+	prodOut := captureOutput(t, func() {
+		err := runEnv(path, "ci", false, "prod")
+		require.NoError(t, err)
+	})
+	assert.NotContains(t, prodOut, "ref:")
+	assert.NotContains(t, prodOut, "base_sha:")
+	assert.NotContains(t, prodOut, "patches:")
+}
+
 func TestRunEnv_FilterJSON(t *testing.T) {
 	path := fixtureManifest(t)
 	out := captureOutput(t, func() {
