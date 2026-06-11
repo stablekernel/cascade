@@ -531,39 +531,6 @@ func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expe
 	return nil
 }
 
-// compareState recursively compares expected vs actual state
-func (r *MultiRepoRunner) compareState(expected, actual map[string]interface{}) error {
-	for key, expectedVal := range expected {
-		actualVal, ok := actual[key]
-		if !ok {
-			return fmt.Errorf("missing key: %s", key)
-		}
-
-		// Handle nested maps
-		if expectedMap, ok := expectedVal.(map[string]interface{}); ok {
-			actualMap, ok := actualVal.(map[string]interface{})
-			if !ok {
-				return fmt.Errorf("expected map for key %s, got %T", key, actualVal)
-			}
-			if err := r.compareState(expectedMap, actualMap); err != nil {
-				return fmt.Errorf("%s.%w", key, err)
-			}
-			continue
-		}
-
-		// Compare scalar values (with interpolation)
-		expectedStr := fmt.Sprintf("%v", expectedVal)
-		actualStr := fmt.Sprintf("%v", actualVal)
-
-		expectedStr = r.interpolate(expectedStr)
-		if expectedStr != actualStr {
-			return fmt.Errorf("key %s: expected %s, got %s", key, expectedStr, actualStr)
-		}
-	}
-
-	return nil
-}
-
 // interpolate replaces ${var} patterns with stored values
 func (r *MultiRepoRunner) interpolate(s string) string {
 	re := regexp.MustCompile(`\$\{([^}]+)\}`)
