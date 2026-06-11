@@ -177,7 +177,7 @@ func TestManager_Create(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		if r.Method == "GET" && r.URL.Path == "/repos/owner/repo/releases" {
+		if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/repos/owner/repo/releases") {
 			// Return empty list for cleanup - no stale drafts
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]GitHubRelease{})
@@ -208,7 +208,7 @@ func TestManager_Create(t *testing.T) {
 
 	manager := &Manager{
 		client:  server.Client(),
-		baseURL: server.URL,
+		baseURL: server.URL + "/github", // host substring marks it as GitHub
 		token:   "test-token",
 		repo:    "owner/repo",
 	}
@@ -473,7 +473,7 @@ func TestManager_Create_CleansUpStaleDrafts(t *testing.T) {
 		// List releases - returns drafts with different versions
 		// Only same base version with lower RC should be cleaned up
 		// Different base versions (promoted to other envs) should be preserved
-		if r.Method == "GET" && r.URL.Path == "/repos/owner/repo/releases" {
+		if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/repos/owner/repo/releases") {
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]GitHubRelease{
 				{
@@ -504,7 +504,8 @@ func TestManager_Create_CleansUpStaleDrafts(t *testing.T) {
 		// Delete stale draft release (tags are preserved - only releases are cleaned up)
 		if r.Method == "DELETE" && strings.Contains(r.URL.Path, "/releases/") {
 			var id int64
-			_, _ = fmt.Sscanf(r.URL.Path, "/repos/owner/repo/releases/%d", &id)
+			idx := strings.LastIndex(r.URL.Path, "/releases/")
+			_, _ = fmt.Sscanf(r.URL.Path[idx:], "/releases/%d", &id)
 			deletedIDs = append(deletedIDs, id)
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -531,7 +532,7 @@ func TestManager_Create_CleansUpStaleDrafts(t *testing.T) {
 
 	manager := &Manager{
 		client:  server.Client(),
-		baseURL: server.URL,
+		baseURL: server.URL + "/github", // host substring marks it as GitHub
 		token:   "test-token",
 		repo:    "owner/repo",
 	}
@@ -666,5 +667,142 @@ func TestCreateGitTag_CallsGitDataAPIOnGitHub(t *testing.T) {
 	}
 	if !called {
 		t.Error("createGitTag should call the git-data API on a GitHub host")
+	}
+}
+
+// TestManager_Create_HostGating verifies that the release-object POST is issued
+// on a GitHub host and skipped on the Gitea e2e backend. GitHub's Releases API
+// (release objects) is unavailable on Gitea; on a non-GitHub host create returns
+// a synthetic success so finalize proceeds, and the tag is materialized via the
+// env branch / git tag path instead.
+func TestManager_Create_HostGating(t *testing.T) {
+	tests := []struct {
+		name       string
+		githubHost bool
+		wantPost   bool
+	}{
+		{name: "github host issues release POST", githubHost: true, wantPost: true},
+		{name: "gitea host skips release POST", githubHost: false, wantPost: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			postCalled := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "POST" && strings.Contains(r.URL.Path, "/git/refs") {
+					// createGitTag (CreateTag: true) on the GitHub host.
+					w.WriteHeader(http.StatusCreated)
+					return
+				}
+				if r.Method == "POST" && strings.Contains(r.URL.Path, "/releases") {
+					postCalled = true
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(GitHubRelease{
+						ID:      321,
+						URL:     "https://api.github.com/repos/owner/repo/releases/321",
+						HTMLURL: "https://github.com/owner/repo/releases/tag/v0.1.0-rc.0.hotfix.1",
+					})
+					return
+				}
+				// Any other request (e.g. stale-draft cleanup GET) is tolerated.
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode([]GitHubRelease{})
+			}))
+			defer server.Close()
+
+			baseURL := server.URL
+			if tt.githubHost {
+				baseURL = server.URL + "/github" // host substring marks it as GitHub
+			}
+			manager := &Manager{
+				client:  server.Client(),
+				baseURL: baseURL,
+				token:   "test-token",
+				repo:    "owner/repo",
+			}
+
+			result, err := manager.Manage(Options{
+				Action:      ActionCreate,
+				Environment: "test",
+				SHA:         "abc123",
+				Tag:         "v0.1.0-rc.0.hotfix.1",
+				Changelog:   "Hotfix",
+				CreateTag:   true,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, tt.wantPost, postCalled,
+				"release POST issued=%v, want %v", postCalled, tt.wantPost)
+		})
+	}
+}
+
+// TestManager_Prerelease_HostGating verifies that the prerelease promotion (a
+// release-object PATCH) is issued on a GitHub host and skipped on the Gitea e2e
+// backend. On a non-GitHub host there is no release object to promote, so the
+// finalize prerelease step returns a synthetic success without contacting the
+// release-object API.
+func TestManager_Prerelease_HostGating(t *testing.T) {
+	tests := []struct {
+		name        string
+		githubHost  bool
+		wantRelease bool
+	}{
+		{name: "github host issues prerelease PATCH", githubHost: true, wantRelease: true},
+		{name: "gitea host skips prerelease PATCH", githubHost: false, wantRelease: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			releaseCalled := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// On the GitHub path, findRelease resolves the existing draft first.
+				if r.Method == "GET" && strings.Contains(r.URL.Path, "/releases") {
+					_ = json.NewEncoder(w).Encode(GitHubRelease{
+						ID:              654,
+						TagName:         "v0.1.0-rc.0.hotfix.1",
+						TargetCommitish: "abc123",
+						Draft:           true,
+					})
+					return
+				}
+				if r.Method == "PATCH" && strings.Contains(r.URL.Path, "/releases/") {
+					releaseCalled = true
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(GitHubRelease{
+						ID:      654,
+						URL:     "https://api.github.com/repos/owner/repo/releases/654",
+						HTMLURL: "https://github.com/owner/repo/releases/tag/v0.1.0-rc.0.hotfix.1",
+					})
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			baseURL := server.URL
+			if tt.githubHost {
+				baseURL = server.URL + "/github" // host substring marks it as GitHub
+			}
+			manager := &Manager{
+				client:  server.Client(),
+				baseURL: baseURL,
+				token:   "test-token",
+				repo:    "owner/repo",
+			}
+
+			result, err := manager.Manage(Options{
+				Action:      ActionPrerelease,
+				Environment: "test",
+				SHA:         "abc123",
+				Tag:         "v0.1.0-rc.0.hotfix.1",
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, tt.wantRelease, releaseCalled,
+				"prerelease PATCH issued=%v, want %v", releaseCalled, tt.wantRelease)
+		})
 	}
 }
