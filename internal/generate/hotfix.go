@@ -536,9 +536,11 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Finalize hotfix\n")
 	sb.WriteString("        env:\n")
 	// GH_TOKEN authenticates the Contents REST API write that finalize performs
-	// on real GitHub (signed commit, branch-protection bypass). GITHUB_REPOSITORY
-	// names the target repo for that write.
+	// on real GitHub (signed commit, branch-protection bypass). GITHUB_TOKEN
+	// authenticates the release/tag API calls. GITHUB_REPOSITORY names the target
+	// repo for both.
 	sb.WriteString("          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
+	sb.WriteString("          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
 	sb.WriteString("          GITHUB_REPOSITORY: ${{ github.repository }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix finalize \\\n")
