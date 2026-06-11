@@ -1,0 +1,148 @@
+name: "Promote rolls back a successful deploy when a sibling deploy fails"
+description: |
+  Exercises the rollback_on_failure path in the generated promote workflow.
+  Two reusable deploys run during a dev-to-test promote: infra always succeeds,
+  app fails when a marker file is present on the promoted SHA. The first promote
+  populates test state (so preflight later resolves a non-empty rollback_sha).
+  A marker commit is then orchestrated into dev and promoted again with
+  rollback_on_failure=true. app's deploy fails, so the rollback-infra job runs
+  and re-deploys infra at the SHA test held before this promote.
+
+  Observable boundary: the assertions verify the rollback-infra JOB ran with
+  conclusion=success (infra deploy succeeded, app deploy failed). The exact
+  rollback_sha value handed to the infra deploy callback comes from
+  needs.preflight.outputs.rollback_sha; on real GitHub the deployed SHA is
+  observable through deployment objects, which gitea/act do not model, so the
+  SHA-value claim is trimmed to the job-conclusion claim here.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    # infra is a reusable workflow so its rollback-infra job emits a valid
+    # uses: call. The deploy itself always succeeds.
+    - name: infra
+      workflow: .github/workflows/deploy-infra.yaml
+      triggers: ["**"]
+    # app fails its deploy when the marker file is present on the promoted SHA,
+    # which forces the rollback path for the sibling infra deploy.
+    - name: app
+      workflow: .github/workflows/deploy-app.yaml
+      triggers: ["**"]
+
+steps:
+  - name: "Commit app source and custom deploy workflows"
+    action: commit
+    commit:
+      message: "feat: add app source and deploy callbacks"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+        # infra deploy: always succeeds. Declares the environment/sha inputs the
+        # generated promote workflow passes through its uses: with: block.
+        .github/workflows/deploy-infra.yaml: |
+          name: deploy-infra
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            deploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "infra deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+        # app deploy: checks out the promoted sha and fails if the marker file
+        # exists at that commit. The marker is committed later, so the first
+        # promote (no marker) succeeds and the second (marker present) fails.
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            deploy:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                  with:
+                    ref: ${{ inputs.sha }}
+                - name: Fail when marker present
+                  run: |
+                    if [ -f deploy/fail-marker ]; then
+                      echo "marker present: deploy-app failing on purpose"
+                      exit 1
+                    fi
+                    echo "no marker: app deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+
+  - name: "Orchestrate the clean commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "First promote dev to test succeeds and populates test state"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          sha: commit1
+      jobs:
+        preflight: success
+        promote: success
+        deploy-infra: success
+        deploy-app: success
+
+  - name: "Commit the fail marker so the next app deploy fails"
+    action: commit
+    commit:
+      message: "chore: arm deploy-app failure marker"
+      files:
+        deploy/fail-marker: |
+          fail the app deploy on the next promote
+
+  - name: "Orchestrate the marker commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote with rollback_on_failure: app fails, infra rolls back"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+      rollback_on_failure: true
+      expect_failure: true
+    expect:
+      jobs:
+        preflight: success
+        promote: success
+        deploy-infra: success
+        deploy-app: failure
+        # rollback-infra rolls back the successful infra deploy to the SHA test
+        # held before this promote (preflight rollback_sha = prior test state).
+        rollback-infra: success
+        # rollback-app does not run: a deploy that failed is never rolled back.
+        rollback-app: skipped

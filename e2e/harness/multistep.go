@@ -145,6 +145,11 @@ type PromoteStep struct {
 	// bypassing the no-op promotion guard. Only meaningful for multi-env
 	// (default mode) promotions; single-env Release promotions ignore it.
 	Force bool `yaml:"force,omitempty"`
+	// RollbackOnFailure sets the promote workflow's "rollback_on_failure"
+	// dispatch input to "true", enabling the atomic rollback path: when a deploy
+	// fails, every deploy that already succeeded is rolled back to the SHA
+	// previously deployed in the target env (preflight's rollback_sha).
+	RollbackOnFailure bool `yaml:"rollback_on_failure,omitempty"`
 }
 
 // StepExpect defines expected outcomes for a step
