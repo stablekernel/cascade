@@ -111,6 +111,7 @@ steps:
     hotfix_plan:
       commit_ref: commit3
       target_env: test
+      dry_run: true
 
   - name: "Apply hotfix to test (triggers conflict)"
     action: hotfix_apply

@@ -96,6 +96,7 @@ steps:
     hotfix_plan:
       commit_ref: commit2
       target_env: test
+      dry_run: true
 
   - name: "Apply hotfix to test"
     action: hotfix_apply
