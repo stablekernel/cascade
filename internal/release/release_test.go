@@ -617,27 +617,54 @@ func TestNewCommand(t *testing.T) {
 	assert.NotNil(t, tokenFlag)
 }
 
-// TestCreateGitTag_GiteaMethodNotAllowedIsTolerated verifies that a 405 from the
-// git-data refs API (which Gitea does not implement) is treated as success: the
-// release create that follows materializes the tag from target_commitish.
-func TestCreateGitTag_GiteaMethodNotAllowedIsTolerated(t *testing.T) {
+// TestCreateGitTag_SkipsGitDataAPIOnGitea verifies that on a non-GitHub host the
+// git-data refs API is not called at all: the release create that follows
+// materializes the tag from target_commitish. The fake server fails any request
+// so the test proves no HTTP call is made.
+func TestCreateGitTag_SkipsGitDataAPIOnGitea(t *testing.T) {
+	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" && strings.Contains(r.URL.Path, "/git/refs") {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		w.WriteHeader(http.StatusNotImplemented)
+		called = true
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}))
 	defer server.Close()
 
 	manager := &Manager{
 		client:  server.Client(),
-		baseURL: server.URL,
+		baseURL: server.URL, // httptest host, not github -> treated as Gitea
 		token:   "test-token",
 		repo:    "owner/repo",
 	}
 
 	if err := manager.createGitTag("v1.0.0-rc.0.hotfix.1", "abc123"); err != nil {
-		t.Fatalf("createGitTag should tolerate Gitea 405, got: %v", err)
+		t.Fatalf("createGitTag on a non-GitHub host should be a no-op, got: %v", err)
+	}
+	if called {
+		t.Error("createGitTag should not call the git-data API on a non-GitHub host")
+	}
+}
+
+// TestCreateGitTag_CallsGitDataAPIOnGitHub verifies that on a GitHub host the
+// git-data refs API is called and a 201 is treated as success.
+func TestCreateGitTag_CallsGitDataAPIOnGitHub(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL + "/github", // host substring marks it as GitHub
+		token:   "test-token",
+		repo:    "owner/repo",
+	}
+
+	if err := manager.createGitTag("v1.0.0", "abc123"); err != nil {
+		t.Fatalf("createGitTag on GitHub should succeed on 201, got: %v", err)
+	}
+	if !called {
+		t.Error("createGitTag should call the git-data API on a GitHub host")
 	}
 }

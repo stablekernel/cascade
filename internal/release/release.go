@@ -63,6 +63,15 @@ func NewManagerWithURL(repo, token, baseURL string) *Manager {
 	}
 }
 
+// isGitHubHost reports whether the API base URL points at GitHub (github.com or
+// a GitHub Enterprise host) rather than the Gitea e2e backend. GitHub exposes
+// the git-data refs API; Gitea does not, and materializes tags from a release's
+// target_commitish instead. Detection is by host substring: GitHub API hosts
+// contain "github", which the Gitea test host (localhost/gitea) does not.
+func isGitHubHost(baseURL string) bool {
+	return strings.Contains(baseURL, "github")
+}
+
 // Options contains the parameters for release operations
 type Options struct {
 	Action      Action
@@ -119,8 +128,16 @@ type GitHubRelease struct {
 	HTMLURL         string `json:"html_url"`
 }
 
-// createGitTag creates a lightweight git tag pointing to a commit
+// createGitTag creates a lightweight git tag pointing to a commit.
+//
+// On a non-GitHub host (the Gitea e2e backend) the GitHub git-data refs API is
+// unavailable, and the release create that follows materializes the tag from
+// target_commitish, so the explicit ref create is skipped there.
 func (m *Manager) createGitTag(tagName, sha string) error {
+	if !isGitHubHost(m.baseURL) {
+		return nil
+	}
+
 	// Create a reference for the tag
 	payload := map[string]interface{}{
 		"ref": "refs/tags/" + tagName,
@@ -144,13 +161,6 @@ func (m *Manager) createGitTag(tagName, sha string) error {
 	}
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		// Tag already exists - this is fine
-		return nil
-	}
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		// The git-data refs API (POST /git/refs) is a GitHub endpoint that Gitea
-		// does not implement, so it answers 405. The release create that follows
-		// materializes the tag from target_commitish, so the explicit ref create
-		// is unnecessary there and a 405 is not fatal.
 		return nil
 	}
 
