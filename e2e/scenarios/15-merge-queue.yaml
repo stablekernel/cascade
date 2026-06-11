@@ -1,0 +1,37 @@
+name: "Merge Queue Workflow"
+description: |
+  Verifies that enabling merge_queue emits the cascade-merge-queue.yaml
+  workflow that validates the manifest and sets up orchestration on
+  merge_group events (#91).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  merge_queue:
+    enabled: true
+
+steps:
+  - name: "Initial commit; assert cascade-merge-queue.yaml is generated"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-merge-queue.yaml"
+          contains:
+            - "merge_group"
+            - "contents: read"
+            - "merge-queue-validate:"
+            - "cascade parse-config"
+            - "cascade orchestrate setup"

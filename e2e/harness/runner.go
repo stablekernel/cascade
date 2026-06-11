@@ -725,6 +725,12 @@ func (r *Runner) assertWorkflowFile(ctx context.Context, expect WorkflowFileExpe
 	if reader != nil {
 		_, _ = io.Copy(&content, reader)
 	}
+	if expect.NotExists {
+		if exitCode == 0 {
+			return []error{fmt.Errorf("workflow file %s should not exist but was found", expect.Path)}
+		}
+		return nil
+	}
 	if exitCode != 0 {
 		return []error{fmt.Errorf("workflow file not found: %s", expect.Path)}
 	}

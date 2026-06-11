@@ -1,0 +1,37 @@
+name: "Validate Callback Gate"
+description: |
+  Verifies that a top-level validate callback adds a validate job to the
+  generated orchestrate.yaml and gates the build jobs on its success via a
+  needs.validate.result == 'success' condition (#94).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  validate:
+    run: "echo validate"
+
+steps:
+  - name: "Initial commit; assert validate gate in orchestrate.yaml"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "validate:"
+            - "needs.validate.result == 'success'"

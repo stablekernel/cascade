@@ -1,0 +1,51 @@
+name: "Hotfix Generation Threshold"
+description: |
+  Verifies that a repository with two or more environments generates the
+  cascade-hotfix.yaml workflow with its full set of jobs and the finalize
+  step that records the merge, fix, and base SHAs (#88).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit; assert cascade-hotfix.yaml is generated"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          contains:
+            - "workflow_dispatch:"
+            - "type: choice"
+            - "target_env:"
+            - "pull_request:"
+            - "types: [closed]"
+            - "'env/*'"
+            - "group: hotfix-"
+            - "  plan:"
+            - "  apply:"
+            - "  check:"
+            - "  context:"
+            - "  finalize:"
+            - "--merge-sha"
+            - "--fix-sha"
+            - "--base-sha"

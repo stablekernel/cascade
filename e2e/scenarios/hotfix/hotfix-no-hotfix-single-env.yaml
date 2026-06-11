@@ -1,0 +1,33 @@
+name: "Hotfix Single Env Absent"
+description: |
+  Verifies that a repository with a single environment does not generate
+  the cascade-hotfix.yaml workflow, since the hotfix flow only applies once
+  two or more environments exist (#88).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit; assert cascade-hotfix.yaml is absent"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          not_exists: true

@@ -1,0 +1,37 @@
+name: "PR Preview Workflow"
+description: |
+  Verifies that enabling pr_preview emits the cascade-pr-preview.yaml
+  workflow that plans a preview on pull requests, with a per-PR
+  concurrency group (#93).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  pr_preview:
+    enabled: true
+
+steps:
+  - name: "Initial commit; assert cascade-pr-preview.yaml is generated"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-pr-preview.yaml"
+          contains:
+            - "name: Cascade PR Preview"
+            - "pull_request:"
+            - "cascade-pr-preview-${{ github.event.pull_request.number }}"
+            - "preview:"
+            - "Plan Preview"
