@@ -72,10 +72,10 @@ func (w *Writer) Flush() error {
 
 	var sb strings.Builder
 	for k, v := range w.outputs {
-		sb.WriteString(fmt.Sprintf("%s=%s\n", k, v))
+		fmt.Fprintf(&sb, "%s=%s\n", k, v)
 	}
 	for k, v := range w.multiline {
-		sb.WriteString(fmt.Sprintf("%s<<EOF\n%s\nEOF\n", k, v))
+		fmt.Fprintf(&sb, "%s<<EOF\n%s\nEOF\n", k, v)
 	}
 
 	_, err = f.WriteString(sb.String())

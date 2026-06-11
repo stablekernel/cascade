@@ -78,7 +78,12 @@ func TestFinalize_Integration_PlanThenMergeThenFinalize(t *testing.T) {
 	}))
 	defer server.Close()
 
-	mgr := release.NewManagerWithURL("owner/repo", "token", server.URL)
+	// Point the manager at a GitHub-host URL (the "/github" path segment marks it
+	// as GitHub) so finalize exercises the real release-object API path. On the
+	// Gitea e2e backend that API is unavailable and release-object creation is
+	// skipped; that boundary is covered by the e2e harness and the release
+	// host-gating unit tests.
+	mgr := release.NewManagerWithURL("owner/repo", "token", server.URL+"/github")
 
 	f := newFinalizer(t, manifest,
 		WithReleaseManager(mgr),

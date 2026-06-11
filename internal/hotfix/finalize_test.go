@@ -37,11 +37,13 @@ func (s stubTagLister) ListTags() ([]string, error) { return s.tags, nil }
 type recordingPusher struct {
 	calls    int
 	messages []string
+	branches []string
 }
 
-func (r *recordingPusher) CommitAndPush(path, message string) error {
+func (r *recordingPusher) CommitAndPush(path, branch, message string) error {
 	r.calls++
 	r.messages = append(r.messages, message)
+	r.branches = append(r.branches, branch)
 	return nil
 }
 
@@ -362,6 +364,84 @@ func TestFinalize_Idempotent_Rerun(t *testing.T) {
 	}
 }
 
+// TestFinalize_StateWriteTargetsTrunkBranch guards that the manifest state write
+// targets the configured trunk branch, not the env branch the hotfix PR merged
+// into. The finalize job runs on the merged pull_request event whose base is
+// env/<target>, so deriving the push branch from the event would write state to
+// the wrong branch.
+func TestFinalize_StateWriteTargetsTrunkBranch(t *testing.T) {
+	newScratchRepo(t)
+	runGit(t, "branch", "-m", "trunk")
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cp")
+	runGit(t, "checkout", "trunk")
+
+	var b strings.Builder
+	b.WriteString("ci:\n  config:\n    trunk_branch: trunk\n    environments:\n")
+	for _, e := range []string{"dev", "test", "prod"} {
+		b.WriteString("      - " + e + "\n")
+	}
+	b.WriteString("  state:\n")
+	for _, e := range []string{"dev", "test", "prod"} {
+		sha := base
+		if e == "dev" {
+			sha = fix
+		}
+		b.WriteString("    " + e + ":\n      sha: " + sha + "\n      version: v1.4.0-rc.2\n")
+	}
+	path := filepath.Join(".", "manifest.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	pusher := &recordingPusher{}
+	f := newFinalizer(t, path,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(pusher),
+	)
+	if err := f.Finalize("test", merge, fix, base); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if len(pusher.branches) != 1 || pusher.branches[0] != "trunk" {
+		t.Errorf("state write branch = %v, want [trunk]", pusher.branches)
+	}
+}
+
+// TestReleaseToken_FallsBackThroughEnvVars verifies the token resolution order:
+// RELEASE_TOKEN, then GITHUB_TOKEN, then GH_TOKEN. GH_TOKEN is the reliable
+// fallback because the runner does not always propagate the reserved
+// GITHUB_TOKEN name as a step env var.
+func TestReleaseToken_FallsBackThroughEnvVars(t *testing.T) {
+	tests := []struct {
+		name string
+		set  map[string]string
+		want string
+	}{
+		{name: "release token wins", set: map[string]string{"RELEASE_TOKEN": "rel", "GITHUB_TOKEN": "gh", "GH_TOKEN": "ghx"}, want: "rel"},
+		{name: "github token next", set: map[string]string{"GITHUB_TOKEN": "gh", "GH_TOKEN": "ghx"}, want: "gh"},
+		{name: "gh token fallback", set: map[string]string{"GH_TOKEN": "ghx"}, want: "ghx"},
+		{name: "none set", set: map[string]string{}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RELEASE_TOKEN", "")
+			t.Setenv("GITHUB_TOKEN", "")
+			t.Setenv("GH_TOKEN", "")
+			for k, v := range tt.set {
+				t.Setenv(k, v)
+			}
+			if got := releaseToken(); got != tt.want {
+				t.Errorf("releaseToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFinalize_VersionAllocation_SkipsExistingTags(t *testing.T) {
 	newScratchRepo(t)
 	base := commitFile(t, "a.txt", "one", "first")
@@ -472,4 +552,52 @@ func TestFinalize_PrereleaseEnv_ReplacesPrerelease(t *testing.T) {
 	if !sawPrerelease {
 		t.Errorf("prerelease-env hotfix should promote the release to a prerelease; calls=%+v", rm.calls)
 	}
+}
+
+// TestEnvTipReader_ResolvesLocalAndRemoteRefs verifies the finalize tip reader
+// resolves an env branch from a local ref when present and falls back to the
+// origin-tracking ref otherwise (the shape the finalize job's checkout has,
+// where env/<target> is fetched into refs/remotes/origin/* but not checked out
+// as a local branch).
+func TestEnvTipReader_ResolvesLocalAndRemoteRefs(t *testing.T) {
+	reader := envTipReader{}
+
+	t.Run("local ref", func(t *testing.T) {
+		newScratchRepo(t)
+		sha := commitFile(t, "a.txt", "one", "first commit")
+		runGit(t, "branch", "env/test")
+
+		got, err := reader.LocalBranchSHA("env/test")
+		if err != nil {
+			t.Fatalf("LocalBranchSHA(local): %v", err)
+		}
+		if got != sha {
+			t.Errorf("LocalBranchSHA(local) = %q, want %q", got, sha)
+		}
+	})
+
+	t.Run("origin-tracking ref only", func(t *testing.T) {
+		newScratchRepo(t)
+		sha := commitFile(t, "a.txt", "one", "first commit")
+		// Simulate the finalize-job checkout: env/test exists only as a
+		// remote-tracking ref, not as a local branch.
+		runGit(t, "update-ref", "refs/remotes/origin/env/test", sha)
+
+		got, err := reader.LocalBranchSHA("env/test")
+		if err != nil {
+			t.Fatalf("LocalBranchSHA(remote): %v", err)
+		}
+		if got != sha {
+			t.Errorf("LocalBranchSHA(remote) = %q, want %q", got, sha)
+		}
+	})
+
+	t.Run("missing ref errors", func(t *testing.T) {
+		newScratchRepo(t)
+		commitFile(t, "a.txt", "one", "first commit")
+
+		if _, err := reader.LocalBranchSHA("env/absent"); err == nil {
+			t.Fatalf("LocalBranchSHA(absent) expected error, got nil")
+		}
+	})
 }

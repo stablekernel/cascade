@@ -185,6 +185,7 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("      base_sha: ${{ steps.plan.outputs.base_sha }}\n")
 	sb.WriteString("      hotfix_version_candidate: ${{ steps.plan.outputs.hotfix_version_candidate }}\n")
 	sb.WriteString("      conflict_expected: ${{ steps.plan.outputs.conflict_expected }}\n")
+	sb.WriteString("      no_op: ${{ steps.plan.outputs.no_op }}\n")
 	sb.WriteString("    steps:\n")
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
@@ -201,6 +202,7 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("          HOTFIX_DRY_RUN: ${{ github.event.inputs.dry_run }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix plan \\\n")
+	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
 	sb.WriteString("            --commit \"$HOTFIX_COMMIT\" \\\n")
 	sb.WriteString("            --target-env \"$HOTFIX_TARGET_ENV\" \\\n")
 	sb.WriteString("            --dry-run=\"$HOTFIX_DRY_RUN\" \\\n")
@@ -226,7 +228,10 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("  apply:\n")
 	sb.WriteString("    name: Apply Hotfix Cherry-Pick\n")
 	sb.WriteString("    needs: plan\n")
-	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true'\n")
+	// Skip the cherry-pick on a dry-run and on a no-op plan: when the fix is
+	// already contained in the target state SHA the planner reports no_op and
+	// there is nothing to cherry-pick, so attempting one would fail.
+	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true' && needs.plan.outputs.no_op != 'true'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    env:\n")
 	sb.WriteString("      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
@@ -263,7 +268,17 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          SHORT_SHA=$(echo \"$COMMIT\" | cut -c1-8)\n")
 	sb.WriteString("          BRANCH=\"hotfix/${TARGET_ENV}/${SHORT_SHA}\"\n")
-	sb.WriteString("          git switch -c \"$BRANCH\" \"origin/env/${TARGET_ENV}\"\n")
+	// The first hotfix into an environment runs before env/<env> has ever been
+	// pushed: the plan verb creates it locally at the recorded state SHA but does
+	// not push, so origin/env/<env> may not exist yet. Materialize it at BASE_SHA
+	// (the plan's validated base) and push so the resolution PR has a base branch,
+	// then branch the hotfix from BASE_SHA. When the env branch already exists its
+	// tip equals BASE_SHA (the plan enforces this), so this is a no-op create.
+	sb.WriteString("          if ! git rev-parse --verify --quiet \"refs/remotes/origin/env/${TARGET_ENV}\" >/dev/null; then\n")
+	sb.WriteString("            git push origin \"${BASE_SHA}:refs/heads/env/${TARGET_ENV}\"\n")
+	sb.WriteString("            git fetch origin \"+refs/heads/env/${TARGET_ENV}:refs/remotes/origin/env/${TARGET_ENV}\"\n")
+	sb.WriteString("          fi\n")
+	sb.WriteString("          git switch -c \"$BRANCH\" \"$BASE_SHA\"\n")
 	sb.WriteString("          BODY=$(printf 'Cascade-Hotfix-Target: %s\\nCascade-Hotfix-Source: %s\\nCascade-Hotfix-Base: %s\\n' \"$TARGET_ENV\" \"$COMMIT\" \"$BASE_SHA\")\n")
 	sb.WriteString("          if git cherry-pick -x \"$COMMIT\"; then\n")
 	sb.WriteString("            echo \"clean cherry-pick\"\n")
@@ -514,10 +529,22 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          fetch-depth: 0\n")
 
 	g.writeSetupCLI(sb)
+	// Finalize cross-checks the merge SHA against the env-branch tip, so the env
+	// branches must be fetched into the checkout before the verb runs.
+	g.writeFetchEnvBranches(sb)
 
 	sb.WriteString("      - name: Finalize hotfix\n")
+	sb.WriteString("        env:\n")
+	// GH_TOKEN authenticates the Contents REST API write that finalize performs
+	// on real GitHub (signed commit, branch-protection bypass). GITHUB_TOKEN
+	// authenticates the release/tag API calls. GITHUB_REPOSITORY names the target
+	// repo for both.
+	sb.WriteString("          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
+	sb.WriteString("          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
+	sb.WriteString("          GITHUB_REPOSITORY: ${{ github.repository }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix finalize \\\n")
+	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
 	sb.WriteString("            --target-env \"$TARGET_ENV\" \\\n")
 	sb.WriteString("            --merge-sha \"$MERGE_SHA\" \\\n")
 	sb.WriteString("            --fix-sha \"$FIX_SHA\" \\\n")

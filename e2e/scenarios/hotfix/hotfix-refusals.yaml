@@ -1,0 +1,129 @@
+name: "Hotfix Refusal Guards"
+description: |
+  Verifies that the hotfix planner refuses invalid requests and that dry-run
+  leaves repository state unchanged.
+
+  Covers:
+  - hotfix_plan with a zero SHA is rejected (non-existent commit)
+  - hotfix_plan targeting the first environment (dev) is rejected
+  - hotfix_plan with a commit already reachable from the target env is a no-op
+  - hotfix_plan with dry_run=true does not create branches or PRs
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial app commit"
+    action: commit
+    commit:
+      message: "feat: initial app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate dev at commit1"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+
+  - name: "Promote dev to test"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+
+  - name: "Promote test to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+
+  - name: "Promote release to prod"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit1
+        test:
+          sha: commit1
+
+  - name: "Hotfix fix commit"
+    action: commit
+    commit:
+      message: "fix: critical patch"
+      files:
+        src/fix.go: |
+          package main
+          // patch
+
+  - name: "Refusal: zero SHA is rejected"
+    action: hotfix_plan
+    hotfix_plan:
+      commit_ref: "0000000000000000000000000000000000000000"
+      target_env: test
+      expect_failure: true
+
+  - name: "Refusal: first env (dev) is rejected"
+    action: hotfix_plan
+    hotfix_plan:
+      commit_ref: commit2
+      target_env: dev
+      expect_failure: true
+
+  - name: "No-op: commit1 already reachable from test state"
+    action: hotfix_plan
+    hotfix_plan:
+      commit_ref: commit1
+      target_env: test
+    expect:
+      state:
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+
+  - name: "Dry run: commit2 targeting test, no branch or PR created"
+    action: hotfix_plan
+    hotfix_plan:
+      commit_ref: commit2
+      target_env: test
+      dry_run: true
+    expect:
+      state:
+        test:
+          sha: commit1
+        dev:
+          sha: commit1
+      branches:
+        deleted: ["env/test"]
