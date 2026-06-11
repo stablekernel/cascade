@@ -46,6 +46,11 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: [build]
+    # The act + gitea scenarios run serially (-parallel 1, see the test step),
+    # which trades wall-clock for reliability, so the job needs more than the
+    # default headroom. 70m covers the 60m go test budget plus checkout, Go
+    # install, and container teardown.
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -61,7 +66,10 @@ jobs:
 
       - name: Run E2E tests
         working-directory: e2e
-        # Cap subtest parallelism at 2 to match e2e.yaml's E2E_PARALLEL. The
-        # 4-core / ~7.9GB runner is OOM-killed at 4 (silent FAIL, see #104), and
-        # the extra container load widens the gitea push-vs-Contents-API race.
-        run: go test -v -parallel 2 -timeout 30m ./...
+        # Run scenarios serially (-parallel 1). The 4-core / ~7.9GB runner is
+        # OOM-killed at 4 (silent FAIL, see #104), and even at 2 the concurrent
+        # act + gitea container load throttles gitea (405 "try again later") and
+        # destabilises act runs, producing intermittent failures unrelated to
+        # the product. Serial execution removes that contention; the longer
+        # 60m timeout covers the resulting slower wall-clock.
+        run: go test -v -parallel 1 -timeout 60m ./...
