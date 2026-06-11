@@ -511,12 +511,16 @@ func (f *Finalizer) resolveReleaseManager() (releaseManager, error) {
 }
 
 // releaseToken resolves the GitHub token for release operations from the
-// environment, preferring an explicit RELEASE_TOKEN.
+// environment, preferring an explicit RELEASE_TOKEN, then GITHUB_TOKEN, then
+// GH_TOKEN. GH_TOKEN is the reliable fallback in workflows: GITHUB_TOKEN is a
+// reserved name that the runner does not always propagate as a step env var.
 func releaseToken() string {
-	if t := os.Getenv("RELEASE_TOKEN"); t != "" {
-		return t
+	for _, key := range []string{"RELEASE_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
+		if t := os.Getenv(key); t != "" {
+			return t
+		}
 	}
-	return os.Getenv("GITHUB_TOKEN")
+	return ""
 }
 
 // isPrereleaseEnv reports whether env is the prerelease env (second from top),

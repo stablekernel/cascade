@@ -412,6 +412,36 @@ func TestFinalize_StateWriteTargetsTrunkBranch(t *testing.T) {
 	}
 }
 
+// TestReleaseToken_FallsBackThroughEnvVars verifies the token resolution order:
+// RELEASE_TOKEN, then GITHUB_TOKEN, then GH_TOKEN. GH_TOKEN is the reliable
+// fallback because the runner does not always propagate the reserved
+// GITHUB_TOKEN name as a step env var.
+func TestReleaseToken_FallsBackThroughEnvVars(t *testing.T) {
+	tests := []struct {
+		name string
+		set  map[string]string
+		want string
+	}{
+		{name: "release token wins", set: map[string]string{"RELEASE_TOKEN": "rel", "GITHUB_TOKEN": "gh", "GH_TOKEN": "ghx"}, want: "rel"},
+		{name: "github token next", set: map[string]string{"GITHUB_TOKEN": "gh", "GH_TOKEN": "ghx"}, want: "gh"},
+		{name: "gh token fallback", set: map[string]string{"GH_TOKEN": "ghx"}, want: "ghx"},
+		{name: "none set", set: map[string]string{}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RELEASE_TOKEN", "")
+			t.Setenv("GITHUB_TOKEN", "")
+			t.Setenv("GH_TOKEN", "")
+			for k, v := range tt.set {
+				t.Setenv(k, v)
+			}
+			if got := releaseToken(); got != tt.want {
+				t.Errorf("releaseToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFinalize_VersionAllocation_SkipsExistingTags(t *testing.T) {
 	newScratchRepo(t)
 	base := commitFile(t, "a.txt", "one", "first")
