@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -123,6 +124,38 @@ func (a *ActRunner) Terminate(ctx context.Context) error {
 	return a.container.Terminate(ctx)
 }
 
+// eventFilePath is the in-container path the event payload is written to when
+// RunOpts.EventJSON is set. act reads it via its -e flag to seed the
+// github.event context (e.g. a merged pull_request payload).
+const eventFilePath = "/tmp/cascade-event.json"
+
+// writeEventFile writes the run's EventJSON payload to eventFilePath inside the
+// act container via CopyToContainer. It is a no-op (returning "" with no error)
+// when EventJSON is empty, so callers can unconditionally invoke it and only
+// append the -e flag when a path comes back. CopyToContainer transfers the raw
+// bytes, so arbitrary JSON (quotes, newlines, shell metacharacters) round-trips
+// intact without heredoc or shell-escaping hazards.
+func (a *ActRunner) writeEventFile(ctx context.Context, eventJSON string) (string, error) {
+	if eventJSON == "" {
+		return "", nil
+	}
+	if err := a.container.CopyToContainer(ctx, []byte(eventJSON), eventFilePath, 0644); err != nil {
+		return "", fmt.Errorf("failed to write event payload: %w", err)
+	}
+	return eventFilePath, nil
+}
+
+// eventFileArgs returns the act flag fragment that points act at the event
+// payload file. eventPath is the path returned by writeEventFile (empty when no
+// EventJSON was supplied), so the result is empty in that case. Kept pure so the
+// command construction is unit-testable without a container.
+func eventFileArgs(eventPath string) []string {
+	if eventPath == "" {
+		return nil
+	}
+	return []string{"-e", eventPath}
+}
+
 // RunWorkflow executes a GitHub Actions workflow using act
 func (a *ActRunner) RunWorkflow(ctx context.Context, opts RunOpts) (*ExtendedWorkflowResult, error) {
 	// Create temp directory for workflow
@@ -157,6 +190,15 @@ func (a *ActRunner) RunWorkflow(ctx context.Context, opts RunOpts) (*ExtendedWor
 		"--pull=false",
 		"--network=" + network,
 	}
+
+	// When an event payload is supplied, write it into the container and point
+	// act at it with -e so the github.event context is seeded (e.g. a merged
+	// pull_request payload for the hotfix post-merge path).
+	eventPath, evErr := a.writeEventFile(ctx, opts.EventJSON)
+	if evErr != nil {
+		return nil, evErr
+	}
+	cmd = append(cmd, eventFileArgs(eventPath)...)
 
 	// Add Gitea environment variables
 	if a.giteaURL != "" {
@@ -229,6 +271,15 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 	if a.networkName != "" {
 		network = a.networkName
 	}
+	// When an event payload is supplied, write it into the container so
+	// buildActArgs can append the act -e flag pointing at it. This seeds the
+	// github.event context (e.g. the merged pull_request payload that drives the
+	// hotfix context/build/deploy/finalize jobs).
+	eventPath, err := a.writeEventFile(ctx, opts.EventJSON)
+	if err != nil {
+		return nil, err
+	}
+
 	actCmd := "cd /tmp/repo && act " + opts.Event +
 		" -W " + workflowsPath +
 		" --detect-event" +
@@ -241,7 +292,7 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 		// Provide token for Gitea authentication
 		" --secret GITHUB_TOKEN=" + a.giteaToken
 
-	actCmd += a.buildActArgs(opts)
+	actCmd += a.buildActArgs(opts, eventPath)
 
 	cmd := []string{
 		"bash", "-c",
@@ -296,8 +347,10 @@ func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string
 	}
 }
 
-// buildActArgs builds additional act command arguments
-func (a *ActRunner) buildActArgs(opts RunOpts) string {
+// buildActArgs builds additional act command arguments. eventPath is the
+// in-container event-payload file written by writeEventFile (empty when no
+// EventJSON was supplied); when set it is appended as the act -e flag.
+func (a *ActRunner) buildActArgs(opts RunOpts, eventPath string) string {
 	var args string
 
 	// Add provided env vars
@@ -308,6 +361,11 @@ func (a *ActRunner) buildActArgs(opts RunOpts) string {
 	// Add inputs for workflow_dispatch
 	for k, v := range opts.Inputs {
 		args += fmt.Sprintf(" --input %s=%s", k, v)
+	}
+
+	// Point act at the event payload file when one was written.
+	if flags := eventFileArgs(eventPath); len(flags) > 0 {
+		args += " " + strings.Join(flags, " ")
 	}
 
 	return args

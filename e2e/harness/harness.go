@@ -704,6 +704,14 @@ func (h *Harness) ensureCLIBinary(ctx context.Context) (string, error) {
 // `./` prefix act needs for local resolution. Each pass is checked for
 // success and verified by grepping for any remaining `stablekernel/...` ref;
 // the operation retries on transient failure.
+//
+// The `.github/workflows/*.yaml` glob is intentionally broad: it covers every
+// generated workflow, including cascade-hotfix.yaml (whose plan/apply/finalize
+// jobs reference the same setup-cli action ref). No hotfix-specific localization
+// is required beyond this glob. The companion `name:` namespacing in
+// GenerateWorkflows only appends a per-scenario suffix to the workflow-level
+// `name:` line, so workflow_files assertions over hotfix job/trigger content
+// remain stable as long as they do not assert on the top-level name line.
 func (h *Harness) localizeWorkflows(ctx context.Context) error {
 	const maxAttempts = 3
 	const retryDelay = 200 * time.Millisecond
@@ -766,9 +774,21 @@ func (h *Harness) SyncRepoToActContainer(ctx context.Context) error {
 	// push converged. Re-fetching resolves those; a persistent miss after the
 	// bound is a real lost-commit and is reported with this call site's own
 	// message rather than the generation-phase one.
+	//
+	// After the load-bearing `git fetch origin main && git reset --hard
+	// origin/main` (which still gates the lost-commit detection and bounded
+	// retry below), pull the env/* integration branches and tags too, mirroring
+	// the generated hotfix workflow's fetch step (internal/generate/hotfix.go,
+	// writeFetchEnvBranches). Hotfix plan/apply/finalize jobs inspect
+	// env/<env> branches and hotfix tags, so they must be present in /tmp/repo.
+	// This extra fetch is chained with `|| true`: env/* branches and tags do not
+	// exist in most scenarios, and their absence must never fail the sync or
+	// regress the main-branch convergence guarantee.
 	syncCmd := []string{
 		"bash", "-c",
-		"cd /tmp/repo && git fetch origin main && git reset --hard origin/main && (git branch -f master HEAD 2>/dev/null || true)",
+		"cd /tmp/repo && git fetch origin main && git reset --hard origin/main && " +
+			"(git fetch origin '+refs/heads/env/*:refs/remotes/origin/env/*' --tags 2>/dev/null || true) && " +
+			"(git branch -f master HEAD 2>/dev/null || true)",
 	}
 
 	const maxAttempts = 5
