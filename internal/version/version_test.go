@@ -23,6 +23,7 @@ func TestParse(t *testing.T) {
 				Minor:      2,
 				Patch:      3,
 				PreRelease: -1,
+				Hotfix:     -1,
 				Prefix:     "v",
 			},
 		},
@@ -34,6 +35,7 @@ func TestParse(t *testing.T) {
 				Minor:      2,
 				Patch:      3,
 				PreRelease: 4,
+				Hotfix:     -1,
 				Prefix:     "v",
 			},
 		},
@@ -45,6 +47,7 @@ func TestParse(t *testing.T) {
 				Minor:      0,
 				Patch:      0,
 				PreRelease: 0,
+				Hotfix:     -1,
 				Prefix:     "v",
 			},
 		},
@@ -56,6 +59,7 @@ func TestParse(t *testing.T) {
 				Minor:      2,
 				Patch:      3,
 				PreRelease: -1,
+				Hotfix:     -1,
 				Prefix:     "",
 			},
 		},
@@ -67,6 +71,7 @@ func TestParse(t *testing.T) {
 				Minor:      2,
 				Patch:      3,
 				PreRelease: 5,
+				Hotfix:     -1,
 				Prefix:     "",
 			},
 		},
@@ -455,4 +460,138 @@ func TestNewCalculator_EmptyPrefixDefaultsToV(t *testing.T) {
 	got, err := calc.CalculateNext("", "", commits)
 	require.NoError(t, err)
 	assert.Equal(t, "v0.1.0-rc.0", got.String())
+}
+
+func TestParse_HotfixSegment(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  *Version
+	}{
+		{
+			name:  "hotfix with v prefix",
+			input: "v1.4.0-rc.2.hotfix.1",
+			want: &Version{
+				Major:      1,
+				Minor:      4,
+				Patch:      0,
+				PreRelease: 2,
+				Hotfix:     1,
+				Prefix:     "v",
+			},
+		},
+		{
+			name:  "hotfix without prefix",
+			input: "1.4.0-rc.2.hotfix.3",
+			want: &Version{
+				Major:      1,
+				Minor:      4,
+				Patch:      0,
+				PreRelease: 2,
+				Hotfix:     3,
+				Prefix:     "",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Parse(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			// Round-trip back to the same string.
+			assert.Equal(t, tt.input, got.String())
+		})
+	}
+}
+
+func TestParse_RejectsMalformedHotfix(t *testing.T) {
+	inputs := []string{
+		"v1.4.0-hotfix.1",      // hotfix without rc
+		"v1.4.0-rc.2.hotfix",   // no number
+		"v1.4.0-rc.2-hotfix.1", // wrong separator
+		"v1.4.0-rc.2.hotfix.x", // non-numeric
+	}
+
+	for _, input := range inputs {
+		t.Run(input, func(t *testing.T) {
+			_, err := Parse(input)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestVersion_Ordering_HotfixBetweenRCs(t *testing.T) {
+	rc2 := mustParse(t, "v1.4.0-rc.2")
+	rc2hf1 := mustParse(t, "v1.4.0-rc.2.hotfix.1")
+	rc2hf2 := mustParse(t, "v1.4.0-rc.2.hotfix.2")
+	rc3 := mustParse(t, "v1.4.0-rc.3")
+
+	assert.Equal(t, -1, rc2.Compare(rc2hf1), "rc.2 < rc.2.hotfix.1")
+	assert.Equal(t, -1, rc2hf1.Compare(rc2hf2), "rc.2.hotfix.1 < rc.2.hotfix.2")
+	assert.Equal(t, -1, rc2hf2.Compare(rc3), "rc.2.hotfix.2 < rc.3")
+
+	// Symmetry and equality.
+	assert.Equal(t, 1, rc2hf1.Compare(rc2), "rc.2.hotfix.1 > rc.2")
+	assert.Equal(t, 0, rc2hf1.Compare(mustParse(t, "v1.4.0-rc.2.hotfix.1")))
+}
+
+func TestCalculateNext_NextEnvHoldsHotfixVersion(t *testing.T) {
+	calc := NewCalculator("v")
+
+	commits := []changelog.ConventionalCommit{
+		{Type: "fix", Description: "bug fix"},
+	}
+
+	got, err := calc.CalculateNext("", "v1.4.0-rc.2.hotfix.1", commits)
+	require.NoError(t, err)
+
+	// Computed from the rc base v1.4.0, ignoring the hotfix segment.
+	assert.Equal(t, "v1.4.1-rc.0", got.String())
+	assert.Equal(t, -1, got.Hotfix)
+}
+
+func TestStripRC_HotfixVersion(t *testing.T) {
+	got, err := StripRC("v1.4.0-rc.2.hotfix.1")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.4.0", got)
+}
+
+func TestVersion_WithHotfix(t *testing.T) {
+	base := mustParse(t, "v1.4.0-rc.2")
+
+	t.Run("sets hotfix preserving rc", func(t *testing.T) {
+		result := base.WithHotfix(3)
+		assert.Equal(t, "v1.4.0-rc.2.hotfix.3", result.String())
+	})
+
+	t.Run("preserves original", func(t *testing.T) {
+		_ = base.WithHotfix(3)
+		assert.Equal(t, "v1.4.0-rc.2", base.String())
+	})
+}
+
+func TestVersion_NextHotfix(t *testing.T) {
+	t.Run("first hotfix on plain rc is hotfix.1", func(t *testing.T) {
+		base := mustParse(t, "v1.4.0-rc.2")
+		assert.Equal(t, "v1.4.0-rc.2.hotfix.1", base.NextHotfix().String())
+	})
+
+	t.Run("increments existing hotfix", func(t *testing.T) {
+		base := mustParse(t, "v1.4.0-rc.2.hotfix.1")
+		assert.Equal(t, "v1.4.0-rc.2.hotfix.2", base.NextHotfix().String())
+	})
+
+	t.Run("preserves original", func(t *testing.T) {
+		base := mustParse(t, "v1.4.0-rc.2")
+		_ = base.NextHotfix()
+		assert.Equal(t, "v1.4.0-rc.2", base.String())
+	})
+}
+
+func mustParse(t *testing.T, s string) *Version {
+	t.Helper()
+	v, err := Parse(s)
+	require.NoError(t, err)
+	return v
 }

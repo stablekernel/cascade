@@ -491,6 +491,12 @@ func TestStripRCSuffix(t *testing.T) {
 	}
 }
 
+func TestStripRCSuffix_HotfixVersion(t *testing.T) {
+	if got := stripRCSuffix("v1.4.0-rc.2.hotfix.1"); got != "v1.4.0" {
+		t.Errorf("stripRCSuffix(%q) = %q, want %q", "v1.4.0-rc.2.hotfix.1", got, "v1.4.0")
+	}
+}
+
 func TestPromotionResultToJSON(t *testing.T) {
 	result := &PromotionResult{
 		Success:   true,

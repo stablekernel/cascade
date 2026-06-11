@@ -16,6 +16,7 @@ type Version struct {
 	Minor      int
 	Patch      int
 	PreRelease int    // -1 means no pre-release suffix, >= 0 is the RC number
+	Hotfix     int    // -1 means no hotfix segment, >= 0 is the hotfix number
 	Prefix     string // e.g., "v" or custom prefix
 }
 
@@ -264,6 +265,21 @@ func GetLatestRelease(tags []string) (*Version, error) {
 	}
 
 	return latest, nil
+}
+
+// WithHotfix is a stub pending implementation.
+func (v *Version) WithHotfix(m int) *Version {
+	return v
+}
+
+// NextHotfix is a stub pending implementation.
+func (v *Version) NextHotfix() *Version {
+	return v
+}
+
+// Compare is a stub pending implementation.
+func (v *Version) Compare(other *Version) int {
+	return 0
 }
 
 // StripRC removes the pre-release suffix for publishing
