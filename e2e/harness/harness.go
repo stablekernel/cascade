@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/network"
 	"gopkg.in/yaml.v3"
 )
@@ -467,7 +468,9 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	}
 	_, _, _ = h.act.Container().Exec(ctx, namespaceCmd)
 
-	// Configure git in the container and commit workflows and CLI binary
+	// Configure git in the container and commit workflows and CLI binary.
+	// Echo the pushed HEAD on a stable marker line so we can read it back and
+	// verify gitea has observed the push before returning (see below).
 	commitCmd := []string{
 		"bash", "-c",
 		"cd /tmp/repo && " +
@@ -475,19 +478,136 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 			"git config user.name 'Test' && " +
 			"git add .github/workflows/*.yaml .github/bin/ && " +
 			"git commit -m 'chore: generate workflows and add CLI binary' && " +
-			"git push",
+			"git push && " +
+			"echo PUSHED_SHA=$(git rev-parse HEAD)",
 	}
 
-	exitCode, reader, err = h.act.Container().Exec(ctx, commitCmd)
+	// Request a demultiplexed stream. Without tcexec.Multiplexed the reader
+	// carries Docker's hijacked-attach framing (an 8-byte header per chunk:
+	// stream type, padding, then a big-endian uint32 length), so the
+	// PUSHED_SHA marker line arrives prefixed with binary header bytes and
+	// parsePushedSHA cannot match it. Multiplexed() strips that framing and
+	// merges stdout/stderr into clean text.
+	exitCode, reader, err = h.act.Container().Exec(ctx, commitCmd, tcexec.Multiplexed())
+	var output bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&output, reader)
+	}
 	if err != nil || exitCode != 0 {
-		var output bytes.Buffer
-		if reader != nil {
-			_, _ = io.Copy(&output, reader)
-		}
 		return fmt.Errorf("failed to commit workflows (exit %d): %w\nOutput: %s", exitCode, err, output.String())
 	}
 
+	pushedSHA := parsePushedSHA(output.String())
+	if pushedSHA == "" {
+		return fmt.Errorf("could not determine pushed workflows SHA from push output:\n%s", output.String())
+	}
+
+	// Close the lost-commit race. gitea serves its Contents API from a layer
+	// that can lag a raw `git push` to the same branch: the very next runner
+	// action (executeCommit) writes through that Contents API and, if it still
+	// holds the pre-push branch head, parents its commit on the stale head and
+	// moves the ref there - silently discarding this workflows commit. Block
+	// until gitea's API reports the pushed SHA as the branch head so every
+	// subsequent Contents-API write is parented on it.
+	if err := h.waitForBranchHead(ctx, pushedSHA); err != nil {
+		return fmt.Errorf("workflows push did not converge in gitea: %w", err)
+	}
+
 	return nil
+}
+
+// pushedSHAMarker is the prefix GenerateWorkflows echoes after a successful
+// push so the pushed HEAD can be recovered from the (otherwise free-form) git
+// output.
+const pushedSHAMarker = "PUSHED_SHA="
+
+// parsePushedSHA extracts the SHA echoed on the `PUSHED_SHA=<sha>` marker line.
+// It returns "" when no well-formed marker is present.
+func parsePushedSHA(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		// Locate the marker anywhere in the line rather than only as a
+		// leading prefix. Docker's multiplexed exec stream frames each chunk
+		// with an 8-byte binary header (stream type, padding, big-endian
+		// length); if that framing reaches us the marker is preceded by
+		// header bytes that may themselves be printable (the length byte can
+		// land in the ASCII range), so a leading-prefix check fails. Slicing
+		// from the marker recovers the SHA whether or not the stream was
+		// demultiplexed upstream.
+		idx := strings.Index(line, pushedSHAMarker)
+		if idx < 0 {
+			continue
+		}
+		sha := strings.TrimSpace(line[idx+len(pushedSHAMarker):])
+		if isHexSHA(sha) {
+			return sha
+		}
+	}
+	return ""
+}
+
+// isHexSHA reports whether s is a non-empty hex string of a plausible git
+// object length (full 40-char or abbreviated, >= 7).
+func isHexSHA(s string) bool {
+	if len(s) < 7 || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// branchHeadPollAttempts and branchHeadPollInterval bound the verify-after-push
+// poll. ~10 x 500ms covers the observed gitea API staleness window with margin
+// while still failing fast on a genuinely lost push.
+const (
+	branchHeadPollAttempts = 10
+	branchHeadPollInterval = 500 * time.Millisecond
+)
+
+// waitForBranchHead polls gitea's branch API until the main branch head equals
+// wantSHA, bounding the wait by branchHeadPollAttempts. It returns a clear
+// error (including the last head it observed) if the branch never converges, so
+// a genuinely lost push is reported as such rather than masquerading as a
+// missing-file failure downstream.
+func (h *Harness) waitForBranchHead(ctx context.Context, wantSHA string) error {
+	if h.gitea == nil || h.repo == nil {
+		return nil
+	}
+
+	var lastSHA string
+	var lastErr error
+	for attempt := 0; attempt < branchHeadPollAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(branchHeadPollInterval):
+			}
+		}
+		head, err := h.gitea.getHeadSHA(ctx, h.repo)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		lastSHA = head
+		if head == wantSHA {
+			return nil
+		}
+	}
+
+	if lastErr != nil && lastSHA == "" {
+		return fmt.Errorf("branch head never readable after %d attempts (want %s): %w",
+			branchHeadPollAttempts, wantSHA, lastErr)
+	}
+	return fmt.Errorf("branch head did not reach pushed SHA after %d attempts (want %s, last observed %s)",
+		branchHeadPollAttempts, wantSHA, lastSHA)
 }
 
 // assertOrchestrateGenerated confirms that .github/workflows/orchestrate.yaml
@@ -496,17 +616,46 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 // of the workflows directory so the missing-file moment is captured with
 // context rather than surfacing later as an opaque `cat: ... No such file`.
 func (h *Harness) assertOrchestrateGenerated(ctx context.Context, genOutput string) error {
-	const workflowPath = ".github/workflows/orchestrate.yaml"
-	checkCmd := []string{
-		"bash", "-c",
-		"cd /tmp/repo && test -s " + workflowPath,
-	}
-	exitCode, _, err := h.act.Container().Exec(ctx, checkCmd)
-	if err == nil && exitCode == 0 {
+	present, exitCode, err := h.probeOrchestrateWorkflow(ctx)
+	if present {
 		return nil
 	}
+	// A docker-exec transport error (err != nil) means the probe itself did not
+	// run, not that the file is absent. Surface it as a distinct, retryable
+	// condition so a flaky exec is not misreported as a generation failure.
+	if err != nil {
+		return fmt.Errorf("workflow probe transport error (exit=%d): %w", exitCode, err)
+	}
+	return fmt.Errorf(
+		"generate-workflow exited 0 but did not produce %s (exit=%d)\ngenerate output:\n%s\nworkflows dir:\n%s",
+		orchestrateWorkflowPath, exitCode, strings.TrimSpace(genOutput),
+		strings.TrimSpace(h.workflowsDirListing(ctx)),
+	)
+}
 
-	// Gather diagnostics for the failure path only.
+// orchestrateWorkflowPath is the generated workflow whose presence gates every
+// orchestrate run.
+const orchestrateWorkflowPath = ".github/workflows/orchestrate.yaml"
+
+// probeOrchestrateWorkflow reports whether orchestrate.yaml exists and is
+// non-empty in /tmp/repo. The returned error is a docker-exec transport error
+// (the probe could not be run), which callers treat as retryable and distinct
+// from a clean "file absent" result (present=false, err=nil).
+func (h *Harness) probeOrchestrateWorkflow(ctx context.Context) (present bool, exitCode int, err error) {
+	checkCmd := []string{
+		"bash", "-c",
+		"cd /tmp/repo && test -s " + orchestrateWorkflowPath,
+	}
+	exitCode, _, err = h.act.Container().Exec(ctx, checkCmd)
+	if err != nil {
+		return false, exitCode, err
+	}
+	return exitCode == 0, exitCode, nil
+}
+
+// workflowsDirListing returns a best-effort `ls -la` of the workflows dir for
+// diagnostics. It never errors; transport failures yield an empty listing.
+func (h *Harness) workflowsDirListing(ctx context.Context) string {
 	lsCmd := []string{
 		"bash", "-c",
 		"cd /tmp/repo && ls -la .github/workflows/ 2>&1 || true",
@@ -515,10 +664,7 @@ func (h *Harness) assertOrchestrateGenerated(ctx context.Context, genOutput stri
 	if _, lsReader, lsErr := h.act.Container().Exec(ctx, lsCmd); lsErr == nil && lsReader != nil {
 		_, _ = io.Copy(&listing, lsReader)
 	}
-	return fmt.Errorf(
-		"generate-workflow exited 0 but did not produce %s (exit=%d err=%v)\ngenerate output:\n%s\nworkflows dir:\n%s",
-		workflowPath, exitCode, err, strings.TrimSpace(genOutput), strings.TrimSpace(listing.String()),
-	)
+	return listing.String()
 }
 
 // ensureCLIBinary builds the cascade binary once per test process and
@@ -614,31 +760,63 @@ func (h *Harness) SyncRepoToActContainer(ctx context.Context) error {
 	// to origin/main explicitly and chain the reset so a partial sync surfaces
 	// as a non-zero exit instead of silently resetting to a stale tree (which
 	// would drop the just-pushed orchestrate.yaml (#25).
+	//
+	// The fetch+reset and the orchestrate.yaml presence check are retried as a
+	// unit: a transient gitea read or a momentarily stale ref can yield a tree
+	// without the workflow even though GenerateWorkflows already verified the
+	// push converged. Re-fetching resolves those; a persistent miss after the
+	// bound is a real lost-commit and is reported with this call site's own
+	// message rather than the generation-phase one.
 	syncCmd := []string{
 		"bash", "-c",
 		"cd /tmp/repo && git fetch origin main && git reset --hard origin/main && (git branch -f master HEAD 2>/dev/null || true)",
 	}
 
-	exitCode, reader, err := h.act.Container().Exec(ctx, syncCmd)
-	if err != nil {
-		return fmt.Errorf("failed to sync repo: %w", err)
-	}
-	if exitCode != 0 {
-		var output bytes.Buffer
-		if reader != nil {
-			_, _ = io.Copy(&output, reader)
+	const maxAttempts = 5
+	const retryDelay = 500 * time.Millisecond
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(retryDelay):
+			}
 		}
-		return fmt.Errorf("sync repo failed (exit %d): %s", exitCode, output.String())
+
+		exitCode, reader, err := h.act.Container().Exec(ctx, syncCmd)
+		if err != nil {
+			lastErr = fmt.Errorf("fetch/reset transport error: %w", err)
+			continue
+		}
+		if exitCode != 0 {
+			var output bytes.Buffer
+			if reader != nil {
+				_, _ = io.Copy(&output, reader)
+			}
+			lastErr = fmt.Errorf("fetch/reset failed (exit %d): %s", exitCode, strings.TrimSpace(output.String()))
+			continue
+		}
+
+		present, probeExit, probeErr := h.probeOrchestrateWorkflow(ctx)
+		if present {
+			return nil
+		}
+		if probeErr != nil {
+			lastErr = fmt.Errorf("workflow probe transport error (exit=%d): %w", probeExit, probeErr)
+			continue
+		}
+		lastErr = fmt.Errorf("%s absent after fetch/reset (exit=%d)", orchestrateWorkflowPath, probeExit)
 	}
 
-	// After syncing, the orchestrate workflow must be present; if the synced
-	// tree lacks it the orchestrate run would otherwise misreport as a passing
-	// 0-job scenario instead of failing here with context.
-	if err := h.assertOrchestrateGenerated(ctx, ""); err != nil {
-		return fmt.Errorf("orchestrate workflow missing after repo sync: %w", err)
-	}
-
-	return nil
+	// Distinct from the generation-phase message: this is a sync/lost-commit
+	// failure, not a generate-workflow failure. Misattributing it (the prior
+	// behavior) sent diagnosis down the wrong path.
+	return fmt.Errorf(
+		"orchestrate workflow still missing after %d repo-sync attempts: %w\nworkflows dir:\n%s",
+		maxAttempts, lastErr, strings.TrimSpace(h.workflowsDirListing(ctx)),
+	)
 }
 
 // getProjectRoot finds the project root directory containing cmd/cascade
