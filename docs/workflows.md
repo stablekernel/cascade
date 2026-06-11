@@ -279,7 +279,81 @@ The framework drops the RC suffix when crossing the prerelease→release boundar
 
 ## Hotfix
 
-Hotfix is currently handled via the standard promote workflow with `dry_run: false` and a deploy-list filter. A first-class hotfix workflow is tracked in issue #94 (direct promotion to prod with branch ancestry checks).
+A hotfix applies a single trunk commit onto an environment that is pinned to an older trunk base, without dragging in the intervening commits. This is the case the standard promote flow cannot serve: promoting a pointer forward would advance the target environment past every commit between its base and the fix, which is exactly what an operator pinning that environment is trying to avoid.
+
+### Roll forward on trunk first (the default)
+
+The fix always lands on trunk first. cascade refuses to apply a commit that is not already an ancestor of trunk tip, so a hotfix never introduces a commit that exists only on a side branch. If the intervening commits between an environment's base and the fix are acceptable, the simplest answer is to merge the fix to trunk and run a normal cascade promotion: the target environment advances to a trunk SHA and nothing diverges. Reach for the hotfix workflow only when the environment must run `base + fix` and nothing else.
+
+### Per-environment integration branches
+
+When an environment genuinely needs to diverge, the hotfix is staged on a per-environment integration branch named `env/<env>` (for example `env/test`). The branch does not exist while an environment tracks trunk; it is created on demand at the environment's recorded state SHA. The cherry-pick of the fix is staged on a working branch `hotfix/<env>/<short-sha>` whose base is `env/<env>`, and a resolution pull request is opened with base `env/<env>`.
+
+While an environment is diverged its state carries three additional fields, all additive and absent for environments that track trunk:
+
+```yaml
+state:
+  test:
+    sha: <merge SHA on env/test>      # now possibly a non-trunk SHA
+    version: v1.4.0-rc.2.hotfix.1     # hotfix version segment
+    ref: env/test                     # the integration branch
+    base_sha: <trunk SHA>             # the trunk anchor of the divergence
+    patches: [<sha of fix>, ...]      # trunk commits applied on top
+```
+
+`cascade status` surfaces `ref`, `base_sha`, and `patches` only when they are set.
+
+### Cherry-pick and resolution pull request
+
+A clean cherry-pick opens a pull request labeled `cascade-hotfix` with auto-merge enabled. The required checks configured on `env/<env>` gate the merge, and the pull request is the audit record even when no human touches it.
+
+On conflict, the conflicted tree is committed with its conflict markers intact, the branch is pushed, and the pull request is opened labeled `cascade-hotfix-conflict`. Committing the markers makes the resolution pull request a real, checkout-able branch: the diff shows exactly where the conflict is, and a human resolves it locally by force-pushing the head branch.
+
+```
+git fetch && git switch hotfix/<env>/<short-sha>
+# resolve conflicts, then
+git push --force-with-lease
+```
+
+The pushed resolution re-runs the checks, which unblock the merge. The pull request body also carries a machine-readable trailer block so the post-merge stages do not depend on branch-name parsing alone:
+
+```
+Cascade-Hotfix-Target: test
+Cascade-Hotfix-Source: <fix SHA>
+Cascade-Hotfix-Base: <base SHA>
+```
+
+When a conflict is resolved by hand, the resolution on `env/<env>` and the original fix on trunk can differ. Trunk's version wins long term: the divergence is discarded, not merged back. If the manual resolution embodies a real improvement, it needs its own trunk pull request; merging `env/<env>` back to trunk is wrong because it would introduce merge commits into a history that every SHA comparison in cascade assumes moves forward.
+
+### Rejoin and cleanup
+
+The divergence ends the next time the environment receives a normal promotion. Promote preflight verifies that the incoming trunk SHA contains every recorded patch (the regression gate). On success the divergence fields are cleared, the `env/<env>` branch is deleted, and the hotfix tags and release objects for that base are cleaned up. Promotion is refused from a diverged environment, and promoting an older trunk SHA that would drop a recorded patch is blocked unless explicitly forced with a loud annotation.
+
+### Generated `cascade-hotfix.yaml` workflow
+
+`cascade generate-workflow` emits `cascade-hotfix.yaml` for any repository that declares two or more environments. With a single environment there is no intermediate target to hotfix onto, so nothing is emitted.
+
+The workflow carries two triggers in one file:
+
+- `workflow_dispatch` with inputs `commit` (the trunk fix SHA), `target_env` (a choice over every configured environment except the first), `pr_number` (optional, to replay an existing resolution pull request), and `dry_run`.
+- `pull_request` on `types: [closed]` against `branches: ['env/*']`, with the post-merge stages gated on the pull request having merged and carrying the `cascade-hotfix` label.
+
+Its jobs:
+
+| Job | Trigger | Role |
+| --- | --- | --- |
+| plan | dispatch | Fetch env branches and tags, run `cascade hotfix plan`, surface branch-protection suggestions as `::notice::` lines |
+| apply | dispatch (not dry-run) | Cherry-pick onto `hotfix/<env>/<sha>`, open the resolution pull request (clean auto-merges; conflict opens the labeled resolution pull request) |
+| check | open pull request to `env/*` | Validate the manifest while the hotfix pull request is open |
+| build | merged hotfix | Build the merge SHA, since a cherry-picked commit has no prebuilt artifact |
+| deploy | merged hotfix | Deploy to the target environment, paired with a rollback job mirroring the promote workflow |
+| finalize | all deploys succeed | Run `cascade hotfix finalize` to write the diverged state, tag, and release |
+
+Prod is a valid hotfix target. The deploy job binds to the GitHub `environment:` of the target environment, so organization protection rules (manual approval, required reviewers) apply to the hotfix deploy exactly as they do to a normal promotion. This is one mechanism, not a separate prod path.
+
+Branch protection on `env/*` is the operator's responsibility: cascade never creates protection rules itself, because it does not assume an admin token. When no required status checks are configured on the target `env/*` branch, the workflow **warns** rather than blocks, and the `plan` verb prints ready-to-run `gh` and `gh api` command suggestions an operator can paste to put the protections in place.
+
+> The `rollback_sha` output in the generated workflow is a disclosed placeholder today: the deploy and rollback jobs mirror the promote workflow's shape, and the rollback path activates once a CLI output supplies the prior SHA.
 
 ## Workflow Permissions
 

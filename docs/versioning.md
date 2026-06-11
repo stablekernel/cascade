@@ -107,6 +107,38 @@ When cascade reaches v1.0 the following guarantees apply:
 Older tags outside the current release line do not receive backported fixes.
 See [SECURITY.md](https://github.com/stablekernel/cascade/blob/main/SECURITY.md) for the security-patch policy.
 
+## Hotfix version segment
+
+A hotfix applies a single trunk commit onto an environment pinned to an older trunk base (see the Hotfix section of [workflows.md](workflows.md)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (an rc) or already published.
+
+### rc-based (unpublished) base
+
+When the environment holds an rc version, the hotfix appends a nested `hotfix.M` segment:
+
+```
+v1.4.0-rc.2          -> v1.4.0-rc.2.hotfix.1   (first hotfix)
+v1.4.0-rc.2.hotfix.1 -> v1.4.0-rc.2.hotfix.2   (second hotfix, stacked)
+```
+
+The dotted form is deliberate. Under semver precedence the pre-release field list for `v1.4.0-rc.2.hotfix.1` is `["rc", "2", "hotfix", "1"]`, which sorts strictly above `rc.2` and strictly below `rc.3`:
+
+```
+v1.4.0-rc.2 < v1.4.0-rc.2.hotfix.1 < v1.4.0-rc.2.hotfix.2 < v1.4.0-rc.3
+```
+
+A hotfix version therefore slots cleanly between its base rc and the next rc, and it never collides with the orchestrator's rc sequence. The rc-shaped tag and draft cleanup logic matches only `vX.Y.Z-rc.N`, so it is inert on hotfix tags; hotfix tags and drafts are cleaned up explicitly when the divergence ends.
+
+### Published (no rc) base
+
+When the environment holds a published version with no rc segment (for example `v1.3.0`), a hotfix is a **normal patch bump**, not a `-hotfix.M` shape:
+
+```
+v1.3.0 -> v1.3.1   (first hotfix)
+v1.3.1 -> v1.3.2   (next free patch)
+```
+
+cascade allocates the next free patch by reconciling against existing tags, so the hotfix does not collide with a patch the normal release flow may also mint. There is no `vX.Y.Z-hotfix.M` form; the nested `hotfix.M` segment applies only to rc-based, still-in-flight versions.
+
 ## Version bump reference
 
 | Change type | CLI semver impact | `schema_version` impact |
