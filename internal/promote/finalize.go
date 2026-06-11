@@ -413,9 +413,16 @@ func (f *Finalizer) commitAndPushGit(message string) error {
 		return fmt.Errorf("git commit failed: %w", err)
 	}
 
-	cmd = exec.Command("git", "push")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git push failed: %w", err)
+	// Push HEAD explicitly to the trunk branch. The finalize job checks out the
+	// triggering SHA, so on a workflow_dispatch run HEAD is detached and a bare
+	// "git push" fails (exit 128) with no upstream tracking branch. Pushing
+	// HEAD:refs/heads/<trunk> works regardless of detached state and targets the
+	// branch the state belongs on. Capture combined output so the real git error
+	// surfaces in the workflow log rather than just the exit status.
+	branch := trunkBranchFromEnv()
+	cmd = exec.Command("git", "push", "origin", "HEAD:refs/heads/"+branch)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	return nil

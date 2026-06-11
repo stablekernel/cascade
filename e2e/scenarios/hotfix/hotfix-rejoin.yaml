@@ -102,7 +102,12 @@ steps:
   # Rejoin: promoting dev into the diverged test env, where the incoming SHA
   # contains every recorded patch, ends the divergence. The product clears the
   # divergence fields (ref/base_sha/patches) and deletes env/test on the remote.
-  # prod is untouched by this default-mode dev-to-test promotion.
+  #
+  # A targeted dev-to-test cascade is used (not default mode) so only the
+  # rejoin leg runs. Default mode would also queue the test-to-prod leg, which
+  # sources FROM the still-diverged test env and trips the diverged-source guard
+  # before the rejoin leg can clear the divergence. The targeted promote isolates
+  # the incoming dev SHA -> test containment-and-rejoin path. prod is untouched.
   #
   # The cleared matcher asserts ref/base_sha/patches read back EMPTY on test
   # after rejoin (an empty StateExpect value alone is skipped, so the matcher
@@ -113,7 +118,8 @@ steps:
   - name: "Promote a containing SHA into test triggers rejoin"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: test
     expect:
       state:
         test:
