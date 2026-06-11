@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -142,6 +143,16 @@ func printEnvState(state *config.EnvState, indent string) {
 	fmt.Printf("%ssha:          %s\n", indent, orDash(state.SHA))
 	fmt.Printf("%scommitted_at: %s\n", indent, orDash(state.CommittedAt))
 	fmt.Printf("%scommitted_by: %s\n", indent, orDash(state.CommittedBy))
+
+	if state.Ref != "" {
+		fmt.Printf("%sref:          %s\n", indent, state.Ref)
+	}
+	if state.BaseSHA != "" {
+		fmt.Printf("%sbase_sha:     %s\n", indent, state.BaseSHA)
+	}
+	if len(state.Patches) > 0 {
+		fmt.Printf("%spatches:      %s\n", indent, strings.Join(state.Patches, ", "))
+	}
 
 	if len(state.Builds) > 0 {
 		fmt.Printf("%sbuilds:\n", indent)
