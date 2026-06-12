@@ -1,4 +1,7 @@
-# Configuration Reference
+---
+title: Configuration Reference
+description: Complete reference for every field in the cascade manifest file, including config, state, and policy sections.
+---
 
 Complete reference for the manifest file (default `.github/manifest.yaml`).
 

@@ -1,0 +1,69 @@
+---
+title: Cascade
+description: Declarative trunk-based CI/CD for GitHub Actions. Define what to build and where to deploy in one manifest.
+template: splash
+hero:
+  tagline: Declarative trunk-based CI/CD for GitHub Actions.
+  image:
+    alt: "The Cascade mascot riding a wave of cascading deployments."
+    file: ../../assets/hero.png
+  actions:
+    - text: Get started
+      link: /cascade/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/stablekernel/cascade
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Define what to build and where to deploy in one manifest. Cascade generates the
+GitHub Actions wiring, tracks deployment state, manages releases, and cascades
+promotions through your environments.
+
+The manifest (`.github/manifest.yaml`) is the single source of truth. It holds the
+pipeline configuration and the live deployment state for every environment. You run
+`cascade generate-workflow` once. After that, the generated workflows own their
+execution.
+
+<CardGrid stagger>
+  <Card title="Getting Started" icon="rocket">
+    Walk through a first manifest and the generated workflows.
+
+    [Get started →](/cascade/getting-started/)
+  </Card>
+  <Card title="Manifest Reference" icon="setting">
+    Every field of the manifest documented in one place.
+
+    [Read the reference →](/cascade/configuration/)
+  </Card>
+  <Card title="Callback Contract" icon="random">
+    The inputs and outputs your build, deploy, and publish workflows exchange
+    with cascade.
+
+    [See the contract →](/cascade/callback-contract/)
+  </Card>
+  <Card title="Workflows" icon="seti:github">
+    How orchestrate, promote, and release move artifacts through environments.
+
+    [Explore workflows →](/cascade/workflows/)
+  </Card>
+  <Card title="CLI Reference" icon="laptop">
+    The commands and flags cascade exposes.
+
+    [Browse the CLI →](/cascade/cli-reference/)
+  </Card>
+  <Card title="Architecture" icon="puzzle">
+    The design, and what cascade does and does not own.
+
+    [Understand the design →](/cascade/architecture/)
+  </Card>
+</CardGrid>
+
+## Project
+
+Cascade is open source under the Apache 2.0 license. The source, issue tracker, and
+releases live at [github.com/stablekernel/cascade](https://github.com/stablekernel/cascade).

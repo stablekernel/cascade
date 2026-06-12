@@ -1,4 +1,7 @@
-# Getting Started
+---
+title: Getting Started
+description: A step-by-step guide to installing the cascade CLI, creating a manifest, wiring callback workflows, and generating orchestration workflows in your repository.
+---
 
 This guide walks through setting up `cascade` in your repository.
 
@@ -85,7 +88,7 @@ ci:
 
 The framework owns `state:` and `latest_release:`. The `state: { dev: {}, ... }` skeleton is enough. The workflows fill in the details on every run.
 
-See [Configuration Reference](configuration.md) for every field.
+See [Configuration Reference](/cascade/configuration/) for every field.
 
 ### No-environment mode
 
@@ -108,7 +111,7 @@ Commits create RC pre-releases automatically; a `promote` dispatch (default mode
 
 ## Step 3: Create Callback Workflows
 
-The framework calls your workflows. Create them following the [Callback Contract](callback-contract.md).
+The framework calls your workflows. Create them following the [Callback Contract](/cascade/callback-contract/).
 
 ### Build Workflow Example
 
@@ -291,12 +294,12 @@ The orchestrate workflow runs automatically on the next merge.
    - Creates/updates a draft pre-release with the changelog
 
 2. **To promote to test:**
-   - Actions → Promote workflow
+   - Actions -> Promote workflow
    - Select `dev-to-test`
    - Run
 
 3. **To promote to prod:**
-   - Actions → Promote workflow
+   - Actions -> Promote workflow
    - Select `test-to-prod` (or `dev-to-prod` for full cascade)
    - Run
 
@@ -328,6 +331,6 @@ permissions:
 
 ## Next Steps
 
-- [Configuration Reference](configuration.md) for every field
-- [Callback Contract](callback-contract.md) for callback inputs/outputs
-- [Workflows](workflows.md) for generated workflow internals
+- [Configuration Reference](/cascade/configuration/) for every field
+- [Callback Contract](/cascade/callback-contract/) for callback inputs/outputs
+- [Workflows](/cascade/workflows/) for generated workflow internals
