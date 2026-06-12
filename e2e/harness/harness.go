@@ -884,13 +884,24 @@ func (h *Harness) Cleanup() {
 }
 
 // removeNetwork removes the scenario network, waiting for and checking the
-// result. It retries briefly so a container that is still detaching cannot
-// leave the network behind, and logs (rather than swallows) a terminal
-// failure so a genuine leak is visible in the test output.
+// result, and logs (rather than swallows) a terminal failure so a genuine leak
+// is visible in the test output.
+//
+// act runs each job by spawning a NESTED container over the docker socket and
+// attaching it to this network. Those job containers are act's children, not
+// testcontainers-managed, so terminating the act runner does not reap them;
+// one can outlive the runner and hold the network open, failing Remove with an
+// "active endpoints" error. So before each Remove attempt we force-remove any
+// container still attached to the network, then retry briefly to let the
+// detach settle. This keeps the network count flat across the suite instead of
+// leaking one network per scenario whose job container lingered.
 func (h *Harness) removeNetwork(ctx context.Context) {
 	const attempts = 5
 	var err error
 	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			h.disconnectNetworkContainers(ctx)
+		}
 		if err = h.network.Remove(ctx); err == nil {
 			return
 		}
@@ -899,5 +910,21 @@ func (h *Harness) removeNetwork(ctx context.Context) {
 	if h.t != nil {
 		h.t.Logf("warning: failed to remove docker network %q after %d attempts: %v",
 			h.networkName, attempts, err)
+	}
+}
+
+// disconnectNetworkContainers force-removes every container still attached to
+// the scenario network so it can be removed. It targets act's nested job
+// containers, which are not testcontainers-managed and so survive the act
+// runner's termination. Best effort: a container that is already gone or a
+// docker hiccup must not abort cleanup.
+func (h *Harness) disconnectNetworkContainers(ctx context.Context) {
+	out, err := exec.CommandContext(ctx, "docker", "network", "inspect",
+		"--format", "{{range .Containers}}{{.Name}} {{end}}", h.networkName).Output()
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Fields(string(out)) {
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", name).Run()
 	}
 }
