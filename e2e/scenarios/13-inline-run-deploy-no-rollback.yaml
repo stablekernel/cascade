@@ -1,0 +1,39 @@
+name: "Inline Run Deploy Skips Rollback Job"
+description: |
+  Verifies that a deploy declaring run: (an inline-run callback with no reusable
+  workflow) does not produce a rollback-<name> job in the generated promote.yaml.
+  A rollback job is a reusable-workflow call, so an inline-run deploy has nothing
+  to call: emitting one would write an empty `uses:` value and invalid workflow
+  YAML. The deploy-<name> job itself must still be emitted.
+
+  This is a generator-output verification scenario. Assertion runs on the staged
+  repo after StageRepoFromConfig generates workflows, before any run.
+
+config:
+  trunk_branch: main
+  environments: [test, staging, prod]
+  deploys:
+    - name: app
+      run: |
+        echo "deploy $ENVIRONMENT"
+      shell: bash
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit generates workflows; inline-run deploy has no rollback job and no empty uses"
+    action: commit
+    commit:
+      message: "feat: add inline-run deploy"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "deploy-app:"
+            - "deploy-app-prod:"
+          not_contains:
+            - "rollback-app:"
+            - "uses: \n"
