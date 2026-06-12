@@ -386,6 +386,11 @@ func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string
 	if exitCode != 0 {
 		result.Conclusion = "failure"
 		result.Error = "workflow execution failed"
+		// A non-zero act exit is the act/docker execution layer failing to run
+		// the workflow to a real conclusion (a transport/exec hiccup), as
+		// opposed to a workflow job genuinely concluding "failure". Mark it
+		// transient so the scenario runner may retry it from a clean slate.
+		result.ExecError = true
 	}
 
 	if workflowPath != "" && len(result.Jobs) == 0 && result.Conclusion != "failure" {
