@@ -64,6 +64,21 @@ jobs:
           cache: true
           cache-dependency-path: e2e/go.sum
 
+      - name: Widen Docker network address pool
+        # Each scenario creates its own docker network, and the daemon's
+        # default address pool is small. Even with synchronous per-scenario
+        # network teardown, brief cleanup lag under serial load can leave the
+        # pool short and fail a later scenario at setup with "all predefined
+        # address pools have been fully subnetted". Carving /24 subnets out of
+        # a 10.99.0.0/16 base yields 256 networks of headroom, well above the
+        # handful in flight at once, so cleanup lag can never exhaust the pool.
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"default-address-pools":[{"base":"10.99.0.0/16","size":24}]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          # Wait for the daemon to come back before the tests start.
+          timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'
+
       - name: Run E2E tests
         working-directory: e2e
         # Run scenarios serially (-parallel 1). The 4-core / ~7.9GB runner is
