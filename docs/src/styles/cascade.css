@@ -66,6 +66,19 @@
   text-wrap: balance;
 }
 
+/* ---- Splash hero illustration: show the wide art in full ------------------ */
+/* Starlight forces the hero <Image> to 400x400 attrs, which boxes our wide
+   662x343 art into a square and clips it. Override to keep the natural aspect
+   ratio, contain the whole image, and cap its height. */
+.hero > img,
+.hero > .hero-html img {
+  object-fit: contain;
+  height: auto;
+  max-height: 320px;
+  width: auto;
+  max-width: 100%;
+}
+
 /* Tasteful teal marker on the active sidebar link. */
 .sidebar a[aria-current='page'] {
   border-inline-start-color: var(--cascade-teal);
