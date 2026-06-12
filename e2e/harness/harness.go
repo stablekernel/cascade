@@ -858,7 +858,18 @@ func (h *Harness) getProjectRoot() (string, error) {
 	}
 }
 
-// Cleanup terminates all containers
+// Cleanup terminates all containers and removes the scenario's docker network.
+//
+// Network removal is synchronous and verified, not fire-and-forget: a single
+// scenario allocates a /16 (or /24) from the daemon's address pool, and across
+// the serial scenario suite a leaked network drains that pool until a late
+// scenario cannot allocate one and dies at setup ("all predefined address
+// pools have been fully subnetted"). The retry layer defers Cleanup per
+// attempt, so every attempt - including a failed one - releases its network
+// here. Because the act and gitea containers detach from the network during
+// their own teardown, Remove can briefly observe an "active endpoints" error;
+// a short bounded retry lets that detach settle so the count returns to
+// baseline rather than growing monotonically.
 func (h *Harness) Cleanup() {
 	ctx := context.Background()
 	if h.act != nil {
@@ -868,6 +879,52 @@ func (h *Harness) Cleanup() {
 		_ = h.gitea.Terminate(ctx)
 	}
 	if h.network != nil {
-		_ = h.network.Remove(ctx)
+		h.removeNetwork(ctx)
+	}
+}
+
+// removeNetwork removes the scenario network, waiting for and checking the
+// result, and logs (rather than swallows) a terminal failure so a genuine leak
+// is visible in the test output.
+//
+// act runs each job by spawning a NESTED container over the docker socket and
+// attaching it to this network. Those job containers are act's children, not
+// testcontainers-managed, so terminating the act runner does not reap them;
+// one can outlive the runner and hold the network open, failing Remove with an
+// "active endpoints" error. So before each Remove attempt we force-remove any
+// container still attached to the network, then retry briefly to let the
+// detach settle. This keeps the network count flat across the suite instead of
+// leaking one network per scenario whose job container lingered.
+func (h *Harness) removeNetwork(ctx context.Context) {
+	const attempts = 5
+	var err error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			h.disconnectNetworkContainers(ctx)
+		}
+		if err = h.network.Remove(ctx); err == nil {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if h.t != nil {
+		h.t.Logf("warning: failed to remove docker network %q after %d attempts: %v",
+			h.networkName, attempts, err)
+	}
+}
+
+// disconnectNetworkContainers force-removes every container still attached to
+// the scenario network so it can be removed. It targets act's nested job
+// containers, which are not testcontainers-managed and so survive the act
+// runner's termination. Best effort: a container that is already gone or a
+// docker hiccup must not abort cleanup.
+func (h *Harness) disconnectNetworkContainers(ctx context.Context) {
+	out, err := exec.CommandContext(ctx, "docker", "network", "inspect",
+		"--format", "{{range .Containers}}{{.Name}} {{end}}", h.networkName).Output()
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Fields(string(out)) {
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", name).Run()
 	}
 }

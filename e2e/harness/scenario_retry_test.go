@@ -36,6 +36,26 @@ func transientErr() error {
 	return fmt.Errorf("promote workflow failed: workflow execution failed: %w", errTransientWorkflow)
 }
 
+// fastRetries removes the inter-attempt pause and stubs out the docker network
+// prune for the duration of a test so the retry loop neither sleeps nor shells
+// out to docker in unit tests, and restores both on cleanup. It records how
+// many times the prune seam fired so callers can assert prune-between-attempts
+// behaviour. These globals are shared, so a test using this must not run in
+// parallel.
+func fastRetries(t *testing.T) *int {
+	t.Helper()
+	prevBackoff := scenarioRetryBackoff
+	prevPrune := pruneBetweenAttempts
+	prunes := 0
+	scenarioRetryBackoff = 0
+	pruneBetweenAttempts = func(context.Context) { prunes++ }
+	t.Cleanup(func() {
+		scenarioRetryBackoff = prevBackoff
+		pruneBetweenAttempts = prevPrune
+	})
+	return &prunes
+}
+
 func TestRunScenarioWithRetry_PassesFirstAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -57,7 +77,7 @@ func TestRunScenarioWithRetry_PassesFirstAttempt(t *testing.T) {
 }
 
 func TestRunScenarioWithRetry_RecoversAfterTransient(t *testing.T) {
-	t.Parallel()
+	prunes := fastRetries(t)
 
 	log := &fakeLogger{}
 	calls := 0
@@ -73,6 +93,11 @@ func TestRunScenarioWithRetry_RecoversAfterTransient(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("attempts = %d, want 2", calls)
+	}
+	// One failed attempt preceded the recovery, so the prune-between-attempts
+	// seam must have fired exactly once.
+	if *prunes != 1 {
+		t.Fatalf("prune-between-attempts fired %d times, want 1", *prunes)
 	}
 	if !log.contains("transient act/docker execution failure on attempt 1") {
 		t.Fatalf("expected a transient-retry log line, got: %v", log.lines)
@@ -130,7 +155,7 @@ func TestRunScenarioWithRetry_RealJobFailureNotRetried(t *testing.T) {
 }
 
 func TestRunScenarioWithRetry_ExhaustsAttemptsOnPersistentTransient(t *testing.T) {
-	t.Parallel()
+	prunes := fastRetries(t)
 
 	log := &fakeLogger{}
 	calls := 0
@@ -143,6 +168,10 @@ func TestRunScenarioWithRetry_ExhaustsAttemptsOnPersistentTransient(t *testing.T
 	}
 	if calls != scenarioRetryAttempts {
 		t.Fatalf("attempts = %d, want %d", calls, scenarioRetryAttempts)
+	}
+	// A prune runs between attempts but not after the final one.
+	if *prunes != scenarioRetryAttempts-1 {
+		t.Fatalf("prune-between-attempts fired %d times, want %d", *prunes, scenarioRetryAttempts-1)
 	}
 	if !IsTransientWorkflowError(err) {
 		t.Fatalf("final error should still wrap the transient sentinel: %v", err)
