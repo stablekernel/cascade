@@ -34,10 +34,6 @@
 
 ## How it works
 
-<p align="center">
-  <img src="docs/src/assets/hero.png" alt="Cascade promotes one artifact through every environment" width="640">
-</p>
-
 The **manifest** (`.github/manifest.yaml`) is the single source of truth. It holds both the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once; after that the generated workflows own their own execution.
 
 ```
