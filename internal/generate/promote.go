@@ -1032,6 +1032,14 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 
 	// Write rollback jobs for local deploys
 	for _, d := range g.config.Deploys {
+		// A rollback job is, by contract, a reusable-workflow call that reverts a
+		// deploy. An inline run: deploy callback has no reusable workflow to call,
+		// so there is nothing to roll back through: skip it. Emitting a rollback
+		// job here would write an empty `uses:` value and invalid workflow YAML.
+		if d.Run != "" {
+			continue
+		}
+
 		jobName := fmt.Sprintf("deploy-%s", d.Name)
 
 		fmt.Fprintf(sb, "  rollback-%s:\n", d.Name)
@@ -1057,6 +1065,13 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 	// Write rollback jobs for external deploys
 	for _, ext := range g.config.External {
 		for _, d := range ext.Deploys {
+			// Inline run: external deploys (Run set, Workflow empty) have no
+			// reusable workflow to call, so they cannot have a rollback job for
+			// the same reason as local inline-run deploys above.
+			if d.Run != "" {
+				continue
+			}
+
 			jobName := fmt.Sprintf("deploy-%s", d.Name)
 
 			fmt.Fprintf(sb, "  rollback-%s:\n", d.Name)

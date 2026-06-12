@@ -9,6 +9,7 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // concurrencyGroupLine extracts the "  group: ..." line from the top-level
@@ -1245,6 +1246,74 @@ func TestPromoteGenerator_RollbackJobs(t *testing.T) {
 	// Preflight outputs should include rollback_sha and rollback_on_failure
 	assert.Contains(t, content, "rollback_sha: ${{ steps.preflight.outputs.rollback_sha }}")
 	assert.Contains(t, content, "rollback_on_failure: ${{ steps.preflight.outputs.rollback_on_failure }}")
+}
+
+func TestPromoteGenerator_RollbackJobs_InlineRunDeploy(t *testing.T) {
+	tests := []struct {
+		name          string
+		deploys       []config.DeployConfig
+		wantRollback  []string // rollback job names that must be present
+		noRollback    []string // rollback job names that must be absent
+		wantDeployJob []string // deploy job names that must still be present
+	}{
+		{
+			name: "single inline-run deploy emits no rollback job",
+			deploys: []config.DeployConfig{
+				{Name: "app", Run: "echo deploying $ENVIRONMENT", Shell: "bash"},
+			},
+			noRollback:    []string{"rollback-app:"},
+			wantDeployJob: []string{"deploy-app:", "deploy-app-prod:"},
+		},
+		{
+			name: "mixed inline-run and reusable-workflow deploys",
+			deploys: []config.DeployConfig{
+				{Name: "app", Run: "echo deploying $ENVIRONMENT", Shell: "bash"},
+				{Name: "infra", Workflow: ".github/workflows/deploy-infra.yaml"},
+			},
+			wantRollback:  []string{"rollback-infra:"},
+			noRollback:    []string{"rollback-app:"},
+			wantDeployJob: []string{"deploy-app:", "deploy-infra:"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"test", "staging", "prod"},
+				Deploys:      tt.deploys,
+			}
+
+			gen := NewPromoteGenerator(cfg, "")
+			content, err := gen.Generate()
+			require.NoError(t, err)
+
+			// An inline-run deploy has no reusable workflow to call, so the
+			// generator must never emit an empty `uses:` line.
+			for _, line := range strings.Split(content, "\n") {
+				assert.NotEqual(t, "    uses:", strings.TrimRight(line, " "),
+					"generated promote workflow must not contain an empty uses: value")
+			}
+
+			for _, want := range tt.wantRollback {
+				assert.Contains(t, content, want,
+					"reusable-workflow deploy should keep its rollback job")
+			}
+			for _, absent := range tt.noRollback {
+				assert.NotContains(t, content, absent,
+					"inline-run deploy must not produce a rollback job")
+			}
+			for _, want := range tt.wantDeployJob {
+				assert.Contains(t, content, want,
+					"deploy job must still be emitted regardless of rollback skip")
+			}
+
+			// The emitted workflow must remain structurally valid YAML.
+			var parsed map[string]any
+			require.NoError(t, yaml.Unmarshal([]byte(content), &parsed),
+				"emitted promote workflow must be valid YAML")
+		})
+	}
 }
 
 func TestPromoteGenerator_RollbackOnFailureInput(t *testing.T) {
