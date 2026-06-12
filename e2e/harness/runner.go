@@ -485,7 +485,7 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 	if result.Conclusion != "success" {
 		r.t.Logf("  Orchestrate failed with conclusion: %s", result.Conclusion)
 		r.t.Logf("  Workflow logs:\n%s", result.Logs)
-		return fmt.Errorf("orchestrate workflow failed: %s", result.Error)
+		return workflowFailureError("orchestrate", result)
 	}
 
 	// Debug: show what jobs were parsed
@@ -626,7 +626,7 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 
 	if result.Conclusion != "success" {
 		r.t.Logf("  Promote workflow logs:\n%s", result.Logs)
-		return fmt.Errorf("promote workflow failed: %s", result.Error)
+		return workflowFailureError("promote", result)
 	}
 
 	// Sync state from Gitea

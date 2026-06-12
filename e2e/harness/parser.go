@@ -29,6 +29,14 @@ type ExtendedWorkflowResult struct {
 	Jobs       map[string]*JobResultExtended
 	Logs       string
 	Error      string
+	// ExecError is true when act itself could not run the workflow to a real
+	// conclusion: the act invocation exited non-zero (a docker-exec or act
+	// transport hiccup) rather than a workflow job genuinely concluding
+	// "failure". It distinguishes a transient infrastructure flake (safe to
+	// retry from a clean slate) from a real job-level failure or an assertion
+	// mismatch (which must fail deterministically). A run that parsed real job
+	// events and concluded "failure" leaves ExecError false.
+	ExecError bool
 }
 
 // JobResultExtended contains detailed result of a single job

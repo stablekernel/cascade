@@ -101,7 +101,7 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 
 	if result.Conclusion != "success" {
 		r.t.Logf("  HotfixPlan workflow logs:\n%s", result.Logs)
-		return fmt.Errorf("hotfix plan workflow failed: %s", result.Error)
+		return workflowFailureError("hotfix plan", result)
 	}
 
 	r.t.Logf("  HotfixPlan: parsed %d jobs", len(result.Jobs))
@@ -397,7 +397,7 @@ func (r *Runner) executeHotfixMerged(ctx context.Context, step *HotfixMergedStep
 
 	if result.Conclusion != "success" {
 		r.t.Logf("  HotfixMerged workflow logs:\n%s", result.Logs)
-		return fmt.Errorf("hotfix merged workflow failed: %s", result.Error)
+		return workflowFailureError("hotfix merged", result)
 	}
 
 	if err := r.syncStateFromGitea(ctx, config); err != nil {

@@ -384,14 +384,45 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 // up as a green-but-empty scenario (#25).
 func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string, exitCode int) {
 	if exitCode != 0 {
+		// ExecError means act could NOT run the workflow to a conclusion: a
+		// genuine act/docker transport or exec hiccup where no job reached a
+		// conclusion. It must NOT cover the case where act ran the workflow and
+		// a job genuinely concluded "failure" - that is a real, deterministic
+		// defect and retrying it would mask a real failure as transient.
+		//
+		// So only tag ExecError when the non-zero exit is unaccompanied by any
+		// parsed job-level failure. If a job concluded "failure" (or the
+		// reconciled conclusion is already "failure"), this was a real outcome.
+		execError := !hasJobFailure(result)
 		result.Conclusion = "failure"
 		result.Error = "workflow execution failed"
+		result.ExecError = execError
 	}
 
 	if workflowPath != "" && len(result.Jobs) == 0 && result.Conclusion != "failure" {
 		result.Conclusion = "failure"
 		result.Error = fmt.Sprintf("act produced no jobs for workflow %q (workflow missing or failed to load)", workflowPath)
 	}
+}
+
+// hasJobFailure reports whether act parsed a genuine job-level failure: either
+// the reconciled run conclusion is already "failure", or at least one parsed
+// job concluded "failure". When true, a non-zero act exit reflects a real
+// workflow outcome rather than an act/docker exec hiccup, so it must not be
+// classified as a transient ExecError.
+func hasJobFailure(result *ExtendedWorkflowResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.Conclusion == "failure" {
+		return true
+	}
+	for _, job := range result.Jobs {
+		if job != nil && job.Conclusion == "failure" {
+			return true
+		}
+	}
+	return false
 }
 
 // buildActArgs builds additional act command arguments. eventPath is the

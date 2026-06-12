@@ -29,22 +29,15 @@ func TestMultiStepScenarios(t *testing.T) {
 		t.Run(scenario.Name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 			defer cancel()
 
-			h := harness.New(t)
-			defer h.Cleanup()
-
-			err := h.SetupInfra(ctx)
-			require.NoError(t, err, "failed to setup infrastructure")
-
-			// Stage initial repo with config
-			err = h.StageRepoFromConfig(ctx, scenario.Config)
-			require.NoError(t, err, "failed to stage repo")
-
-			// Create runner and execute
-			runner := harness.NewRunner(t, h)
-			err = runner.Run(ctx, scenario)
+			// RunMultiStepScenario runs the whole scenario with a bounded
+			// scenario-level retry on transient act/docker execution failures.
+			// Each attempt gets a fresh harness (network, gitea repo, act
+			// containers), so a retry is a clean slate. Real assertion or
+			// job-level failures fail deterministically without a retry.
+			err := harness.RunMultiStepScenario(ctx, t, scenario)
 			require.NoError(t, err, "scenario failed")
 		})
 	}
