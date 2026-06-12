@@ -858,7 +858,18 @@ func (h *Harness) getProjectRoot() (string, error) {
 	}
 }
 
-// Cleanup terminates all containers
+// Cleanup terminates all containers and removes the scenario's docker network.
+//
+// Network removal is synchronous and verified, not fire-and-forget: a single
+// scenario allocates a /16 (or /24) from the daemon's address pool, and across
+// the serial scenario suite a leaked network drains that pool until a late
+// scenario cannot allocate one and dies at setup ("all predefined address
+// pools have been fully subnetted"). The retry layer defers Cleanup per
+// attempt, so every attempt - including a failed one - releases its network
+// here. Because the act and gitea containers detach from the network during
+// their own teardown, Remove can briefly observe an "active endpoints" error;
+// a short bounded retry lets that detach settle so the count returns to
+// baseline rather than growing monotonically.
 func (h *Harness) Cleanup() {
 	ctx := context.Background()
 	if h.act != nil {
@@ -868,6 +879,25 @@ func (h *Harness) Cleanup() {
 		_ = h.gitea.Terminate(ctx)
 	}
 	if h.network != nil {
-		_ = h.network.Remove(ctx)
+		h.removeNetwork(ctx)
+	}
+}
+
+// removeNetwork removes the scenario network, waiting for and checking the
+// result. It retries briefly so a container that is still detaching cannot
+// leave the network behind, and logs (rather than swallows) a terminal
+// failure so a genuine leak is visible in the test output.
+func (h *Harness) removeNetwork(ctx context.Context) {
+	const attempts = 5
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = h.network.Remove(ctx); err == nil {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if h.t != nil {
+		h.t.Logf("warning: failed to remove docker network %q after %d attempts: %v",
+			h.networkName, attempts, err)
 	}
 }
