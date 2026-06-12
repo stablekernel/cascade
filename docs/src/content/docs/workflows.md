@@ -1,4 +1,7 @@
-# Workflows
+---
+title: Workflows
+description: Internals of the orchestrate and promote workflows that cascade emits, including flow diagrams, inputs, outputs, change detection, and the hotfix mechanism.
+---
 
 The framework generates two reusable workflows from your manifest: **Orchestrate** and **Promote**. Both are written by `cascade generate-workflow`.
 
@@ -130,7 +133,7 @@ Default mode (one step at a time)
 └──────────┘
 ```
 
-A cascade mode (e.g., `dev-to-prod`) walks the chain step by step, running deploy/finalize for each intermediate environment, with the breaking-change gate enforced at the prerelease→release boundary.
+A cascade mode (e.g., `dev-to-prod`) walks the chain step by step, running deploy/finalize for each intermediate environment, with the breaking-change gate enforced at the prerelease->release boundary.
 
 ### Triggering (Generated)
 
@@ -178,7 +181,7 @@ on:
 |-------|------|---------|-------------|
 | `mode` | choice | `default` | `default` or a cascade target (e.g., `dev-to-prod`) |
 | `force` | boolean | false | Continue on failure (default mode only) |
-| `allow_breaking_changes` | boolean | false | Required to cross the prerelease→release boundary with breaking changes |
+| `allow_breaking_changes` | boolean | false | Required to cross the prerelease->release boundary with breaking changes |
 | `dry_run` | boolean | false | Preview without deploying |
 | `deploys` | string | `all` | Comma-separated deploy names or `all` |
 | `rollback_on_failure` | boolean | true | Atomic semantics: revert on failure |
@@ -246,17 +249,17 @@ The mode dropdown is generated from the configured `environments` list.
 
 | Mode (example) | Behavior |
 |----------------|----------|
-| `dev-to-test` | Promote dev → test |
-| `dev-to-uat` | Cascade dev → test → uat (each step deployed and finalized) |
+| `dev-to-test` | Promote dev -> test |
+| `dev-to-uat` | Cascade dev -> test -> uat (each step deployed and finalized) |
 | `dev-to-prod` | Full cascade through all environments + release |
 | `uat-to-prod` | Partial cascade from uat onward |
 | `test-to-prod` | Standard release |
 
-Cascade promotions are atomic per environment. The breaking-change gate runs at the prerelease→release boundary; pass `allow_breaking_changes: true` to proceed past it.
+Cascade promotions are atomic per environment. The breaking-change gate runs at the prerelease->release boundary; pass `allow_breaking_changes: true` to proceed past it.
 
 ### Publish Step
 
-When the manifest contains a `publish:` callback, the promote workflow includes a publish step that runs once per configured build at the prerelease→release boundary. The framework reads `artifact_id` from the source environment's build state and dispatches the publish workflow with:
+When the manifest contains a `publish:` callback, the promote workflow includes a publish step that runs once per configured build at the prerelease->release boundary. The framework reads `artifact_id` from the source environment's build state and dispatches the publish workflow with:
 
 ```
 build_name=<build name>
@@ -275,7 +278,7 @@ For prod promotions:
 2. Auto-increment based on conventional commits since that tag (major / minor / patch)
 3. Or use the `version_override` input for an explicit bump
 
-The framework drops the RC suffix when crossing the prerelease→release boundary.
+The framework drops the RC suffix when crossing the prerelease->release boundary.
 
 ## Hotfix
 

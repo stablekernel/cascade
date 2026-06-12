@@ -1,4 +1,7 @@
-# Architecture
+---
+title: Architecture
+description: System design and internals of cascade.
+---
 
 System design and internals of cascade.
 
@@ -14,36 +17,36 @@ System design and internals of cascade.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        cascade                            │
+│                              cascade                                  │
 ├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐      │
-│  │    CLI Tool   │    │   Workflows   │    │   Actions     │      │
-│  │   (cascade)  │    │  (reusable)   │    │  (composite)  │      │
-│  └───────────────┘    └───────────────┘    └───────────────┘      │
-│          │                    │                    │               │
-│          └────────────────────┼────────────────────┘               │
-│                               │                                    │
-│  ┌───────────────────────────────────────────────────────────────┐ │
-│  │                     Go Packages                                │ │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │ │
-│  │  │ config  │ │ changes │ │changelog│ │generate │ │ release │ │ │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ │ │
-│  │  ┌───────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐           │ │
-│  │  │orchestrate│ │ promote │ │ version │ │  reset  │           │ │
-│  │  └───────────┘ └─────────┘ └─────────┘ └─────────┘           │ │
-│  │  ┌─────────┐                                                  │ │
-│  │  │   git   │                                                  │ │
-│  │  └─────────┘                                                  │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│                                                                     │
+│                                                                       │
+│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐         │
+│  │   CLI Tool    │    │   Workflows   │    │    Actions    │         │
+│  │   (cascade)   │    │  (reusable)   │    │  (composite)  │         │
+│  └───────────────┘    └───────────────┘    └───────────────┘         │
+│          │                    │                    │                  │
+│          └────────────────────┼────────────────────┘                  │
+│                               │                                       │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │                          Go Packages                          │   │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐  │   │
+│  │  │ config  │ │ changes │ │changelog│ │generate │ │ release │  │   │
+│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘  │   │
+│  │  ┌───────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │   │
+│  │  │orchestrate│ │ promote │ │ version │ │  reset  │            │   │
+│  │  └───────────┘ └─────────┘ └─────────┘ └─────────┘            │   │
+│  │  ┌─────────┐                                                  │   │
+│  │  │   git   │                                                  │   │
+│  │  └─────────┘                                                  │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+│                                                                       │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                     ┌───────────┴───────────┐
                     ▼                       ▼
             ┌───────────────┐       ┌───────────────┐
             │Adopting Repos │       │   GitHub API  │
-            │ (callbacks)   │       │  (releases)   │
+            │  (callbacks)  │       │  (releases)   │
             └───────────────┘       └───────────────┘
 ```
 
@@ -52,7 +55,7 @@ System design and internals of cascade.
 ```
 cascade/
 ├── cmd/
-│   └── cascade/           # CLI entry point
+│   └── cascade/            # CLI entry point
 │       └── main.go
 ├── internal/
 │   ├── config/             # Config parsing and validation
@@ -146,11 +149,11 @@ type BuildConfig struct {
 }
 
 type EnvState struct {
-    SHA         string                 `yaml:"sha,omitempty"`
-    Version     string                 `yaml:"version,omitempty"`
-    CommittedAt string                 `yaml:"committed_at,omitempty"`
-    CommittedBy string                 `yaml:"committed_by,omitempty"`
-    Builds      map[string]*BuildState `yaml:"builds,omitempty"`
+    SHA         string                  `yaml:"sha,omitempty"`
+    Version     string                  `yaml:"version,omitempty"`
+    CommittedAt string                  `yaml:"committed_at,omitempty"`
+    CommittedBy string                  `yaml:"committed_by,omitempty"`
+    Builds      map[string]*BuildState  `yaml:"builds,omitempty"`
     Deploys     map[string]*DeployState `yaml:"deploys,omitempty"`
 }
 ```
@@ -290,7 +293,7 @@ func Finalize(cfg *config.CICDFile, promotion, sha, repo string, dryRun bool) er
 Key features:
 - Per-deployable change detection
 - Determines which deploys need updates based on trigger path changes
-- Handles release state transitions (draft → pre-release → published)
+- Handles release state transitions (draft -> pre-release -> published)
 
 ### internal/version
 
@@ -308,9 +311,9 @@ func Calculate(cfg *config.CICDFile, env, baseSHA, headSHA string) (*VersionResu
 ```
 
 Algorithm:
-- Breaking changes → major bump
-- Features → minor bump
-- Fixes → patch bump
+- Breaking changes -> major bump
+- Features -> minor bump
+- Fixes -> patch bump
 - Pre-release environments get RC suffix
 
 ### internal/reset
@@ -407,27 +410,18 @@ Execution waves:
 
 ## Manifest State Machine
 
-```
-                     merge to trunk
-                           │
-                           ▼
-┌──────────┐         ┌──────────┐
-│  Empty   │────────▶│   Dev    │
-└──────────┘         └──────────┘
-                           │
-                     manual promote
-                           │
-                           ▼
-                     ┌──────────┐
-                     │   Test   │ ← pre-release created
-                     └──────────┘
-                           │
-                     manual promote
-                           │
-                           ▼
-                     ┌──────────┐
-                     │   Prod   │ ← release published
-                     └──────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> Empty
+    Empty --> Dev: merge to trunk
+    Dev --> Test: manual promote
+    Test --> Prod: manual promote
+    note right of Test
+        pre-release created
+    end note
+    note right of Prod
+        release published
+    end note
 ```
 
 Each environment tracks:
@@ -490,21 +484,21 @@ For deployments spanning multiple repositories (e.g., backend + CDK + K8s), the 
 
 ```
                     ┌───────────────────────────────────────────┐
-                    │            Primary Repo (Backend)         │
-                    │  - Owns environment state machine         │
-                    │  - Coordinates all promotions             │
-                    │  - Tracks external deploy state           │
+                    │           Primary Repo (Backend)           │
+                    │  - Owns environment state machine          │
+                    │  - Coordinates all promotions              │
+                    │  - Tracks external deploy state            │
                     └───────────────────────────────────────────┘
                                         ▲
                     ┌───────────────────┼───────────────────┐
                     │                   │                   │
-            ┌───────┴───────┐   ┌───────┴───────┐   ┌───────┴───────┐
-            │  Satellite A  │   │  Satellite B  │   │  Satellite C  │
-            │   (CDK Infra) │   │ (K8s Manifests)│   │  (Terraform)  │
-            │               │   │               │   │               │
-            │ Notifies after│   │ Notifies after│   │ Notifies after│
-            │ dev deploy    │   │ dev deploy    │   │ dev deploy    │
-            └───────────────┘   └───────────────┘   └───────────────┘
+            ┌───────┴────────┐  ┌───────┴────────┐  ┌───────┴────────┐
+            │  Satellite A   │  │  Satellite B   │  │  Satellite C   │
+            │  (CDK Infra)   │  │ (K8s Manifests)│  │  (Terraform)   │
+            │                │  │                │  │                │
+            │ Notifies after │  │ Notifies after │  │ Notifies after │
+            │ dev deploy     │  │ dev deploy     │  │ dev deploy     │
+            └────────────────┘  └────────────────┘  └────────────────┘
 ```
 
 ### Communication Flow
@@ -628,7 +622,7 @@ needs to touch the generator.
 ### Forward-compatibility guarantee
 
 Both capabilities, when they arrive, will follow the same additive-only policy
-described in [versioning.md](versioning.md): new optional fields under
+described in [Versioning & Schema](/cascade/versioning/): new optional fields under
 `environment_config.<name>`, new optional top-level blocks if needed, and no
 removal or re-typing of existing fields. Neither will require a `schema_version`
 bump. Manifests that do not opt in to the new fields continue to work exactly as

@@ -1,4 +1,7 @@
-# CLI Reference
+---
+title: CLI Reference
+description: Complete reference for every cascade command, flag, subcommand, environment variable, and exit code.
+---
 
 Complete reference for the `cascade` command-line tool.
 
@@ -370,7 +373,7 @@ cascade promote finalize \
 
 ### hotfix
 
-Apply a trunk commit onto an environment pinned to an older base. A hotfix targets one environment on its `env/<env>` integration branch. The fix must already be on trunk; cascade refuses to apply a commit that is not an ancestor of trunk tip. The subcommands compute and validate the hotfix and write its final state; the cherry-pick, build, and deploy run in the generated `cascade-hotfix.yaml` workflow. See the Hotfix section of [workflows.md](workflows.md) for the full flow.
+Apply a trunk commit onto an environment pinned to an older base. A hotfix targets one environment on its `env/<env>` integration branch. The fix must already be on trunk; cascade refuses to apply a commit that is not an ancestor of trunk tip. The subcommands compute and validate the hotfix and write its final state; the cherry-pick, build, and deploy run in the generated `cascade-hotfix.yaml` workflow. See the Hotfix section of [Workflows](/cascade/workflows/) for the full flow.
 
 #### hotfix plan
 

@@ -1,0 +1,84 @@
+/*
+ * Cascade brand theme.
+ *
+ * Real CSS-variable overrides of Starlight's design tokens, not a theme fork.
+ * Dark mode is the default (see :root below); a light variant is provided for
+ * readers who toggle it. Palette: cyan-teal accent over a deep slate base with
+ * cool blue-grays. Technical and crisp.
+ */
+
+/* ---- Accent: cyan-teal --------------------------------------------------- */
+/* Starlight derives links, focus rings, and active nav from --sl-color-accent*. */
+:root {
+  --sl-color-accent-low: #06343a; /* deep teal shadow */
+  --sl-color-accent: #36d0c4; /* cascade cyan-teal */
+  --sl-color-accent-high: #8af0e8; /* bright aqua highlight */
+
+  /* Brand convenience tokens. */
+  --cascade-teal: #36d0c4;
+  --cascade-teal-deep: #1f9b92;
+  --cascade-teal-glow: #8af0e8;
+  --cascade-slate: #8a929c;
+}
+
+/* ---- Dark mode (DEFAULT): deep slate base -------------------------------- */
+:root,
+:root[data-theme='dark'] {
+  --sl-color-white: #f4f7f8;
+  --sl-color-gray-1: #e2e8ec;
+  --sl-color-gray-2: #bfc8cf;
+  --sl-color-gray-3: #8a929c; /* cool blue-gray */
+  --sl-color-gray-4: #555d66;
+  --sl-color-gray-5: #333b42; /* slate panel */
+  --sl-color-gray-6: #222a30; /* slate surface */
+  --sl-color-black: #151b20; /* deep slate base */
+
+  --sl-color-bg: #151b20;
+  --sl-color-bg-nav: #1a2228;
+  --sl-color-bg-sidebar: #1a2228;
+
+  /* Cool the text-accent so inline links read as aqua, not neon. */
+  --sl-color-text-accent: var(--cascade-teal-glow);
+  --sl-color-hairline-shade: #283036;
+}
+
+/* ---- Light mode (toggle): cool grays, teal accent retained --------------- */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #c2f0eb;
+  --sl-color-accent: #0f8d83; /* deepened for contrast on light bg */
+  --sl-color-accent-high: #075d56;
+
+  --sl-color-white: #151b20;
+  --sl-color-gray-1: #222a30;
+  --sl-color-gray-2: #333b42;
+  --sl-color-gray-3: #555d66;
+  --sl-color-gray-4: #8a929c;
+  --sl-color-gray-5: #bfc8cf;
+  --sl-color-gray-6: #e2e8ec;
+  --sl-color-gray-7: #f1f4f5;
+  --sl-color-black: #ffffff;
+
+  --sl-color-text-accent: var(--sl-color-accent);
+}
+
+/* ---- Splash hero: balance the tagline ------------------------------------ */
+.hero > .copy {
+  text-wrap: balance;
+}
+
+/* Tasteful teal marker on the active sidebar link. */
+.sidebar a[aria-current='page'] {
+  border-inline-start-color: var(--cascade-teal);
+}
+
+/* ---- Leading page illustration: centered, sized-down page header --------- */
+/* When a guide leads with a lone transparent illustration as its first content
+   block, constrain and center it so it reads as a header rather than a
+   full-width banner. */
+.sl-markdown-content > p:first-of-type > img:only-child {
+  display: block;
+  width: 100%;
+  max-width: 580px;
+  height: auto;
+  margin: 0.25rem auto 2rem;
+}

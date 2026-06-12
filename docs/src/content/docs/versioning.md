@@ -1,4 +1,7 @@
-# Versioning and schema compatibility
+---
+title: Versioning and schema compatibility
+description: How the cascade manifest schema is versioned and how the CLI decides whether it can read a given manifest, including compatibility rules and the hotfix version segment.
+---
 
 The cascade manifest is the contract between your repository and the cascade
 CLI. This document describes how the manifest schema is versioned and how the
@@ -109,7 +112,7 @@ See [SECURITY.md](https://github.com/stablekernel/cascade/blob/main/SECURITY.md)
 
 ## Hotfix version segment
 
-A hotfix applies a single trunk commit onto an environment pinned to an older trunk base (see the Hotfix section of [workflows.md](workflows.md)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (an rc) or already published.
+A hotfix applies a single trunk commit onto an environment pinned to an older trunk base (see the Hotfix section of [Workflows](/cascade/workflows/)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (an rc) or already published.
 
 ### rc-based (unpublished) base
 

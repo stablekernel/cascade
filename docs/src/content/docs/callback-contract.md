@@ -1,4 +1,7 @@
-# Callback Contract
+---
+title: Callback Contract
+description: Defines the inputs, outputs, and structural requirements for validate, build, deploy, and publish callback workflows invoked by the cascade framework.
+---
 
 The framework calls your workflows (callbacks) during CI/CD execution. This document defines the contract your workflows must follow.
 
@@ -25,7 +28,7 @@ Framework                            Your Repository
 | **Validate** | Pre-build checks (lint, test) | environment, sha, dry_run |
 | **Build** | Produce artifacts | environment, sha, dry_run |
 | **Deploy** | Apply changes to an environment | environment, sha, dry_run, plus build outputs |
-| **Publish** | Retag artifacts at the prerelease→release boundary | build_name, old_version, new_version, sha, artifact_id |
+| **Publish** | Retag artifacts at the prerelease->release boundary | build_name, old_version, new_version, sha, artifact_id |
 
 ## Standard Inputs
 
@@ -316,7 +319,7 @@ jobs:
 
 ## Publish Workflow Contract
 
-The publish callback runs once per build at the prerelease→release boundary (when a draft RC is published as a final semver release). Use it to retag artifacts that still carry their RC version.
+The publish callback runs once per build at the prerelease->release boundary (when a draft RC is published as a final semver release). Use it to retag artifacts that still carry their RC version.
 
 ### Required Structure
 
@@ -477,7 +480,7 @@ jobs:
     environment: ${{ inputs.environment }}
 ```
 
-Configure in GitHub: **Settings → Environments → Add required reviewers**.
+Configure in GitHub: **Settings -> Environments -> Add required reviewers**.
 
 ## Dry Run Handling
 
@@ -510,10 +513,10 @@ With `retries: N`, failed callbacks retry up to N times before final failure.
 
 ### Keep callbacks focused
 
-- Build → produce artifacts
-- Deploy → apply to environment
-- Validate → check quality
-- Publish → retag
+- Build -> produce artifacts
+- Deploy -> apply to environment
+- Validate -> check quality
+- Publish -> retag
 
 ### Consistent naming
 
