@@ -120,12 +120,26 @@ func TestNormalizeWorkflowResult_ExecErrorTagging(t *testing.T) {
 		wantExecError  bool
 	}{
 		{
-			name:           "non-zero exit tags transient exec error",
+			name:           "non-zero exit with no jobs tags transient exec error",
 			jobs:           map[string]*JobResultExtended{},
 			workflowPath:   ".github/workflows/promote.yaml",
 			exitCode:       1,
 			wantConclusion: "failure",
 			wantExecError:  true,
+		},
+		{
+			// Regression: act exits non-zero when a job genuinely concludes
+			// "failure". That is a real, deterministic defect, not an
+			// act/docker transport hiccup, so ExecError must stay false and the
+			// scenario runner must NOT retry it.
+			name: "non-zero exit with a failed job is a real failure not transient",
+			jobs: map[string]*JobResultExtended{
+				"build": {Name: "build", Conclusion: "failure"},
+			},
+			workflowPath:   ".github/workflows/promote.yaml",
+			exitCode:       1,
+			wantConclusion: "failure",
+			wantExecError:  false,
 		},
 		{
 			name:           "zero exit with no jobs is a real failure not transient",
