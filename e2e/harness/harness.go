@@ -344,9 +344,23 @@ func generateStubWorkflow(name, scenarioTag string) string {
 	if scenarioTag != "" {
 		displayName = fmt.Sprintf("%s [scenario-%s]", name, scenarioTag)
 	}
+	// Declare the inputs a real promote/orchestrate deploy callback accepts so the
+	// generator discovers them and threads the matching preflight outputs through
+	// each deploy's with: block. image_tag in particular drives the
+	// source_image_tag passthrough in the generated promote workflow.
 	return fmt.Sprintf(`name: %s
 on:
   workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      image_tag:
+        required: false
+        type: string
 jobs:
   %s:
     runs-on: ubuntu-latest
