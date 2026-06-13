@@ -19,22 +19,69 @@ func IsTransientWorkflowError(err error) bool {
 	return errors.Is(err, errTransientWorkflow)
 }
 
+// workflowError is the error a failing workflow step returns. Beyond the
+// message it carries the failing run's raw act stdout/stderr so the scenario
+// retry layer can persist it as evidence when the retry budget is exhausted -
+// preserving the stack-trace origin of a crash that the CI log would otherwise
+// expire. When transient is true it wraps errTransientWorkflow so the scenario
+// runner may retry; otherwise it is a deterministic failure that fails on the
+// first attempt.
+type workflowError struct {
+	msg       string
+	logs      string
+	transient bool
+}
+
+// Error returns the human-readable failure message.
+func (e *workflowError) Error() string { return e.msg }
+
+// Unwrap exposes errTransientWorkflow for transient failures so
+// IsTransientWorkflowError (and errors.Is) classify them as retryable, and nil
+// otherwise so a deterministic failure never matches the transient sentinel.
+func (e *workflowError) Unwrap() error {
+	if e.transient {
+		return errTransientWorkflow
+	}
+	return nil
+}
+
+// actLogs returns the raw act stdout/stderr captured on the failing run, used by
+// the retry layer to persist crash evidence. It is empty when no logs were
+// available.
+func (e *workflowError) actLogs() string { return e.logs }
+
 // workflowFailureError builds the error returned when a workflow run concluded
 // in failure on a non-expect_failure step. When the failure was an act/docker
-// execution hiccup (result.ExecError), the error wraps errTransientWorkflow so
-// the scenario runner may retry it from a fresh repo and fresh containers. A
-// real job-level failure conclusion (ExecError false) yields a plain error that
-// is never retried.
+// execution hiccup (result.ExecError), the error is classified transient so the
+// scenario runner may retry it from a fresh repo and fresh containers. A real
+// job-level failure or a runtime crash (ExecError false) yields a deterministic
+// error that is never retried. The returned error always carries the run's raw
+// act logs so the retry layer can persist evidence on exhaustion.
 //
 // This must only be called on a genuine failure path. An expect_failure step
 // that legitimately concluded "failure" is the expected outcome and returns nil
 // before reaching here, so a transient classification can never mask it.
 func workflowFailureError(action string, result *ExtendedWorkflowResult) error {
 	if result == nil {
-		return fmt.Errorf("%s workflow failed", action)
+		return &workflowError{msg: fmt.Sprintf("%s workflow failed", action)}
 	}
 	if result.ExecError {
-		return fmt.Errorf("%s workflow failed: %s: %w", action, result.Error, errTransientWorkflow)
+		return &workflowError{
+			msg:       fmt.Sprintf("%s workflow failed: %s: %s", action, result.Error, errTransientWorkflow),
+			logs:      result.Logs,
+			transient: true,
+		}
 	}
-	return fmt.Errorf("%s workflow failed: %s", action, result.Error)
+	return &workflowError{
+		msg:  fmt.Sprintf("%s workflow failed: %s", action, result.Error),
+		logs: result.Logs,
+	}
+}
+
+// workflowExecError is an alias for workflowFailureError, named for the call
+// sites that surface an act execution failure carrying raw logs. It exists so
+// the intent (capture-and-classify an act run failure) reads clearly at the call
+// site and in tests.
+func workflowExecError(action string, result *ExtendedWorkflowResult) error {
+	return workflowFailureError(action, result)
 }
