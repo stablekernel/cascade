@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -178,5 +180,68 @@ func TestRunScenarioWithRetry_ExhaustsAttemptsOnPersistentTransient(t *testing.T
 	}
 	if !strings.Contains(err.Error(), fmt.Sprintf("after %d attempts", scenarioRetryAttempts)) {
 		t.Fatalf("final error should report the attempt count: %v", err)
+	}
+}
+
+// TestRunScenarioWithRetry_PersistsEvidenceOnExhaustion verifies that when a
+// scenario exhausts its retry budget, the last attempt's full act stdout/stderr
+// is written to an artifact file and the path is referenced in the returned
+// error, so a future CI failure yields the stack-trace origin instead of an
+// expired log.
+func TestRunScenarioWithRetry_PersistsEvidenceOnExhaustion(t *testing.T) {
+	fastRetries(t)
+
+	dir := t.TempDir()
+	prev := artifactDir
+	artifactDir = dir
+	t.Cleanup(func() { artifactDir = prev })
+
+	const dump = "panic: boom\n\ngoroutine 1 [running]:\nruntime.gopanic(...)\n"
+	log := &fakeLogger{}
+	err := runScenarioWithRetry(context.Background(), log, "Hotfix Promote Guards", func(context.Context) error {
+		// A transient-classified failure that nonetheless carries the raw act
+		// logs (the masking case the harness must preserve evidence for).
+		return workflowExecError("orchestrate", &ExtendedWorkflowResult{
+			Conclusion: "failure",
+			Error:      "workflow execution failed",
+			Logs:       dump,
+			ExecError:  true,
+		})
+	})
+	if err == nil {
+		t.Fatal("expected an error after exhausting attempts")
+	}
+
+	// The error must reference a written artifact path.
+	if !strings.Contains(err.Error(), dir) {
+		t.Fatalf("error should reference the artifact dir %q: %v", dir, err)
+	}
+
+	// Exactly one artifact file for this scenario+last-attempt must exist and
+	// contain the raw dump.
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read artifact dir: %v", readErr)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected an artifact log to be written, dir empty")
+	}
+	var found bool
+	for _, e := range entries {
+		b, rdErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if rdErr != nil {
+			t.Fatalf("read artifact %q: %v", e.Name(), rdErr)
+		}
+		if strings.Contains(string(b), "panic: boom") {
+			found = true
+			// The filename must be unique per scenario+attempt and filesystem
+			// safe (no spaces or slashes from the scenario name).
+			if strings.ContainsAny(e.Name(), " /") {
+				t.Fatalf("artifact name %q is not filesystem safe", e.Name())
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no artifact contained the raw act dump; entries=%v", entries)
 	}
 }

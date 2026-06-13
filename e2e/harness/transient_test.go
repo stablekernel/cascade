@@ -114,18 +114,36 @@ func TestNormalizeWorkflowResult_ExecErrorTagging(t *testing.T) {
 	tests := []struct {
 		name           string
 		jobs           map[string]*JobResultExtended
+		crashed        bool
+		crashReason    string
 		workflowPath   string
 		exitCode       int
 		wantConclusion string
 		wantExecError  bool
 	}{
 		{
-			name:           "non-zero exit with no jobs tags transient exec error",
+			// Preserved behavior: a non-zero exit with no parsed jobs and NO
+			// crash signature is a benign act/docker transport hiccup and stays
+			// transient (safe to retry from a clean slate).
+			name:           "non-zero exit with no jobs and no crash signature tags transient exec error",
 			jobs:           map[string]*JobResultExtended{},
 			workflowPath:   ".github/workflows/promote.yaml",
 			exitCode:       1,
 			wantConclusion: "failure",
 			wantExecError:  true,
+		},
+		{
+			// New: a non-zero exit with no parsed jobs but carrying a Go-runtime
+			// crash signature is a REAL crash, not a flake. ExecError must stay
+			// false so the scenario runner does not retry it away.
+			name:           "non-zero exit with crash signature is not transient",
+			jobs:           map[string]*JobResultExtended{},
+			crashed:        true,
+			crashReason:    "panic: runtime error: nil pointer dereference",
+			workflowPath:   ".github/workflows/promote.yaml",
+			exitCode:       2,
+			wantConclusion: "failure",
+			wantExecError:  false,
 		},
 		{
 			// Regression: act exits non-zero when a job genuinely concludes
@@ -163,7 +181,12 @@ func TestNormalizeWorkflowResult_ExecErrorTagging(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := &ExtendedWorkflowResult{Conclusion: "success", Jobs: tt.jobs}
+			result := &ExtendedWorkflowResult{
+				Conclusion:  "success",
+				Jobs:        tt.jobs,
+				Crashed:     tt.crashed,
+				CrashReason: tt.crashReason,
+			}
 			normalizeWorkflowResult(result, tt.workflowPath, tt.exitCode)
 			if result.Conclusion != tt.wantConclusion {
 				t.Fatalf("Conclusion = %q, want %q", result.Conclusion, tt.wantConclusion)

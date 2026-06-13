@@ -2,8 +2,12 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -29,6 +33,45 @@ var scenarioRetryBackoff = 5 * time.Second
 // is a var so unit tests can replace it with a no-op (and so the production
 // path stays a single, testable seam over the docker CLI).
 var pruneBetweenAttempts = pruneDockerNetworks
+
+// artifactDir is where the raw act stdout/stderr of an exhausted scenario is
+// persisted so a future CI failure yields the stack-trace origin instead of an
+// expired log. It is a var so unit tests can redirect it to a temp dir. The
+// default lives under the e2e module so captured logs are easy to find and are
+// covered by e2e/.gitignore (which ignores *.log).
+var artifactDir = "_artifacts"
+
+// artifactNameUnsafe matches any run of characters that are not safe in a
+// cross-platform filename. The scenario name (which can contain spaces and
+// slashes) is sanitized through it so each artifact path is a single, safe
+// filename.
+var artifactNameUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// persistAttemptEvidence writes the raw act logs carried by err to a per
+// scenario+attempt artifact file and returns its path. It is best effort: if no
+// logs are available or the write fails, it returns "" and the caller proceeds
+// without an artifact reference (the scenario result must never be masked by an
+// artifact-write failure). The filename is unique per scenario+attempt so
+// parallel scenarios never collide.
+func persistAttemptEvidence(scenario string, attempt int, err error) string {
+	var we *workflowError
+	if !errors.As(err, &we) {
+		return ""
+	}
+	logs := we.actLogs()
+	if logs == "" {
+		return ""
+	}
+	if mkErr := os.MkdirAll(artifactDir, 0o755); mkErr != nil {
+		return ""
+	}
+	safe := artifactNameUnsafe.ReplaceAllString(scenario, "_")
+	path := filepath.Join(artifactDir, fmt.Sprintf("%s-attempt%d.log", safe, attempt))
+	if wrErr := os.WriteFile(path, []byte(logs), 0o644); wrErr != nil {
+		return ""
+	}
+	return path
+}
 
 // logger is the minimal logging surface a scenario attempt needs. *testing.T
 // satisfies it, and unit tests can supply a fake to assert on retry logging.
@@ -80,6 +123,15 @@ func runScenarioWithRetry(ctx context.Context, log logger, name string, attempt 
 		}
 		log.Logf("scenario %q: exhausted %d attempts; last failure was transient: %v",
 			name, scenarioRetryAttempts, err)
+	}
+
+	// The budget is exhausted. Persist the last attempt's raw act stdout/stderr
+	// so the stack-trace origin survives the CI log's retention window, and
+	// reference the artifact path in the returned error.
+	if path := persistAttemptEvidence(name, scenarioRetryAttempts, lastErr); path != "" {
+		log.Logf("scenario %q: wrote last-attempt act log to %s", name, path)
+		return fmt.Errorf("scenario %q failed after %d attempts (act log: %s): %w",
+			name, scenarioRetryAttempts, path, lastErr)
 	}
 	return fmt.Errorf("scenario %q failed after %d attempts: %w", name, scenarioRetryAttempts, lastErr)
 }

@@ -1,3 +1,6 @@
 # Test artifacts
 *.log
 coverage.out
+
+# Captured act stdout/stderr from exhausted scenario retries
+_artifacts/
