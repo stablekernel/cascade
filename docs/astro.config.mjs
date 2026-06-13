@@ -15,7 +15,28 @@ export default defineConfig({
     // mermaid auto-syncs when the reader toggles the theme.
     mermaid({
       theme: 'dark',
+      // Mermaid follows the Starlight light/dark toggle. We keep autoTheme so
+      // node fills and text stay legible in both modes, and brand only the
+      // accent surfaces (edges, borders, cluster outlines, active accent) with
+      // cascade teal/copper - colors that read on both the dark slate and the
+      // light gray Starlight backgrounds.
       autoTheme: true,
+      mermaidConfig: {
+        themeVariables: {
+          fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+          // Cascade cyan-teal: drives edges, focus accents, and active states.
+          primaryColor: '#0E8B82',
+          primaryBorderColor: '#36D0C4',
+          lineColor: '#36D0C4',
+          // Cluster (subgraph) outline in teal; transparent fill keeps the
+          // Starlight surface showing through in either mode.
+          clusterBorder: '#36D0C4',
+          clusterBkg: 'transparent',
+          // Copper/ember secondary accent for highlighted nodes.
+          tertiaryColor: '#B87333',
+          tertiaryBorderColor: '#E8702A',
+        },
+      },
     }),
     starlight({
       title: 'Cascade',

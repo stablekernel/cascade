@@ -15,39 +15,34 @@ System design and internals of cascade.
 
 ## System Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                              cascade                                  │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│  ┌───────────────┐    ┌───────────────┐    ┌───────────────┐         │
-│  │   CLI Tool    │    │   Workflows   │    │    Actions    │         │
-│  │   (cascade)   │    │  (reusable)   │    │  (composite)  │         │
-│  └───────────────┘    └───────────────┘    └───────────────┘         │
-│          │                    │                    │                  │
-│          └────────────────────┼────────────────────┘                  │
-│                               │                                       │
-│  ┌───────────────────────────────────────────────────────────────┐   │
-│  │                          Go Packages                          │   │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐  │   │
-│  │  │ config  │ │ changes │ │changelog│ │generate │ │ release │  │   │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘  │   │
-│  │  ┌───────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │   │
-│  │  │orchestrate│ │ promote │ │ version │ │  reset  │            │   │
-│  │  └───────────┘ └─────────┘ └─────────┘ └─────────┘            │   │
-│  │  ┌─────────┐                                                  │   │
-│  │  │   git   │                                                  │   │
-│  │  └─────────┘                                                  │   │
-│  └───────────────────────────────────────────────────────────────┘   │
-│                                                                       │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-            ┌───────────────┐       ┌───────────────┐
-            │Adopting Repos │       │   GitHub API  │
-            │  (callbacks)  │       │  (releases)   │
-            └───────────────┘       └───────────────┘
+```mermaid
+flowchart TD
+    subgraph cascade["cascade"]
+        direction TB
+        subgraph surfaces[" "]
+            direction LR
+            cli["CLI Tool<br/>(cascade)"]
+            wf["Workflows<br/>(reusable)"]
+            act["Actions<br/>(composite)"]
+        end
+        subgraph pkgs["Go Packages"]
+            direction LR
+            config["config"]
+            changes["changes"]
+            changelog["changelog"]
+            generate["generate"]
+            release["release"]
+            orchestrate["orchestrate"]
+            promote["promote"]
+            version["version"]
+            reset["reset"]
+            git["git"]
+        end
+        surfaces --> pkgs
+    end
+
+    cascade --> repos["Adopting Repos<br/>(callbacks)"]
+    cascade --> api["GitHub API<br/>(releases)"]
 ```
 
 ## Directory Structure
@@ -482,23 +477,13 @@ For deployments spanning multiple repositories (e.g., backend + CDK + K8s), the 
 
 ### Primary/Satellite Model
 
-```
-                    ┌───────────────────────────────────────────┐
-                    │           Primary Repo (Backend)           │
-                    │  - Owns environment state machine          │
-                    │  - Coordinates all promotions              │
-                    │  - Tracks external deploy state            │
-                    └───────────────────────────────────────────┘
-                                        ▲
-                    ┌───────────────────┼───────────────────┐
-                    │                   │                   │
-            ┌───────┴────────┐  ┌───────┴────────┐  ┌───────┴────────┐
-            │  Satellite A   │  │  Satellite B   │  │  Satellite C   │
-            │  (CDK Infra)   │  │ (K8s Manifests)│  │  (Terraform)   │
-            │                │  │                │  │                │
-            │ Notifies after │  │ Notifies after │  │ Notifies after │
-            │ dev deploy     │  │ dev deploy     │  │ dev deploy     │
-            └────────────────┘  └────────────────┘  └────────────────┘
+```mermaid
+flowchart BT
+    satA["Satellite A<br/>(CDK Infra)"] -- "notify after dev deploy" --> primary
+    satB["Satellite B<br/>(K8s Manifests)"] -- "notify after dev deploy" --> primary
+    satC["Satellite C<br/>(Terraform)"] -- "notify after dev deploy" --> primary
+
+    primary["<b>Primary Repo (Backend)</b><br/>Owns environment state machine<br/>Coordinates all promotions<br/>Tracks external deploy state"]
 ```
 
 ### Communication Flow
