@@ -50,24 +50,48 @@ type ExtendedWorkflowResult struct {
 	CrashReason string
 }
 
-// goroutineDumpRE matches the header of a Go goroutine dump, e.g.
-// "goroutine 1 [running]:". This is the anchored runtime signature emitted on a
-// panic or fatal error; it does not match prose that merely contains the word
-// "goroutine".
-var goroutineDumpRE = regexp.MustCompile(`(?m)^goroutine \d+ \[`)
-
 // signalCrashRE matches a Go runtime fatal-signal line, e.g.
 // "[signal SIGSEGV: segmentation violation ...]" or a SIGABRT report.
 var signalCrashRE = regexp.MustCompile(`signal SIG(SEGV|ABRT|BUS|FPE|ILL)`)
 
+// cascadeFrameRE matches a Go stack-trace frame that belongs to cascade's own
+// code, e.g. "github.com/stablekernel/cascade/internal/orchestrate.(*Planner).Plan(...)"
+// or "github.com/stablekernel/cascade/cmd/cascade.run(...)". It is deliberately
+// strict: the package path must be under cascade's internal or cmd tree AND be
+// followed by a "." and a function/receiver identifier, so it matches a real
+// stack frame and not git-URL prose, the bare word "cascade", stdlib packages
+// such as "internal/poll", or vendored "internal" packages like
+// "go.opentelemetry.io/otel/internal/global".
+var cascadeFrameRE = regexp.MustCompile(`stablekernel/cascade/(internal|cmd)[^\s]*\.[A-Za-z0-9_]`)
+
 // detectCrashSignature reports whether raw act stdout/stderr carries a Go
-// runtime crash signature, returning the first matched signature line as the
-// reason. It anchors on real runtime signatures (a goroutine dump header, a
-// "panic:" or "fatal error:" at the start of a line, a fatal signal report) so
-// it does not misfire on benign occurrences of the words "panic" or
-// "goroutine" inside an ordinary log line (e.g. a deploy script's prose).
+// runtime crash originating in cascade's own code, returning the matched crash
+// trigger line as the reason.
+//
+// A run is classified as a cascade crash only when BOTH conditions hold:
+//
+//  1. A real crash TRIGGER is present: a line beginning (trimmed) with "panic:"
+//     or "fatal error:", or a fatal-signal report ("signal SIGSEGV" and
+//     friends).
+//  2. The dump contains a real cascade STACK FRAME (see cascadeFrameRE).
+//
+// This pairing is intentional. act routinely prints full goroutine dumps on its
+// own cancellation/teardown paths (for example monitorJobCancellation under
+// cancel-in-progress emits a bare "goroutine N [...]:" dump with no panic and
+// only nektos/act frames). A bare goroutine dump, or a panic that carries only
+// act/docker/stdlib frames, is act-infrastructure noise that a retry can absorb,
+// not a cascade defect. Requiring both a trigger and a cascade frame keeps a
+// genuine cascade-CLI panic a definitive failure while letting infra flakes stay
+// transient. A bare goroutine-dump header is therefore NOT a trigger.
 func detectCrashSignature(logs string) (bool, string) {
 	if logs == "" {
+		return false, ""
+	}
+
+	// First, require a real cascade stack frame anywhere in the dump. Without a
+	// cascade frame the crash (if any) is act/docker/stdlib only, which is
+	// infrastructure noise a retry should absorb.
+	if !cascadeFrameRE.MatchString(logs) {
 		return false, ""
 	}
 
@@ -82,8 +106,6 @@ func detectCrashSignature(logs string) (bool, string) {
 		case strings.HasPrefix(trimmed, "panic:"):
 			return true, trimmed
 		case strings.HasPrefix(trimmed, "fatal error:"):
-			return true, trimmed
-		case goroutineDumpRE.MatchString(line):
 			return true, trimmed
 		case signalCrashRE.MatchString(line):
 			return true, trimmed
