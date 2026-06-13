@@ -717,10 +717,14 @@ func (h *Harness) ensureCLIBinary(ctx context.Context) (string, error) {
 
 // localizeWorkflows rewrites generated workflows so external action refs
 // (`stablekernel/cascade/.github/actions/X@ref`) point at the local
-// mock actions, and reusable-workflow refs (`uses: build.yaml`) gain the
-// `./` prefix act needs for local resolution. Each pass is checked for
-// success and verified by grepping for any remaining `stablekernel/...` ref;
-// the operation retries on transient failure.
+// mock actions. A second pass adds the `./` prefix act needs for any bare
+// local reusable-workflow ref (`uses: build.yaml` -> `uses: ./build.yaml`).
+// That pass is idempotent: it skips values that are already `./`-qualified,
+// already a `.github/...` path, or a cross-repo `owner/repo/...@ref`, so an
+// already-normalized `uses: ./.github/workflows/build.yaml` is left unchanged
+// rather than gaining a second `./` prefix. Each pass is checked for success
+// and verified by grepping for any remaining `stablekernel/...` ref; the
+// operation retries on transient failure.
 //
 // The `.github/workflows/*.yaml` glob is intentionally broad: it covers every
 // generated workflow, including cascade-hotfix.yaml (whose plan/apply/finalize
@@ -729,6 +733,19 @@ func (h *Harness) ensureCLIBinary(ctx context.Context) (string, error) {
 // GenerateWorkflows only appends a per-scenario suffix to the workflow-level
 // `name:` line, so workflow_files assertions over hotfix job/trigger content
 // remain stable as long as they do not assert on the top-level name line.
+// actionLocalizeSedExpr rewrites external composite-action refs
+// (`stablekernel/cascade/.github/actions/X@ref`) to the local mock path
+// (`./.github/actions/X`).
+const actionLocalizeSedExpr = `s|stablekernel/cascade/\.github/actions/\([^@]*\)@[^[:space:]]*|./.github/actions/\1|g`
+
+// usesLocalizeSedExpr prefixes a bare local reusable-workflow ref
+// (`uses: build.yaml`) with `./` so act can resolve it. It is idempotent: the
+// capture group requires a bare filename (no leading `.`, `/`, or `@`, and no
+// embedded `/`), so an already-qualified `uses: ./.github/workflows/build.yaml`
+// or a cross-repo `uses: owner/repo/...@ref` is left unchanged rather than
+// gaining a second `./` prefix.
+const usesLocalizeSedExpr = `s|uses: \([^./@][^/@]*\.yaml\)|uses: ./\1|g`
+
 func (h *Harness) localizeWorkflows(ctx context.Context) error {
 	const maxAttempts = 3
 	const retryDelay = 200 * time.Millisecond
@@ -737,8 +754,8 @@ func (h *Harness) localizeWorkflows(ctx context.Context) error {
 		"bash", "-c",
 		"set -e; cd /tmp/repo && " +
 			"for f in .github/workflows/*.yaml; do " +
-			"  sed -i 's|stablekernel/cascade/\\.github/actions/\\([^@]*\\)@[^[:space:]]*|./.github/actions/\\1|g' \"$f\"; " +
-			"  sed -i 's|uses: \\([^/][^@]*\\.yaml\\)|uses: ./\\1|g' \"$f\"; " +
+			"  sed -i '" + actionLocalizeSedExpr + "' \"$f\"; " +
+			"  sed -i '" + usesLocalizeSedExpr + "' \"$f\"; " +
 			"done",
 	}
 	// grep -l exits 0 on match (= un-localized ref still present, which we
