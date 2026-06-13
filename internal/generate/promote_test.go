@@ -1248,6 +1248,43 @@ func TestPromoteGenerator_RollbackJobs(t *testing.T) {
 	assert.Contains(t, content, "rollback_on_failure: ${{ steps.preflight.outputs.rollback_on_failure }}")
 }
 
+// TestPromoteGenerator_NoRollbackWhenNoEnvironments asserts that with
+// environments: [] no rollback job is emitted, even when deploys: is non-empty.
+// Deploy jobs are only written when len(Environments) > 0, so a rollback job
+// would reference deploy jobs that do not exist (needs: deploy-<name>), which
+// GitHub rejects at parse ("needs job X which does not exist").
+func TestPromoteGenerator_NoRollbackWhenNoEnvironments(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{},
+		Deploys: []config.DeployConfig{
+			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// No deploy jobs exist, so no rollback job may reference them.
+	assert.NotContains(t, content, "rollback-app:",
+		"no rollback job when there are no environments (no deploy jobs exist)")
+	assert.NotContains(t, content, "deploy-app:",
+		"sanity: no deploy job is emitted when environments is empty")
+	assert.NotContains(t, content, "needs.deploy-app",
+		"no needs: reference to a nonexistent deploy job")
+	// The finalize job's needs: list must not reference deploy jobs either.
+	assert.NotContains(t, content, "deploy-app-prod",
+		"no needs: reference to a nonexistent prod deploy job")
+	assert.NotContains(t, content, "DEPLOY_RESULT_APP",
+		"no deploy-result env var dereferencing a nonexistent deploy job")
+
+	// The emitted workflow must remain structurally valid YAML.
+	var parsed map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(content), &parsed),
+		"emitted promote workflow must be valid YAML")
+}
+
 func TestPromoteGenerator_RollbackJobs_InlineRunDeploy(t *testing.T) {
 	tests := []struct {
 		name          string

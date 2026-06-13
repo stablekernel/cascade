@@ -56,3 +56,10 @@ steps:
           not_contains:
             # #18: optional dep must NOT contribute a skip-gate condition.
             - "needs.build-migrations.result == 'success'"
+        # With environments: [] no deploy jobs are emitted in promote.yaml, so
+        # rollback jobs and finalize must not reference nonexistent deploy jobs.
+        - path: ".github/workflows/promote.yaml"
+          not_contains:
+            - "rollback-deploy-app:"
+            - "needs.deploy-deploy-app"
+            - "deploy-deploy-app-prod"
