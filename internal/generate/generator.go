@@ -701,7 +701,22 @@ func (g *Generator) writeJobs(sb *strings.Builder) {
 		}
 	}
 
+	// A custom changelog is a reusable workflow and must run as its own
+	// job-level `uses:` call (it cannot be a step). Emit it before finalize so
+	// finalize can consume its output via needs.changelog.outputs.changelog.
+	if g.changelogJobEnabled() {
+		g.writeChangelogJob(sb)
+	}
+
 	g.writeFinalizeJob(sb, sorted)
+}
+
+// changelogJobEnabled reports whether a dedicated custom-changelog job should be
+// emitted. This mirrors the condition under which the finalize job would
+// otherwise produce a changelog: release and changelog enabled, with a custom
+// reusable workflow configured.
+func (g *Generator) changelogJobEnabled() bool {
+	return g.config.ReleaseEnabled() && g.config.ChangelogEnabled() && g.config.HasCustomChangelog()
 }
 
 func (g *Generator) writeSetupJob(sb *strings.Builder) {
@@ -1364,6 +1379,11 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 			allJobs = append(allJobs, fmt.Sprintf("%s-retry-%d", jobID, i))
 		}
 	}
+	// The custom changelog runs as its own job; finalize consumes its output,
+	// so it must be in finalize's needs:.
+	if g.changelogJobEnabled() {
+		allJobs = append(allJobs, changelogJobID)
+	}
 
 	sb.WriteString("  finalize:\n")
 	sb.WriteString("    name: Finalize\n")
@@ -1739,17 +1759,17 @@ func failureOrCancelledCond(jobName string) string {
 	return fmt.Sprintf("contains(fromJSON('[\"failure\", \"cancelled\"]'), needs.%s.result)", jobName)
 }
 
+// writeChangelogStep emits the built-in changelog generation as a step inside
+// the finalize job. The custom changelog path is NOT a step: a reusable
+// workflow cannot be invoked as a step `uses:`, so it is hoisted into its own
+// job (see writeChangelogJob) and this function does nothing for that case.
 func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 	if g.config.HasCustomChangelog() {
-		// Call custom changelog workflow
-		sb.WriteString("      - name: Generate Changelog (Custom)\n")
-		sb.WriteString("        id: changelog\n")
-		fmt.Fprintf(sb, "        uses: %s\n", g.config.Changelog.Workflow)
-		sb.WriteString("        with:\n")
-		sb.WriteString("          base_sha: ${{ needs.setup.outputs.base_sha }}\n")
-		sb.WriteString("          head_sha: ${{ needs.setup.outputs.head_sha }}\n")
-		sb.WriteString("          repo: ${{ github.repository }}\n")
-	} else {
+		// Custom changelog is emitted as a dedicated job (writeChangelogJob),
+		// not as a step, because a reusable workflow is invalid as a step uses:.
+		return
+	}
+	{
 		// Use built-in changelog generation
 		sb.WriteString("      - name: Setup CLI\n")
 		fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
@@ -1775,6 +1795,33 @@ func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 		sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' >> \"$GITHUB_OUTPUT\"\n")
 		sb.WriteString("          echo \"EOF\" >> \"$GITHUB_OUTPUT\"\n")
 	}
+}
+
+// changelogJobID is the job name used for the hoisted custom changelog job.
+// The finalize job depends on it and the release step reads its `changelog`
+// output via needs.changelog.outputs.changelog.
+const changelogJobID = "changelog"
+
+// writeChangelogJob emits the custom changelog reusable workflow as a
+// dedicated job-level `uses:` call. A reusable workflow cannot be invoked as a
+// step `uses:`, so the custom changelog (config.Changelog.Workflow) is hoisted
+// into its own job. The job depends on setup so it can read the SHAs the setup
+// job exposes, and exposes the called workflow's `changelog` output for the
+// finalize/release step to consume.
+//
+// This is only emitted when g.config.HasCustomChangelog() is true; the built-in
+// changelog remains a step inside the finalize job (writeChangelogStep).
+func (g *Generator) writeChangelogJob(sb *strings.Builder) {
+	fmt.Fprintf(sb, "  %s:\n", changelogJobID)
+	sb.WriteString("    name: Changelog\n")
+	sb.WriteString("    needs: [setup]\n")
+	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(g.config.Changelog.Workflow))
+	sb.WriteString("    with:\n")
+	// Pass the base SHA from the output the setup job actually declares:
+	// changelog_base_sha (not base_sha, which does not exist).
+	sb.WriteString("      changelog_base_sha: ${{ needs.setup.outputs.changelog_base_sha }}\n")
+	sb.WriteString("      head_sha: ${{ needs.setup.outputs.head_sha }}\n")
+	sb.WriteString("      repo: ${{ github.repository }}\n")
 }
 
 func (g *Generator) writeReleaseStep(sb *strings.Builder) {
@@ -1815,7 +1862,13 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 	}
 	sb.WriteString("          sha: ${{ needs.setup.outputs.head_sha }}\n")
 	if g.config.ChangelogEnabled() {
-		sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+		if g.config.HasCustomChangelog() {
+			// Custom changelog runs as its own job; read its job output.
+			fmt.Fprintf(sb, "          changelog: ${{ needs.%s.outputs.changelog }}\n", changelogJobID)
+		} else {
+			// Built-in changelog runs as a step in this job; read the step output.
+			sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+		}
 	}
 	sb.WriteString("          previous_tag: ${{ needs.setup.outputs.previous_tag }}\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())

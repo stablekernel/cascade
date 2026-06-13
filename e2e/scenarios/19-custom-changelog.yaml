@@ -1,0 +1,47 @@
+name: "Custom Changelog Workflow"
+description: "Repository with a custom changelog reusable workflow - the changelog runs as its own job and feeds the release"
+
+config:
+  trunk_branch: main
+  environments: []
+  changelog:
+    workflow: .github/workflows/cl.yaml
+    contributors: true
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  # Push first commit to trunk. The orchestrate run invokes the custom changelog
+  # reusable workflow as a dedicated job (needs: [setup]); finalize depends on it
+  # and the release step reads needs.changelog.outputs.changelog. The previous
+  # behavior emitted the reusable workflow as a step uses:, which GitHub Actions
+  # rejects at parse time, so this scenario only passes with the F7 fix.
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add initial feature"
+      files:
+        src/app.go: |
+          package main
+          func main() {
+            println("Hello v0.1.0")
+          }
+
+  - name: "Orchestrate after first commit"
+    action: orchestrate
+    expect:
+      state:
+        prerelease:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]

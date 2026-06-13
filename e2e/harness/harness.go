@@ -151,6 +151,14 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config) error 
 				files[p] = generatePublishStubWorkflow(scenarioTag)
 			}
 		}
+		// A custom changelog workflow is a reusable workflow invoked as a
+		// job-level uses:. Stub it so the generated changelog job resolves and
+		// exposes a changelog output for the release step to consume.
+		if wf, ok := config.Changelog["workflow"].(string); ok && wf != "" {
+			if p := normalizeCallbackStubPath(wf); p != "" {
+				files[p] = generateChangelogStubWorkflow(scenarioTag)
+			}
+		}
 
 		// Create mock setup-cli action that installs CLI from repo
 		// The generated workflows reference stablekernel/cascade/.github/actions/setup-cli
@@ -367,6 +375,43 @@ jobs:
     steps:
       - run: echo "Running %s"
 `, displayName, name, name)
+}
+
+// generateChangelogStubWorkflow returns a reusable workflow_call stub for a
+// custom changelog workflow. It declares the inputs the generator threads
+// (changelog_base_sha, head_sha, repo) and a changelog output so the generated
+// changelog job and the downstream release step resolve correctly.
+func generateChangelogStubWorkflow(scenarioTag string) string {
+	displayName := "Changelog"
+	if scenarioTag != "" {
+		displayName = fmt.Sprintf("Changelog [scenario-%s]", scenarioTag)
+	}
+	return fmt.Sprintf(`name: %s
+on:
+  workflow_call:
+    inputs:
+      changelog_base_sha:
+        type: string
+        required: false
+      head_sha:
+        type: string
+        required: false
+      repo:
+        type: string
+        required: false
+    outputs:
+      changelog:
+        description: Generated changelog markdown
+        value: ${{ jobs.changelog.outputs.changelog }}
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.gen.outputs.changelog }}
+    steps:
+      - id: gen
+        run: echo "changelog=- custom changelog entry" >> "$GITHUB_OUTPUT"
+`, displayName)
 }
 
 // GenerateWorkflows generates GitHub Actions workflows from cicd-config.yaml
