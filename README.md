@@ -36,36 +36,36 @@
 
 The **manifest** (`.github/manifest.yaml`) is the single source of truth. It holds both the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once; after that the generated workflows own their own execution.
 
-```
-Merge to trunk
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Orchestrate workflow (generated)                           │
-│  Setup → Validate → Build(s) → Deploy(s) → Finalize         │
-│                                                             │
-│  • Change detection: only run what changed                  │
-│  • Version computation: next semver RC from commits         │
-│  • State written to manifest.yaml on every run              │
-└─────────────────────────────────────────────────────────────┘
-      │
-      ▼  state[dev] updated, draft release created
-      │
-      │  workflow_dispatch (promote)
-      ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Promote workflow (generated)                               │
-│  Preflight → Deploy(s) → Publish callback → Finalize        │
-│                                                             │
-│  • Same artifacts, never rebuilt on promote                 │
-│  • Breaking-change gate at prerelease → release boundary    │
-│  • Per-deploy change detection: skip unchanged              │
-│  • Release published, RC tags cleaned up                    │
-└─────────────────────────────────────────────────────────────┘
-```
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
+flowchart TD
+    M["<b>.github/manifest.yaml</b><br/>config + live state"] --> G["<b>cascade generate-workflow</b>"]
+    G --> WF["Generated GitHub Actions<br/>orchestrate.yaml + promote.yaml"]
 
-<!-- TODO(image): promote/cascade flow diagram. place at docs/images/promote-flow.png once generated -->
-<!-- ![cascade promotion flow](docs/images/promote-flow.png) -->
+    WF -- "merge to trunk" --> O
+
+    subgraph O["Orchestrate (on merge)"]
+        direction LR
+        O1["Setup"] --> O2["Validate"] --> O3["Build"] --> O4["Deploy first env"] --> O5["Finalize"]
+    end
+
+    O -- "workflow_dispatch · same artifacts, never rebuilt" --> P
+
+    subgraph P["Promote (cascade through environments)"]
+        direction LR
+        dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
+    end
+
+    P --> R
+
+    subgraph R["Release lifecycle"]
+        direction LR
+        draft["draft"] --> pre["prerelease"] --> pub["published<br/>RC tags cleaned"]
+    end
+
+    classDef accent fill:#B87333,stroke:#E8702A,color:#FFF7F0;
+    class M accent;
+```
 
 ---
 

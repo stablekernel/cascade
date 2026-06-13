@@ -11,33 +11,17 @@ Triggered on every merge to trunk. Handles the full CI/CD pipeline for the first
 
 ### Flow
 
-```
-Merge to Trunk
-      │
-      ▼
-┌──────────┐
-│  Setup   │ ← Parse config, detect changes, compute version
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│ Validate │ ← Optional pre-build validation
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│  Build   │ ← Matrix: triggered builds only
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│  Deploy  │ ← Matrix: triggered deploys with dependency ordering
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│ Finalize │ ← Update state, generate changelog, draft pre-release
-└──────────┘
+```mermaid
+flowchart TD
+    M["Merge to trunk"] --> S["Setup"] --> V["Validate"] --> B["Build"] --> D["Deploy"] --> F["Finalize"]
+    S -.-> sn["Parse config, detect changes,<br/>compute version"]
+    V -.-> vn["Optional pre-build validation"]
+    B -.-> bn["Matrix: triggered builds only"]
+    D -.-> dn["Matrix: triggered deploys,<br/>dependency-ordered"]
+    F -.-> fn["Update state, generate changelog,<br/>draft pre-release"]
+
+    classDef note fill:none,stroke:none,color:#8A929C;
+    class sn,vn,bn,dn,fn note;
 ```
 
 ### Triggering
@@ -109,28 +93,16 @@ Manual workflow to promote between environments.
 
 ### Flow
 
-```
-Default mode (one step at a time)
-      │
-      ▼
-┌──────────┐
-│ Preflight│ ← Validate source/target, check ancestry, gate breaking changes
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│  Deploy  │ ← Matrix: per-deploy with change detection
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│  Publish │ ← (only at prerelease → release boundary, if publish: configured)
-└──────────┘
-      │
-      ▼
-┌──────────┐
-│ Finalize │ ← Update state, publish release, dispatch Release workflow
-└──────────┘
+```mermaid
+flowchart TD
+    M["Default mode<br/>(one step at a time)"] --> P["Preflight"] --> D["Deploy"] --> Pub["Publish"] --> F["Finalize"]
+    P -.-> pn["Validate source/target, check ancestry,<br/>gate breaking changes"]
+    D -.-> dn["Matrix: per-deploy with change detection"]
+    Pub -.-> pubn["Only at prerelease to release boundary,<br/>if publish: configured"]
+    F -.-> fn["Update state, publish release,<br/>dispatch Release workflow"]
+
+    classDef note fill:none,stroke:none,color:#8A929C;
+    class pn,dn,pubn,fn note;
 ```
 
 A cascade mode (e.g., `dev-to-prod`) walks the chain step by step, running deploy/finalize for each intermediate environment, with the breaking-change gate enforced at the prerelease->release boundary.
