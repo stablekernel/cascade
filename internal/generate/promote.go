@@ -838,12 +838,11 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			} else {
 				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
 			}
-			// environment: wires the job to a GitHub Environment so that the
-			// environment's protection rules apply when gha_environment is configured
-			// for any env. The target env is resolved at runtime by preflight.
-			if anyEnvHasGHAConfig(g.config) {
-				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
-			}
+			// This branch only runs for external (uses:) deploys, so no job-level
+			// environment: key is emitted: GitHub Actions forbids it on a
+			// reusable-workflow caller job. The environment name is threaded via
+			// the with: environment input below, and GitHub Environment protection
+			// must be declared inside the reusable workflow's own job.
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
@@ -876,10 +875,17 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		// environment: The prod deploy job always targets a single known env
 		// (the final environment in the pipeline), so we can resolve the GitHub
 		// Environment name statically from gha_environment when configured.
-		if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
-			fmt.Fprintf(sb, "    environment: %s\n", ec.GHAEnvironment)
-		}
+		//
+		// The job-level environment: key is only valid on a steps job (an inline
+		// run: deploy). GitHub Actions forbids it on a reusable-workflow caller
+		// job, so it is gated on d.Run being set. For external (uses:) deploys
+		// the environment name is threaded via the with: environment input below,
+		// and GitHub Environment protection must be declared inside the reusable
+		// workflow's own job.
 		if d.Run != "" {
+			if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
+				fmt.Fprintf(sb, "    environment: %s\n", ec.GHAEnvironment)
+			}
 			g.writeInlineDeployBody(sb, d,
 				finalEnv,
 				"${{ needs.preflight.outputs.prod_sha }}",
