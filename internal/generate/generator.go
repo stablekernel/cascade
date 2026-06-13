@@ -646,24 +646,31 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    outputs:\n")
 
-	// All outputs come from the CLI setup command
+	// All outputs come from the CLI setup command. Output keys are normalized to
+	// underscores via OutputKey: GitHub Actions parses a hyphen in an expression
+	// as subtraction, so a hyphenated key would never match the consuming if:.
 	for _, b := range g.config.Builds {
-		fmt.Fprintf(sb, "      run_build_%s: ${{ steps.setup.outputs.run_build_%s }}\n", b.Name, b.Name)
+		key := config.OutputKey(b.Name)
+		fmt.Fprintf(sb, "      run_build_%s: ${{ steps.setup.outputs.run_build_%s }}\n", key, key)
 	}
 	for _, d := range g.config.Deploys {
-		fmt.Fprintf(sb, "      run_deploy_%s: ${{ steps.setup.outputs.run_deploy_%s }}\n", d.Name, d.Name)
+		key := config.OutputKey(d.Name)
+		fmt.Fprintf(sb, "      run_deploy_%s: ${{ steps.setup.outputs.run_deploy_%s }}\n", key, key)
 	}
 	sb.WriteString("      head_sha: ${{ steps.setup.outputs.head_sha }}\n")
 	sb.WriteString("      version: ${{ steps.setup.outputs.version }}\n")
 	sb.WriteString("      previous_tag: ${{ steps.setup.outputs.previous_tag }}\n")
 	sb.WriteString("      changelog_base_sha: ${{ steps.setup.outputs.changelog_base_sha }}\n")
 
-	// Per-deployable base SHAs for callbacks that need them
+	// Per-deployable base SHAs for callbacks that need them. Keys are normalized
+	// to underscores via OutputKey for the same GitHub Actions expression reason.
 	for _, b := range g.config.Builds {
-		fmt.Fprintf(sb, "      base_build_%s: ${{ steps.setup.outputs.base_build_%s }}\n", b.Name, b.Name)
+		key := config.OutputKey(b.Name)
+		fmt.Fprintf(sb, "      base_build_%s: ${{ steps.setup.outputs.base_build_%s }}\n", key, key)
 	}
 	for _, d := range g.config.Deploys {
-		fmt.Fprintf(sb, "      base_deploy_%s: ${{ steps.setup.outputs.base_deploy_%s }}\n", d.Name, d.Name)
+		key := config.OutputKey(d.Name)
+		fmt.Fprintf(sb, "      base_deploy_%s: ${{ steps.setup.outputs.base_deploy_%s }}\n", key, key)
 	}
 
 	sb.WriteString("    steps:\n")

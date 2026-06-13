@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/ghaoutput"
 	"github.com/stablekernel/cascade/internal/globals"
 )
@@ -141,19 +142,21 @@ func (r *SetupResult) WriteGHAOutput() error {
 	w.Set("previous_tag", r.PreviousTag)
 	w.Set("changelog_base_sha", r.ChangelogBaseSHA)
 
-	// Build decisions
+	// Build decisions. Output keys are normalized to underscores via OutputKey
+	// so they match the run_build_* identifiers the generated workflow consumes;
+	// GitHub Actions parses a hyphen in an expression as subtraction.
 	for name, run := range r.RunBuilds {
-		w.SetBool(fmt.Sprintf("run_build_%s", name), run)
+		w.SetBool(fmt.Sprintf("run_build_%s", config.OutputKey(name)), run)
 	}
 
 	// Deploy decisions
 	for name, run := range r.RunDeploys {
-		w.Set(fmt.Sprintf("run_deploy_%s", name), run)
+		w.Set(fmt.Sprintf("run_deploy_%s", config.OutputKey(name)), run)
 	}
 
 	// Base SHAs for per-deployable change detection
 	for name, sha := range r.BaseSHAs {
-		w.Set(fmt.Sprintf("base_%s", name), sha)
+		w.Set(fmt.Sprintf("base_%s", config.OutputKey(name)), sha)
 	}
 
 	return w.Flush()
