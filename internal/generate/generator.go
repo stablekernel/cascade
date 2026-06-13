@@ -18,12 +18,32 @@ import (
 // hold a runner for six hours. Override per manifest via config.job_timeout_minutes.
 const DefaultJobTimeoutMinutes = 30
 
-// normalizeWorkflowPath adds ./ prefix to local workflow paths (required by GitHub Actions)
+// normalizeWorkflowPath returns a GitHub-valid workflow path for a local callback.
+// Cross-repo external refs (containing "@") are returned unchanged.
+// Paths already under ./.github/workflows/ are returned unchanged.
+// Paths starting with .github/workflows/ get the ./ prefix.
+// Bare filenames (no "/") and any other local path are routed to
+// ./.github/workflows/<basename>, which is where GitHub requires local reusable
+// workflows to live.
 func normalizeWorkflowPath(path string) string {
+	// Cross-repo external refs contain "@" - leave them as-is.
+	if strings.Contains(path, "@") {
+		return path
+	}
+	// Already fully normalized.
+	if strings.HasPrefix(path, "./.github/workflows/") {
+		return path
+	}
+	// .github/workflows/x.yaml -> ./.github/workflows/x.yaml
+	if strings.HasPrefix(path, ".github/workflows/") {
+		return "./" + path
+	}
+	// .github/<other>/ - legacy edge case, prepend ./ (prior behavior).
 	if strings.HasPrefix(path, ".github/") {
 		return "./" + path
 	}
-	return path
+	// Bare filename or any other local path: route to canonical location.
+	return "./.github/workflows/" + filepath.Base(path)
 }
 
 // envGHAName returns the GitHub Environment name for a given cascade environment
@@ -479,7 +499,11 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			continue
 		}
 
-		path := filepath.Join(g.baseDir, cb.workflow)
+		// Read the stub from the normalized location so a bare filename
+		// (build.yaml) resolves to .github/workflows/build.yaml, which is where
+		// GitHub requires local reusable workflows to live and where the emitted
+		// uses: reference points.
+		path := filepath.Join(g.baseDir, normalizeWorkflowPath(cb.workflow))
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading workflow %s: %w", cb.workflow, err)

@@ -33,6 +33,17 @@ var (
 	cliBinaryErr  error
 )
 
+// normalizeCallbackStubPath returns the canonical path where a callback stub
+// workflow should be placed so it matches the path the generator will reference.
+// Cross-repo external refs (containing "@") are skipped - they are not stubs.
+// All other paths are placed under .github/workflows/ using the base filename.
+func normalizeCallbackStubPath(workflow string) string {
+	if strings.Contains(workflow, "@") {
+		return ""
+	}
+	return ".github/workflows/" + filepath.Base(workflow)
+}
+
 // Harness orchestrates E2E test execution
 type Harness struct {
 	t           *testing.T
@@ -123,16 +134,22 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config) error 
 		scenarioTag := scenarioTagFromTestName(h.t.Name())
 		for _, build := range config.Builds {
 			if build.Workflow != "" {
-				files[build.Workflow] = generateStubWorkflow(build.Name, scenarioTag)
+				if p := normalizeCallbackStubPath(build.Workflow); p != "" {
+					files[p] = generateStubWorkflow(build.Name, scenarioTag)
+				}
 			}
 		}
 		for _, deploy := range config.Deploys {
 			if deploy.Workflow != "" {
-				files[deploy.Workflow] = generateStubWorkflow(deploy.Name, scenarioTag)
+				if p := normalizeCallbackStubPath(deploy.Workflow); p != "" {
+					files[p] = generateStubWorkflow(deploy.Name, scenarioTag)
+				}
 			}
 		}
 		if config.Publish != nil && config.Publish.Workflow != "" {
-			files[config.Publish.Workflow] = generatePublishStubWorkflow(scenarioTag)
+			if p := normalizeCallbackStubPath(config.Publish.Workflow); p != "" {
+				files[p] = generatePublishStubWorkflow(scenarioTag)
+			}
 		}
 
 		// Create mock setup-cli action that installs CLI from repo

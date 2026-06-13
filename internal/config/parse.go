@@ -178,6 +178,7 @@ func Validate(cfg *TrunkConfig) []string {
 		}
 		// workflow XOR run: exactly one must be set.
 		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("builds[%d]", i), b.Workflow, b.Run, b.Shell)...)
+		errors = append(errors, validateLocalCallbackWorkflowPath(fmt.Sprintf("builds[%d]", i), b.Workflow)...)
 
 		// Reusable-workflow callbacks cannot carry job-control fields that GHA
 		// rejects on a jobs.<id>.uses call. matrix: is builds-only.
@@ -234,6 +235,7 @@ func Validate(cfg *TrunkConfig) []string {
 		}
 		// workflow XOR run: exactly one must be set.
 		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("deploys[%d]", i), d.Workflow, d.Run, d.Shell)...)
+		errors = append(errors, validateLocalCallbackWorkflowPath(fmt.Sprintf("deploys[%d]", i), d.Workflow)...)
 
 		// Reusable-workflow callbacks cannot carry job-control fields that GHA
 		// rejects on a jobs.<id>.uses call. rollout: is deploys-only.
@@ -286,6 +288,7 @@ func Validate(cfg *TrunkConfig) []string {
 	if cfg.Validate != nil {
 		v := cfg.Validate
 		errors = append(errors, validateWorkflowRunXOR("validate", v.Workflow, v.Run, v.Shell)...)
+		errors = append(errors, validateLocalCallbackWorkflowPath("validate", v.Workflow)...)
 		isReusable := v.Workflow != ""
 		errors = append(errors, validateJobControlFields("validate", isReusable, v.RunsOn, v.Concurrency)...)
 		errors = append(errors, validatePermissions("validate", v.Permissions)...)
