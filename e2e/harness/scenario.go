@@ -34,6 +34,11 @@ type Config struct {
 	Builds            []BuildConfig  `yaml:"builds"`
 	Deploys           []DeployConfig `yaml:"deploys"`
 	Publish           *PublishConfig `yaml:"publish,omitempty"`
+	// Changelog carries the changelog block (custom workflow, contributors)
+	// through to the generated manifest untouched. A generic map keeps the
+	// harness decoupled from the generator's ChangelogConfig shape while
+	// preserving every key across the marshal round-trip.
+	Changelog map[string]any `yaml:"changelog,omitempty"`
 	// DispatchInputs carries operator-facing workflow_dispatch inputs through to
 	// the generated manifest untouched. A generic map (rather than a typed
 	// struct) is used so the harness stays decoupled from the generator's

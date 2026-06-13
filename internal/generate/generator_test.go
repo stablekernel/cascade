@@ -796,15 +796,34 @@ on:
 	output, err := gen.Generate()
 	require.NoError(t, err)
 
-	// Should reference custom changelog workflow
+	// A reusable workflow cannot be invoked as a step `uses:`; it must be a
+	// job-level `uses:`. The custom changelog is therefore hoisted into its own
+	// `changelog` job that calls the reusable workflow.
 	assert.Contains(t, output, "custom-changelog.yaml", "Output should reference custom changelog workflow")
-	// Verify uses: directive with the custom workflow path
-	assert.Contains(t, output, "uses: .github/workflows/custom-changelog.yaml", "Should contain uses directive with custom workflow path")
-	// Verify input parameters are passed
-	assert.Contains(t, output, "base_sha: ${{ needs.setup.outputs.base_sha }}", "Should pass base_sha input parameter")
+
+	// The custom changelog must NOT be emitted as a step inside finalize.
+	assert.NotContains(t, output, "Generate Changelog (Custom)",
+		"Custom changelog must be a job, not a step (a reusable workflow cannot be a step uses:)")
+
+	// It must be a job-level `uses:` with a normalized (./-prefixed) path so
+	// actionlint resolves it as a reusable-workflow call.
+	assert.Contains(t, output, "  changelog:\n", "Should emit a dedicated changelog job")
+	assert.Contains(t, output, "uses: ./.github/workflows/custom-changelog.yaml",
+		"Changelog job should call the reusable workflow via a normalized job-level uses:")
+
+	// The changelog job depends on setup and passes the base SHA from the
+	// output the setup job actually declares: changelog_base_sha (not base_sha).
+	assert.Contains(t, output, "changelog_base_sha: ${{ needs.setup.outputs.changelog_base_sha }}",
+		"Changelog job should pass changelog_base_sha keyed to the real setup output")
 	assert.Contains(t, output, "head_sha: ${{ needs.setup.outputs.head_sha }}", "Should pass head_sha input parameter")
-	// Setup CLI is now in setup job for version calculation, but should not be in finalize job changelog step
-	assert.Contains(t, output, "Generate Changelog (Custom)", "Should have custom changelog step in finalize job")
+	assert.NotContains(t, output, "needs.setup.outputs.base_sha",
+		"Setup job does not declare a base_sha output; that reference would be empty at runtime")
+
+	// The release step must read the changelog from the job output, not a step.
+	assert.Contains(t, output, "changelog: ${{ needs.changelog.outputs.changelog }}",
+		"Release step should consume the changelog from the changelog job output")
+	assert.NotContains(t, output, "changelog: ${{ steps.changelog.outputs.changelog }}",
+		"Release step must not read a step output for the custom changelog case")
 }
 
 func TestGenerator_FinalizeJob_FrameworkManagedRelease(t *testing.T) {
