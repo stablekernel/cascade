@@ -69,6 +69,41 @@ flowchart TD
 
 ---
 
+## Cross-repo artifact tracking
+
+A primary repo can own the environment chain for artifacts that are built and versioned in other repos. Each external repo dispatches the primary's generated `external-update.yaml`, which writes `{sha, version}` into `state.<env>.external.<name>` of the one shared manifest; concurrent updates serialize on that manifest, then the primary cascades every source through its own environments. A callback can also pull in an external repo's workflow synchronously via `uses:` during the primary's run.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
+flowchart TD
+    subgraph EXT["External artifact repos"]
+        direction LR
+        A["<b>artifact-a</b><br/>builds its own artifact"]
+        B["<b>artifact-b</b><br/>builds its own artifact"]
+    end
+
+    A -- "workflow_dispatch<br/>source_repo · deploy_name · environment<br/>sha · version · artifacts" --> EU
+    B -- "workflow_dispatch<br/>source_repo · deploy_name · environment<br/>sha · version · artifacts" --> EU
+
+    subgraph PRIMARY["Primary repo"]
+        direction TB
+        EU["<b>external-update.yaml</b><br/>cascade external update"]
+        EU -- "writes {sha, version}" --> ST["<b>.github/manifest.yaml</b><br/>state.&lt;env&gt;.external.&lt;name&gt;<br/>concurrent updates serialize"]
+        ST --> PR
+        subgraph PR["Promote (cascade through environments)"]
+            direction LR
+            dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
+        end
+    end
+
+    CB["Primary build / deploy callback"] -. "sync uses:<br/>org/artifact-repo/.github/workflows/&lt;name&gt;.yaml@ref" .-> SYNC["External workflow<br/>invoked inline"]
+
+    classDef accent fill:#B87333,stroke:#E8702A,color:#FFF7F0;
+    class ST accent;
+```
+
+---
+
 ## Quick start
 
 ### 1. Install the CLI

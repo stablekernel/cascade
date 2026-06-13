@@ -493,6 +493,33 @@ flowchart BT
 3. **Primary updates state**: Records external deploy SHA/version in manifest
 4. **Promotion includes all**: When promoting, primary triggers all deploys (local + external)
 
+The topology above shows which repos talk to which. The flow below shows what actually moves between them: each external repo dispatches the primary's `external-update.yaml` with a payload, the primary serializes those writes into the one shared manifest, then cascades every source through its environments.
+
+```mermaid
+flowchart TD
+    subgraph EXT["External artifact repos"]
+        direction LR
+        A["<b>artifact-a</b><br/>builds its own artifact"]
+        B["<b>artifact-b</b><br/>builds its own artifact"]
+    end
+
+    A -- "workflow_dispatch<br/>source_repo · deploy_name · environment<br/>sha · version · artifacts" --> EU
+    B -- "workflow_dispatch<br/>source_repo · deploy_name · environment<br/>sha · version · artifacts" --> EU
+
+    subgraph PRIMARY["Primary repo"]
+        direction TB
+        EU["<b>external-update.yaml</b><br/>cascade external update"]
+        EU -- "writes {sha, version}" --> ST["<b>.github/manifest.yaml</b><br/>state.&lt;env&gt;.external.&lt;name&gt;<br/>concurrent updates serialize"]
+        ST --> PR
+        subgraph PR["Promote (cascade through environments)"]
+            direction LR
+            dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
+        end
+    end
+
+    CB["Primary build / deploy callback"] -. "sync uses:<br/>org/artifact-repo/.github/workflows/&lt;name&gt;.yaml@ref" .-> SYNC["External workflow<br/>invoked inline"]
+```
+
 ### State Tracking
 
 Primary manifest tracks external deploys alongside local deploys:
