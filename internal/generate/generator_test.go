@@ -877,10 +877,69 @@ on:
 	assert.Contains(t, content, "cascade orchestrate setup")
 	assert.Contains(t, content, "--gha-output")
 
-	// Outputs reference CLI outputs
-	assert.Contains(t, content, "run_deploy_app-deploy: ${{ steps.setup.outputs.run_deploy_app-deploy }}")
+	// Outputs reference CLI outputs. Output keys are normalized to underscores
+	// (GitHub Actions parses hyphens in expressions as subtraction).
+	assert.Contains(t, content, "run_deploy_app_deploy: ${{ steps.setup.outputs.run_deploy_app_deploy }}")
 	assert.Contains(t, content, "run_deploy_cdk: ${{ steps.setup.outputs.run_deploy_cdk }}")
 	assert.Contains(t, content, "run_deploy_notify: ${{ steps.setup.outputs.run_deploy_notify }}")
+}
+
+// TestGenerator_HyphenatedNameOutputKeysConsistent guards against the silent
+// skip described in #127: a hyphenated build/deploy name must produce the same
+// underscore-normalized run_build_*/run_deploy_* identifier at every site (the
+// setup job-level outputs passthrough and the consuming job if: condition). If
+// any site emits a hyphen, GitHub Actions parses the expression as subtraction
+// and the consuming job's if: never matches, silently skipping the work.
+func TestGenerator_HyphenatedNameOutputKeysConsistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	workflowDir := filepath.Join(tmpDir, ".github", "workflows")
+	require.NoError(t, os.MkdirAll(workflowDir, 0755))
+
+	mockWorkflow := `name: Mock
+on:
+  workflow_call:
+    outputs:
+      result:
+        value: test
+`
+	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "build.yaml"), []byte(mockWorkflow), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "deploy.yaml"), []byte(mockWorkflow), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "shared-lib", Workflow: ".github/workflows/build.yaml", Triggers: []string{"libs/**"}},
+		},
+		Deploys: []config.DeployConfig{
+			{Name: "web-api", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"api/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// (a) The job-level outputs passthrough uses the underscore identifier on
+	// BOTH the output key and the steps.setup.outputs.* reference.
+	assert.Contains(t, content, "run_build_shared_lib: ${{ steps.setup.outputs.run_build_shared_lib }}",
+		"build passthrough must use underscore output key and reference")
+	assert.Contains(t, content, "run_deploy_web_api: ${{ steps.setup.outputs.run_deploy_web_api }}",
+		"deploy passthrough must use underscore output key and reference")
+
+	// (b) No hyphenated run_* output identifier appears anywhere. A hyphen in a
+	// GHA expression is subtraction, so these would silently break.
+	assert.NotContains(t, content, "run_build_shared-lib",
+		"hyphenated build output identifier breaks GHA expression parsing")
+	assert.NotContains(t, content, "run_deploy_web-api",
+		"hyphenated deploy output identifier breaks GHA expression parsing")
+
+	// (c) The consuming job if: condition references the SAME underscore key the
+	// passthrough exposes (not an always-false hyphenated reference).
+	assert.Contains(t, content, "needs.setup.outputs.run_build_shared_lib == 'true'",
+		"build if: must reference the underscore-normalized key")
+	assert.Contains(t, content, "needs.setup.outputs.run_deploy_web_api == 'true'",
+		"deploy if: must reference the underscore-normalized key")
 }
 
 func TestGenerator_BuildLinkedDeployCondition(t *testing.T) {
@@ -1004,8 +1063,8 @@ on:
 	assert.Contains(t, content, "cascade orchestrate setup")
 	assert.Contains(t, content, "--gha-output")
 
-	// Outputs reference CLI outputs
-	assert.Contains(t, content, "run_deploy_app-deploy: ${{ steps.setup.outputs.run_deploy_app-deploy }}")
+	// Outputs reference CLI outputs. Output keys are normalized to underscores.
+	assert.Contains(t, content, "run_deploy_app_deploy: ${{ steps.setup.outputs.run_deploy_app_deploy }}")
 	assert.Contains(t, content, "run_deploy_cdk: ${{ steps.setup.outputs.run_deploy_cdk }}")
 	assert.Contains(t, content, "run_deploy_notify: ${{ steps.setup.outputs.run_deploy_notify }}")
 
