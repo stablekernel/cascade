@@ -104,6 +104,39 @@ flowchart TD
 
 ---
 
+## Hotfix any environment
+
+Most pipelines can only hotfix the tip, which in practice means production. cascade hotfixes **any** environment: it stages the fix on a per-environment integration branch, deploys that one environment with a clean `-rc.N.hotfix.M` version, and rejoins trunk the next time a trunk SHA that already contains the fix is promoted. The example below lands a fix on **staging** while dev, test, and prod stay exactly where they are.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
+flowchart TD
+    T["<b>trunk tip</b><br/>fix already merged (roll forward first)"]
+
+    subgraph LADDER["Environments"]
+        direction LR
+        dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
+    end
+
+    T -- "cherry-pick fix onto env/staging<br/>at staging's recorded base_sha" --> CP["<b>hotfix/staging/&lt;short-sha&gt;</b><br/>base + fix, nothing else"]
+    CP --> RPR["<b>resolution PR</b> (base env/staging)<br/>cascade-hotfix · auto-merge on env checks"]
+    RPR -- "on merge: build -> deploy staging only -> finalize" --> DS
+
+    subgraph DS["staging diverged"]
+        direction TB
+        SV["<b>v1.4.0-rc.2.hotfix.1</b><br/>ref: env/staging<br/>base_sha: trunk SHA · patches: [fix]"]
+    end
+
+    DS -. "targets staging" .-> staging
+
+    DS == "later promotion of a trunk SHA containing the fix<br/>clears divergence (patch-containment guard)" ==> staging
+
+    classDef accent fill:#B87333,stroke:#E8702A,color:#FFF7F0;
+    class SV accent;
+```
+
+---
+
 ## Quick start
 
 ### 1. Install the CLI

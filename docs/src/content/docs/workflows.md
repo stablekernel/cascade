@@ -254,6 +254,20 @@ The framework drops the RC suffix when crossing the prerelease->release boundary
 
 ## Hotfix
 
+```mermaid
+flowchart TD
+    RF["<b>Roll forward first (default)</b><br/>fix merged to trunk; refused if not an ancestor of trunk tip"]
+    RF -- "env must run base + fix only" --> IB["<b>env/&lt;env&gt;</b> integration branch<br/>created on demand at recorded state SHA"]
+    IB --> CP["cherry-pick onto <b>hotfix/&lt;env&gt;/&lt;short-sha&gt;</b>"]
+    CP -- "clean" --> PRclean["resolution PR · <b>cascade-hotfix</b><br/>auto-merge, gated by env checks"]
+    CP -- "conflict" --> PRconf["resolution PR · <b>cascade-hotfix-conflict</b><br/>markers committed; human force-pushes head"]
+    PRclean --> MERGE["on merge"]
+    PRconf --> MERGE
+    MERGE --> FIN["build -> deploy one env -> finalize<br/>vX.Y.Z-rc.N.hotfix.M · ref env/&lt;env&gt; · patches [fix]"]
+    FIN --> DIV["environment diverged<br/>other environments untouched"]
+    DIV == "promote a trunk SHA containing the fix<br/>patch-containment guard refuses dropping it" ==> REJOIN["rejoin trunk<br/>divergence cleared · env/&lt;env&gt; deleted"]
+```
+
 A hotfix applies a single trunk commit onto an environment that is pinned to an older trunk base, without dragging in the intervening commits. This is the case the standard promote flow cannot serve: promoting a pointer forward would advance the target environment past every commit between its base and the fix, which is exactly what an operator pinning that environment is trying to avoid.
 
 ### Roll forward on trunk first (the default)
