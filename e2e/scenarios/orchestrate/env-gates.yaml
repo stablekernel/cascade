@@ -4,6 +4,12 @@ description: |
   the generated orchestrate.yaml deploy job carries a job-level environment:
   key pointing at the configured GitHub Environment name (#11).
 
+  The job-level environment: key is only valid on a cascade-owned steps job, so
+  the gated deploy here is an inline run: deploy. A reusable-workflow (uses:)
+  deploy correctly omits the job-level key, since GitHub Actions forbids it on a
+  uses: caller job (#137/#138); the environment name is threaded as a with:
+  input instead in that case.
+
   This is a generator-output verification scenario. The GitHub Environment's
   actual protection rules (required reviewers, wait timers, branch policy,
   scoped secrets) live in the repository's GitHub settings and are not
@@ -18,7 +24,9 @@ config:
       triggers: ["src/**"]
   deploys:
     - name: cdk
-      workflow: deploy.yaml
+      run: |
+        echo "deploying cdk"
+      shell: bash
       triggers: ["cdk/**"]
   environment_config:
     prod:
