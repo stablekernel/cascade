@@ -159,8 +159,11 @@ func Validate(cfg *TrunkConfig) []string {
 	// Empty environments is valid - means pre-release -> release only (no deployments)
 
 	envSet := make(map[string]bool)
-	for _, env := range cfg.Environments {
+	for i, env := range cfg.Environments {
 		envSet[env] = true
+		// Environment names key job IDs and ${{ }} expression references, so they
+		// must be job-ID-safe.
+		errors = append(errors, validateJobIDSafeName(fmt.Sprintf("environments[%d]", i), env)...)
 	}
 
 	// Build name sets for each section (builds and deploys can share names)
@@ -176,6 +179,9 @@ func Validate(cfg *TrunkConfig) []string {
 		} else {
 			buildNames[b.Name] = true
 		}
+		// The name becomes part of the job ID (build-<name>); enforce the job-ID
+		// grammar so generation cannot emit invalid YAML.
+		errors = append(errors, validateJobIDSafeName(fmt.Sprintf("builds[%d].name", i), b.Name)...)
 		// workflow XOR run: exactly one must be set.
 		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("builds[%d]", i), b.Workflow, b.Run, b.Shell)...)
 		errors = append(errors, validateLocalCallbackWorkflowPath(fmt.Sprintf("builds[%d]", i), b.Workflow)...)
@@ -233,6 +239,9 @@ func Validate(cfg *TrunkConfig) []string {
 		} else {
 			deployNames[d.Name] = true
 		}
+		// The name becomes part of the job ID (deploy-<name>); enforce the job-ID
+		// grammar so generation cannot emit invalid YAML.
+		errors = append(errors, validateJobIDSafeName(fmt.Sprintf("deploys[%d].name", i), d.Name)...)
 		// workflow XOR run: exactly one must be set.
 		errors = append(errors, validateWorkflowRunXOR(fmt.Sprintf("deploys[%d]", i), d.Workflow, d.Run, d.Shell)...)
 		errors = append(errors, validateLocalCallbackWorkflowPath(fmt.Sprintf("deploys[%d]", i), d.Workflow)...)
@@ -352,6 +361,8 @@ func Validate(cfg *TrunkConfig) []string {
 					errors = append(errors, fmt.Sprintf("external deploy name '%s' conflicts with local deploy name", d.Name))
 				}
 			}
+			// External deploys also key job IDs (deploy-<name>); enforce the grammar.
+			errors = append(errors, validateJobIDSafeName(fmt.Sprintf("external[%d].deploys[%d].name", i, j), d.Name)...)
 			prefix := fmt.Sprintf("external[%d].deploys[%d]", i, j)
 			errors = append(errors, validateExternalDeployWorkflowOnly(prefix, d.Workflow, d.Run, d.Shell)...)
 			// External deploys are always reusable-workflow callbacks.

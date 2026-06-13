@@ -853,3 +853,111 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		})
 	}
 }
+
+// TestValidate_JobIDSafeNames asserts that build, deploy, external-deploy, and
+// environment names which would become part of a GitHub Actions job ID
+// (build-<name>, deploy-<name>, and env-keyed identifiers) are rejected at
+// config validation when they contain characters outside the job-ID grammar.
+//
+// A GitHub job ID must start with a letter or _ and contain only [A-Za-z0-9_-].
+// Because the name is used as a suffix after build-/deploy-, a leading digit,
+// uppercase letters, and hyphens are all fine; only characters outside the
+// allowed set (such as ., spaces, and /) are rejected. Sanitizing is avoided
+// deliberately: two distinct names could collapse to one job ID.
+func TestValidate_JobIDSafeNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   TrunkConfig
+		wantErr  string // substring that must appear; "" means expect no errors
+		wantNone bool
+	}{
+		{
+			name: "build name with dot rejected",
+			config: TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"dev"},
+				Builds:       []BuildConfig{{Name: "app.web", Workflow: ".github/workflows/build.yaml"}},
+			},
+			wantErr: `builds[0].name "app.web"`,
+		},
+		{
+			name: "build name with space rejected",
+			config: TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"dev"},
+				Builds:       []BuildConfig{{Name: "my app", Workflow: ".github/workflows/build.yaml"}},
+			},
+			wantErr: `builds[0].name "my app"`,
+		},
+		{
+			name: "deploy name with slash rejected",
+			config: TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"dev"},
+				Deploys:      []DeployConfig{{Name: "svc/api", Workflow: ".github/workflows/deploy.yaml"}},
+			},
+			wantErr: `deploys[0].name "svc/api"`,
+		},
+		{
+			name: "external deploy name with dot rejected",
+			config: TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"dev"},
+				External: []ExternalRepoConfig{{
+					Repo:    "owner/repo",
+					Deploys: []ExternalDeployConfig{{Name: "svc.api", Workflow: ".github/workflows/deploy.yaml"}},
+				}},
+			},
+			wantErr: `external[0].deploys[0].name "svc.api"`,
+		},
+		{
+			name: "environment name with dot rejected",
+			config: TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"us.east"},
+			},
+			wantErr: `environments[0] "us.east"`,
+		},
+		{
+			name: "valid names: hyphen, uppercase, leading digit, underscore",
+			config: TrunkConfig{
+				TrunkBranch:  "main",
+				Environments: []string{"dev-1", "Prod", "2nd", "us_west"},
+				Builds: []BuildConfig{
+					{Name: "my-app", Workflow: ".github/workflows/build.yaml"},
+					{Name: "MyApp", Workflow: ".github/workflows/build.yaml"},
+					{Name: "_internal", Workflow: ".github/workflows/build.yaml"},
+				},
+				Deploys: []DeployConfig{
+					{Name: "1svc", Workflow: ".github/workflows/deploy.yaml"},
+				},
+			},
+			wantNone: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.config
+			errs := Validate(&cfg)
+			if tt.wantNone {
+				for _, e := range errs {
+					if strings.Contains(e, "must contain only") {
+						t.Errorf("Validate() unexpectedly rejected a valid name: %q", e)
+					}
+				}
+				return
+			}
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e, tt.wantErr) && strings.Contains(e, "must contain only") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Validate() missing job-ID-safe error containing %q, got: %v", tt.wantErr, errs)
+			}
+		})
+	}
+}

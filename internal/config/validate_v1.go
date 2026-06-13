@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -42,6 +43,32 @@ var validRolloutTypes = map[string]bool{
 	RolloutTypeRolling:   true,
 	RolloutTypeCanary:    true,
 	RolloutTypeBlueGreen: true,
+}
+
+// jobIDSafeNameRe matches a name that is safe to use as a component of a GitHub
+// Actions job ID. cascade derives job IDs as build-<name>/deploy-<name> and
+// keys several identifiers and expression references off environment names. A
+// GitHub job ID must start with a letter or _ and contain only [A-Za-z0-9_-].
+// Because the name is a suffix after a build-/deploy- prefix, a leading digit,
+// uppercase letters, and hyphens are all acceptable in the name itself; only
+// characters outside [A-Za-z0-9_-] (such as ".", spaces, and "/") break the job
+// ID and the ${{ }} dereferences that read its outputs.
+var jobIDSafeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// validateJobIDSafeName rejects a name that would produce an invalid GitHub
+// Actions job ID or break the expression references derived from it. Names are
+// rejected (not sanitized) on purpose: sanitizing distinct names could collapse
+// them to a single job ID and silently merge two callbacks.
+func validateJobIDSafeName(prefix, name string) []string {
+	if name == "" {
+		// Empty names are reported separately by the caller (".name is required").
+		return nil
+	}
+	if jobIDSafeNameRe.MatchString(name) {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"%s %q must contain only letters, digits, hyphens, and underscores", prefix, name)}
 }
 
 // validateWorkflowRunXOR enforces that exactly one of workflow:/run: is set, and
