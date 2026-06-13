@@ -471,16 +471,43 @@ ci:
 
 ## Environment Protection
 
-Use GitHub environment protection for approval gates:
+Use GitHub Environment protection for approval gates. Where you declare the
+`environment:` key depends on whether the deploy is an external reusable
+workflow or an inline `run:` callback, because GitHub Actions only allows a
+job-level `environment:` key on a steps job, never on a job that calls a
+reusable workflow with `uses:`.
+
+### External reusable-workflow deploys (`workflow:`)
+
+For a deploy backed by an external reusable workflow, declare `environment:` on
+the job **inside your reusable workflow**. cascade passes the target environment
+name to that workflow as the `environment` input, so wire it through:
 
 ```yaml
+# your reusable deploy workflow
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment }}   # protection lives here
+    steps:
+      - run: ./deploy.sh
 ```
 
-Configure in GitHub: **Settings -> Environments -> Add required reviewers**.
+cascade cannot set `environment:` on the caller job it generates: GitHub Actions
+rejects a workflow that puts `environment:` on a `uses:` job. cascade therefore
+emits only the `with: environment:` input on the caller and relies on your
+reusable workflow to apply the protection rules. cascade prints a generate-time
+note when `gha_environment` is configured for an environment whose deploys are
+external reusable workflows, reminding you to declare `environment:` inside the
+reusable workflow.
+
+### Inline `run:` deploys
+
+For an inline `run:` deploy, cascade owns the job and emits the job-level
+`environment:` key directly (resolved from `gha_environment` when configured),
+so GitHub Environment protection applies without any extra wiring.
+
+Configure protection in GitHub: **Settings -> Environments -> Add required reviewers**.
 
 ## Dry Run Handling
 

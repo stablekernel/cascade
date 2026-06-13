@@ -296,7 +296,48 @@ func (g *Generator) Validate() []string {
 	// emitted as dead literals; the operator likely intended passthrough.
 	g.warnings = append(g.warnings, g.unwrappedExpressionWarnings()...)
 
+	// Warn when gha_environment is configured but the deploys are external
+	// reusable workflows. GitHub Actions forbids a job-level environment: key on
+	// a reusable-workflow caller job (jobs.<id>.uses), so cascade cannot wire the
+	// GitHub Environment protection rules onto the caller. cascade still passes
+	// the environment name via the with: environment input; the protection rules
+	// must be declared on the internal job inside the reusable workflow itself.
+	g.warnings = append(g.warnings, g.externalDeployEnvironmentWarnings()...)
+
 	return g.warnings
+}
+
+// externalDeployEnvironmentWarnings returns a warning when gha_environment is
+// configured for any environment while one or more deploys are external
+// reusable workflows. GitHub Actions forbids a job-level environment: key on a
+// reusable-workflow caller job, so cascade cannot apply GitHub Environment
+// protection to those deploys from the caller side. The environment name is
+// still passed via the with: environment input; the protection must be declared
+// inside the reusable workflow's own job.
+func (g *Generator) externalDeployEnvironmentWarnings() []string {
+	if !anyEnvHasGHAConfig(g.config) {
+		return nil
+	}
+
+	externalDeploys := make([]string, 0, len(g.config.Deploys))
+	for _, d := range g.config.Deploys {
+		if d.Run == "" {
+			externalDeploys = append(externalDeploys, d.Name)
+		}
+	}
+	if len(externalDeploys) == 0 {
+		return nil
+	}
+
+	return []string{fmt.Sprintf(
+		"Note: gha_environment is configured but deploy(s) %s use an external "+
+			"reusable workflow. GitHub Actions disallows a job-level environment: key "+
+			"on a reusable-workflow caller job, so cascade cannot apply GitHub "+
+			"Environment protection from the caller. cascade passes the environment "+
+			"name as the reusable workflow's 'environment' input; declare "+
+			"environment: on the job inside your reusable workflow to enforce "+
+			"protection rules.",
+		strings.Join(externalDeploys, ", "))}
 }
 
 // unwrappedExpressionWarnings scans all callback inputs/env_inputs for literal
@@ -793,7 +834,14 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// workflow_dispatch input, so we emit an expression that resolves to the
 	// cascade environment name. When gha_environment differs from the cascade
 	// env name, users should align their GitHub Environment names accordingly.
-	if info.Type == config.CallbackTypeDeploy && len(g.config.Environments) > 0 && anyEnvHasGHAConfig(g.config) {
+	//
+	// The job-level environment: key is only valid on a steps job (an inline
+	// run: deploy). GitHub Actions forbids it on a reusable-workflow caller job
+	// (one that uses jobs.<id>.uses), so it is gated on info.Run being set. For
+	// external (uses:) deploys the environment name is threaded via the with:
+	// environment input instead, and GitHub Environment protection must be
+	// declared inside the reusable workflow's own job.
+	if info.Type == config.CallbackTypeDeploy && info.Run != "" && len(g.config.Environments) > 0 && anyEnvHasGHAConfig(g.config) {
 		defaultEnv := g.config.Environments[0]
 		fmt.Fprintf(sb, "    environment: ${{ github.event.inputs.environment || '%s' }}\n", defaultEnv)
 	}
