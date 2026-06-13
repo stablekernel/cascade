@@ -832,8 +832,12 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	g.writeIfCondition(sb, info, needs)
 
 	switch {
-	case info.TimeoutMinutes > 0:
-		// Explicit per-callback timeout always wins.
+	case info.TimeoutMinutes > 0 && info.Run != "":
+		// Explicit per-callback timeout wins, but only on an inline run: callback.
+		// timeout-minutes is forbidden on a reusable-workflow caller job
+		// (jobs.<id>.uses): GitHub rejects the workflow at parse time. For uses:
+		// callbacks the timeout must live inside the called workflow. This mirrors
+		// the info.Run gate on environment: below.
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
 	case info.Run != "":
 		// Inline run: callbacks are cascade-owned jobs, so they inherit the

@@ -248,3 +248,48 @@ func TestGenerator_BothFieldsUnsetNonBreaking(t *testing.T) {
 	assert.NotContains(t, jobBlock(t, result, "build-app"), "timeout-minutes:")
 	assert.Contains(t, jobBlock(t, result, "setup"), "timeout-minutes: 30")
 }
+
+// TestGenerator_ExplicitTimeoutNotOnReusableCallback asserts that an explicit
+// per-callback timeout_minutes is NOT emitted as a job-level timeout-minutes on
+// a reusable-workflow (uses:) callback. GitHub forbids timeout-minutes on a job
+// that calls a reusable workflow (allowed caller keys: name, uses, with,
+// secrets, needs, if, permissions, strategy, concurrency); the timeout must live
+// inside the called workflow. An inline run: callback with the same setting DOES
+// carry it, since inline jobs are cascade-owned steps jobs.
+func TestGenerator_ExplicitTimeoutNotOnReusableCallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStubWorkflow(t, tmpDir, "build.yaml")
+	writeStubWorkflow(t, tmpDir, "deploy.yaml")
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			// Reusable-workflow callback with an explicit timeout: must NOT emit it.
+			{Name: "reusable", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}, TimeoutMinutes: 15},
+			// Inline run: callback with an explicit timeout: DOES emit it.
+			{Name: "inline", Run: "go test ./...", Triggers: []string{"src/**"}, TimeoutMinutes: 15},
+		},
+		Deploys: []config.DeployConfig{
+			// Reusable-workflow deploy callback with an explicit timeout: no emit.
+			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}, TimeoutMinutes: 15},
+		},
+	}
+
+	result, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	reusableBuild := jobBlock(t, result, "build-reusable")
+	assert.Contains(t, reusableBuild, "uses:", "sanity: reusable callback is a uses: caller")
+	assert.NotContains(t, reusableBuild, "timeout-minutes:",
+		"explicit timeout_minutes must not be emitted on a reusable-workflow caller job")
+
+	reusableDeploy := jobBlock(t, result, "deploy-svc")
+	assert.Contains(t, reusableDeploy, "uses:", "sanity: reusable deploy is a uses: caller")
+	assert.NotContains(t, reusableDeploy, "timeout-minutes:",
+		"explicit timeout_minutes must not be emitted on a reusable-workflow deploy caller job")
+
+	inline := jobBlock(t, result, "build-inline")
+	assert.Contains(t, inline, "timeout-minutes: 15",
+		"explicit timeout_minutes on an inline run: callback is honored")
+}

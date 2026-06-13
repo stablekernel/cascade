@@ -1014,6 +1014,14 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 		return
 	}
 
+	// Deploy jobs are only emitted when there is at least one environment (see
+	// writeDeployJobs). With no environments, the deploy jobs a rollback would
+	// depend on do not exist, so emitting rollback jobs would produce a
+	// needs: reference to a nonexistent job that GitHub rejects at parse time.
+	if len(g.config.Environments) == 0 {
+		return
+	}
+
 	// Collect all deploy job names for failure detection
 	var allDeployJobs []string
 	for _, d := range g.config.Deploys {
@@ -1100,19 +1108,26 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 
 func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	// Build needs list: [preflight, promote, deploy-<name1>, deploy-<name2>, deploy-<name1>-prod, ...]
+	//
+	// Deploy jobs are only emitted when there is at least one environment (see
+	// writeDeployJobs). With no environments there are no deploy jobs, so
+	// referencing them in needs: would produce a "needs job X which does not
+	// exist" parse error on GitHub.
 	needs := []string{"preflight", "promote"}
-	for _, d := range g.config.Deploys {
-		needs = append(needs, fmt.Sprintf("deploy-%s", d.Name))
-	}
-	// Add prod deploy jobs
-	for _, d := range g.config.Deploys {
-		needs = append(needs, fmt.Sprintf("deploy-%s-prod", d.Name))
-	}
-	// Add external deploy jobs
-	for _, ext := range g.config.External {
-		for _, d := range ext.Deploys {
+	if len(g.config.Environments) > 0 {
+		for _, d := range g.config.Deploys {
 			needs = append(needs, fmt.Sprintf("deploy-%s", d.Name))
+		}
+		// Add prod deploy jobs
+		for _, d := range g.config.Deploys {
 			needs = append(needs, fmt.Sprintf("deploy-%s-prod", d.Name))
+		}
+		// Add external deploy jobs
+		for _, ext := range g.config.External {
+			for _, d := range ext.Deploys {
+				needs = append(needs, fmt.Sprintf("deploy-%s", d.Name))
+				needs = append(needs, fmt.Sprintf("deploy-%s-prod", d.Name))
+			}
 		}
 	}
 
@@ -1338,9 +1353,14 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
 	sb.WriteString("          PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}\n")
-	for _, d := range g.config.Deploys {
-		envKey := "DEPLOY_RESULT_" + strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_"))
-		fmt.Fprintf(sb, "          %s: ${{ needs.deploy-%s.result }}\n", envKey, d.Name)
+	// Deploy result env vars reference deploy jobs, which only exist when there
+	// is at least one environment. Skip them otherwise so finalize does not
+	// dereference a job that was never emitted.
+	if len(g.config.Environments) > 0 {
+		for _, d := range g.config.Deploys {
+			envKey := "DEPLOY_RESULT_" + strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_"))
+			fmt.Fprintf(sb, "          %s: ${{ needs.deploy-%s.result }}\n", envKey, d.Name)
+		}
 	}
 	sb.WriteString("        run: |\n")
 	fmt.Fprintf(sb, "          cascade promote finalize \\\n")

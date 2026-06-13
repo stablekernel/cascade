@@ -158,28 +158,30 @@ on:
 
 // TestGenerator_CallbackTimeoutMinutes asserts the per-callback
 // timeout_minutes field renders into the generated workflow as a job-level
-// `timeout-minutes:` setting (#97). Without this, callbacks default to GHA's
-// 360min timeout, which is too lenient for tight feedback loops and too
-// strict for longer integration jobs.
+// `timeout-minutes:` setting (#97) for inline run: callbacks. Without this,
+// inline callbacks default to GHA's 360min timeout, which is too lenient for
+// tight feedback loops and too strict for longer integration jobs.
+//
+// timeout-minutes is only valid on a steps job, so the callbacks here use inline
+// run:. Reusable-workflow (uses:) callbacks must NOT receive it (GitHub rejects
+// the workflow); that gate is covered by
+// TestGenerator_ExplicitTimeoutNotOnReusableCallback.
 func TestGenerator_CallbackTimeoutMinutes(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/deploy.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/validate.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev"},
 		Validate: &config.ValidateConfig{
-			Workflow:       ".github/workflows/validate.yaml",
+			Run:            "make validate",
 			TimeoutMinutes: 5,
 		},
 		Builds: []config.BuildConfig{
-			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}, TimeoutMinutes: 30},
+			{Name: "app", Run: "make build", Triggers: []string{"src/**"}, TimeoutMinutes: 30},
 		},
 		Deploys: []config.DeployConfig{
-			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", DependsOn: []string{"app"}, TimeoutMinutes: 15},
+			{Name: "svc", Run: "make deploy", DependsOn: []string{"app"}, TimeoutMinutes: 15},
 		},
 	}
 
