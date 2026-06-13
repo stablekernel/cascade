@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Structural validation for the v1 reserved-shape fields. These rules are the
@@ -94,6 +95,29 @@ func validateJobControlFields(prefix string, isReusableWorkflow bool, runsOn *Ru
 			"%s: concurrency is not valid on a reusable-workflow callback; set concurrency inside your callback workflow", prefix))
 	}
 	return errs
+}
+
+// validateLocalCallbackWorkflowPath checks that a local callback workflow path
+// is either a bare filename, a .github/workflows/... path, or a cross-repo
+// external ref (containing "@"). Any other form is rejected because GitHub
+// requires local reusable workflows to live under .github/workflows/.
+func validateLocalCallbackWorkflowPath(prefix, workflow string) []string {
+	if workflow == "" {
+		return nil
+	}
+	// Cross-repo external refs contain "@" - always valid.
+	if strings.Contains(workflow, "@") {
+		return nil
+	}
+	// Bare filename (no "/") - valid; normalizeWorkflowPath will route it.
+	if !strings.Contains(workflow, "/") {
+		return nil
+	}
+	// .github/workflows/... path - valid.
+	if strings.HasPrefix(workflow, ".github/workflows/") || strings.HasPrefix(workflow, "./.github/workflows/") {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s: local callback workflow must be a .github/workflows/... path or a bare filename, got %q", prefix, workflow)}
 }
 
 // validatePermissions checks permission scope keys and values.
