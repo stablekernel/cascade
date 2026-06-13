@@ -213,7 +213,7 @@ This prevents unnecessary deploys (e.g., don't redeploy CDK if only services cha
 
 ### Promotion Modes
 
-The mode dropdown is generated from the configured `environments` list.
+The mode dropdown is generated from the configured `environments` list. The env names and the resulting `<from>-to-<to>` modes come from your own configuration, not from fixed names; roles are positional (last = release stage, second-to-last = prerelease).
 
 **Default mode** advances the chain by one logical step (next env, or release/prod at the boundary).
 

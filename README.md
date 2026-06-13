@@ -214,6 +214,8 @@ Promotions are triggered via `workflow_dispatch` on the generated `promote.yaml`
 | `dev-to-prod` | Full cascade through all environments |
 | `uat-to-prod` | Partial cascade from uat onward |
 
+These modes are generated from your configured environment names (`dev`, `test`, `uat`, `prod` shown here as an example); roles are positional, with the last environment as the release stage.
+
 The same artifacts built on the first merge are promoted through the chain; nothing is rebuilt.
 
 ---

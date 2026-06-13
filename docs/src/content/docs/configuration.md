@@ -53,6 +53,24 @@ ci:
 | `manifest_key` | string | No | `ci` | Top-level key inside the manifest file |
 | `action_folder` | string | No | `manage-release` | Folder name for the manage-release action |
 
+:::note[Environment names are yours; roles are positional]
+The `environments` list is fully configurable. cascade attaches no meaning to specific
+labels: `dev`, `test`, `uat`, `staging`, and `prod` are illustrative examples used
+throughout these docs, not reserved names. Roles are decided by position in the list, not
+by name. The last environment is the release stage (prod), the second-to-last is the
+prerelease environment, and the publish boundary is the final crossing into the last
+environment. The count is structural too: zero environments is release-only, one
+environment generates a single-environment Release workflow, and two or more enable the
+full promote cascade.
+
+**Naming.** Environment, build, and deploy names become GitHub Actions job IDs and
+output-variable keys, so keep them identifier-safe: use letters, digits, and underscores
+(hyphens are read as subtraction in GitHub Actions expressions). The reserved
+generator-owned names `environment` and `dry_run` cannot be used as `dispatch_inputs`. Any
+`gha_environment` value maps to a real GitHub Environment, so GitHub's own naming rules
+apply there.
+:::
+
 ### cli_version
 
 Controls which CLI version the generated workflows install via setup-cli:
