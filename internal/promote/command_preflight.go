@@ -160,6 +160,9 @@ func writePreflightGHAOutput(result *PreflightResult) error {
 	w.Set("target_env", result.TargetEnv)
 	w.Set("source_sha", result.SourceSHA)
 	w.Set("source_version", result.SourceVersion)
+	// The promoted artifact version is the canonical image tag for the promotion.
+	// Deploy jobs consume this as their image_tag input.
+	w.Set("source_image_tag", result.SourceVersion)
 	w.Set("changelog_base_sha", result.ChangelogBaseSHA)
 	w.Set("rollback_sha", result.RollbackSHA)
 

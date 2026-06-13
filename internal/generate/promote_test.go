@@ -203,6 +203,26 @@ func TestPromoteGenerator_PublishOnProd(t *testing.T) {
 	assert.Contains(t, content, "rc_version")
 }
 
+// TestPromoteGenerator_PreflightDeclaresSourceImageTag verifies the preflight job
+// declares a source_image_tag output. Deploy jobs reference
+// needs.preflight.outputs.source_image_tag for the image_tag input, so the
+// preflight outputs block must declare it or the reference resolves to an empty
+// string on real GitHub (and actionlint flags an undefined property).
+func TestPromoteGenerator_PreflightDeclaresSourceImageTag(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "test", "prod"},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content,
+		"source_image_tag: ${{ steps.preflight.outputs.source_image_tag }}",
+		"preflight outputs block must declare source_image_tag so deploy jobs resolve a non-empty image_tag")
+}
+
 func TestPromoteGenerator_DryRunSupport(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",

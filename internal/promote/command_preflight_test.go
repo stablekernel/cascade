@@ -259,6 +259,10 @@ func TestPreflightCommand_GHAOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(output), "source_env=")
 	require.Contains(t, string(output), "target_env=")
+	// Deploy jobs consume source_image_tag for their image_tag input. The promoted
+	// artifact version is the canonical image tag, so it must mirror source_version.
+	require.Contains(t, string(output), "source_image_tag=v1.0.0-rc.1",
+		"preflight must emit source_image_tag set to the source version")
 }
 
 // TestPreflightCommand_AllowBreaking tests --allow-breaking flag.

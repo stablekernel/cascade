@@ -626,6 +626,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      target_env: ${{ steps.preflight.outputs.target_env }}\n")
 	sb.WriteString("      source_sha: ${{ steps.preflight.outputs.source_sha }}\n")
 	sb.WriteString("      source_version: ${{ steps.preflight.outputs.source_version }}\n")
+	sb.WriteString("      source_image_tag: ${{ steps.preflight.outputs.source_image_tag }}\n")
 	sb.WriteString("      changelog_base_sha: ${{ steps.preflight.outputs.changelog_base_sha }}\n")
 	sb.WriteString("      rollback_sha: ${{ steps.preflight.outputs.rollback_sha }}\n")
 	sb.WriteString("      rollback_on_failure: ${{ steps.preflight.outputs.rollback_on_failure }}\n")

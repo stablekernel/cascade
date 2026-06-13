@@ -1,0 +1,36 @@
+name: "Promote threads source image tag to deploys"
+description: |
+  Verifies the generated promote.yaml wires the source image tag from the
+  preflight job into each deploy that accepts an image_tag input. The preflight
+  job's outputs block must declare source_image_tag, and a deploy whose reusable
+  workflow declares an image_tag input must receive
+  image_tag: ${{ needs.preflight.outputs.source_image_tag }} in its with: block.
+  Without the output declaration the reference resolves to an empty string on
+  real GitHub and the deploy receives a blank image tag.
+
+  This is a generator-output verification scenario. Assertion runs on the staged
+  repo after StageRepoFromConfig generates workflows, before any run.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  deploys:
+    - name: app
+      workflow: .github/workflows/deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit generates workflows; promote threads source_image_tag to deploy-app"
+    action: commit
+    commit:
+      message: "feat: add app source"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "source_image_tag: ${{ steps.preflight.outputs.source_image_tag }}"
+            - "image_tag: ${{ needs.preflight.outputs.source_image_tag }}"
