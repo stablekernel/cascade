@@ -265,7 +265,7 @@ ci:
 | `parse-config` | Validate and print the parsed manifest (with schema warnings) |
 | `reset` | Wipe releases and state (for testing or a fresh start) |
 
-Full flag reference: [docs/cli-reference.md](docs/cli-reference.md).
+Full flag reference: [CLI reference](https://stablekernel.github.io/cascade/cli-reference/).
 
 ---
 
@@ -273,13 +273,13 @@ Full flag reference: [docs/cli-reference.md](docs/cli-reference.md).
 
 | Document | Description |
 |---|---|
-| [Getting Started](docs/getting-started.md) | Step-by-step setup guide |
-| [Configuration](docs/configuration.md) | Full manifest reference |
-| [Workflows](docs/workflows.md) | Orchestrate and Promote explained |
-| [CLI Reference](docs/cli-reference.md) | All commands and flags |
-| [Callback Contract](docs/callback-contract.md) | How to write build/deploy/publish workflows |
-| [Architecture](docs/architecture.md) | System design and internals |
-| [Schema Versioning](docs/versioning.md) | Compatibility policy and migration guide |
+| [Getting Started](https://stablekernel.github.io/cascade/getting-started/) | Step-by-step setup guide |
+| [Configuration](https://stablekernel.github.io/cascade/configuration/) | Full manifest reference |
+| [Workflows](https://stablekernel.github.io/cascade/workflows/) | Orchestrate and Promote explained |
+| [CLI Reference](https://stablekernel.github.io/cascade/cli-reference/) | All commands and flags |
+| [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) | How to write build/deploy/publish workflows |
+| [Architecture](https://stablekernel.github.io/cascade/architecture/) | System design and internals |
+| [Schema Versioning](https://stablekernel.github.io/cascade/versioning/) | Compatibility policy and migration guide |
 
 ---
 
@@ -289,7 +289,7 @@ cascade is functional and self-hosted. Its own releases page shows the full pipe
 
 **Schema coverage.** A few GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These sit on the direct path to v1.0.0.
 
-**Hardening.** This covers schema version enforcement (shipped), compatibility docs ([docs/versioning.md](docs/versioning.md)), and more e2e coverage. The added tests confirm that the generated workflows behave correctly under edge cases such as empty builds, cross-repo coordination, and rollback to N-1.
+**Hardening.** This covers schema version enforcement (shipped), compatibility docs ([schema versioning](https://stablekernel.github.io/cascade/versioning/)), and more e2e coverage. The added tests confirm that the generated workflows behave correctly under edge cases such as empty builds, cross-repo coordination, and rollback to N-1.
 
 The manifest schema field shapes were frozen in v0.1.0 as the v1 contract baseline. Minor versions between now and v1.0.0 may add new optional fields; no existing fields will be removed or renamed before v1.0.0.
 
