@@ -5,6 +5,14 @@ description: Defines the inputs, outputs, and structural requirements for valida
 
 The framework calls your workflows (callbacks) during CI/CD execution. This document defines the contract your workflows must follow.
 
+Every callback (validate, build, deploy, publish) is a reusable workflow that you declare with `workflow:` in the manifest. The framework invokes it with `workflow_call`.
+
+## Migrating from inline `run:`/`shell:` callbacks
+
+Inline `run:`/`shell:` callbacks were removed. A callback can no longer carry a `run:` script or a `shell:` setting in the manifest; it must point at a reusable workflow via `workflow:`. The manifest still parses these keys, but validation now rejects them.
+
+To migrate, move the script into a reusable workflow under `.github/workflows/`, expose it with `on: workflow_call` (declaring the standard `environment`, `sha`, and `dry_run` inputs), and replace the callback's `run:`/`shell:` with `workflow: .github/workflows/<name>.yaml`. The script text becomes a `run:` step inside that workflow's job. The sections below show the required structure for each callback type.
+
 ## Overview
 
 Adopting repositories provide callback workflows that the framework invokes:
@@ -471,17 +479,14 @@ ci:
 
 ## Environment Protection
 
-Use GitHub Environment protection for approval gates. Where you declare the
-`environment:` key depends on whether the deploy is an external reusable
-workflow or an inline `run:` callback, because GitHub Actions only allows a
-job-level `environment:` key on a steps job, never on a job that calls a
-reusable workflow with `uses:`.
+Use GitHub Environment protection for approval gates. Because every deploy is a
+reusable workflow, declare the `environment:` key on the job **inside your
+reusable workflow**. GitHub Actions only allows a job-level `environment:` key on
+a steps job, never on a job that calls a reusable workflow with `uses:`, so the
+caller job cascade generates cannot carry it.
 
-### External reusable-workflow deploys (`workflow:`)
-
-For a deploy backed by an external reusable workflow, declare `environment:` on
-the job **inside your reusable workflow**. cascade passes the target environment
-name to that workflow as the `environment` input, so wire it through:
+cascade passes the target environment name to your workflow as the `environment`
+input, so wire it through:
 
 ```yaml
 # your reusable deploy workflow
@@ -497,15 +502,8 @@ cascade cannot set `environment:` on the caller job it generates: GitHub Actions
 rejects a workflow that puts `environment:` on a `uses:` job. cascade therefore
 emits only the `with: environment:` input on the caller and relies on your
 reusable workflow to apply the protection rules. cascade prints a generate-time
-note when `gha_environment` is configured for an environment whose deploys are
-external reusable workflows, reminding you to declare `environment:` inside the
-reusable workflow.
-
-### Inline `run:` deploys
-
-For an inline `run:` deploy, cascade owns the job and emits the job-level
-`environment:` key directly (resolved from `gha_environment` when configured),
-so GitHub Environment protection applies without any extra wiring.
+note when `gha_environment` is configured for an environment, reminding you to
+declare `environment:` inside the reusable workflow.
 
 Configure protection in GitHub: **Settings -> Environments -> Add required reviewers**.
 

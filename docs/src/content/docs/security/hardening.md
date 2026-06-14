@@ -41,14 +41,11 @@ These properties hold for generated output today:
 - **Local reusable workflows are commit-pinned.** Workflows referenced as
   `./.github/...` are pinned to the calling commit, so your own callbacks
   resolve from a fixed commit rather than a moving branch.
-- **Untrusted inputs are routed through `env:`.** Workflow inputs are exposed to
-  shell steps as environment variables rather than interpolated directly into
-  `run:` script text, which keeps input values as data instead of as part of the
-  script.
-- **Inline deploys are environment-gated.** A deploy expressed as an inline
-  `run:` job receives a real job-level `environment:`, so the environment's
-  protection rules (required reviewers, wait timers, branch policies) apply to
-  it.
+- **Every callback is a reusable workflow.** Validate, build, and deploy
+  callbacks run as reusable workflows referenced by `workflow:`. cascade does not
+  emit inline scripts on your behalf, so the script your pipeline runs is code you
+  author and review in a workflow file rather than text generated from the
+  manifest.
 - **The reusable-deploy gate boundary is surfaced at generate time.** GitHub does
   not allow a job-level `environment:` on a job that calls a reusable workflow.
   When you wire a reusable deploy, cascade warns you at generation time that the
@@ -111,10 +108,10 @@ moves from the cross-repo trust boundary outward to the surrounding controls.
 2. **Protect trunk and tags, and add CODEOWNERS.** Require review on trunk and on
    `.github/workflows/**`, and protect release and version tags from being moved
    or deleted.
-3. **Gate every production deploy with a GitHub Environment.** For inline deploys,
-   confirm the job-level `environment:` is set. For reusable deploys, add the
-   `environment:` gate, required reviewers, and deployment branch or tag policy
-   inside the called workflow, since the calling job cannot carry the gate.
+3. **Gate every production deploy with a GitHub Environment.** Deploys run as
+   reusable workflows, so add the `environment:` gate, required reviewers, and
+   deployment branch or tag policy inside the called workflow, since the calling
+   job cannot carry the gate.
 4. **Scope secrets to the job that needs them.** Replace blanket secret
    inheritance with an explicit list, and place production secrets behind an
    environment so only the gated production job can read them.
