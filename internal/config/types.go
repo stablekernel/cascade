@@ -243,16 +243,24 @@ func (c *TrunkConfig) ValidateSchemaVersion() (warnings []string, fatalErr error
 	return nil, nil
 }
 
-// GetCLIVersion returns the configured CLI version.
+// DefaultCLIVersion is the immutable cascade release tag pinned into generated
+// workflows when cli_version is unset (or set to the mutable "latest"). Bump this
+// with each cascade release so generated pipelines track the newest stable tag.
+const DefaultCLIVersion = "v0.1.0"
+
+// GetCLIVersion returns the configured CLI version, resolving mutable refs to the
+// immutable pinned default for supply-chain integrity.
 // Supported values:
-//   - "" or "latest" → uses the "latest" tag (most recent stable release)
-//   - "beta" → uses "master" branch (bleeding edge, may be unstable)
-//   - "vX.Y.Z" → uses a specific version tag
+//   - "" or "latest" → DefaultCLIVersion (the pinned, immutable release tag)
+//   - "beta" → passes through; the generator maps it to "master" (bleeding edge)
+//   - "vX.Y.Z" → passes through as a specific version tag
 func (c *TrunkConfig) GetCLIVersion() string {
-	if c.CLIVersion == "" {
-		return "latest"
+	switch c.CLIVersion {
+	case "", "latest":
+		return DefaultCLIVersion
+	default:
+		return c.CLIVersion
 	}
-	return c.CLIVersion
 }
 
 // GetTagPrefix returns the configured tag prefix or "v" if not specified

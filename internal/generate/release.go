@@ -22,21 +22,18 @@ func NewReleaseGenerator(cfg *config.TrunkConfig, baseDir string) *ReleaseGenera
 	}
 }
 
-// getCLIRef returns the Git ref to use for the cascade actions.
+// getCLIRef returns the Git ref for the cascade self-action. The default
+// (cli_version unset or "latest") resolves to config.DefaultCLIVersion, an
+// immutable release tag, so consumers never run an unpinned mutable ref.
 // Supported values:
-//   - "latest" → uses the "latest" tag (updated with each stable release)
-//   - "beta" → uses "master" branch (bleeding edge, may be unstable)
-//   - "vX.Y.Z" → uses a specific version tag
+//   - unset / "latest" → config.DefaultCLIVersion (immutable, pinned default)
+//   - "beta" → "master" branch (explicit opt-in, bleeding edge, may be unstable)
+//   - "vX.Y.Z" → that specific version tag
 func (g *ReleaseGenerator) getCLIRef() string {
-	version := g.config.GetCLIVersion()
-	switch version {
-	case "latest", "":
-		return "latest" // Points to the most recent stable release
-	case "beta":
-		return "master" // Bleeding edge from trunk
-	default:
-		return version // Specific version tag (e.g., v1.0.0)
+	if g.config.CLIVersion == "beta" {
+		return "master" // Explicit opt-in escape hatch to trunk.
 	}
+	return g.config.GetCLIVersion()
 }
 
 // getReleaseTokenRef returns the token expression for release operations.

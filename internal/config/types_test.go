@@ -391,11 +391,19 @@ func TestGetTriggersForDeploy_BuildWithNoTriggers(t *testing.T) {
 // =============================================================================
 
 func TestGetCLIVersion(t *testing.T) {
-	// Default when not set
+	// Default when not set resolves to the pinned, immutable release tag.
 	cfg := &TrunkConfig{}
-	assert.Equal(t, "latest", cfg.GetCLIVersion())
+	assert.Equal(t, DefaultCLIVersion, cfg.GetCLIVersion())
 
-	// Configured value
+	// Explicit "latest" is a mutable ref and is pinned to the default tag.
+	cfg.CLIVersion = "latest"
+	assert.Equal(t, DefaultCLIVersion, cfg.GetCLIVersion())
+
+	// "beta" is the explicit opt-in escape hatch and passes through.
+	cfg.CLIVersion = "beta"
+	assert.Equal(t, "beta", cfg.GetCLIVersion())
+
+	// Configured version tag passes through unchanged.
 	cfg.CLIVersion = "v1.2.3"
 	assert.Equal(t, "v1.2.3", cfg.GetCLIVersion())
 }

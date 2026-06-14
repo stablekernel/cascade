@@ -156,7 +156,7 @@ func TestPinPolicy_E2E_OrchestrateEmitsPinnedRefs(t *testing.T) {
 	require.NoError(t, err)
 
 	// No mutable third-party tag survives. cascade's own setup-cli ref is
-	// intentionally excluded and may still carry @latest (its CLI version).
+	// intentionally excluded from SHA pinning and carries its version tag.
 	for _, action := range thirdPartyActions {
 		assert.NotContainsf(t, out, "uses: "+action+"@v", "third-party %s must be SHA-pinned, not tagged", action)
 		assert.NotContainsf(t, out, action+"@latest", "third-party %s must never be @latest", action)
@@ -182,6 +182,28 @@ func TestPinPolicy_E2E_OrchestrateEmitsPinnedRefs(t *testing.T) {
 		"cascade-owned action ref must remain present")
 	assert.NotContains(t, out, "stablekernel/cascade/.github/actions/setup-cli@"+defaultActionPins[actionCheckout].sha,
 		"cascade-owned action must not be SHA-pinned by the third-party pin table")
+}
+
+// TestGetCLIRef_DefaultIsPinnedNotMutable asserts that, under a default manifest
+// with cli_version unset, the generated self-action ref is the immutable release
+// tag (config.DefaultCLIVersion) and never the mutable @latest or @master refs.
+// SHA-pinning the self-action is not done at generation time; the version tag is
+// the supply-chain pin.
+func TestGetCLIRef_DefaultIsPinnedNotMutable(t *testing.T) {
+	cfg, tmpDir := newPinE2EConfig(t)
+	cfg.PinMode = "" // default manifest, no pin config
+	// cli_version intentionally unset.
+
+	out, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	const action = "stablekernel/cascade/.github/actions/setup-cli"
+	assert.Contains(t, out, action+"@"+config.DefaultCLIVersion,
+		"self-action must be pinned to the immutable release tag by default")
+	assert.NotContains(t, out, action+"@latest",
+		"self-action default ref must not be the mutable @latest")
+	assert.NotContains(t, out, action+"@master",
+		"self-action default ref must not be the mutable @master")
 }
 
 // TestPinPolicy_E2E_Deterministic confirms re-generating against the same pin
