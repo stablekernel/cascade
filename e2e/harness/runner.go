@@ -114,6 +114,13 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.StageDivergence.Env == "" {
 				return fmt.Errorf("step %d (%s): stage_divergence requires env", i, step.Name)
 			}
+		case "rollback":
+			if step.Rollback == nil {
+				return fmt.Errorf("step %d (%s): rollback action requires rollback config", i, step.Name)
+			}
+			if step.Rollback.Environment == "" {
+				return fmt.Errorf("step %d (%s): rollback requires environment", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -346,6 +353,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeHotfixMerged(ctx, step.HotfixMerged, config)
 	case "stage_divergence":
 		return r.executeStageDivergence(ctx, step.StageDivergence)
+	case "rollback":
+		return r.executeRollback(ctx, step.Rollback, config)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}

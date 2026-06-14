@@ -1,0 +1,124 @@
+name: "Deployable-scoped rollback moves one deployable and leaves the env"
+description: |
+  Proves a rollback scoped to a single deployable touches only that deployable's
+  per-deployable state, leaving the env-level pointer, sibling deployables, and
+  env divergence untouched.
+
+  prod runs two deployables (api, web) and is advanced through two published
+  versions, so both deployables record commit2 per-deployable state. The rollback
+  is dispatched with deployable=api and an explicit target of the first version,
+  so preflight resolves api's prior target and only deploy-api re-runs.
+
+  finalize runs deployable-scoped (the generated workflow threads the dispatch
+  deployable input through to the CLI), so it re-applies only api's recorded
+  per-deployable SHA. It does NOT move env.sha, does NOT mirror onto web, and
+  does NOT mark prod diverged. The assertions lock that scope: prod's env-level
+  sha stays at commit2, its divergence ref stays cleared, api lands on commit1,
+  and web stays on commit2.
+
+  Both deploys are inline run: jobs (no actions/checkout, which act cannot
+  resolve for a reusable callback against the per-scenario gitea), so each deploy
+  job runs observably under act; only deploy-api runs for a scoped dispatch.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: api
+      run: |
+        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      triggers: ["**"]
+    - name: web
+      run: |
+        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version to prod (records per-deployable commit1)"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit1
+          deploys:
+            api:
+              sha: commit1
+            web:
+              sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version to prod (advances both deployables)"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit2
+          deploys:
+            api:
+              sha: commit2
+            web:
+              sha: commit2
+
+  # Rollback scoped to the api deployable, targeting the first version. Only
+  # deploy-api re-runs. finalize applies api's per-deployable SHA and nothing
+  # else: env.sha stays commit2, prod is NOT marked diverged (ref stays cleared),
+  # and the web sibling stays on commit2.
+  - name: "Rollback only the api deployable to the prior version"
+    action: rollback
+    rollback:
+      environment: prod
+      deployable: api
+      target: commit1
+    expect:
+      state:
+        prod:
+          sha: commit2
+          cleared: [ref]
+          deploys:
+            api:
+              sha: commit1
+            web:
+              sha: commit2
+      jobs:
+        preflight: success
+        deploy-api: success
+        finalize: success

@@ -1,0 +1,105 @@
+name: "Rollback leaves trunk state unchanged when the deploy fails"
+description: |
+  Proves the rollback gate: when the re-deploy of the prior target fails, the
+  finalize job must NOT record the environment as rolled back. The cascade-
+  rollback workflow's finalize job runs with always() so it observes the deploy
+  result, but the CLI aborts the state write when an in-scope deploy did not
+  succeed, leaving trunk state exactly where it was.
+
+  prod is advanced through two published versions, then a rollback is requested.
+  The inline deploy job exits non-zero on purpose, so finalize sees
+  DEPLOY_RESULT_APP=failure, aborts before writing, and the run concludes in
+  failure. prod state therefore stays on the second version: no rolled-back SHA,
+  no rollback ref. This is the safety property that distinguishes a real
+  re-deploy from a blind state rewrite.
+
+  The deploy is an inline run: job (no actions/checkout, which act cannot resolve
+  for a reusable callback against the per-scenario gitea), so the deploy job runs
+  observably under act and is asserted as deploy-app: failure.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    # Inline run: deploy that always fails. The non-zero exit forces
+    # deploy-app to fail, so finalize sees DEPLOY_RESULT_APP=failure and aborts
+    # the state write. Its caller job id is deploy-app, which the harness's
+    # findJob matches directly.
+    - name: app
+      run: |
+        echo "rollback deploy of env=${ENVIRONMENT} sha=${SHA} failing on purpose"
+        exit 1
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version to prod (establishes the prior target)"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version to prod (advances past the prior target)"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit2
+
+  # Rollback prod with no explicit target: the preflight resolves N-1 from the
+  # previous-deploy ring (the first commit) and the deploy job re-runs at that
+  # SHA, but the deploy exits non-zero. finalize observes the failure and aborts
+  # the state write, so the run concludes in failure and prod state stays on
+  # commit2 with no rollback ref.
+  - name: "Rollback prod with a failing deploy leaves state on commit2"
+    action: rollback
+    rollback:
+      environment: prod
+      expect_failure: true
+    expect:
+      state:
+        prod:
+          unchanged: true
+      jobs:
+        preflight: success
+        deploy-app: failure

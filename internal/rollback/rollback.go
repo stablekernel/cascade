@@ -2,11 +2,11 @@
 // re-promotion of a prior version or SHA to a target environment.
 //
 // Rollback does not introduce a new deploy code path. It resolves a prior
-// deployment target from existing state (and, when needed, the git history of
-// the manifest) and then re-applies that target's SHA/version to the
-// environment using the same state-write machinery the promote/finalize flow
-// uses. The reserved `state.<env>.previous` ring is intentionally not consulted
-// here; target resolution walks current state and manifest git history.
+// deployment target from existing state and then re-applies that target's
+// SHA/version to the environment using the same state-write machinery the
+// promote/finalize flow uses. Target resolution walks the environment's live
+// state, then its deploy-history ring (state.<env>.previous, newest first),
+// then the git history of the manifest.
 package rollback
 
 import (
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/promote"
 	"gopkg.in/yaml.v3"
 )
 
@@ -118,20 +119,40 @@ func New(opts Options) (*Rollbacker, error) {
 	}, nil
 }
 
+// ConfigPath returns the resolved manifest path the Rollbacker reads and writes.
+// The finalize subcommand uses it to commit the post-rollback state back to the
+// trunk branch.
+func (r *Rollbacker) ConfigPath() string {
+	return r.configPath
+}
+
+// DeployNames returns the names of the deploys declared in the manifest, in
+// declaration order. The finalize subcommand uses it to gate the state write on
+// each deploy job's reported result. It returns nil when no deploys are
+// configured (a state-only, deploy-less rollback).
+func (r *Rollbacker) DeployNames() []string {
+	if r.cicdFile.Config == nil {
+		return nil
+	}
+	names := make([]string, 0, len(r.cicdFile.Config.Deploys))
+	for _, d := range r.cicdFile.Config.Deploys {
+		names = append(names, d.Name)
+	}
+	return names
+}
+
 // Plan resolves the rollback target for env and (optionally) a single
 // deployable, without mutating any state. It returns a clear error when the
-// environment is unknown or the requested target cannot be resolved from
-// state or manifest history.
+// environment is unknown or the requested target cannot be resolved.
 //
 // to is matched against both SHA and version. Matching is exact for full
 // values and prefix-based for SHAs (so a short SHA resolves to the recorded
-// full SHA).
+// full SHA). When to is empty, Plan resolves the previous version (the N-1
+// entry in the deploy-history ring, or the newest distinct prior state from
+// manifest history when the ring has no distinct entry).
 func (r *Rollbacker) Plan(env, to, deployable string) (*Plan, error) {
 	if env == "" {
 		return nil, fmt.Errorf("rollback requires --env")
-	}
-	if to == "" {
-		return nil, fmt.Errorf("rollback requires --to <version|sha>")
 	}
 
 	if !r.knownEnvironment(env) {
@@ -158,7 +179,13 @@ func (r *Rollbacker) Plan(env, to, deployable string) (*Plan, error) {
 		return nil, fmt.Errorf("unknown deployable %q (not declared in config.deploys and has no recorded state in %q)", deployable, env)
 	}
 
-	target, err := r.resolveTarget(env, to, deployable)
+	var target *Target
+	var err error
+	if to == "" {
+		target, err = r.resolveDefaultTarget(env, deployable)
+	} else {
+		target, err = r.resolveTarget(env, to, deployable)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -171,8 +198,10 @@ func (r *Rollbacker) Plan(env, to, deployable string) (*Plan, error) {
 }
 
 // resolveTarget finds a prior SHA/version matching `to`, searching live state
-// first and manifest git history second (per the locked git/state-history
-// approach). It never consults the reserved previous-state ring.
+// first, the environment's deploy-history ring (state.<env>.previous) next, and
+// manifest git history last. The ring is env-scoped only: snapshots carry no
+// per-deployable data, so a deployable-scoped resolution skips it and falls
+// straight through to git history.
 func (r *Rollbacker) resolveTarget(env, to, deployable string) (*Target, error) {
 	// 1. Live state for the environment (and the scoped deployable).
 	if cur := r.cicdFile.State[env]; cur != nil {
@@ -187,7 +216,19 @@ func (r *Rollbacker) resolveTarget(env, to, deployable string) (*Target, error) 
 		}
 	}
 
-	// 2. Manifest git history, newest first. This recovers a prior deployment
+	// 2. Deploy-history ring, newest first. Env-scoped only: snapshots have no
+	//    per-deployable data, so a deployable-scoped rollback skips the ring.
+	if deployable == "" {
+		if cur := r.cicdFile.State[env]; cur != nil {
+			for i := range cur.Previous {
+				if t := matchSnapshot(cur.Previous[i], to); t != nil {
+					return t, nil
+				}
+			}
+		}
+	}
+
+	// 3. Manifest git history, newest first. This recovers a prior deployment
 	//    the live manifest has already advanced past (the core rollback case).
 	priors, err := r.history.PriorStates(env)
 	if err != nil {
@@ -239,6 +280,78 @@ func matchDeploy(ds *config.DeployState, to, deployable, source string) *Target 
 		return &Target{SHA: ds.SHA, Version: ds.Version, Source: source, Deployable: deployable}
 	}
 	return nil
+}
+
+// matchSnapshot returns a Target when `to` matches a deploy-history ring
+// snapshot's SHA (full or >=7-char prefix) or exact version. The ring is
+// env-scoped, so the resulting Target carries no Deployable.
+func matchSnapshot(snap config.EnvStateSnapshot, to string) *Target {
+	if shaMatches(snap.SHA, to) || (snap.Version != "" && snap.Version == to) {
+		return &Target{SHA: snap.SHA, Version: snap.Version, Source: "previous-ring"}
+	}
+	return nil
+}
+
+// resolveDefaultTarget resolves the implicit "previous version" target used when
+// no --to is given. Env-scoped: it picks the newest deploy-history ring entry
+// whose SHA differs from the current state (the N-1), falling back to the newest
+// distinct git-history entry. Deployable-scoped: the ring is env-only, so it
+// uses the newest git-history entry carrying a distinct per-deployable SHA.
+func (r *Rollbacker) resolveDefaultTarget(env, deployable string) (*Target, error) {
+	cur := r.cicdFile.State[env]
+	currentSHA := ""
+	if cur != nil {
+		currentSHA = cur.SHA
+		if deployable != "" {
+			if ds := cur.Deploys[deployable]; ds != nil {
+				currentSHA = ds.SHA
+			}
+		}
+	}
+
+	if deployable == "" {
+		if cur != nil {
+			for i := range cur.Previous {
+				snap := cur.Previous[i]
+				if snap.SHA != "" && snap.SHA != currentSHA {
+					return &Target{SHA: snap.SHA, Version: snap.Version, Source: "previous-ring"}, nil
+				}
+			}
+		}
+
+		priors, err := r.history.PriorStates(env)
+		if err != nil {
+			return nil, fmt.Errorf("reading manifest history for %q: %w", env, err)
+		}
+		for _, prior := range priors {
+			if prior == nil {
+				continue
+			}
+			if prior.SHA != "" && prior.SHA != currentSHA {
+				return &Target{SHA: prior.SHA, Version: prior.Version, Source: "git-history"}, nil
+			}
+		}
+
+		return nil, fmt.Errorf("no prior version to roll back to for environment %q (deploy-history ring and manifest history are empty)", env)
+	}
+
+	// Deployable-scoped default: the ring carries no per-deployable data, so the
+	// only source of a distinct prior per-deployable SHA is git history.
+	priors, err := r.history.PriorStates(env)
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest history for %q: %w", env, err)
+	}
+	for _, prior := range priors {
+		if prior == nil {
+			continue
+		}
+		ds := prior.Deploys[deployable]
+		if ds != nil && ds.SHA != "" && ds.SHA != currentSHA {
+			return &Target{SHA: ds.SHA, Version: ds.Version, Source: "git-history", Deployable: deployable}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no prior version to roll back to for deployable %q in environment %q (deploy-history ring and manifest history are empty)", deployable, env)
 }
 
 // shaMatches reports whether candidate matches the requested value exactly or
@@ -296,6 +409,10 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 		// SHA onto every recorded deployable so change-detection compares
 		// against the rolled-back base.
 		//
+		// Capture the outgoing (pre-rollback) SHA before any field is mutated;
+		// it becomes the divergence base recorded below.
+		prevSHA := env.SHA
+
 		// Record the outgoing state in the deploy-history ring before the env
 		// pointer advances. No-op when there is no prior SHA or the rollback
 		// target equals the current SHA.
@@ -313,6 +430,15 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 			ds.DeployedAt = timestamp
 			ds.DeployedBy = r.actor
 		}
+
+		// Mark the environment diverged so forward-promotion guards treat it as
+		// off-trunk until a promotion rejoins it. The rollback ref distinguishes
+		// this from a hotfix divergence (no integration branch, tags, or drafts),
+		// so the rejoin cleanup can skip the hotfix-specific teardown. No patches
+		// are recorded: a rollback re-points at a prior SHA, it does not stack
+		// commits on a base.
+		env.Ref = promote.RollbackRefPrefix + plan.Environment
+		env.BaseSHA = prevSHA
 	}
 
 	return r.writeConfig()
