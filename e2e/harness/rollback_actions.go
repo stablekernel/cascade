@@ -67,6 +67,14 @@ func (r *Runner) executeRollback(ctx context.Context, rollback *RollbackStep, co
 		Env: map[string]string{
 			"GITHUB_REF":        fmt.Sprintf("refs/heads/%s", branch),
 			"GITHUB_REPOSITORY": fmt.Sprintf("%s/%s", AdminUsername, r.harness.repo.Name),
+			// Mark this run as a rollback so a deploy callback can distinguish the
+			// rollback re-deploy from a setup promote. Both are dispatched via
+			// workflow_dispatch and a reusable callback sees its own name in
+			// $GITHUB_WORKFLOW (the callee's, not the caller's), so the caller's
+			// workflow name is not a usable signal. act passes top-level --env into
+			// every job, including reusable callees, so this is observable in the
+			// deploy step. Only the rollback path sets it; promote never does.
+			"CASCADE_E2E_ROLLBACK": "1",
 		},
 	})
 	if err != nil {

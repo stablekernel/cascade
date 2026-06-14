@@ -15,6 +15,18 @@ type MultiStepScenario struct {
 	Config      Config      `yaml:"config"`
 	Setup       *SetupState `yaml:"setup,omitempty"` // Optional initial state
 	Steps       []Step      `yaml:"steps"`
+	// SetupWorkflows seeds reusable callback workflow files into the setup commit
+	// BEFORE workflow generation runs, keyed by repository path (for example
+	// ".github/workflows/deploy-app.yaml"). The harness generates a generic
+	// non-failing stub for every build/deploy callback, which is sufficient for
+	// most scenarios. A scenario that needs a callback to behave differently (for
+	// example a deploy that exits non-zero only under the Rollback workflow) sets
+	// the exact reusable-workflow body here so it is present on disk when the
+	// generator reads the referenced workflow. A staged file overrides any
+	// auto-generated stub at the same path. These files are harness-side only and
+	// are never written into the generated manifest. Staging them via a step's
+	// commit.files would land after generation, so they would be invisible to it.
+	SetupWorkflows map[string]string `yaml:"setup_workflows,omitempty"`
 }
 
 // SetupState defines optional initial state for the scenario
