@@ -241,12 +241,16 @@ func TestNormalizeWorkflowResult_CrashIsNotTransient(t *testing.T) {
 	}
 }
 
-// TestNormalizeWorkflowResult_ActOnlyDumpIsTransient is the sibling guarantee:
-// a non-zero act exit whose logs carry only an act/docker dump (no cascade
-// frame) is NOT flagged Crashed by the parser, so it falls through to the
-// transient ExecError path and the scenario runner retries it as an infra
-// flake.
-func TestNormalizeWorkflowResult_ActOnlyDumpIsTransient(t *testing.T) {
+// TestNormalizeWorkflowResult_ActOnlyDumpIsDeterministic is the sibling
+// guarantee to the crash test, updated for the narrowed classifier: a non-zero
+// act exit whose logs carry only an act/docker dump (no cascade frame) is still
+// correctly NOT flagged Crashed by the parser - the #146/#147 crash-frame logic
+// is intact - but it is NO LONGER auto-retried. With no cascade crash frame and
+// no named infra-saturation signature, it is a deterministic failure that must
+// surface on the first attempt rather than being masked by the old catch-all
+// transient bucket. An infra signature in the SAME shape of dump is what makes
+// it transient again (covered by the infra subtest below).
+func TestNormalizeWorkflowResult_ActOnlyDumpIsDeterministic(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -265,18 +269,40 @@ func TestNormalizeWorkflowResult_ActOnlyDumpIsTransient(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseActOutput returned error: %v", err)
 			}
+			if result.Crashed {
+				t.Fatalf("an act-only dump must NOT be flagged Crashed (no cascade frame)")
+			}
 			normalizeWorkflowResult(result, ".github/workflows/orchestrate.yaml", 2)
 
 			if result.Conclusion != "failure" {
 				t.Fatalf("Conclusion = %q, want failure", result.Conclusion)
 			}
-			if !result.ExecError {
-				t.Fatalf("an act-only dump must be tagged transient (ExecError) so it is retried")
+			if result.ExecError {
+				t.Fatalf("an act-only dump with no infra signature must be deterministic (not retried)")
 			}
 			failErr := workflowFailureError("orchestrate", result)
-			if !IsTransientWorkflowError(failErr) {
-				t.Fatalf("an act-only dump failure must be classified transient: %v", failErr)
+			if IsTransientWorkflowError(failErr) {
+				t.Fatalf("an act-only dump with no infra signature must NOT be classified transient: %v", failErr)
 			}
 		})
 	}
+
+	// The same act-only dump shape, but carrying a named infra-saturation
+	// signature, IS a genuine retryable transient - proving the gate is the
+	// signature, not the dump.
+	t.Run("act dump with infra signature is transient", func(t *testing.T) {
+		t.Parallel()
+		logs := bareActGoroutineDump + "\nError response from daemon: all predefined address pools have been fully subnetted\n"
+		result, err := ParseActOutput(logs)
+		if err != nil {
+			t.Fatalf("ParseActOutput returned error: %v", err)
+		}
+		normalizeWorkflowResult(result, ".github/workflows/orchestrate.yaml", 2)
+		if !result.ExecError {
+			t.Fatalf("an act dump carrying an infra signature must be transient (ExecError)")
+		}
+		if !IsTransientWorkflowError(workflowFailureError("orchestrate", result)) {
+			t.Fatalf("an act dump carrying an infra signature must be classified transient")
+		}
+	})
 }
