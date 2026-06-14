@@ -7,9 +7,9 @@ description: |
   succeed, leaving trunk state exactly where it was.
 
   prod is advanced through two published versions, then a rollback is requested.
-  The inline deploy succeeds while it is invoked by the Promote workflow (so the
-  two setup promotions land prod on commit1 then commit2), and exits non-zero
-  only when invoked by the Rollback workflow's re-deploy. finalize then sees
+  The deploy succeeds while it is invoked by the Promote workflow (so the two
+  setup promotions land prod on commit1 then commit2), and exits non-zero only
+  when invoked by the Rollback workflow's re-deploy. finalize then sees
   DEPLOY_RESULT_APP=failure, aborts before writing, and the run concludes in
   failure. prod state therefore stays on the second version: no rolled-back SHA,
   no rollback ref. This is the safety property that distinguishes a real
@@ -17,13 +17,14 @@ description: |
 
   The deploy is a reusable workflow whose inner job runs under act (no actions/
   checkout, which act cannot resolve for a reusable callback against the
-  per-scenario gitea), and is asserted as appdeploy: failure. The deploy keys its
-  conditional failure on $GITHUB_WORKFLOW, which inside a reusable callback is the
-  invoking (caller) workflow's name: the generated promote workflow sets
-  name: Promote and the rollback workflow sets name: Rollback, and the harness
-  suffixes each with [scenario-...], so the deploy matches the Rollback prefix.
-  The Promote workflow succeeds, only the Rollback re-deploy fails, exercising the
-  gateOnDeployResults guard rather than aborting during setup.
+  per-scenario gitea), and is asserted as appdeploy: failure. Inside a reusable
+  workflow_call callback, $GITHUB_WORKFLOW is the callee's own name, not the
+  caller's, on act and on real GitHub alike, so the caller workflow name cannot
+  tell the rollback re-deploy from a setup promote (both also run under
+  workflow_dispatch). The harness instead sets CASCADE_E2E_ROLLBACK=1 only on the
+  rollback dispatch, and act passes that top-level env into the reusable callee,
+  so the deploy fails only on the rollback re-deploy. The two setup promotes
+  succeed, exercising the gateOnDeployResults guard rather than aborting setup.
 
 config:
   trunk_branch: main
@@ -37,12 +38,12 @@ config:
     # Rollback workflow's re-deploy. Both workflows thread the same with: inputs
     # (environment, sha) into this callback, and the rollback target SHA equals an
     # earlier promote's SHA, so the SHA alone cannot tell the two apart. The
-    # invoking workflow name ($GITHUB_WORKFLOW, the caller's name inside a reusable
-    # callback) does: it is "Promote" during the two setup promotions and
-    # "Rollback" during the re-deploy under test. Failing only on Rollback forces
-    # appdeploy to fail there, so finalize sees DEPLOY_RESULT_APP=failure and
-    # aborts the state write, while setup lands prod on commit1 then commit2
-    # cleanly. act keys it by the inner job id appdeploy.
+    # callee cannot read the caller's workflow name ($GITHUB_WORKFLOW resolves to
+    # the callee inside a reusable callback), so the harness sets the
+    # CASCADE_E2E_ROLLBACK env only on the rollback dispatch. Failing only when it
+    # is set forces appdeploy to fail on the rollback re-deploy, so finalize sees
+    # DEPLOY_RESULT_APP=failure and aborts the state write, while setup lands prod
+    # on commit1 then commit2 cleanly. act keys it by the inner job id appdeploy.
     - name: app
       workflow: .github/workflows/deploy-app.yaml
       triggers: ["**"]
@@ -75,17 +76,18 @@ setup_workflows:
               DEPLOY_ENV: ${{ inputs.environment }}
               DEPLOY_SHA: ${{ inputs.sha }}
             run: |
-              echo "deploy of env=$DEPLOY_ENV sha=$DEPLOY_SHA via workflow=$GITHUB_WORKFLOW"
-              # GITHUB_WORKFLOW inside a reusable callback is the caller
-              # workflow's name. The harness suffixes each with
-              # [scenario-<tag>], so the Rollback workflow surfaces it as
-              # "Rollback [scenario-...]". Match the Rollback prefix.
-              case "$GITHUB_WORKFLOW" in
-                Rollback*)
-                  echo "failing the rollback re-deploy on purpose"
-                  exit 1
-                  ;;
-              esac
+              echo "deploy of env=$DEPLOY_ENV sha=$DEPLOY_SHA rollback=${CASCADE_E2E_ROLLBACK:-0}"
+              # Inside a reusable workflow_call callback, $GITHUB_WORKFLOW is the
+              # callee's own name (deploy-app), not the caller's, on act and on
+              # real GitHub alike, so the caller name cannot tell rollback from
+              # promote. The harness instead sets CASCADE_E2E_ROLLBACK=1 only on
+              # the rollback dispatch (act passes top-level --env into reusable
+              # callees), so the rollback re-deploy fails while the two setup
+              # promotes succeed.
+              if [ "${CASCADE_E2E_ROLLBACK:-0}" = "1" ]; then
+                echo "failing the rollback re-deploy on purpose"
+                exit 1
+              fi
               echo "promote deploy succeeded"
 
 steps:
