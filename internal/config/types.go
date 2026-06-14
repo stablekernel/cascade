@@ -367,8 +367,8 @@ func (c *TrunkConfig) HasGPGSigning() bool {
 // ValidateConfig defines a validation workflow
 type ValidateConfig struct {
 	Workflow       string                            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`           // Inline command, XOR with workflow (reserved-shape)
-	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"`       // Shell for inline run (default bash; only valid with run)
+	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`           // rejected: inline run is no longer supported; use workflow:
+	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"`       // rejected: inline shell is no longer supported; use workflow:
 	Triggers       []string                          `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns that should trigger validation
 	SupportsDryRun bool                              `yaml:"supports_dry_run,omitempty" json:"supports_dry_run,omitempty"`
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
@@ -391,8 +391,8 @@ type ValidateConfig struct {
 type BuildConfig struct {
 	Name           string                            `yaml:"name" json:"name"`
 	Workflow       string                            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`     // Inline command, XOR with workflow (reserved-shape)
-	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"` // Shell for inline run (default bash; only valid with run)
+	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`     // rejected: inline run is no longer supported; use workflow:
+	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"` // rejected: inline shell is no longer supported; use workflow:
 	Triggers       []string                          `yaml:"triggers" json:"triggers"`
 	DependsOn      []string                          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	StateTags      []string                          `yaml:"state_tags,omitempty" json:"state_tags,omitempty"`
@@ -451,8 +451,8 @@ type PassthroughArtifact struct {
 type DeployConfig struct {
 	Name           string                            `yaml:"name" json:"name"`
 	Workflow       string                            `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`     // Inline command, XOR with workflow (reserved-shape)
-	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"` // Shell for inline run (default bash; only valid with run)
+	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`     // rejected: inline run is no longer supported; use workflow:
+	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"` // rejected: inline shell is no longer supported; use workflow:
 	Triggers       []string                          `yaml:"triggers" json:"triggers"`
 	DependsOn      []string                          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	StateTags      []string                          `yaml:"state_tags,omitempty" json:"state_tags,omitempty"`
@@ -509,8 +509,8 @@ type ExternalRepoConfig struct {
 type ExternalDeployConfig struct {
 	Name     string   `yaml:"name" json:"name"`                             // Deploy identifier (e.g., "cdk")
 	Workflow string   `yaml:"workflow,omitempty" json:"workflow,omitempty"` // Workflow path - local (.github/...) or external (org/repo/.github/...@ref)
-	Run      string   `yaml:"run,omitempty" json:"run,omitempty"`           // Inline command, XOR with workflow (reserved-shape)
-	Shell    string   `yaml:"shell,omitempty" json:"shell,omitempty"`       // Shell for inline run (default bash; only valid with run)
+	Run      string   `yaml:"run,omitempty" json:"run,omitempty"`           // rejected: inline run is no longer supported; use workflow:
+	Shell    string   `yaml:"shell,omitempty" json:"shell,omitempty"`       // rejected: inline shell is no longer supported; use workflow:
 	Triggers []string `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns for change detection
 
 	// v1 reserved-shape per-callback fields (parse + structural validation only).
