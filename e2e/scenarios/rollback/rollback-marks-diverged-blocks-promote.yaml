@@ -1,0 +1,100 @@
+name: "Rollback marks the env diverged and blocks an onward promote"
+description: |
+  A rollback marks the rolled-back environment diverged with a rollback ref, and
+  that divergence guards an onward promotion sourced from the rolled-back env.
+
+  test is advanced through two versions, then rolled back. The rollback workflow's
+  finalize step records test's divergence as ref=rollback/test (exact match). A
+  subsequent dev-to-test cascade is irrelevant; the guarded leg is test-to-prod,
+  which sources FROM the diverged test env, so its preflight trips the
+  diverged-source guard and the promote concludes in failure.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      run: |
+        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version from dev to test"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version into test (advances past the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          sha: commit2
+
+  # Roll test back to the prior version. finalize records test as diverged with
+  # the rollback ref. The ref is matched exactly against "rollback/test".
+  - name: "Rollback test to the prior version marks it diverged"
+    action: rollback
+    rollback:
+      environment: test
+    expect:
+      state:
+        test:
+          sha: commit1
+          ref: "rollback/test"
+
+  # An onward promote sourced FROM the rolled-back test env is guarded: the
+  # test-to-prod leg's preflight sees test diverged and trips the diverged-source
+  # guard, so the promote concludes in failure. source: test drives the
+  # test-to-prod cascade leg directly (the harness default of Environments[0]
+  # would source from on-trunk dev and never exercise the guard).
+  - name: "Promote from the rolled-back test env is blocked"
+    action: promote
+    promote:
+      mode: cascade
+      source: test
+      target: prod
+      expect_failure: true

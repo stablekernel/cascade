@@ -63,6 +63,11 @@ func WithLifecycleCleaner(c LifecycleCleaner) FinalizeOption {
 type rejoinEvent struct {
 	env         string
 	baseVersion string
+	// rollbackOrigin is true when the env diverged via a manual rollback rather
+	// than a hotfix integration branch. The rejoin cleanup skips integration
+	// branch and hotfix release deletion in that case, since a rollback creates
+	// no such objects; the divergence fields are still cleared unconditionally.
+	rollbackOrigin bool
 }
 
 // gitReleaseCleaner is the production LifecycleCleaner. It deletes the remote

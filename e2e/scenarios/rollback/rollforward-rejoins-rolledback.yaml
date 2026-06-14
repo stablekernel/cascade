@@ -1,0 +1,129 @@
+name: "Roll-forward rejoins a rolled-back env without a cleaner error"
+description: |
+  A forward promotion onto a rolled-back environment ends the divergence. Unlike
+  a hotfix rejoin, a rollback never creates an env/<env> integration branch, so
+  the rejoin path must clear the divergence WITHOUT attempting (and failing) a
+  branch deletion.
+
+  test is rolled back (finalize records ref=rollback/test), then trunk advances
+  and a dev-to-test cascade promotes a containing SHA into test. The promote
+  succeeds, the divergence fields read back empty, and there is no env/test branch
+  to delete. The targeted dev-to-test cascade isolates the rejoin leg so the
+  diverged test env is never used as a promote source.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      run: |
+        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version into test"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version into test"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          sha: commit2
+
+  # Roll test back to the prior version. finalize records test diverged with the
+  # rollback ref. No env/test branch is created by a rollback.
+  - name: "Rollback test to the prior version"
+    action: rollback
+    rollback:
+      environment: test
+    expect:
+      state:
+        test:
+          sha: commit1
+          ref: "rollback/test"
+      branches:
+        deleted: ["env/test"]
+
+  - name: "Advance trunk past the rolled-back point"
+    action: commit
+    commit:
+      message: "chore: trunk advance"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate so dev carries the advanced trunk"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit3
+
+  # Roll-forward: a dev-to-test cascade promotes a containing SHA into the
+  # rolled-back test env. The rejoin clears the divergence fields. Because the
+  # rollback ref carries no env/test branch, the cleaner skips the branch deletion
+  # and the promote SUCCEEDS (no DeleteEnvBranch error). cleared asserts ref and
+  # base_sha read back empty; the env/test branch never existed.
+  - name: "Roll-forward promote into the rolled-back test env"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          cleared: [ref, base_sha]
+        dev:
+          unchanged: true
+        prod:
+          unchanged: true
+      branches:
+        deleted: ["env/test"]

@@ -114,6 +114,13 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.StageDivergence.Env == "" {
 				return fmt.Errorf("step %d (%s): stage_divergence requires env", i, step.Name)
 			}
+		case "rollback":
+			if step.Rollback == nil {
+				return fmt.Errorf("step %d (%s): rollback action requires rollback config", i, step.Name)
+			}
+			if step.Rollback.Environment == "" {
+				return fmt.Errorf("step %d (%s): rollback requires environment", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -346,6 +353,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeHotfixMerged(ctx, step.HotfixMerged, config)
 	case "stage_divergence":
 		return r.executeStageDivergence(ctx, step.StageDivergence)
+	case "rollback":
+		return r.executeRollback(ctx, step.Rollback, config)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -540,7 +549,7 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 	// the literal "cascade". Translate scenarios that use the cascade+target
 	// pair into the "<source>-to-<target>" form. Source defaults to the first
 	// env (typically dev) since the workflow generator only emits dev-rooted
-	// cascade options.
+	// cascade options, but a step may set Source to drive a non-default leg.
 	var inputs map[string]string
 	if len(config.Environments) == 1 {
 		// Single-environment repos generate a Release workflow (see
@@ -561,9 +570,16 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 	} else {
 		mode := promote.Mode
 		if mode == "cascade" {
+			// Source defaults to the first env (typically dev, the trunk-rooted
+			// leg the generator emits cascade options for). A scenario can override
+			// it to drive a non-default leg, e.g. test-to-prod sourced from a
+			// diverged env to exercise the diverged-source guard.
 			source := "dev"
 			if len(config.Environments) > 0 {
 				source = config.Environments[0]
+			}
+			if promote.Source != "" {
+				source = promote.Source
 			}
 			mode = fmt.Sprintf("%s-to-%s", source, promote.Target)
 		}

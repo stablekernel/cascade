@@ -1,0 +1,98 @@
+name: "Rollback re-deploys the prior version"
+description: |
+  Proves a manual rollback DEPLOYS the prior target, not merely rewrites state.
+  prod is advanced through two published versions, then rolled back to the
+  previous one. The cascade-rollback workflow's preflight resolves the prior
+  target from the previous-deploy ring (no explicit target input), the deploy
+  job re-runs at that target SHA, and prod state lands back on the first commit's
+  version.
+
+  The deploy is an inline run: job (no actions/checkout, which act cannot resolve
+  for a reusable callback against the per-scenario gitea), so the deploy job runs
+  observably under act and is asserted as deploy-app: success.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    # Inline run: deploy. It echoes the resolved env/sha the rollback workflow
+    # threads in, so the deploy job runs under act without a checkout step. Its
+    # caller job id is deploy-app, which the harness's findJob matches directly.
+    - name: app
+      run: |
+        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version from dev to prod (establishes the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version from dev to prod (advances past the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit2
+
+  # Rollback prod with no explicit target: the preflight resolves N-1 from the
+  # previous-deploy ring (the first commit). The deploy job re-runs at that SHA,
+  # and prod state lands back on commit1. The deploy job running is what proves
+  # this is a deploy, not just a state rewrite.
+  - name: "Rollback prod to the prior version"
+    action: rollback
+    rollback:
+      environment: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+      jobs:
+        preflight: success
+        deploy-app: success
+        finalize: success

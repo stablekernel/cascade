@@ -129,6 +129,12 @@ func (f *Finalizer) Run() error {
 // this is a no-op and the injected cleaner is never called.
 func (f *Finalizer) runLifecycleCleanup() error {
 	for _, ev := range f.pendingRejoins {
+		if ev.rollbackOrigin {
+			// A manual rollback creates no integration branch, hotfix tags, or
+			// release drafts. The divergence fields were already cleared above,
+			// so the rejoin is complete with no side effects to undo.
+			continue
+		}
 		if err := f.cleaner.DeleteEnvBranch(ev.env); err != nil {
 			return fmt.Errorf("rejoin cleanup for %s: %w", ev.env, err)
 		}
@@ -191,12 +197,18 @@ func (f *Finalizer) updateState() {
 			// on the env having been diverged, so a normal promotion into a
 			// non-diverged env touches none of the lifecycle logic.
 			if wasDiverged {
+				// Capture the divergence origin before clearing the ref: a
+				// rollback-origin rejoin clears the same fields but skips the
+				// integration-branch and hotfix-release cleanup, which apply
+				// only to hotfix divergences.
+				rollbackOrigin := IsRollbackRef(state.Ref)
 				state.Ref = ""
 				state.BaseSHA = ""
 				state.Patches = nil
 				f.pendingRejoins = append(f.pendingRejoins, rejoinEvent{
-					env:         promo.Environment,
-					baseVersion: priorVersion,
+					env:            promo.Environment,
+					baseVersion:    priorVersion,
+					rollbackOrigin: rollbackOrigin,
 				})
 			}
 

@@ -1,0 +1,129 @@
+name: "Rollback leaves trunk state unchanged when the deploy fails"
+description: |
+  Proves the rollback gate: when the re-deploy of the prior target fails, the
+  finalize job must NOT record the environment as rolled back. The cascade-
+  rollback workflow's finalize job runs with always() so it observes the deploy
+  result, but the CLI aborts the state write when an in-scope deploy did not
+  succeed, leaving trunk state exactly where it was.
+
+  prod is advanced through two published versions, then a rollback is requested.
+  The inline deploy succeeds while it is invoked by the Promote workflow (so the
+  two setup promotions land prod on commit1 then commit2), and exits non-zero
+  only when invoked by the Rollback workflow's re-deploy. finalize then sees
+  DEPLOY_RESULT_APP=failure, aborts before writing, and the run concludes in
+  failure. prod state therefore stays on the second version: no rolled-back SHA,
+  no rollback ref. This is the safety property that distinguishes a real
+  re-deploy from a blind state rewrite.
+
+  The deploy is an inline run: job (no actions/checkout, which act cannot resolve
+  for a reusable callback against the per-scenario gitea), so the deploy job runs
+  observably under act and is asserted as deploy-app: failure. The deploy keys
+  its conditional failure on $GITHUB_WORKFLOW (the invoking workflow's name,
+  which the harness suffixes with [scenario-...], so the deploy matches the
+  Rollback prefix): the Promote workflow succeeds, only the Rollback re-deploy
+  fails, exercising the gateOnDeployResults guard rather than aborting during
+  setup.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    # Inline run: deploy that succeeds under the Promote workflow but fails under
+    # the Rollback workflow's re-deploy. Both workflows surface the same env vars
+    # (ENVIRONMENT, SHA) to this inline step, and the rollback target SHA equals
+    # an earlier promote's SHA, so the SHA alone cannot tell the two apart. The
+    # invoking workflow name ($GITHUB_WORKFLOW) does: it is "Promote" during the
+    # two setup promotions and "Rollback" during the re-deploy under test. Failing
+    # only on Rollback forces deploy-app to fail there, so finalize sees
+    # DEPLOY_RESULT_APP=failure and aborts the state write, while setup lands prod
+    # on commit1 then commit2 cleanly. Its caller job id is deploy-app, which the
+    # harness's findJob matches directly.
+    - name: app
+      run: |
+        echo "deploy of env=${ENVIRONMENT} sha=${SHA} via workflow=${GITHUB_WORKFLOW}"
+        # The harness suffixes each workflow name with [scenario-<tag>], so the
+        # Rollback workflow surfaces GITHUB_WORKFLOW as "Rollback [scenario-...]".
+        # Match the Rollback prefix rather than an exact string.
+        case "${GITHUB_WORKFLOW}" in
+          Rollback*)
+            echo "failing the rollback re-deploy on purpose"
+            exit 1
+            ;;
+        esac
+        echo "promote deploy succeeded"
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version from dev to prod (establishes the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version from dev to prod (advances past the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit2
+
+  # Rollback prod with no explicit target: the preflight resolves N-1 from the
+  # previous-deploy ring (the first commit) and the deploy job re-runs at that
+  # SHA, but the deploy exits non-zero. finalize observes the failure and aborts
+  # the state write, so the run concludes in failure and prod state stays on
+  # commit2 with no rollback ref.
+  - name: "Rollback prod with a failing deploy leaves state on commit2"
+    action: rollback
+    rollback:
+      environment: prod
+      expect_failure: true
+    expect:
+      state:
+        prod:
+          unchanged: true
+      jobs:
+        preflight: success
+        deploy-app: failure

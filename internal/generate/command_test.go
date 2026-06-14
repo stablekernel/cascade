@@ -447,6 +447,10 @@ func TestRunGenerateWorkflow_ExtraTriggers(t *testing.T) {
 
 	outputPath := filepath.Join(tmpDir, "orchestrate.yaml")
 	opts := defaultOpts(configPath, outputPath)
+	// The rollback workflow lands at a hardcoded repo-relative path shared across
+	// tests; force overwrite plus cleanup keeps this run order-independent.
+	opts.force = true
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(".github/workflows", "cascade-rollback.yaml")) })
 	require.NoError(t, runGenerateWorkflow(opts))
 
 	raw, err := os.ReadFile(outputPath)

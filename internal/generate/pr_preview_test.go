@@ -201,6 +201,8 @@ func TestRunGenerateWorkflow_PRPreview(t *testing.T) {
 
 	outputPath := filepath.Join(workflowDir, "orchestrate.yaml")
 	opts := defaultOpts(configPath, outputPath)
+	opts.force = true
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(".github/workflows", "cascade-rollback.yaml")) })
 	require.NoError(t, runGenerateWorkflow(opts))
 
 	previewPath := filepath.Join(".github/workflows", "cascade-pr-preview.yaml")
@@ -229,6 +231,8 @@ func TestRunGenerateWorkflow_NoPRPreviewWhenAbsent(t *testing.T) {
 
 	outputPath := filepath.Join(workflowDir, "orchestrate.yaml")
 	opts := defaultOpts(configPath, outputPath)
+	opts.force = true
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(".github/workflows", "cascade-rollback.yaml")) })
 	require.NoError(t, runGenerateWorkflow(opts))
 
 	previewPath := filepath.Join(".github/workflows", "cascade-pr-preview.yaml")

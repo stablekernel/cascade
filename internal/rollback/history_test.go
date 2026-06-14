@@ -100,3 +100,63 @@ func TestGitHistoryReader_RecoversPriorVersion(t *testing.T) {
 		t.Errorf("prod not rolled back: %q", file.State["prod"].SHA)
 	}
 }
+
+// TestGitHistoryReader_RecoversPriorVersion_Subdir proves the reader recovers
+// prior states when the manifest lives in a subdirectory (e.g. .github/) rather
+// than at the repo root. `git show <sha>:<path>` resolves <path> relative to the
+// repo root, so a subdir manifest must be addressed by its repo-root-relative
+// path, not a basename combined with `-C <subdir>`.
+func TestGitHistoryReader_RecoversPriorVersion_Subdir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0755); err != nil {
+		t.Fatalf("mkdir .github: %v", err)
+	}
+	rel := filepath.Join(".github", "manifest.yaml")
+	gitCommitFile(t, dir, rel, manifestAt("oldsha1112223", "v1.5.0"), "prod v1.5.0")
+	gitCommitFile(t, dir, rel, manifestAt("newsha4445556", "v2.0.0"), "prod v2.0.0")
+
+	path := filepath.Join(dir, rel)
+
+	reader := newGitHistoryReader(path, config.DefaultManifestKey)
+	states, err := reader.PriorStates("prod")
+	if err != nil {
+		t.Fatalf("PriorStates: %v", err)
+	}
+	if len(states) == 0 {
+		t.Fatalf("PriorStates returned empty; subdir manifest history not recovered")
+	}
+	// Newest first: v2.0.0 then v1.5.0.
+	if states[0].Version != "v2.0.0" {
+		t.Errorf("states[0].Version = %q, want v2.0.0", states[0].Version)
+	}
+	var foundPrior bool
+	for _, s := range states {
+		if s.SHA == "oldsha1112223" && s.Version == "v1.5.0" {
+			foundPrior = true
+		}
+	}
+	if !foundPrior {
+		t.Errorf("prior state v1.5.0/oldsha1112223 not found in %+v", states)
+	}
+
+	// End-to-end: the historical target must be resolvable and applicable.
+	rb, err := New(Options{ConfigPath: path, Actor: "oncall"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	plan, err := rb.Plan("prod", "v1.5.0", "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if plan.Target.SHA != "oldsha1112223" {
+		t.Errorf("target sha = %q, want oldsha1112223", plan.Target.SHA)
+	}
+	if plan.Target.Source != "git-history" {
+		t.Errorf("source = %q, want git-history", plan.Target.Source)
+	}
+}

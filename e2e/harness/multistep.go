@@ -49,7 +49,12 @@ type Step struct {
 	Action  string       `yaml:"action"` // commit, orchestrate, promote, hotfix_plan, hotfix_apply, merge_pr, resolve_conflict, hotfix_merged
 	Commit  *CommitStep  `yaml:"commit,omitempty"`
 	Promote *PromoteStep `yaml:"promote,omitempty"`
-	Expect  *StepExpect  `yaml:"expect,omitempty"`
+	// Rollback configures a "rollback" action: a workflow_dispatch run of the
+	// cascade-rollback workflow that re-points an environment at a prior version
+	// or SHA, re-runs its deploys at that target, and marks the environment
+	// diverged until a forward promotion rejoins it.
+	Rollback *RollbackStep `yaml:"rollback,omitempty"`
+	Expect   *StepExpect   `yaml:"expect,omitempty"`
 	// HotfixPlan configures a "hotfix_plan" action: a workflow_dispatch run of the
 	// hotfix workflow's plan job for a trunk commit and target environment.
 	HotfixPlan *HotfixPlanStep `yaml:"hotfix_plan,omitempty"`
@@ -137,8 +142,16 @@ type CommitStep struct {
 
 // PromoteStep defines a promote action
 type PromoteStep struct {
-	Mode          string `yaml:"mode"`             // default, cascade
-	Target        string `yaml:"target,omitempty"` // for cascade: dev-to-prod
+	Mode string `yaml:"mode"` // default, cascade
+	// Target is the destination env for a cascade promote; the harness builds the
+	// "<source>-to-<target>" mode string from Source and Target.
+	Target string `yaml:"target,omitempty"`
+	// Source overrides the cascade source env. When unset the harness defaults to
+	// Environments[0] (the trunk-rooted leg), matching the generator's dev-rooted
+	// cascade options. Set it to drive a non-default leg, e.g. source: test with
+	// target: prod runs the test-to-prod hop so a promote sourced from a diverged
+	// env exercises the diverged-source guard.
+	Source        string `yaml:"source,omitempty"`
 	AllowBreaking bool   `yaml:"allow_breaking,omitempty"`
 	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
 	// Force sets the promote workflow's "force" dispatch input to "true",
@@ -150,6 +163,22 @@ type PromoteStep struct {
 	// fails, every deploy that already succeeded is rolled back to the SHA
 	// previously deployed in the target env (preflight's rollback_sha).
 	RollbackOnFailure bool `yaml:"rollback_on_failure,omitempty"`
+}
+
+// RollbackStep defines a rollback action: a workflow_dispatch of the
+// cascade-rollback workflow. Environment is the env to roll back. Target is the
+// prior version or SHA to roll back to; when empty the workflow defaults to the
+// previous version (N-1). Deployable, when set, limits the rollback to a single
+// deployable. DryRun sets the dry_run input, which suppresses the deploy and
+// finalize jobs. ExpectFailure marks a run that is expected to conclude in
+// failure (for example a rollback whose preflight cannot resolve a target),
+// mirroring PromoteStep.ExpectFailure.
+type RollbackStep struct {
+	Environment   string `yaml:"environment"`
+	Target        string `yaml:"target,omitempty"`
+	Deployable    string `yaml:"deployable,omitempty"`
+	DryRun        bool   `yaml:"dry_run,omitempty"`
+	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
 }
 
 // StepExpect defines expected outcomes for a step
