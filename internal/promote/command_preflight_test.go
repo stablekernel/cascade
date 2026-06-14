@@ -263,6 +263,59 @@ func TestPreflightCommand_GHAOutput(t *testing.T) {
 	// artifact version is the canonical image tag, so it must mirror source_version.
 	require.Contains(t, string(output), "source_image_tag=v1.0.0-rc.1",
 		"preflight must emit source_image_tag set to the source version")
+	// No source build carries an artifact_id here, so source_image_digest must
+	// be omitted entirely (guarded on non-empty) rather than emitted empty.
+	require.NotContains(t, string(output), "source_image_digest=",
+		"preflight must omit source_image_digest when no source build has an artifact_id")
+}
+
+// TestPreflightCommand_GHAOutput_ImageDigest tests that source_image_digest is
+// emitted when the source env's build state carries an artifact_id.
+func TestPreflightCommand_GHAOutput_ImageDigest(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+	outputPath := filepath.Join(tmpDir, "GITHUB_OUTPUT")
+
+	manifestContent := `ci:
+  config:
+    environments: [dev, test, uat, prod]
+    deploys:
+      - name: app
+        workflow: .github/workflows/deploy.yaml
+  state:
+    dev:
+      sha: abc123
+      version: v1.0.0-rc.1
+      builds:
+        app:
+          artifact_id: sha256:deadbeef
+    test: {}
+    uat: {}
+    prod: {}
+`
+	err := os.WriteFile(configPath, []byte(manifestContent), 0644)
+	require.NoError(t, err)
+
+	err = os.WriteFile(outputPath, []byte(""), 0644)
+	require.NoError(t, err)
+
+	t.Setenv("GITHUB_OUTPUT", outputPath)
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{
+		"preflight",
+		"--mode", "default",
+		"--config", configPath,
+		"--gha-output",
+	})
+
+	err = cmd.Execute()
+	require.NoError(t, err)
+
+	output, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Contains(t, string(output), "source_image_digest=sha256:deadbeef",
+		"preflight must emit source_image_digest from the source build's artifact_id")
 }
 
 // TestPreflightCommand_AllowBreaking tests --allow-breaking flag.

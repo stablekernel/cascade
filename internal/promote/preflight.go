@@ -25,6 +25,15 @@ type PreflightResult struct {
 	TargetEnv     string `json:"target_env"`
 	SourceSHA     string `json:"source_sha"`
 	SourceVersion string `json:"source_version"`
+	// SourceImageDigest is an immutable artifact identifier (e.g. a Docker image
+	// content digest) for the source env, threaded alongside the mutable
+	// SourceVersion so operators can pin deploys to immutable content. It is
+	// sourced from the source env's build state: cascade treats artifact_id as an
+	// opaque immutable id, so this is only a real content digest if the operator's
+	// build populates artifact_id with one. When the source env has multiple
+	// builds, the first build (by sorted build name) with a non-empty artifact_id
+	// is used; when none has one, this stays empty and the deploy input is omitted.
+	SourceImageDigest string `json:"source_image_digest,omitempty"`
 
 	// Rollback SHA (target env's current SHA before promotion - what we revert to on failure)
 	RollbackSHA string `json:"rollback_sha,omitempty"`
@@ -156,6 +165,7 @@ func (p *Preflighter) Run() (*PreflightResult, error) {
 		if state := p.cicdFile.State[first.SourceEnv]; state != nil {
 			result.SourceSHA = state.SHA
 			result.SourceVersion = state.Version
+			result.SourceImageDigest = firstNonEmptyArtifactID(state.Builds)
 		}
 
 		// Build envs to update list
@@ -590,4 +600,25 @@ func containsBreakingCommit(commits []git.Commit) bool {
 // stringSliceContains checks if a string is in a slice
 func stringSliceContains(slice []string, item string) bool {
 	return slices.Contains(slice, item)
+}
+
+// firstNonEmptyArtifactID picks a single deterministic artifact identifier from
+// an env's per-build state. artifact_id is per-build, but the deploy threads one
+// env-level value, so build names are iterated in sorted order and the first
+// build with a non-empty artifact_id wins. Returns "" when no build has one, so
+// callers can omit the deploy input gracefully. Operators must populate a
+// build's artifact_id output with the content digest to use this; cascade treats
+// artifact_id as an opaque immutable id.
+func firstNonEmptyArtifactID(builds map[string]*config.BuildState) string {
+	names := make([]string, 0, len(builds))
+	for name := range builds {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if b := builds[name]; b != nil && b.ArtifactID != "" {
+			return b.ArtifactID
+		}
+	}
+	return ""
 }

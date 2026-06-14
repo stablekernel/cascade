@@ -295,6 +295,132 @@ func TestPromoteGenerator_PreflightDeclaresSourceImageTag(t *testing.T) {
 		"preflight outputs block must declare source_image_tag so deploy jobs resolve a non-empty image_tag")
 }
 
+// deployWithImageDigestInput is a reusable deploy workflow that accepts both
+// image_tag and image_digest, used to verify additive digest threading.
+const deployWithImageDigestInput = `name: Deploy
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      image_tag:
+        required: false
+        type: string
+      image_digest:
+        required: false
+        type: string
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+`
+
+// TestPromoteGenerator_PreflightDeclaresSourceImageDigest asserts the preflight
+// job outputs block declares source_image_digest so deploy jobs can resolve it.
+func TestPromoteGenerator_PreflightDeclaresSourceImageDigest(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "test", "prod"},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content,
+		"source_image_digest: ${{ steps.preflight.outputs.source_image_digest }}",
+		"preflight outputs block must declare source_image_digest so deploy jobs resolve a digest")
+}
+
+// TestPromoteGenerator_DeployThreadsImageDigestWhenDeclared asserts that when a
+// reusable deploy workflow declares an image_digest input, the generated deploy
+// job with: block threads BOTH image_tag and image_digest (additive).
+func TestPromoteGenerator_DeployThreadsImageDigestWhenDeclared(t *testing.T) {
+	tmpDir := t.TempDir()
+	wfDir := filepath.Join(tmpDir, ".github/workflows")
+	require.NoError(t, os.MkdirAll(wfDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(wfDir, "deploy.yaml"),
+		[]byte(deployWithImageDigestInput), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "test", "prod"},
+		Deploys: []config.DeployConfig{
+			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, tmpDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	block := jobBlock(t, content, "deploy-app")
+	require.NotEmpty(t, block, "deploy-app job not found")
+
+	assert.Contains(t, block,
+		"image_tag: ${{ needs.preflight.outputs.source_image_tag }}",
+		"deploy job must still thread image_tag (non-breaking)")
+	assert.Contains(t, block,
+		"image_digest: ${{ needs.preflight.outputs.source_image_digest }}",
+		"deploy job must additively thread image_digest when the workflow declares it")
+}
+
+// TestPromoteGenerator_DeployOmitsImageDigestWhenNotDeclared asserts the
+// non-breaking path: a deploy workflow that declares image_tag but NOT
+// image_digest gets image_tag only, with no image_digest line emitted.
+func TestPromoteGenerator_DeployOmitsImageDigestWhenNotDeclared(t *testing.T) {
+	tmpDir := t.TempDir()
+	wfDir := filepath.Join(tmpDir, ".github/workflows")
+	require.NoError(t, os.MkdirAll(wfDir, 0755))
+	deployTagOnly := `name: Deploy
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      image_tag:
+        required: false
+        type: string
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+`
+	require.NoError(t, os.WriteFile(filepath.Join(wfDir, "deploy.yaml"),
+		[]byte(deployTagOnly), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "test", "prod"},
+		Deploys: []config.DeployConfig{
+			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, tmpDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	block := jobBlock(t, content, "deploy-app")
+	require.NotEmpty(t, block, "deploy-app job not found")
+
+	assert.Contains(t, block,
+		"image_tag: ${{ needs.preflight.outputs.source_image_tag }}",
+		"deploy job must thread image_tag")
+	assert.NotContains(t, block, "image_digest:",
+		"deploy job must NOT emit image_digest when the workflow does not declare it")
+}
+
 func TestPromoteGenerator_DryRunSupport(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",

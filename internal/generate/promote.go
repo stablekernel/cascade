@@ -149,9 +149,10 @@ func (g *PromoteGenerator) discoverDeployInputs() error {
 func (g *PromoteGenerator) validateRequiredInputs() error {
 	// In promote workflow, available inputs come from preflight outputs
 	availableInputs := map[string]string{
-		"environment": "preflight.outputs.target_env",
-		"sha":         "preflight.outputs.source_sha",
-		"image_tag":   "preflight.outputs.source_image_tag",
+		"environment":  "preflight.outputs.target_env",
+		"sha":          "preflight.outputs.source_sha",
+		"image_tag":    "preflight.outputs.source_image_tag",
+		"image_digest": "preflight.outputs.source_image_digest",
 	}
 
 	var errors []string
@@ -165,7 +166,7 @@ func (g *PromoteGenerator) validateRequiredInputs() error {
 		for _, required := range requiredInputs {
 			if _, ok := availableInputs[required]; !ok {
 				errors = append(errors,
-					fmt.Sprintf("deploy-%s requires input '%s' but it cannot be provided in promote workflow (available: environment, sha, image_tag)",
+					fmt.Sprintf("deploy-%s requires input '%s' but it cannot be provided in promote workflow (available: environment, sha, image_tag, image_digest)",
 						d.Name, required))
 			}
 		}
@@ -624,6 +625,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      source_sha: ${{ steps.preflight.outputs.source_sha }}\n")
 	sb.WriteString("      source_version: ${{ steps.preflight.outputs.source_version }}\n")
 	sb.WriteString("      source_image_tag: ${{ steps.preflight.outputs.source_image_tag }}\n")
+	sb.WriteString("      source_image_digest: ${{ steps.preflight.outputs.source_image_digest }}\n")
 	sb.WriteString("      changelog_base_sha: ${{ steps.preflight.outputs.changelog_base_sha }}\n")
 	sb.WriteString("      rollback_sha: ${{ steps.preflight.outputs.rollback_sha }}\n")
 	sb.WriteString("      rollback_on_failure: ${{ steps.preflight.outputs.rollback_on_failure }}\n")
@@ -781,7 +783,8 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			g.writeInlineDeployBody(sb, d,
 				"${{ needs.preflight.outputs.target_env }}",
 				"${{ needs.preflight.outputs.source_sha }}",
-				"${{ needs.preflight.outputs.source_image_tag }}")
+				"${{ needs.preflight.outputs.source_image_tag }}",
+				"${{ needs.preflight.outputs.source_image_digest }}")
 			continue
 		}
 
@@ -855,6 +858,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			if g.deployHasInput(d.Name, "image_tag") {
 				sb.WriteString("      image_tag: ${{ needs.preflight.outputs.source_image_tag }}\n")
 			}
+			// Additively pass image_digest (the immutable artifact id) when the
+			// deploy workflow declares it. This is gated independently of image_tag
+			// so deploys that only want the digest, only the tag, or both all work.
+			if g.deployHasInput(d.Name, "image_digest") {
+				sb.WriteString("      image_digest: ${{ needs.preflight.outputs.source_image_digest }}\n")
+			}
 			// When the callback opts in to dry-run passthrough, forward the
 			// dispatch input so it can emulate internally.
 			if d.SupportsDryRun {
@@ -890,10 +899,14 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
 				fmt.Fprintf(sb, "    environment: %s\n", ec.GHAEnvironment)
 			}
+			// The prod path uses prod_version as its tag and has no
+			// prod_image_digest preflight output, so digest pinning is not threaded
+			// here. Pass an empty digest to keep the prod deploy unchanged.
 			g.writeInlineDeployBody(sb, d,
 				finalEnv,
 				"${{ needs.preflight.outputs.prod_sha }}",
-				"${{ needs.preflight.outputs.prod_version }}")
+				"${{ needs.preflight.outputs.prod_version }}",
+				"")
 			continue
 		}
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
@@ -904,6 +917,9 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		if g.deployHasInput(d.Name, "image_tag") {
 			sb.WriteString("      image_tag: ${{ needs.preflight.outputs.prod_version }}\n")
 		}
+		// image_digest is intentionally not threaded on the prod path: there is no
+		// prod_image_digest preflight output today, so prod-path digest pinning is
+		// not yet supported.
 		// When the callback opts in to dry-run passthrough, forward the
 		// dispatch input so it can emulate internally.
 		if d.SupportsDryRun {
@@ -918,9 +934,11 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 // writeInlineDeployBody emits the runs-on / steps body of a cascade-owned inline
 // run: deploy callback in a promote workflow. The standard inputs a reusable
-// deploy callback would receive via with: (environment, sha, and image_tag when
-// the callback declares it) are surfaced to the inline step as env: variables.
-func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig, environment, sha, imageTag string) {
+// deploy callback would receive via with: (environment, sha, image_tag, and
+// image_digest when the callback declares them) are surfaced to the inline step
+// as env: variables. An empty imageDigest means no digest is available for this
+// path (for example the prod path), so IMAGE_DIGEST is omitted.
+func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig, environment, sha, imageTag, imageDigest string) {
 	// Per-callback job attributes (inline-run deploy jobs only): runner selection
 	// (#12), permissions incl. id-token: write OIDC (#35/#15), and concurrency
 	// (#17). The config-level runs_on default applies when the deploy sets no
@@ -936,6 +954,11 @@ func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.D
 	fmt.Fprintf(sb, "          SHA: %s\n", sha)
 	if g.deployHasInput(d.Name, "image_tag") {
 		fmt.Fprintf(sb, "          IMAGE_TAG: %s\n", imageTag)
+	}
+	// Additively surface IMAGE_DIGEST when the callback declares image_digest and
+	// a digest is available for this path (imageDigest non-empty).
+	if imageDigest != "" && g.deployHasInput(d.Name, "image_digest") {
+		fmt.Fprintf(sb, "          IMAGE_DIGEST: %s\n", imageDigest)
 	}
 	// When the callback opts in to dry-run emulation, surface the dispatch input
 	// as DRY_RUN so the inline script can branch on it.

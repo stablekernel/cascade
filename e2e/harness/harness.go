@@ -354,8 +354,9 @@ func generateStubWorkflow(name, scenarioTag string) string {
 	}
 	// Declare the inputs a real promote/orchestrate deploy callback accepts so the
 	// generator discovers them and threads the matching preflight outputs through
-	// each deploy's with: block. image_tag in particular drives the
-	// source_image_tag passthrough in the generated promote workflow.
+	// each deploy's with: block. image_tag drives the source_image_tag passthrough
+	// and image_digest drives the source_image_digest passthrough in the generated
+	// promote workflow.
 	return fmt.Sprintf(`name: %s
 on:
   workflow_call:
@@ -367,6 +368,9 @@ on:
         required: false
         type: string
       image_tag:
+        required: false
+        type: string
+      image_digest:
         required: false
         type: string
 jobs:
