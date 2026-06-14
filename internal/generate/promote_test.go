@@ -29,6 +29,78 @@ func concurrencyGroupLine(t *testing.T, content string) string {
 	return ""
 }
 
+// stepRunBody extracts the run: script body of the step whose "- name: <name>"
+// header matches stepName, from a generated workflow. It returns only the shell
+// lines under that step's "run: |" block, stopping at the next step or key at the
+// same or shallower indentation. This lets injection tests assert on what the
+// shell actually sees, without false matches from a sibling env: mapping (which
+// is the safe place for ${{ ... }} expansions) elsewhere in the same step.
+func stepRunBody(t *testing.T, content, stepName string) string {
+	t.Helper()
+	lines := strings.Split(content, "\n")
+
+	stepIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "- name: "+stepName) {
+			stepIdx = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, stepIdx, 0, "step %q not found in workflow", stepName)
+
+	runIdx := -1
+	for i := stepIdx + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		// Stop if we hit the next step before finding this step's run: block.
+		if strings.HasPrefix(trimmed, "- name: ") {
+			break
+		}
+		if trimmed == "run: |" || trimmed == "run: |-" {
+			runIdx = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, runIdx, 0, "step %q has no block run: body", stepName)
+
+	runIndent := len(lines[runIdx]) - len(strings.TrimLeft(lines[runIdx], " "))
+	var body []string
+	for i := runIdx + 1; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			body = append(body, line)
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent <= runIndent {
+			break
+		}
+		body = append(body, line)
+	}
+	return strings.Join(body, "\n")
+}
+
+// TestPromoteGenerator_ModeInputNotInterpolatedIntoRun asserts that the
+// workflow_dispatch "mode" input is not echoed into a run: shell body via
+// ${{ github.event.inputs.mode }}. A mode value containing shell metacharacters
+// would otherwise break out of the echo. It must be bound to env: and printed as
+// a quoted shell variable.
+func TestPromoteGenerator_ModeInputNotInterpolatedIntoRun(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	body := stepRunBody(t, content, "Validate Promotion")
+	assert.NotContains(t, body, "${{ github.event.inputs.mode }}",
+		"the mode input must not be interpolated into the Validate Promotion run: body")
+	assert.Contains(t, content, "MODE: ${{ github.event.inputs.mode }}")
+	assert.Contains(t, body, "echo \"Mode: $MODE\"")
+}
+
 func TestPromoteGenerator_Generate(t *testing.T) {
 	tests := []struct {
 		name         string

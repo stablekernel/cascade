@@ -568,6 +568,67 @@ func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 	assert.Contains(t, content, "cancel-in-progress: false", "external-update default must queue, not cancel")
 }
 
+// TestExternalUpdateGenerator_InputsAreNotInterpolatedIntoRun asserts that the
+// generated "Update External State" step never substitutes workflow_dispatch
+// inputs directly into the shell script text. GitHub Actions expands ${{ ... }}
+// into the run: body before the shell parses it, so a value carrying a single
+// quote, backtick, or $(...) would break out of its argument and execute as
+// shell. Every untrusted input must instead be bound to a step-level env: var
+// and referenced as a quoted shell variable.
+func TestExternalUpdateGenerator_InputsAreNotInterpolatedIntoRun(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "master",
+		Environments: []string{"dev", "test", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	runBody := stepRunBody(t, content, "Update External State")
+
+	untrusted := []string{
+		"${{ inputs.source_repo }}",
+		"${{ inputs.deploy_name }}",
+		"${{ inputs.environment }}",
+		"${{ inputs.sha }}",
+		"${{ inputs.version }}",
+		"${{ inputs.artifacts }}",
+	}
+	for _, expr := range untrusted {
+		assert.NotContainsf(t, runBody, expr,
+			"untrusted input %q must not be interpolated into the run: body; bind it to env: and reference the shell variable", expr)
+	}
+	// No ${{ inputs.* }} expansion of any kind should remain in the run body.
+	assert.NotContains(t, runBody, "${{ inputs.",
+		"no workflow_dispatch input may be interpolated into the run: shell body")
+
+	// The values must instead flow through a step-level env: mapping...
+	assert.Contains(t, content, "SOURCE_REPO: ${{ inputs.source_repo }}")
+	assert.Contains(t, content, "DEPLOY_NAME: ${{ inputs.deploy_name }}")
+	assert.Contains(t, content, "ENVIRONMENT: ${{ inputs.environment }}")
+	assert.Contains(t, content, "SHA: ${{ inputs.sha }}")
+	assert.Contains(t, content, "VERSION: ${{ inputs.version }}")
+	assert.Contains(t, content, "ARTIFACTS: ${{ inputs.artifacts }}")
+
+	// ...and be consumed as quoted shell variables in the verb invocation.
+	assert.Contains(t, runBody, "--source-repo \"$SOURCE_REPO\"")
+	assert.Contains(t, runBody, "--deploy-name \"$DEPLOY_NAME\"")
+	assert.Contains(t, runBody, "--environment \"$ENVIRONMENT\"")
+	assert.Contains(t, runBody, "--sha \"$SHA\"")
+	assert.Contains(t, runBody, "--version \"$VERSION\"")
+	assert.Contains(t, runBody, "--artifacts \"$ARTIFACTS\"")
+}
+
 // TestExternalUpdateGenerator_ConcurrencyOverride asserts that a manifest-level
 // concurrency config is forwarded to the generated external-update workflow.
 func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {

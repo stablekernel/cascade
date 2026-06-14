@@ -495,6 +495,25 @@ func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expe
 						envName, deployName, expectedVersion, got)
 				}
 			}
+
+			// Artifacts are a string->string map. Asserting them end-to-end proves
+			// the dispatched --artifacts JSON survived the receiver's run: shell
+			// verbatim, which is the contract that breaks if the value is
+			// interpolated into the script text instead of routed through env:.
+			if expectedArtifacts, ok := deployMap["artifacts"].(map[string]interface{}); ok {
+				actualArtifacts := mapAt(actual, "artifacts")
+				for k, v := range expectedArtifacts {
+					want, ok := v.(string)
+					if !ok {
+						continue
+					}
+					want = r.interpolate(want)
+					if got := stringAt(actualArtifacts, k); got != want {
+						return fmt.Errorf("%s.external.%s.artifacts.%s: expected %q, got %q",
+							envName, deployName, k, want, got)
+					}
+				}
+			}
 		}
 	}
 
