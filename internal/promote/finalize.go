@@ -172,11 +172,17 @@ func (f *Finalizer) updateState() {
 			// When an auto-committing callback ran, overrideSHA holds the
 			// post-callback HEAD; use it so the recorded state points at the
 			// commit that was actually built/deployed rather than the triggering SHA.
+			newSHA := promo.SHA
 			if f.overrideSHA != "" {
-				state.SHA = f.overrideSHA
-			} else {
-				state.SHA = promo.SHA
+				newSHA = f.overrideSHA
 			}
+
+			// Record the outgoing state in the deploy-history ring before the
+			// env pointer advances. No-op when there is no prior SHA or the env
+			// is not actually transitioning.
+			state.PushPreviousSnapshot(newSHA)
+
+			state.SHA = newSHA
 			state.Version = promo.Version
 			state.CommittedAt = timestamp
 			state.CommittedBy = f.actor

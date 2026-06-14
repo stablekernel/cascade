@@ -329,3 +329,68 @@ func TestShaMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestApply_PushesPriorSnapshotOnEnvRollback(t *testing.T) {
+	dir := t.TempDir()
+	// Live prod is at v2.0.0; the rollback target lives only in history.
+	path := writeManifest(t, dir, "newprodsha1234", "v2.0.0")
+	hist := fakeHistory{states: map[string][]*config.EnvState{
+		"prod": {
+			{SHA: "oldprodsha5678", Version: "v1.8.0",
+				Deploys: map[string]*config.DeployState{
+					"services": {SHA: "oldprodsha5678", Version: "v1.8.0"},
+				}},
+		},
+	}}
+	rb := newRollbacker(t, path, hist)
+
+	plan, err := rb.Plan("prod", "v1.8.0", "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if err := rb.Apply(plan); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	file, err := config.ParseManifestFile(path, config.DefaultManifestKey)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	prod := file.State["prod"]
+	if len(prod.Previous) != 1 {
+		t.Fatalf("previous ring len = %d, want 1: %+v", len(prod.Previous), prod.Previous)
+	}
+	// The snapshot captures the outgoing (pre-rollback) state, newest first.
+	if prod.Previous[0].SHA != "newprodsha1234" {
+		t.Errorf("snapshot sha = %q, want newprodsha1234", prod.Previous[0].SHA)
+	}
+	if prod.Previous[0].Version != "v2.0.0" {
+		t.Errorf("snapshot version = %q, want v2.0.0", prod.Previous[0].Version)
+	}
+}
+
+func TestApply_NoSnapshotWhenSameSHA(t *testing.T) {
+	dir := t.TempDir()
+	// Target matches the current state, so Apply is a no-op and records nothing.
+	path := writeManifest(t, dir, "prodsha9999999", "v1.9.0")
+	rb := newRollbacker(t, path, fakeHistory{})
+
+	plan, err := rb.Plan("prod", "v1.9.0", "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !plan.NoOp {
+		t.Fatal("expected NoOp plan")
+	}
+	if err := rb.Apply(plan); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	file, err := config.ParseManifestFile(path, config.DefaultManifestKey)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	if prev := file.State["prod"].Previous; len(prev) != 0 {
+		t.Errorf("previous ring = %+v, want empty", prev)
+	}
+}

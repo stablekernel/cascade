@@ -38,8 +38,9 @@ type EnvState struct {
 	BaseSHA string `yaml:"base_sha,omitempty" json:"base_sha,omitempty"`
 	// Patches lists the patch commit SHAs applied on top of BaseSHA.
 	Patches []string `yaml:"patches,omitempty" json:"patches,omitempty"`
-	// Previous is the reserved "roll back to N-1" ring (#23). Reserved-shape,
-	// optional: populated only if deterministic history-walking is wired later.
+	// Previous is the per-environment deploy-history ring (#23): snapshots of
+	// prior env states, newest first, bounded to MaxPreviousSnapshots. Populated
+	// on every state transition via PushPreviousSnapshot.
 	Previous []EnvStateSnapshot `yaml:"previous,omitempty" json:"previous,omitempty"`
 }
 
@@ -52,8 +53,8 @@ func (s *EnvState) IsDiverged() bool {
 	return s.Ref != "" || len(s.Patches) > 0
 }
 
-// EnvStateSnapshot is a single prior env-state entry in the reserved rollback
-// ring (state.<env>.previous). Reserved-shape only.
+// EnvStateSnapshot is a single prior env-state entry in the deploy-history
+// ring (state.<env>.previous).
 type EnvStateSnapshot struct {
 	SHA         string `yaml:"sha,omitempty" json:"sha,omitempty"`
 	Version     string `yaml:"version,omitempty" json:"version,omitempty"`
