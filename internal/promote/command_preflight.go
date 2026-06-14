@@ -163,6 +163,12 @@ func writePreflightGHAOutput(result *PreflightResult) error {
 	// The promoted artifact version is the canonical image tag for the promotion.
 	// Deploy jobs consume this as their image_tag input.
 	w.Set("source_image_tag", result.SourceVersion)
+	// source_image_digest is the immutable artifact id threaded alongside the
+	// mutable tag. Emit it only when present so deploys without a digest are
+	// unaffected (Writer.Set always writes the key, even when empty).
+	if result.SourceImageDigest != "" {
+		w.Set("source_image_digest", result.SourceImageDigest)
+	}
 	w.Set("changelog_base_sha", result.ChangelogBaseSHA)
 	w.Set("rollback_sha", result.RollbackSHA)
 

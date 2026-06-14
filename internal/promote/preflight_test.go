@@ -202,6 +202,79 @@ func TestPreflight_ExtractsPromotionFields(t *testing.T) {
 	require.False(t, result.IsFinalEnv)
 }
 
+// TestPreflight_SourceImageDigest_FirstSortedNonEmpty asserts that the env-level
+// SourceImageDigest is taken from the source env's builds, selecting the first
+// build (by sorted build name) that has a non-empty ArtifactID.
+func TestPreflight_SourceImageDigest_FirstSortedNonEmpty(t *testing.T) {
+	cfg := &config.CICDFile{
+		Config: &config.TrunkConfig{
+			Environments: []string{"dev", "test", "uat", "prod"},
+			Deploys: []config.DeployConfig{
+				{Name: "app", Triggers: []string{"src/**"}},
+			},
+		},
+		State: map[string]*config.EnvState{
+			"dev": {
+				SHA:     "abc123",
+				Version: "v1.0.0-1",
+				Builds: map[string]*config.BuildState{
+					// "zeta" sorts after "alpha"; "alpha" has an empty
+					// ArtifactID, so the first sorted NON-empty wins ("beta").
+					"zeta":  {ArtifactID: "sha256:zzz"},
+					"alpha": {ArtifactID: ""},
+					"beta":  {ArtifactID: "sha256:bbb"},
+				},
+			},
+		},
+	}
+
+	pf := NewPreflighter(PreflighterOptions{
+		Config:  cfg,
+		Mode:    ModeDefault,
+		BaseDir: "",
+	})
+	result, err := pf.Run()
+
+	require.NoError(t, err)
+	require.Equal(t, "sha256:bbb", result.SourceImageDigest,
+		"SourceImageDigest must be the first sorted build with a non-empty artifact_id")
+}
+
+// TestPreflight_SourceImageDigest_EmptyWhenNoArtifact asserts SourceImageDigest
+// stays empty (so the deploy input is omitted gracefully) when no source build
+// has an artifact_id, preserving non-breaking behavior for deploys without a
+// content digest.
+func TestPreflight_SourceImageDigest_EmptyWhenNoArtifact(t *testing.T) {
+	cfg := &config.CICDFile{
+		Config: &config.TrunkConfig{
+			Environments: []string{"dev", "test", "uat", "prod"},
+			Deploys: []config.DeployConfig{
+				{Name: "app", Triggers: []string{"src/**"}},
+			},
+		},
+		State: map[string]*config.EnvState{
+			"dev": {
+				SHA:     "abc123",
+				Version: "v1.0.0-1",
+				Builds: map[string]*config.BuildState{
+					"app": {ArtifactID: ""},
+				},
+			},
+		},
+	}
+
+	pf := NewPreflighter(PreflighterOptions{
+		Config:  cfg,
+		Mode:    ModeDefault,
+		BaseDir: "",
+	})
+	result, err := pf.Run()
+
+	require.NoError(t, err)
+	require.Empty(t, result.SourceImageDigest,
+		"SourceImageDigest must be empty when no source build has an artifact_id")
+}
+
 func TestPreflight_PrereleaseFinalEnv(t *testing.T) {
 	// Test prerelease and final env detection
 	cfg := &config.CICDFile{
