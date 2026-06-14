@@ -424,7 +424,8 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 			writeSecretsBlock(sb, b.Secrets)
 			continue
 		}
-		// Inline build fallback: mirror the run-based callback shape.
+		// Hotfix build placeholder step: a steps-based job that echoes the build
+		// name. Operators replace this scaffold with the real build commands.
 		sb.WriteString("    runs-on: ubuntu-latest\n")
 		sb.WriteString("    steps:\n")
 		writeActionStep(sb, g.config, "      ", actionCheckout)
@@ -432,11 +433,7 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("          ref: ${{ github.event.pull_request.merge_commit_sha }}\n")
 		fmt.Fprintf(sb, "      - name: Run build %s\n", b.Name)
 		sb.WriteString("        run: |\n")
-		if b.Run != "" {
-			fmt.Fprintf(sb, "          %s\n", b.Run)
-		} else {
-			fmt.Fprintf(sb, "          echo \"build %s\"\n", b.Name)
-		}
+		fmt.Fprintf(sb, "          echo \"build %s\"\n", b.Name)
 	}
 }
 
@@ -470,7 +467,7 @@ func (g *HotfixGenerator) writeDeployJobs(sb *strings.Builder) {
 		// Decision 7: bind to the target GitHub Environment so org protection
 		// rules (manual approval on prod, etc.) apply to the hotfix deploy. The
 		// environment: key is invalid on a reusable-workflow (uses:) job, so the
-		// hotfix deploy is an inline job that carries the gate and invokes the
+		// hotfix deploy is a steps-based job that carries the gate and invokes the
 		// deploy via the CLI; the configured deploy workflow path is recorded for
 		// the operator in the step.
 		sb.WriteString("    environment: ${{ needs.context.outputs.target_env }}\n")
@@ -481,12 +478,9 @@ func (g *HotfixGenerator) writeDeployJobs(sb *strings.Builder) {
 		sb.WriteString("          DEPLOY_ENV: ${{ needs.context.outputs.target_env }}\n")
 		sb.WriteString("          DEPLOY_SHA: ${{ github.event.pull_request.merge_commit_sha }}\n")
 		sb.WriteString("        run: |\n")
-		switch {
-		case d.Workflow != "":
+		if d.Workflow != "" {
 			fmt.Fprintf(sb, "          echo \"deploy %s via %s to $DEPLOY_ENV at $DEPLOY_SHA\"\n", d.Name, normalizeWorkflowPath(d.Workflow))
-		case d.Run != "":
-			fmt.Fprintf(sb, "          %s\n", d.Run)
-		default:
+		} else {
 			fmt.Fprintf(sb, "          echo \"deploy %s to $DEPLOY_ENV at $DEPLOY_SHA\"\n", d.Name)
 		}
 

@@ -11,8 +11,8 @@ import (
 )
 
 // DefaultJobTimeoutMinutes is the timeout-minutes applied to cascade-owned jobs
-// (setup, finalize, inline run: callbacks, retry shims, and passthrough
-// artifact helper jobs) when config.job_timeout_minutes is not set. GitHub
+// (setup, finalize, retry shims, and passthrough artifact helper jobs) when
+// config.job_timeout_minutes is not set. GitHub
 // Actions defaults jobs to 360 minutes (6 hours); cascade's orchestration jobs
 // are meant to be fast, so a hung git push, CLI download, or API call should not
 // hold a runner for six hours. Override per manifest via config.job_timeout_minutes.
@@ -338,9 +338,7 @@ func (g *Generator) externalDeployEnvironmentWarnings() []string {
 
 	externalDeploys := make([]string, 0, len(g.config.Deploys))
 	for _, d := range g.config.Deploys {
-		if d.Run == "" {
-			externalDeploys = append(externalDeploys, d.Name)
-		}
+		externalDeploys = append(externalDeploys, d.Name)
 	}
 	if len(externalDeploys) == 0 {
 		return nil
@@ -452,7 +450,6 @@ func (g *Generator) discoverOutputsAndInputs() error {
 		jobID    string
 		name     string
 		workflow string
-		run      string
 		inputs   map[string]interface{}
 	}{}
 
@@ -461,9 +458,8 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-			run      string
 			inputs   map[string]interface{}
-		}{"validate", "validate", g.config.Validate.Workflow, g.config.Validate.Run, g.config.Validate.Inputs})
+		}{"validate", "validate", g.config.Validate.Workflow, g.config.Validate.Inputs})
 	}
 	for _, b := range g.config.Builds {
 		jobID := config.JobID(config.CallbackTypeBuild, b.Name)
@@ -471,9 +467,8 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-			run      string
 			inputs   map[string]interface{}
-		}{jobID, b.Name, b.Workflow, b.Run, b.Inputs})
+		}{jobID, b.Name, b.Workflow, b.Inputs})
 	}
 	for _, d := range g.config.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
@@ -481,21 +476,11 @@ func (g *Generator) discoverOutputsAndInputs() error {
 			jobID    string
 			name     string
 			workflow string
-			run      string
 			inputs   map[string]interface{}
-		}{jobID, d.Name, d.Workflow, d.Run, d.Inputs})
+		}{jobID, d.Name, d.Workflow, d.Inputs})
 	}
 
 	for _, cb := range allCallbacks {
-		// Inline run: callbacks have no reusable-workflow file. Their inputs come
-		// from the manifest (declared inputs keys); they emit no outputs.
-		if cb.run != "" {
-			g.outputs[cb.jobID] = nil
-			g.inputs[cb.jobID] = inputKeys(cb.inputs)
-			g.requiredInputs[cb.jobID] = nil
-			continue
-		}
-
 		// Read the stub from the normalized location so a bare filename
 		// (build.yaml) resolves to .github/workflows/build.yaml, which is where
 		// GitHub requires local reusable workflows to live and where the emitted
@@ -825,7 +810,7 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// runs. The pre-job depends on the same upstream jobs as the callback itself so
 	// it can start as soon as the producers finish.
 	downloadPreJobID := ""
-	if info.Run == "" && info.PassthroughArtifact != nil && len(info.PassthroughArtifact.Downloads) > 0 {
+	if info.PassthroughArtifact != nil && len(info.PassthroughArtifact.Downloads) > 0 {
 		downloadPreJobID = fmt.Sprintf("%s-download", info.JobID)
 		g.writePassthroughDownloadJob(sb, info, downloadPreJobID)
 	}
@@ -852,48 +837,23 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// passed here; they sequence the job without gating it.
 	g.writeIfCondition(sb, info, needs)
 
-	switch {
-	case info.TimeoutMinutes > 0 && info.Run != "":
-		// Explicit per-callback timeout wins, but only on an inline run: callback.
-		// timeout-minutes is forbidden on a reusable-workflow caller job
-		// (jobs.<id>.uses): GitHub rejects the workflow at parse time. For uses:
-		// callbacks the timeout must live inside the called workflow. This mirrors
-		// the info.Run gate on environment: below.
-		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
-	case info.Run != "":
-		// Inline run: callbacks are cascade-owned jobs, so they inherit the
-		// cascade-owned-job timeout default (#37). Reusable-workflow callbacks
-		// (jobs.<id>.uses) own their own timeout and get nothing here.
-		g.writeOwnedTimeout(sb, "    ")
-	}
+	// timeout-minutes is forbidden on a reusable-workflow caller job
+	// (jobs.<id>.uses): GitHub rejects the workflow at parse time. Every callback
+	// is now a reusable-workflow call, so the timeout must live inside the called
+	// workflow and nothing is emitted here.
 
 	// strategy: emitted only for build callbacks that declare matrix:
 	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
 		g.writeStrategyBlock(sb, info.Matrix)
 	}
 
-	// environment: emitted on deploy jobs when the config declares a
-	// gha_environment for at least one environment. The job-level environment:
-	// key wires the job to a GitHub Environment so that the environment's
-	// protection rules (required reviewers, wait timers, deployment branch
-	// policy, scoped secrets) apply at runtime. Actual protection configuration
-	// lives in GitHub's Environment settings, not in the manifest.
-	//
-	// For orchestrate, the target environment is chosen at run time via the
-	// workflow_dispatch input, so we emit an expression that resolves to the
-	// cascade environment name. When gha_environment differs from the cascade
-	// env name, users should align their GitHub Environment names accordingly.
-	//
-	// The job-level environment: key is only valid on a steps job (an inline
-	// run: deploy). GitHub Actions forbids it on a reusable-workflow caller job
-	// (one that uses jobs.<id>.uses), so it is gated on info.Run being set. For
-	// external (uses:) deploys the environment name is threaded via the with:
-	// environment input instead, and GitHub Environment protection must be
+	// environment: GitHub Actions forbids a job-level environment: key on a
+	// reusable-workflow caller job (one that uses jobs.<id>.uses). Every deploy is
+	// now a reusable-workflow call, so cascade does not emit a job-level
+	// environment: here; the environment name is threaded via the with:
+	// environment input instead, and GitHub Environment protection (required
+	// reviewers, wait timers, deployment branch policy, scoped secrets) must be
 	// declared inside the reusable workflow's own job.
-	if info.Type == config.CallbackTypeDeploy && info.Run != "" && len(g.config.Environments) > 0 && anyEnvHasGHAConfig(g.config) {
-		defaultEnv := g.config.Environments[0]
-		fmt.Fprintf(sb, "    environment: ${{ github.event.inputs.environment || '%s' }}\n", defaultEnv)
-	}
 
 	// continue-on-error: a callback with on_failure: continue is one the operator
 	// has explicitly marked as tolerable. Emitting continue-on-error keeps the
@@ -903,19 +863,13 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 		sb.WriteString("    continue-on-error: true\n")
 	}
 
-	// Inline run: callback. Emit a cascade-owned job with an inline run: step
-	// instead of a jobs.<id>.uses reusable-workflow call. Standard inputs reach
-	// the step as env: variables rather than reusable-workflow with: inputs.
-	if info.Run != "" {
-		g.writeInlineRunBody(sb, info)
-	} else {
-		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
+	// Every callback is emitted as a jobs.<id>.uses reusable-workflow call.
+	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 
-		// with: pass outputs from dependencies
-		g.writeWithInputs(sb, info)
+	// with: pass outputs from dependencies
+	g.writeWithInputs(sb, info)
 
-		writeSecretsBlock(sb, info.Secrets)
-	}
+	writeSecretsBlock(sb, info.Secrets)
 
 	// Generate retry jobs if retries > 0
 	for i := 1; i <= info.Retries; i++ {
@@ -924,117 +878,10 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 
 	// For reusable-workflow callbacks that declare a passthrough artifact upload,
 	// emit a cascade-owned post-job that uploads the artifact after the callback
-	// completes. Inline-run callbacks handle upload inline (see writeInlineRunBody).
-	if info.Run == "" && info.PassthroughArtifact != nil && info.PassthroughArtifact.Upload != "" {
+	// completes.
+	if info.PassthroughArtifact != nil && info.PassthroughArtifact.Upload != "" {
 		g.writePassthroughUploadJob(sb, info)
 	}
-}
-
-// writeInlineRunBody emits the runs-on / steps body of a cascade-owned inline
-// run: callback job. The standard inputs that a reusable-workflow callback would
-// receive via with: are surfaced to the inline step as env: variables (uppercased,
-// e.g. ENVIRONMENT, SHA, and any dependency outputs the callback declares).
-// When info.PassthroughArtifact is set, download steps are injected before the
-// run step and an upload step is appended after it.
-func (g *Generator) writeInlineRunBody(sb *strings.Builder, info CallbackInfo) {
-	// Per-callback job attributes (inline-run jobs only): runner selection (#12),
-	// permissions incl. id-token: write OIDC (#35/#15), and concurrency (#17). The
-	// config-level runs_on default applies when the callback sets no runner.
-	writeRunsOn(sb, "    ", info.RunsOn, g.config.RunsOn)
-	writeJobPermissions(sb, "    ", info.Permissions)
-	writeJobConcurrency(sb, "    ", info.Concurrency)
-	sb.WriteString("    steps:\n")
-
-	// Inject download-artifact steps before the run step so the artifacts are
-	// present in the workspace when the inline command executes.
-	g.writePassthroughDownloadSteps(sb, info)
-
-	fmt.Fprintf(sb, "      - name: %s\n", info.DisplayName)
-
-	envVars := g.inlineEnvInputs(info)
-	if len(envVars) > 0 {
-		sb.WriteString("        env:\n")
-		for _, ev := range envVars {
-			sb.WriteString(ev + "\n")
-		}
-	}
-
-	shell := info.Shell
-	if shell == "" {
-		shell = "bash"
-	}
-	fmt.Fprintf(sb, "        shell: %s\n", shell)
-
-	sb.WriteString("        run: |\n")
-	for _, line := range strings.Split(strings.TrimRight(info.Run, "\n"), "\n") {
-		fmt.Fprintf(sb, "          %s\n", line)
-	}
-	sb.WriteString("\n")
-
-	// Inject upload-artifact step after the run step.
-	g.writePassthroughUploadStep(sb, info)
-}
-
-// inlineEnvInputs returns the env: lines that surface the standard callback
-// inputs (environment, sha, and declared dependency outputs) to an inline run:
-// step. It mirrors writeWithInputs but renders to env: rather than with:.
-func (g *Generator) inlineEnvInputs(info CallbackInfo) []string {
-	deps := g.graph.GetDirectDependencies(info.JobID)
-
-	var envVars []string
-	// Track emitted env-var names so a dependency output named "sha" doesn't
-	// emit a second SHA: alongside the standard one (GHA rejects duplicate keys).
-	seen := map[string]bool{}
-	emit := func(name, value string) {
-		if seen[name] {
-			return
-		}
-		seen[name] = true
-		envVars = append(envVars, fmt.Sprintf("          %s: %s", name, value))
-	}
-
-	// Only pass environment if there are environments configured
-	if len(g.config.Environments) > 0 {
-		emit("ENVIRONMENT", fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0]))
-	}
-
-	// Optional standard inputs - only passed if callback declares them
-	if g.jobHasInput(info.JobID, "sha") {
-		emit("SHA", "${{ needs.setup.outputs.head_sha }}")
-	}
-
-	// For build callbacks with a matrix, surface each dimension's current value.
-	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
-		keys := make([]string, 0, len(info.Matrix.Dimensions))
-		for k := range info.Matrix.Dimensions {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			if g.jobHasInput(info.JobID, k) {
-				emit(envVarName(k), fmt.Sprintf("${{ matrix.%s }}", k))
-			}
-		}
-	}
-
-	// Pass outputs from dependencies the callback declares as inputs.
-	for _, depJobID := range deps {
-		depInfo := g.graph.Nodes[depJobID]
-		for _, out := range g.outputs[depInfo.JobID] {
-			if g.jobHasInput(info.JobID, out) {
-				emit(envVarName(out), fmt.Sprintf("${{ needs.%s.outputs.%s }}", depJobID, out))
-			}
-		}
-	}
-
-	return envVars
-}
-
-// envVarName converts an input key to a shell-safe env-var name: uppercased with
-// hyphens translated to underscores (e.g. "image-tag" -> "IMAGE_TAG", reachable
-// in the run step as $IMAGE_TAG).
-func envVarName(key string) string {
-	return strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
 }
 
 // writeStrategyBlock emits the GHA strategy: block for a build matrix.
@@ -1149,21 +996,6 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 			fmt.Fprintf(sb, "      %s\n", cond)
 		}
 	}
-}
-
-// inputKeys returns the sorted keys of a manifest inputs map. Used to seed the
-// declared-input set for inline run: callbacks, which have no reusable-workflow
-// file to parse inputs from.
-func inputKeys(m map[string]interface{}) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // jobHasInput checks if a job declares a specific input
@@ -1349,12 +1181,11 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	fmt.Fprintf(sb, "    name: %s - Retry %d\n", info.DisplayName, retryNum)
 	fmt.Fprintf(sb, "    needs: [setup, %s]\n", prevJobName)
 	fmt.Fprintf(sb, "    if: needs.%s.result == 'failure'\n", prevJobName)
-	switch {
-	case info.TimeoutMinutes > 0:
+	// An explicit per-callback timeout-minutes is valid only on a steps job, not
+	// on a reusable-workflow caller job. A retry shim re-invokes the reusable
+	// workflow via uses:, so the timeout must live inside the called workflow.
+	if info.TimeoutMinutes > 0 {
 		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
-	case info.Run != "":
-		// Inline run: retry shims are cascade-owned (#37).
-		g.writeOwnedTimeout(sb, "    ")
 	}
 
 	// Propagate the matrix strategy to the retry job so that ${{ matrix.* }}
@@ -1365,10 +1196,6 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 		g.writeStrategyBlock(sb, info.Matrix)
 	}
 
-	if info.Run != "" {
-		g.writeInlineRunBody(sb, info)
-		return
-	}
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 	g.writeWithInputs(sb, info)
 	writeSecretsBlock(sb, info.Secrets)
@@ -1928,43 +1755,6 @@ func (g *Generator) writeArtifactUploadStep(sb *strings.Builder) {
 // job's passthrough upload: "build-{name}". Consumers reference the same name.
 func passthroughArtifactName(buildName string) string {
 	return fmt.Sprintf("build-%s", buildName)
-}
-
-// writePassthroughDownloadSteps emits one download-artifact step per entry in
-// info.PassthroughArtifact.Downloads. Each step downloads the artifact produced
-// by the named upstream build job and places it in a directory named after the
-// artifact so multiple downloads do not collide.
-func (g *Generator) writePassthroughDownloadSteps(sb *strings.Builder, info CallbackInfo) {
-	if info.PassthroughArtifact == nil || len(info.PassthroughArtifact.Downloads) == 0 {
-		return
-	}
-	for _, src := range info.PassthroughArtifact.Downloads {
-		name := passthroughArtifactName(src)
-		fmt.Fprintf(sb, "      - name: Download artifact from %s\n", src)
-		writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
-		sb.WriteString("        with:\n")
-		fmt.Fprintf(sb, "          name: %s\n", name)
-		fmt.Fprintf(sb, "          path: %s\n", name)
-		sb.WriteString("\n")
-	}
-}
-
-// writePassthroughUploadStep emits an upload-artifact step for
-// info.PassthroughArtifact.Upload when set. The artifact is named
-// "build-{job-name}" so downstream jobs can reference it by name.
-// Used only for inline-run callbacks where the step is injected inside the
-// cascade-owned job's steps list.
-func (g *Generator) writePassthroughUploadStep(sb *strings.Builder, info CallbackInfo) {
-	if info.PassthroughArtifact == nil || info.PassthroughArtifact.Upload == "" {
-		return
-	}
-	name := passthroughArtifactName(info.Name)
-	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
-	writeActionUses(sb, g.config, "        ", actionUploadArtifact)
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          name: %s\n", name)
-	fmt.Fprintf(sb, "          path: %s\n", info.PassthroughArtifact.Upload)
-	sb.WriteString("\n")
 }
 
 // writePassthroughDownloadJob emits a cascade-owned job (jobID) that runs

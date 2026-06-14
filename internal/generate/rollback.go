@@ -14,9 +14,9 @@ import (
 // on the resolved SHA, and a finalize job applies the state write back to trunk
 // (marking the environment diverged until a forward promotion rejoins it).
 //
-// The deploy stage reuses the same deploy callbacks (reusable workflow, inline
-// run, or matrix) the promote workflow drives; there is no separate rollback
-// deploy path. The generator is gated on the configured environment count: it
+// The deploy stage reuses the same deploy callbacks (reusable-workflow, or
+// matrix) the promote workflow drives; there is no separate rollback deploy
+// path. The generator is gated on the configured environment count: it
 // emits only when at least one environment is declared.
 type RollbackGenerator struct {
 	config  *config.TrunkConfig
@@ -227,9 +227,9 @@ func rollbackDeployGuard(deployName string) string {
 
 // writeDeployJobs emits one deploy job per configured deploy, re-running the same
 // callback the promote workflow uses but sourced from the resolved rollback
-// target SHA. Inline run: deploys carry the job-level environment gate when GHA
-// environment protection is configured; reusable (uses:) deploys thread the env
-// via the with: input. With no environments configured, no deploy jobs emit.
+// target SHA. Each deploy is a reusable (uses:) workflow call that threads the
+// resolved env and SHA via the with: input. With no environments configured, no
+// deploy jobs emit.
 func (g *RollbackGenerator) writeDeployJobs(sb *strings.Builder) {
 	if len(g.config.Environments) == 0 {
 		return
@@ -241,16 +241,6 @@ func (g *RollbackGenerator) writeDeployJobs(sb *strings.Builder) {
 		sb.WriteString("    needs: [preflight]\n")
 		fmt.Fprintf(sb, "    if: %s\n", rollbackDeployGuard(d.Name))
 
-		if d.Run != "" {
-			// Inline run: deploy callback. The environment gate is valid only on a
-			// steps job, so it is emitted here (not on a reusable caller job).
-			if anyEnvHasGHAConfig(g.config) {
-				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
-			}
-			g.writeInlineDeployBody(sb, d)
-			continue
-		}
-
 		// Reusable (uses:) deploy: thread the resolved env and SHA via with:. The
 		// environment name is carried as an input; GitHub Environment protection
 		// must be declared inside the reusable workflow's own job.
@@ -260,30 +250,6 @@ func (g *RollbackGenerator) writeDeployJobs(sb *strings.Builder) {
 		sb.WriteString("      sha: ${{ needs.preflight.outputs.target_sha }}\n")
 		writeSecretsBlock(sb, d.Secrets)
 	}
-}
-
-// writeInlineDeployBody emits the runs-on / steps body of an inline run: deploy
-// callback, surfacing the resolved environment and SHA as env: variables.
-func (g *RollbackGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig) {
-	writeRunsOn(sb, "    ", d.RunsOn, g.config.RunsOn)
-	writeJobPermissions(sb, "    ", d.Permissions)
-	writeJobConcurrency(sb, "    ", d.Concurrency)
-	sb.WriteString("    steps:\n")
-	fmt.Fprintf(sb, "      - name: Deploy %s\n", d.Name)
-	sb.WriteString("        env:\n")
-	sb.WriteString("          ENVIRONMENT: ${{ needs.preflight.outputs.target_env }}\n")
-	sb.WriteString("          SHA: ${{ needs.preflight.outputs.target_sha }}\n")
-
-	shell := d.Shell
-	if shell == "" {
-		shell = "bash"
-	}
-	fmt.Fprintf(sb, "        shell: %s\n", shell)
-	sb.WriteString("        run: |\n")
-	for _, line := range strings.Split(strings.TrimRight(d.Run, "\n"), "\n") {
-		fmt.Fprintf(sb, "          %s\n", line)
-	}
-	sb.WriteString("\n")
 }
 
 // deployJobNames returns the deploy job identifiers so finalize can declare
