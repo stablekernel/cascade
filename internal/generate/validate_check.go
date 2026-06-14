@@ -34,17 +34,14 @@ func (g *ValidateCheckGenerator) Enabled() bool {
 }
 
 // getCLIRef mirrors the ref-resolution used by the other generators so the
-// emitted setup-cli ref tracks config.cli_version.
+// emitted setup-cli ref tracks config.cli_version. The default (cli_version
+// unset or "latest") resolves to config.DefaultCLIVersion, an immutable release
+// tag; "beta" is the explicit opt-in escape hatch to the "master" branch.
 func (g *ValidateCheckGenerator) getCLIRef() string {
-	version := g.config.GetCLIVersion()
-	switch version {
-	case "latest", "":
-		return "latest"
-	case "beta":
-		return "master"
-	default:
-		return version
+	if g.config.CLIVersion == "beta" {
+		return "master" // Explicit opt-in escape hatch to trunk.
 	}
+	return g.config.GetCLIVersion()
 }
 
 // getManifestFilePath returns the repo-relative manifest path for use in the

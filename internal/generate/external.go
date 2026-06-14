@@ -21,17 +21,15 @@ func NewExternalUpdateGenerator(cfg *config.TrunkConfig, baseDir string) *Extern
 	}
 }
 
-// getCLIRef returns the Git ref to use for the cascade actions.
+// getCLIRef returns the Git ref for the cascade self-action. The default
+// (cli_version unset or "latest") resolves to config.DefaultCLIVersion, an
+// immutable release tag, so consumers never run an unpinned mutable ref.
+// "beta" is the explicit opt-in escape hatch to the "master" branch.
 func (g *ExternalUpdateGenerator) getCLIRef() string {
-	version := g.config.GetCLIVersion()
-	switch version {
-	case "latest", "":
-		return "latest"
-	case "beta":
-		return "master"
-	default:
-		return version
+	if g.config.CLIVersion == "beta" {
+		return "master" // Explicit opt-in escape hatch to trunk.
 	}
+	return g.config.GetCLIVersion()
 }
 
 // getReleaseTokenRef returns the token expression for release operations.
