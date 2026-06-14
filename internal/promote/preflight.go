@@ -289,18 +289,32 @@ func (p *Preflighter) checkDowngrade(promotions []EnvPromotion, result *Prefligh
 			currentStr = state.Version
 		}
 
+		// The incoming version is the one that actually LANDS on this env, which
+		// is promo.Version. In a cascade across the publish boundary these differ
+		// from the source env's raw version: the prerelease envs receive the RC
+		// (e.g. v1.0.0-rc.0) while the release/prod envs receive the stripped
+		// semver (v1.0.0). Comparing every env against result.SourceVersion (the
+		// single source env's raw version) wrongly flags the rc-to-release
+		// finalization as a downgrade, because an rc sorts below its release under
+		// semver precedence. Use promo.Version per env; fall back to SourceVersion
+		// only when a promotion carries no version (version-less manifests).
+		incomingStr := promo.Version
+		if incomingStr == "" {
+			incomingStr = result.SourceVersion
+		}
+
 		// Skip if either version is empty (first promotion / version-less).
-		if result.SourceVersion == "" || currentStr == "" {
+		if incomingStr == "" || currentStr == "" {
 			continue
 		}
 
-		incoming, errIn := version.Parse(result.SourceVersion)
+		incoming, errIn := version.Parse(incomingStr)
 		current, errCur := version.Parse(currentStr)
 		if errIn != nil || errCur != nil {
 			// FAIL-OPEN: non-semver version -> warn and continue.
 			result.Warnings = append(result.Warnings, fmt.Sprintf(
 				"downgrade check skipped on env %q: could not compare current version %s to incoming %s; ensure both are semver to enforce monotonicity",
-				promo.Environment, currentStr, result.SourceVersion,
+				promo.Environment, currentStr, incomingStr,
 			))
 			continue
 		}
@@ -315,7 +329,7 @@ func (p *Preflighter) checkDowngrade(promotions []EnvPromotion, result *Prefligh
 		if p.allowDowngrade {
 			result.Warnings = append(result.Warnings, fmt.Sprintf(
 				"downgrade on %s from %s to %s permitted via --allow-downgrade",
-				promo.Environment, currentStr, result.SourceVersion,
+				promo.Environment, currentStr, incomingStr,
 			))
 			continue
 		}
@@ -323,12 +337,12 @@ func (p *Preflighter) checkDowngrade(promotions []EnvPromotion, result *Prefligh
 		if isProd {
 			return fmt.Errorf(
 				"downgrade blocked on prod env %q: current version %s is newer than incoming %s; prod downgrades always require --allow-downgrade",
-				promo.Environment, currentStr, result.SourceVersion,
+				promo.Environment, currentStr, incomingStr,
 			)
 		}
 		return fmt.Errorf(
 			"downgrade blocked on env %q: current version %s is newer than incoming %s; pass --allow-downgrade to permit",
-			promo.Environment, currentStr, result.SourceVersion,
+			promo.Environment, currentStr, incomingStr,
 		)
 	}
 	return nil

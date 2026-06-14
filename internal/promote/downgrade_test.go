@@ -158,3 +158,61 @@ func TestCheckDowngrade_EmptyVersions_Skipped(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, result2.Warnings)
 }
+
+// TestCheckDowngrade_PublishBoundary_RCToReleaseNotDowngrade reproduces the
+// cascade publish-boundary false positive: a cascade from a prerelease env at
+// v1.0.0-rc.0 to prod materializes a "release" promotion carrying the stripped
+// semver v1.0.0. The release env currently holds the previously published
+// v1.0.0. The version that LANDS on release is v1.0.0 (promo.Version), which is
+// equal, not a downgrade. The gate must compare against promo.Version, not the
+// source env's raw rc version, otherwise it wrongly blocks the finalization.
+func TestCheckDowngrade_PublishBoundary_RCToReleaseNotDowngrade(t *testing.T) {
+	p := newDowngradePreflighter(t, map[string]*config.EnvState{
+		"release": {Version: "v1.0.0"},
+		"prod":    {Version: "v0.3.0"},
+	}, false)
+	// SourceVersion is the source env's raw rc; promo.Version is what lands.
+	result := &PreflightResult{SourceVersion: "v1.0.0-rc.0"}
+	promotions := []EnvPromotion{
+		{Environment: "release", Version: "v1.0.0"},
+		{Environment: "prod", Version: "v1.0.0"},
+	}
+
+	err := p.checkDowngrade(promotions, result, "prod")
+	require.NoError(t, err)
+	require.Empty(t, result.Warnings)
+}
+
+// TestCheckDowngrade_RealDowngrade_StillBlockedViaPromoVersion proves the fix
+// does not weaken protection: when the version that actually lands (promo.Version)
+// is older than the env's current version, the gate still blocks.
+func TestCheckDowngrade_RealDowngrade_StillBlockedViaPromoVersion(t *testing.T) {
+	p := newDowngradePreflighter(t, map[string]*config.EnvState{
+		"release": {Version: "v2.0.0"},
+	}, false)
+	// Source raw version looks newer, but the version landing on release is older.
+	result := &PreflightResult{SourceVersion: "v2.1.0-rc.0"}
+	promotions := []EnvPromotion{{Environment: "release", Version: "v1.5.0"}}
+
+	err := p.checkDowngrade(promotions, result, "prod")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "release")
+	require.Contains(t, err.Error(), "v2.0.0")
+	require.Contains(t, err.Error(), "v1.5.0")
+	require.Contains(t, err.Error(), "--allow-downgrade")
+}
+
+// TestCheckDowngrade_PrereleaseEnv_RCProgressesForward confirms a cascade that
+// carries an rc forward into prerelease envs is allowed when the rc is newer,
+// using promo.Version (the rc) rather than a stripped value.
+func TestCheckDowngrade_PrereleaseEnv_RCProgressesForward(t *testing.T) {
+	p := newDowngradePreflighter(t, map[string]*config.EnvState{
+		"uat": {Version: "v0.3.0-rc.0"},
+	}, false)
+	result := &PreflightResult{SourceVersion: "v1.0.0-rc.0"}
+	promotions := []EnvPromotion{{Environment: "uat", Version: "v1.0.0-rc.0"}}
+
+	err := p.checkDowngrade(promotions, result, "prod")
+	require.NoError(t, err)
+	require.Empty(t, result.Warnings)
+}
