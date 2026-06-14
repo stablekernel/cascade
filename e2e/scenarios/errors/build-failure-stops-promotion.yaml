@@ -1,18 +1,17 @@
 name: "Build failure stops orchestrate"
 description: |
-  Drives a real build failure under act: the app build runs an inline
-  "exit 1" step, so the generated build-app job fails and the orchestrate run
-  concludes in failure. expect_failure on the orchestrate step makes that
-  failure the success path, proving the harness observes a genuinely failing
-  workflow rather than a simulated outcome.
+  Drives a real build failure under act: the app build is a reusable workflow
+  whose inner job runs "exit 1", so the generated build-app job fails and the
+  orchestrate run concludes in failure. expect_failure on the orchestrate step
+  makes that failure the success path, proving the harness observes a genuinely
+  failing workflow rather than a simulated outcome.
 
 config:
   trunk_branch: main
   environments: [dev, prod]
   builds:
     - name: app
-      run: "exit 1"
-      shell: bash
+      workflow: build.yaml
       triggers: ["src/**"]
   deploys: []
 
@@ -25,6 +24,25 @@ steps:
         src/app.go: |
           package main
           func main() {}
+        # Reusable build callback whose inner job exits non-zero on purpose, so
+        # the generated build-app job fails and the orchestrate run concludes in
+        # failure. Inner job id is failbuild so act keys it distinctly.
+        .github/workflows/build.yaml: |
+          name: build
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            failbuild:
+              runs-on: ubuntu-latest
+              steps:
+                - run: exit 1
 
   - name: "Orchestrate fails because the build exits non-zero"
     action: orchestrate

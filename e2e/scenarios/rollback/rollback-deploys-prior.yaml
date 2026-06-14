@@ -7,9 +7,10 @@ description: |
   job re-runs at that target SHA, and prod state lands back on the first commit's
   version.
 
-  The deploy is an inline run: job (no actions/checkout, which act cannot resolve
-  for a reusable callback against the per-scenario gitea), so the deploy job runs
-  observably under act and is asserted as deploy-app: success.
+  The deploy is a reusable workflow whose inner job echoes the resolved env/sha
+  (no actions/checkout, which act cannot resolve for a reusable callback against
+  the per-scenario gitea), so the deploy job runs observably under act. act keys
+  it by the inner job id appdeploy, which the assertion targets.
 
 config:
   trunk_branch: main
@@ -19,12 +20,12 @@ config:
       workflow: build.yaml
       triggers: ["src/**"]
   deploys:
-    # Inline run: deploy. It echoes the resolved env/sha the rollback workflow
-    # threads in, so the deploy job runs under act without a checkout step. Its
-    # caller job id is deploy-app, which the harness's findJob matches directly.
+    # Reusable deploy. Its inner job echoes the resolved env/sha the rollback
+    # workflow threads in via the with: environment/sha inputs, so the deploy job
+    # runs under act without a checkout step. act keys it by the inner job id
+    # appdeploy, which the harness's findJob matches.
     - name: app
-      run: |
-        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      workflow: .github/workflows/deploy-app.yaml
       triggers: ["**"]
 
 steps:
@@ -36,6 +37,22 @@ steps:
         src/app.go: |
           package main
           func main() {}
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            appdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
 
   - name: "Orchestrate the first commit into dev"
     action: orchestrate
@@ -94,5 +111,5 @@ steps:
           sha: commit1
       jobs:
         preflight: success
-        deploy-app: success
+        appdeploy: success
         finalize: success
