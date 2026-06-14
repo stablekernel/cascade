@@ -6,6 +6,11 @@ description: |
 
   Generator-output verification only.
 
+  The validate callback (validate.yaml) is a reusable workflow the generator
+  reads at generation time to discover its inputs and emit the gate. The harness
+  seeds a workflow_call stub for it from config.validate.workflow before
+  generation runs, so the referenced file is on disk when the generator reads it.
+
 config:
   trunk_branch: main
   environments: [dev]
@@ -29,25 +34,6 @@ steps:
         src/app.go: |
           package main
           func main() {}
-        # Reusable validate callback the generated orchestrate.yaml invokes as a
-        # uses: job. Its inner job echoes "validate" so the gate has a real job to
-        # wait on; the orchestrate build jobs gate on needs.validate.result.
-        .github/workflows/validate.yaml: |
-          name: validate
-          on:
-            workflow_call:
-              inputs:
-                environment:
-                  required: false
-                  type: string
-                sha:
-                  required: false
-                  type: string
-          jobs:
-            runvalidate:
-              runs-on: ubuntu-latest
-              steps:
-                - run: echo "validate"
     expect:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"

@@ -185,7 +185,7 @@ func RunMultiStepScenario(ctx context.Context, t *testing.T, scenario *MultiStep
 		if err := h.SetupInfra(ctx); err != nil {
 			return fmt.Errorf("failed to setup infrastructure: %w", err)
 		}
-		if err := h.StageRepoFromConfig(ctx, scenario.Config); err != nil {
+		if err := h.StageRepoFromConfig(ctx, scenario.Config, scenario.SetupWorkflows); err != nil {
 			return fmt.Errorf("failed to stage repo: %w", err)
 		}
 

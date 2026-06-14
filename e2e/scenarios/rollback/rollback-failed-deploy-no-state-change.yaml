@@ -47,6 +47,47 @@ config:
       workflow: .github/workflows/deploy-app.yaml
       triggers: ["**"]
 
+# Seed the failing deploy callback into the setup commit BEFORE generation, so
+# the generator reads this body (not the generic harness stub) when it resolves
+# deploy-app.yaml. Staging it via step 1's commit.files would land after
+# generation and the generator would never see it, leaving the generic stub that
+# always succeeds in place and the rollback re-deploy would not fail. The inner
+# job is appdeploy (matched by expect.jobs below). It succeeds while the caller
+# workflow is Promote and exits non-zero only when the caller is Rollback, keyed
+# on $GITHUB_WORKFLOW, which inside a reusable callback is the caller's name.
+setup_workflows:
+  .github/workflows/deploy-app.yaml: |
+    name: deploy-app
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: false
+            type: string
+          sha:
+            required: false
+            type: string
+    jobs:
+      appdeploy:
+        runs-on: ubuntu-latest
+        steps:
+          - env:
+              DEPLOY_ENV: ${{ inputs.environment }}
+              DEPLOY_SHA: ${{ inputs.sha }}
+            run: |
+              echo "deploy of env=$DEPLOY_ENV sha=$DEPLOY_SHA via workflow=$GITHUB_WORKFLOW"
+              # GITHUB_WORKFLOW inside a reusable callback is the caller
+              # workflow's name. The harness suffixes each with
+              # [scenario-<tag>], so the Rollback workflow surfaces it as
+              # "Rollback [scenario-...]". Match the Rollback prefix.
+              case "$GITHUB_WORKFLOW" in
+                Rollback*)
+                  echo "failing the rollback re-deploy on purpose"
+                  exit 1
+                  ;;
+              esac
+              echo "promote deploy succeeded"
+
 steps:
   - name: "Commit the first version source"
     action: commit
@@ -56,37 +97,6 @@ steps:
         src/app.go: |
           package main
           func main() {}
-        .github/workflows/deploy-app.yaml: |
-          name: deploy-app
-          on:
-            workflow_call:
-              inputs:
-                environment:
-                  required: false
-                  type: string
-                sha:
-                  required: false
-                  type: string
-          jobs:
-            appdeploy:
-              runs-on: ubuntu-latest
-              steps:
-                - env:
-                    DEPLOY_ENV: ${{ inputs.environment }}
-                    DEPLOY_SHA: ${{ inputs.sha }}
-                  run: |
-                    echo "deploy of env=$DEPLOY_ENV sha=$DEPLOY_SHA via workflow=$GITHUB_WORKFLOW"
-                    # GITHUB_WORKFLOW inside a reusable callback is the caller
-                    # workflow's name. The harness suffixes each with
-                    # [scenario-<tag>], so the Rollback workflow surfaces it as
-                    # "Rollback [scenario-...]". Match the Rollback prefix.
-                    case "$GITHUB_WORKFLOW" in
-                      Rollback*)
-                        echo "failing the rollback re-deploy on purpose"
-                        exit 1
-                        ;;
-                    esac
-                    echo "promote deploy succeeded"
 
   - name: "Orchestrate the first commit into dev"
     action: orchestrate

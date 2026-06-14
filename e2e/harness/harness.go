@@ -97,7 +97,15 @@ func (h *Harness) SetupInfra(ctx context.Context) error {
 }
 
 // StageRepoFromConfig creates a repo with the given config for multi-step scenarios
-func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config) error {
+// StageRepoFromConfig creates the test repo, writes the manifest and the stub
+// callback workflows derived from config, then runs workflow generation. The
+// optional setupWorkflows map seeds additional reusable callback workflow files
+// (keyed by repository path) into the same setup commit before generation, and
+// overrides any auto-generated stub at the same path. Scenarios use it to supply
+// a callback body the generic stub cannot express (for example a deploy that
+// fails only under the Rollback workflow); files staged via a later step's
+// commit.files would land after generation and never be read by the generator.
+func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config, setupWorkflows map[string]string) error {
 	var err error
 
 	// Create repo
@@ -158,6 +166,25 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config) error 
 			if p := normalizeCallbackStubPath(wf); p != "" {
 				files[p] = generateChangelogStubWorkflow(scenarioTag)
 			}
+		}
+		// A top-level validate callback is a reusable workflow the generated
+		// orchestrate.yaml invokes as a job-level uses:. Stub it so the generator
+		// can read the referenced workflow at generation time and emit the validate
+		// gate. Without a seeded stub the generator fails reading validate.yaml,
+		// since the file would otherwise only arrive via a later step commit.
+		if wf, ok := config.Validate["workflow"].(string); ok && wf != "" {
+			if p := normalizeCallbackStubPath(wf); p != "" {
+				files[p] = generateValidateStubWorkflow(scenarioTag)
+			}
+		}
+
+		// Seed scenario-supplied reusable callback workflows last so they override
+		// any auto-generated stub at the same path. These bodies express behavior
+		// the generic stub cannot (for example a deploy that exits non-zero only
+		// under the Rollback workflow) and must be present before generation reads
+		// the referenced workflows.
+		for path, body := range setupWorkflows {
+			files[path] = body
 		}
 
 		// Create mock setup-cli action that installs CLI from repo
@@ -415,6 +442,34 @@ jobs:
     steps:
       - id: gen
         run: echo "changelog=- custom changelog entry" >> "$GITHUB_OUTPUT"
+`, displayName)
+}
+
+// generateValidateStubWorkflow returns a reusable workflow_call stub for a
+// top-level validate callback. The generated orchestrate.yaml invokes it as a
+// job-level uses: and gates the build jobs on needs.validate.result, so the stub
+// declares the environment/sha inputs the generator threads and an inner job
+// that always succeeds, giving the gate a real job to wait on.
+func generateValidateStubWorkflow(scenarioTag string) string {
+	displayName := "validate"
+	if scenarioTag != "" {
+		displayName = fmt.Sprintf("validate [scenario-%s]", scenarioTag)
+	}
+	return fmt.Sprintf(`name: %s
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+jobs:
+  runvalidate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "validate"
 `, displayName)
 }
 
