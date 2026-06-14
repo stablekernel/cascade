@@ -24,13 +24,7 @@ using the "Report a vulnerability" button on the repository's Security tab. This
 needs no email and keeps the report private until a fix is coordinated.
 
 <!-- Maintainers: enable Private Vulnerability Reporting under Settings > Code
-     security so the "Report a vulnerability" button is available. If you also
-     want an email channel, replace the placeholder below with a real, monitored
-     address; otherwise delete it and rely on GitHub Security Advisories alone. -->
-
-- Alternative contact (optional placeholder, replace before publishing):
-  `<security-contact-placeholder@example.com>`
-
+     security so the "Report a vulnerability" button is available. -->
 Include a description of the issue, steps to reproduce, and any relevant version
 information.
 
