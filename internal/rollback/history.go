@@ -29,11 +29,25 @@ func newGitHistoryReader(configPath, manifestKey string) *gitHistoryReader {
 // (or a non-repo) yields an empty slice, not an error, so callers degrade to
 // state-only resolution gracefully.
 func (g *gitHistoryReader) PriorStates(env string) ([]*config.EnvState, error) {
-	repoDir := filepath.Dir(g.configPath)
+	manifestDir := filepath.Dir(g.configPath)
 	relPath := filepath.Base(g.configPath)
 
+	// `git show <sha>:<path>` always interprets <path> relative to the repo
+	// root, so a manifest in a subdirectory (e.g. .github/manifest.yaml) must be
+	// addressed by its repo-root-relative path, not the basename combined with
+	// `-C <subdir>`. Ask git for the subdir's prefix relative to the root and
+	// join it with the basename, so both flat and nested layouts resolve.
+	showPath := relPath
+	prefixCmd := exec.Command("git", "-C", manifestDir, "rev-parse", "--show-prefix")
+	if prefixOut, prefixErr := prefixCmd.Output(); prefixErr == nil {
+		prefix := strings.TrimSpace(string(prefixOut))
+		if prefix != "" {
+			showPath = strings.TrimSuffix(prefix, "/") + "/" + relPath
+		}
+	}
+
 	// List commits that touched the manifest, newest first.
-	logCmd := exec.Command("git", "-C", repoDir, "log", "--format=%H", "--", relPath)
+	logCmd := exec.Command("git", "-C", manifestDir, "log", "--format=%H", "--", relPath)
 	out, err := logCmd.Output()
 	if err != nil {
 		// Not a git repo, or git unavailable; degrade to no history.
@@ -45,7 +59,7 @@ func (g *gitHistoryReader) PriorStates(env string) ([]*config.EnvState, error) {
 	seen := make(map[string]bool) // dedupe identical sha|version snapshots
 
 	for _, sha := range commits {
-		showCmd := exec.Command("git", "-C", repoDir, "show", sha+":"+relPath)
+		showCmd := exec.Command("git", "-C", manifestDir, "show", sha+":"+showPath)
 		blob, err := showCmd.Output()
 		if err != nil {
 			continue // file may not exist at that revision
