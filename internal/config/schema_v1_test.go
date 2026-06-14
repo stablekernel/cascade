@@ -56,6 +56,46 @@ deploys:
 			t.Fatalf("expected map form, got %#v", s)
 		}
 	})
+	t.Run("inherit mapping", func(t *testing.T) {
+		cfg := parseInline(t, `
+deploys:
+  - name: app
+    workflow: .github/workflows/deploy.yaml
+    secrets:
+      inherit: true
+`)
+		s := cfg.Deploys[0].Secrets
+		if s == nil || !s.Inherit || s.Map != nil {
+			t.Fatalf("expected inherit form from mapping, got %#v", s)
+		}
+	})
+	t.Run("inherit false mapping treated as unset", func(t *testing.T) {
+		cfg := parseInline(t, `
+deploys:
+  - name: app
+    workflow: .github/workflows/deploy.yaml
+    secrets:
+      inherit: false
+`)
+		s := cfg.Deploys[0].Secrets
+		if s == nil || s.Inherit || s.Map != nil {
+			t.Fatalf("expected inherit:false to parse to Inherit=false, no map, got %#v", s)
+		}
+	})
+	t.Run("mixed inherit and secret keys rejected", func(t *testing.T) {
+		var cfg TrunkConfig
+		err := yaml.Unmarshal([]byte(`
+deploys:
+  - name: app
+    workflow: w.yaml
+    secrets:
+      inherit: true
+      NPM_TOKEN: PUBLISH_NPM_TOKEN
+`), &cfg)
+		if err == nil {
+			t.Fatal("expected error mixing inherit with explicit secret mappings")
+		}
+	})
 	t.Run("invalid scalar rejected", func(t *testing.T) {
 		var cfg TrunkConfig
 		err := yaml.Unmarshal([]byte(`

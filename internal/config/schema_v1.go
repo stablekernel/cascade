@@ -13,18 +13,21 @@ import (
 // and structural validation are implemented; emit/generation behavior is not.
 
 // SecretsConfig models the per-callback secrets passing union. It is either the
-// literal string "inherit" (form A, the default that preserves today's
-// hardcoded behavior) or an explicit map of called-workflow secret name to
-// caller secret name (form B, least-privilege).
+// opt-in "inherit" form (the scalar "inherit", or the mapping {inherit: true})
+// or an explicit map of called-workflow secret name to caller secret name (the
+// least-privilege form). An unset secrets field (nil SecretsConfig) emits no
+// secrets block at all.
 type SecretsConfig struct {
-	// Inherit is true when the manifest specified the scalar "inherit".
+	// Inherit is true when the manifest opted in to inheriting all caller secrets,
+	// via the scalar "inherit" or the mapping {inherit: true}.
 	Inherit bool `json:"inherit,omitempty"`
-	// Map holds the explicit form-B mapping (called name -> caller name) when a
-	// mapping was provided. Nil when Inherit is true.
+	// Map holds the explicit mapping (called name -> caller name) when a mapping of
+	// secret names was provided. Nil when Inherit is true.
 	Map map[string]string `json:"map,omitempty"`
 }
 
-// UnmarshalYAML accepts either the scalar "inherit" or a mapping of secret names.
+// UnmarshalYAML accepts the scalar "inherit", the mapping {inherit: <bool>}, or a
+// mapping of secret names. inherit may not be mixed with explicit secret keys.
 func (s *SecretsConfig) UnmarshalYAML(value *yaml.Node) error {
 	// A bare `secrets:` (null node) is treated as unset.
 	if value.Tag == "!!null" {
@@ -42,6 +45,25 @@ func (s *SecretsConfig) UnmarshalYAML(value *yaml.Node) error {
 		s.Inherit = true
 		return nil
 	case yaml.MappingNode:
+		// Reject mixing the inherit key with explicit secret mappings.
+		hasInherit := false
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			if value.Content[i].Value == "inherit" {
+				hasInherit = true
+				break
+			}
+		}
+		if hasInherit {
+			if len(value.Content) != 2 {
+				return fmt.Errorf("secrets: cannot mix \"inherit\" with explicit secret mappings")
+			}
+			var b bool
+			if err := value.Content[1].Decode(&b); err != nil {
+				return fmt.Errorf("secrets: inherit value must be a boolean: %w", err)
+			}
+			s.Inherit = b
+			return nil
+		}
 		m := map[string]string{}
 		if err := value.Decode(&m); err != nil {
 			return err

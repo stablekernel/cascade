@@ -403,7 +403,10 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 			sb.WriteString("    with:\n")
 			sb.WriteString("      sha: ${{ github.event.pull_request.merge_commit_sha }}\n")
 			sb.WriteString("      target_env: ${{ needs.context.outputs.target_env }}\n")
-			sb.WriteString("    secrets: inherit\n")
+			// Honor the same opt-in / least-privilege model as the orchestrate and
+			// promote callbacks: emit no secrets block unless the build opted in via
+			// secrets: inherit or an explicit per-secret map.
+			writeSecretsBlock(sb, b.Secrets)
 			continue
 		}
 		// Inline build fallback: mirror the run-based callback shape.

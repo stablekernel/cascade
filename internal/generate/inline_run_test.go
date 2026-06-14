@@ -71,7 +71,8 @@ func TestGenerator_InlineRunShellHonored(t *testing.T) {
 }
 
 // TestGenerator_WorkflowCallbackStillUsesReusable asserts a workflow: callback
-// is unchanged: it still emits jobs.<id>.uses + secrets: inherit.
+// is unchanged: it still emits jobs.<id>.uses. With explicit secrets: inherit
+// opted in, it carries the inherit form.
 func TestGenerator_WorkflowCallbackStillUsesReusable(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
@@ -85,6 +86,7 @@ func TestGenerator_WorkflowCallbackStillUsesReusable(t *testing.T) {
 				Name:     "app",
 				Workflow: ".github/workflows/build.yaml",
 				Triggers: []string{"src/**"},
+				Secrets:  &config.SecretsConfig{Inherit: true},
 			},
 		},
 	}

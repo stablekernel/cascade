@@ -48,10 +48,11 @@ type CallbackInfo struct {
 	// within a single orchestrate run (#16).
 	PassthroughArtifact *config.PassthroughArtifact
 
-	// Secrets holds the per-callback secrets passing config. Nil means inherit
-	// (the default). When non-nil and Inherit is true, secrets: inherit is emitted.
-	// When non-nil with an explicit Map, a secrets: block with per-entry
-	// ${{ secrets.CALLER_NAME }} expressions is emitted instead.
+	// Secrets holds the per-callback secrets passing config. Nil means no secrets
+	// block is emitted at all (the default; secrets: inherit is opt-in). When
+	// non-nil and Inherit is true, secrets: inherit is emitted. When non-nil with
+	// an explicit Map, a secrets: block with per-entry ${{ secrets.CALLER_NAME }}
+	// expressions is emitted instead.
 	Secrets *config.SecretsConfig
 }
 
