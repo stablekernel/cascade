@@ -39,7 +39,7 @@ steps:
         dev:
           sha: commit1
 
-  - name: "Promote the first version into test and prod"
+  - name: "Promote the first version from dev to test"
     action: promote
     promote:
       mode: default

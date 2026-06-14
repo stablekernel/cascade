@@ -44,10 +44,11 @@ steps:
         dev:
           sha: commit1
 
-  - name: "Promote the first version to prod (establishes the prior target)"
+  - name: "Promote the first version from dev to prod (establishes the prior target)"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: prod
     expect:
       state:
         prod:
@@ -69,10 +70,11 @@ steps:
         dev:
           sha: commit2
 
-  - name: "Promote the second version to prod (advances past the prior target)"
+  - name: "Promote the second version from dev to prod (advances past the prior target)"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: prod
     expect:
       state:
         prod:
