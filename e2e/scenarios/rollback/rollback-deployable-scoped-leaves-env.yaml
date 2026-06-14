@@ -57,7 +57,8 @@ steps:
   - name: "Promote the first version to prod (records per-deployable commit1)"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: prod
     expect:
       state:
         prod:
@@ -87,7 +88,8 @@ steps:
   - name: "Promote the second version to prod (advances both deployables)"
     action: promote
     promote:
-      mode: default
+      mode: cascade
+      target: prod
     expect:
       state:
         prod:
@@ -107,7 +109,7 @@ steps:
     rollback:
       environment: prod
       deployable: api
-      target: commit1
+      target: "v0.1.0"
     expect:
       state:
         prod:
