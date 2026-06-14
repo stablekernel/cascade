@@ -334,14 +334,11 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		return nil
 	}
 
-	// Snapshot the prior state into the Previous ring (newest first).
-	snapshot := config.EnvStateSnapshot{
-		SHA:         prior.SHA,
-		Version:     prior.Version,
-		CommittedAt: prior.CommittedAt,
-		CommittedBy: prior.CommittedBy,
-	}
-	prior.Previous = append([]config.EnvStateSnapshot{snapshot}, prior.Previous...)
+	// Snapshot the prior state into the deploy-history ring (newest first,
+	// bounded). The idempotency gate above already returned when the state
+	// records mergeSHA, so this records a genuine transition; the gate inside
+	// PushPreviousSnapshot is belt-and-suspenders.
+	prior.PushPreviousSnapshot(mergeSHA)
 
 	// Carry BaseSHA forward when already diverged; otherwise anchor it now.
 	if prior.BaseSHA == "" {

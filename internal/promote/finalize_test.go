@@ -752,3 +752,84 @@ func TestCommitAndPushGit_DetachedHeadPushesToTrunk(t *testing.T) {
 	require.NoError(t, err, "reading remote main log: %s", out)
 	require.Contains(t, string(out), "update state after promotion to test")
 }
+
+func TestUpdateState_PushesPriorSnapshotOnTransition(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	// test already holds a prior state; promoting a new SHA into it records the
+	// outgoing state in the deploy-history ring.
+	initialConfig := `ci:
+  config:
+    environments: [dev, test, uat, prod]
+  state:
+    test:
+      sha: oldsha111
+      version: v1.0.0
+      committed_at: "2026-01-01T10:00:00Z"
+      committed_by: alice
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0644))
+
+	fin, err := NewFinalizer(configPath, "test")
+	require.NoError(t, err)
+	fin.SetActor("bob")
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "test",
+			SHA:         "newsha222",
+			Version:     "v1.1.0",
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	testState := cicdFile.State["test"]
+	require.NotNil(t, testState)
+	require.Equal(t, "newsha222", testState.SHA)
+	require.Len(t, testState.Previous, 1)
+	require.Equal(t, "oldsha111", testState.Previous[0].SHA)
+	require.Equal(t, "v1.0.0", testState.Previous[0].Version)
+	require.Equal(t, "alice", testState.Previous[0].CommittedBy)
+}
+
+func TestUpdateState_NoSnapshotOnSameSHA(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	// Promoting the same SHA the env already records is not a transition, so no
+	// snapshot is pushed.
+	initialConfig := `ci:
+  config:
+    environments: [dev, test, uat, prod]
+  state:
+    test:
+      sha: samesha111
+      version: v1.0.0
+      committed_at: "2026-01-01T10:00:00Z"
+      committed_by: alice
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0644))
+
+	fin, err := NewFinalizer(configPath, "test")
+	require.NoError(t, err)
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "test",
+			SHA:         "samesha111",
+			Version:     "v1.0.0",
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	testState := cicdFile.State["test"]
+	require.NotNil(t, testState)
+	require.Empty(t, testState.Previous)
+}

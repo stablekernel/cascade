@@ -3,6 +3,7 @@ package hotfix
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -226,6 +227,58 @@ func TestFinalize_PreviousRingSnapshot(t *testing.T) {
 	}
 	if prev.Version != "v1.4.0-rc.2" {
 		t.Errorf("snapshot version = %q, want prior version v1.4.0-rc.2", prev.Version)
+	}
+}
+
+func TestFinalize_PreviousRingBounded(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cp")
+	runGit(t, "checkout", "main")
+
+	// Seed test with a deploy-history ring already at the cap, then finalize a
+	// genuine transition: the new snapshot prepends and the oldest is dropped, so
+	// the ring stays bounded at MaxPreviousSnapshots.
+	var b strings.Builder
+	b.WriteString("ci:\n  config:\n    environments:\n")
+	for _, e := range []string{"dev", "test", "prod"} {
+		b.WriteString("      - " + e + "\n")
+	}
+	b.WriteString("  state:\n")
+	b.WriteString("    dev:\n      sha: " + fix + "\n      version: v1.4.0-rc.2\n")
+	b.WriteString("    prod:\n      sha: " + base + "\n      version: v1.4.0-rc.2\n")
+	b.WriteString("    test:\n      sha: " + base + "\n      version: v1.4.0-rc.2\n")
+	b.WriteString("      previous:\n")
+	for i := 0; i < config.MaxPreviousSnapshots; i++ {
+		b.WriteString("        - sha: seed" + strconv.Itoa(i) + "\n          version: v0.0." + strconv.Itoa(i) + "\n")
+	}
+	path := filepath.Join(".", "manifest.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	f := newFinalizer(t, path,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(&recordingPusher{}),
+	)
+	if err := f.Finalize("test", merge, fix, base); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	st := loadState(t, path, "test")
+	if len(st.Previous) != config.MaxPreviousSnapshots {
+		t.Fatalf("previous ring len = %d, want %d (bounded)", len(st.Previous), config.MaxPreviousSnapshots)
+	}
+	// Newest snapshot is the outgoing pre-hotfix state; oldest seed was dropped.
+	if st.Previous[0].SHA != base {
+		t.Errorf("newest snapshot sha = %q, want prior sha %q", st.Previous[0].SHA, base)
+	}
+	if st.Previous[len(st.Previous)-1].SHA == "seed0" {
+		t.Errorf("oldest seed snapshot was not evicted: %+v", st.Previous)
 	}
 }
 

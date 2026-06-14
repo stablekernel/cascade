@@ -295,6 +295,11 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 		// Environment-scoped rollback: re-apply the env pointer and mirror the
 		// SHA onto every recorded deployable so change-detection compares
 		// against the rolled-back base.
+		//
+		// Record the outgoing state in the deploy-history ring before the env
+		// pointer advances. No-op when there is no prior SHA or the rollback
+		// target equals the current SHA.
+		env.PushPreviousSnapshot(plan.Target.SHA)
 		env.SHA = plan.Target.SHA
 		env.Version = plan.Target.Version
 		env.CommittedAt = timestamp
