@@ -66,6 +66,8 @@ jobs:
       target_env: ${{ steps.preflight.outputs.target_env }}
       source_sha: ${{ steps.preflight.outputs.source_sha }}
       source_version: ${{ steps.preflight.outputs.source_version }}
+      source_image_tag: ${{ steps.preflight.outputs.source_image_tag }}
+      source_image_digest: ${{ steps.preflight.outputs.source_image_digest }}
       changelog_base_sha: ${{ steps.preflight.outputs.changelog_base_sha }}
       rollback_sha: ${{ steps.preflight.outputs.rollback_sha }}
       rollback_on_failure: ${{ steps.preflight.outputs.rollback_on_failure }}
@@ -126,9 +128,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: v0.1.0
       - name: Validate Promotion
+        env:
+          MODE: ${{ github.event.inputs.mode }}
         run: |
           echo "Promotion validated by preflight job"
-          echo "Mode: ${{ github.event.inputs.mode }}"
+          echo "Mode: $MODE"
           echo "Source: ${{ needs.preflight.outputs.source_env }}"
           echo "Final Env: ${{ needs.preflight.outputs.target_env }}"
           echo "::notice::Promotion validation completed successfully"
