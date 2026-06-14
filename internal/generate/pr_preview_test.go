@@ -23,6 +23,32 @@ func prPreviewConfig(comment bool) *config.TrunkConfig {
 	}
 }
 
+// TestPRPreviewGenerator_PRFieldsAreNotInterpolatedIntoRun asserts that the
+// pull_request event fields the preview workflow consumes (head/base SHAs) are
+// not substituted directly into a run: shell body. Although these are SHAs, the
+// values originate from the pull_request event, which is attacker-influenceable
+// on a fork PR, so they are routed through env: like every other untrusted input.
+func TestPRPreviewGenerator_PRFieldsAreNotInterpolatedIntoRun(t *testing.T) {
+	gen := NewPRPreviewGenerator(prPreviewConfig(false), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	detectBody := stepRunBody(t, content, "Detect changes")
+	assert.NotContains(t, detectBody, "${{ github.event.",
+		"detect-changes run: body must not interpolate pull_request event fields")
+	assert.Contains(t, detectBody, "--base-sha \"$BASE_SHA\"")
+	assert.Contains(t, detectBody, "--head-sha \"$HEAD_SHA\"")
+
+	planBody := stepRunBody(t, content, "Compute plan (dry-run)")
+	assert.NotContains(t, planBody, "${{ github.event.",
+		"plan dry-run run: body must not interpolate pull_request event fields")
+	assert.Contains(t, planBody, "--sha \"$HEAD_SHA\"")
+
+	// Values bound via step env:.
+	assert.Contains(t, content, "BASE_SHA: ${{ github.event.pull_request.base.sha }}")
+	assert.Contains(t, content, "HEAD_SHA: ${{ github.event.pull_request.head.sha }}")
+}
+
 func TestPRPreviewGenerator_Disabled(t *testing.T) {
 	// nil pr_preview
 	gen := NewPRPreviewGenerator(&config.TrunkConfig{TrunkBranch: "main"}, "")
@@ -59,9 +85,10 @@ func TestPRPreviewGenerator_Enabled(t *testing.T) {
 	assert.Contains(t, content, "cascade detect-changes")
 	assert.Contains(t, content, "cascade --dry-run orchestrate setup")
 
-	// Change detection runs against the PR diff (base..head).
-	assert.Contains(t, content, "--base-sha \"${{ github.event.pull_request.base.sha }}\"")
-	assert.Contains(t, content, "--head-sha \"${{ github.event.pull_request.head.sha }}\"")
+	// Change detection runs against the PR diff (base..head). The SHAs are bound
+	// to env: and passed as quoted shell variables, never interpolated into run:.
+	assert.Contains(t, content, "--base-sha \"$BASE_SHA\"")
+	assert.Contains(t, content, "--head-sha \"$HEAD_SHA\"")
 
 	// Plan written to the step summary.
 	assert.Contains(t, content, "$GITHUB_STEP_SUMMARY")

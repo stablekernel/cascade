@@ -713,9 +713,15 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
 	sb.WriteString("      - name: Validate Promotion\n")
+	// The mode input is untrusted workflow_dispatch data. GitHub expands ${{ ... }}
+	// into the run: script before the shell runs it, so a mode value carrying shell
+	// metacharacters would break out of the echo. Bind it to env: and print the
+	// quoted shell variable instead.
+	sb.WriteString("        env:\n")
+	sb.WriteString("          MODE: ${{ github.event.inputs.mode }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          echo \"Promotion validated by preflight job\"\n")
-	sb.WriteString("          echo \"Mode: ${{ github.event.inputs.mode }}\"\n")
+	sb.WriteString("          echo \"Mode: $MODE\"\n")
 	sb.WriteString("          echo \"Source: ${{ needs.preflight.outputs.source_env }}\"\n")
 	sb.WriteString("          echo \"Final Env: ${{ needs.preflight.outputs.target_env }}\"\n")
 	sb.WriteString("          echo \"::notice::Promotion validation completed successfully\"\n\n")

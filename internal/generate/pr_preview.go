@@ -141,11 +141,17 @@ func (g *PRPreviewGenerator) writeValidateStep(sb *strings.Builder) {
 // read-only and only reports which builds/deploys this merge would trigger.
 func (g *PRPreviewGenerator) writeDetectStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Detect changes\n")
+	// pull_request event fields are attacker-influenceable on a fork PR. GitHub
+	// expands ${{ ... }} into the run: script before the shell parses it, so route
+	// the SHAs through env: and reference them as quoted shell variables.
+	sb.WriteString("        env:\n")
+	sb.WriteString("          BASE_SHA: ${{ github.event.pull_request.base.sha }}\n")
+	sb.WriteString("          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade detect-changes \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.config.GetManifestFile())
-	sb.WriteString("            --base-sha \"${{ github.event.pull_request.base.sha }}\" \\\n")
-	sb.WriteString("            --head-sha \"${{ github.event.pull_request.head.sha }}\" \\\n")
+	sb.WriteString("            --base-sha \"$BASE_SHA\" \\\n")
+	sb.WriteString("            --head-sha \"$HEAD_SHA\" \\\n")
 	sb.WriteString("            > cascade-changes.json\n")
 	sb.WriteString("\n")
 }
@@ -156,12 +162,16 @@ func (g *PRPreviewGenerator) writeDetectStep(sb *strings.Builder) {
 // be cut, and which builds/deploys this merge would run.
 func (g *PRPreviewGenerator) writeDeployDryRunStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Compute plan (dry-run)\n")
+	// pull_request.head.sha is attacker-influenceable on a fork PR; route it
+	// through env: rather than interpolating it into the run: script.
+	sb.WriteString("        env:\n")
+	sb.WriteString("          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          # READ-ONLY: --dry-run is enforced and never sourced from an input,\n")
 	sb.WriteString("          # so no release is cut, no state is written, and no deploy is triggered.\n")
 	sb.WriteString("          cascade --dry-run orchestrate setup \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.config.GetManifestFile())
-	sb.WriteString("            --sha \"${{ github.event.pull_request.head.sha }}\" \\\n")
+	sb.WriteString("            --sha \"$HEAD_SHA\" \\\n")
 	sb.WriteString("            > cascade-plan.json\n")
 	sb.WriteString("\n")
 }

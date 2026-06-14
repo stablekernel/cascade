@@ -86,6 +86,13 @@ steps:
         environment: dev
         sha: "${infra.head_sha}"
         version: "v1.1.0-rc.0"
+        # Shell metacharacters in the artifacts JSON: a single quote, a $(...)
+        # command substitution, and a backtick. If the receiver interpolated this
+        # input into its run: script text instead of routing it through env:, the
+        # single quote would break out of the argument and $(...)/`...` would
+        # execute. Routing through env: lets the raw JSON reach the verb intact,
+        # so the recorded artifact value must equal the dispatched value exactly.
+        artifacts: "{\"image_tag\":\"cdk-it's-$(whoami)-`id`\"}"
 
   # Step 3: Update K8s in satellite
   - name: update-k8s
@@ -118,5 +125,10 @@ expect:
           external:
             cdk:
               version: "v1.1.0-rc.0"
+              # The artifacts payload dispatched in step 2 must round-trip through
+              # the receiver's env-routed run: body byte-for-byte, including the
+              # single quote, $(...), and backtick.
+              artifacts:
+                image_tag: "cdk-it's-$(whoami)-`id`"
             k8s:
               version: "v1.1.0-rc.1"

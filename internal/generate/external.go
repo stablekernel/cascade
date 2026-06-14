@@ -138,18 +138,32 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	writeGitConfigSteps(sb, g.config, "          ")
 	sb.WriteString("\n")
 
-	// Run external update
+	// Run external update.
+	//
+	// Every workflow_dispatch input is untrusted: GitHub expands ${{ ... }} into
+	// the run: script text before the shell parses it, so a value carrying a single
+	// quote, backtick, or $(...) would break out of its argument and execute as
+	// shell. Bind each input to a step-level env: variable and reference it as a
+	// quoted shell variable so the value reaches the verb as a single inert
+	// argument regardless of its contents.
 	sb.WriteString("      - name: Update External State\n")
+	sb.WriteString("        env:\n")
+	sb.WriteString("          SOURCE_REPO: ${{ inputs.source_repo }}\n")
+	sb.WriteString("          DEPLOY_NAME: ${{ inputs.deploy_name }}\n")
+	sb.WriteString("          ENVIRONMENT: ${{ inputs.environment }}\n")
+	sb.WriteString("          SHA: ${{ inputs.sha }}\n")
+	sb.WriteString("          VERSION: ${{ inputs.version }}\n")
+	sb.WriteString("          ARTIFACTS: ${{ inputs.artifacts }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade external update \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
 	fmt.Fprintf(sb, "            --manifest-key %s \\\n", g.getManifestKey())
-	sb.WriteString("            --source-repo \"${{ inputs.source_repo }}\" \\\n")
-	sb.WriteString("            --deploy-name \"${{ inputs.deploy_name }}\" \\\n")
-	sb.WriteString("            --environment \"${{ inputs.environment }}\" \\\n")
-	sb.WriteString("            --sha \"${{ inputs.sha }}\" \\\n")
-	sb.WriteString("            --version \"${{ inputs.version }}\" \\\n")
-	sb.WriteString("            --artifacts '${{ inputs.artifacts }}'\n")
+	sb.WriteString("            --source-repo \"$SOURCE_REPO\" \\\n")
+	sb.WriteString("            --deploy-name \"$DEPLOY_NAME\" \\\n")
+	sb.WriteString("            --environment \"$ENVIRONMENT\" \\\n")
+	sb.WriteString("            --sha \"$SHA\" \\\n")
+	sb.WriteString("            --version \"$VERSION\" \\\n")
+	sb.WriteString("            --artifacts \"$ARTIFACTS\"\n")
 }
 
 // writeConcurrency emits a top-level concurrency: block on the external-update
