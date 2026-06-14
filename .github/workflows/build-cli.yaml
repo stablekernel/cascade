@@ -88,3 +88,19 @@ jobs:
         # the product. Serial execution removes that contention; the longer
         # 60m timeout covers the resulting slower wall-clock.
         run: go test -v -parallel 1 -timeout 60m ./...
+
+      # On a retry-exhausted scenario the harness writes the last attempt's raw
+      # act stdout/stderr to e2e/_artifacts/<scenario>-attempt<N>.log so the
+      # stack-trace origin survives the CI log retention window. Upload it on
+      # every run (always()) so the evidence is recoverable whether the job
+      # failed or a flake was absorbed. The directory may not exist when no
+      # scenario exhausted its retries; if-no-files-found: ignore keeps that a
+      # clean no-op rather than a warning.
+      - name: Upload e2e crash evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-crash-evidence
+          path: e2e/_artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
