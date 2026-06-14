@@ -150,6 +150,10 @@ func (g *ReleaseGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
+// The release workflow tags, generates the changelog, and publishes a GitHub
+// release; it performs no environment deploy, so there is no deploy to
+// auto-roll-back (unlike promote/hotfix). Auto-rollback parity is intentionally
+// not emitted here.
 func (g *ReleaseGenerator) writeJobs(sb *strings.Builder) {
 	sb.WriteString("jobs:\n")
 	g.writePreflightJob(sb)

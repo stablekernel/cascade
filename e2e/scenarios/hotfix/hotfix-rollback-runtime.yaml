@@ -1,0 +1,55 @@
+name: "Hotfix Rollback Runtime"
+description: |
+  Verifies that the generated cascade-hotfix.yaml wires a real rollback SHA into
+  its auto-rollback path. The context job must check out the repo, read the
+  target env's pre-hotfix state SHA from the manifest via yq, and emit it as the
+  rollback_sha output (no empty placeholder). Each deploy must be paired with a
+  rollback job gated on a non-empty rollback_sha and a failed deploy.
+
+  A full failed-deploy simulation would require driving the entire
+  cherry-pick -> PR -> merge -> deploy flow and forcing a conditional failure in
+  the inline deploy stub, which the act-based harness cannot reliably stage. This
+  scenario therefore verifies the generated wiring (the unit of behavior that the
+  earlier empty-placeholder bug broke).
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit; assert hotfix wires a real rollback_sha"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          contains:
+            # Context job reads the target env state SHA from the manifest.
+            - "yq eval"
+            - ".state."
+            # Non-empty rollback_sha output (the bug emitted an empty echo).
+            - "rollback_sha=${ROLLBACK_SHA}"
+            # Correctly-gated rollback jobs, one per deploy.
+            - "rollback-deploy-test:"
+            - "rollback-deploy-prod:"
+            - "if: always() && needs.context.outputs.rollback_sha != '' && needs.deploy-deploy-prod.result == 'failure'"
+          not_contains:
+            - "echo \"rollback_sha=\""

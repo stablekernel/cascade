@@ -259,6 +259,53 @@ func TestHotfixGeneratorE2E(t *testing.T) {
 	assert.False(t, NewHotfixGenerator(singleCfg, tmpDir).Enabled(), "single-env manifest emits nothing")
 }
 
+// TestHotfixGenerator_ContextEmitsNonEmptyRollbackSHA guards the rollback_sha
+// wiring regression: the context job formerly emitted an empty `rollback_sha=`,
+// so the rollback-<deploy> gate (which requires rollback_sha != '') never fired.
+// The context job must check out the repo and read the target env's pre-hotfix
+// state SHA from the manifest via yq, then emit it as the rollback_sha output.
+func TestHotfixGenerator_ContextEmitsNonEmptyRollbackSHA(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	contextJob := extractJobSection(t, content, "context:")
+	require.NotEmpty(t, contextJob, "context job section should be present")
+
+	// The context job must check out the repo so the manifest is on disk for yq.
+	assert.Contains(t, contextJob, "actions/checkout",
+		"context job must check out the repo to read the manifest")
+
+	// It must read the target env's pre-hotfix state SHA from the manifest.
+	assert.Contains(t, contextJob, "yq eval",
+		"context job must read the rollback SHA from the manifest via yq")
+	assert.Contains(t, contextJob, ".state.",
+		"context job must read .state.<env>.sha from the manifest")
+	assert.Contains(t, contextJob, ".sha",
+		"context job must read the state sha field")
+
+	// The empty placeholder echo must be gone, replaced by a non-empty assignment.
+	assert.NotContains(t, contextJob, `echo "rollback_sha="`,
+		"context job must not emit an empty rollback_sha placeholder")
+	assert.Contains(t, contextJob, "rollback_sha=${ROLLBACK_SHA}",
+		"context job must emit the resolved rollback SHA as its output")
+}
+
+// TestHotfixGenerator_RollbackJobGatedCorrectly confirms the rollback job exists
+// and is gated on a non-empty rollback_sha and a failed deploy, mirroring the
+// promote workflow's rollback shape.
+func TestHotfixGenerator_RollbackJobGatedCorrectly(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "  rollback-service:",
+		"a rollback job must be emitted per deploy")
+	assert.Contains(t, content,
+		"if: always() && needs.context.outputs.rollback_sha != '' && needs.deploy-service.result == 'failure'",
+		"rollback job must be gated on a non-empty rollback_sha and a failed deploy")
+}
+
 // hotfixFlagInvocation captures a single `cascade hotfix <subcommand> --flag`
 // pairing parsed from the generated workflow, for cross-checking against the
 // real cobra command tree.
