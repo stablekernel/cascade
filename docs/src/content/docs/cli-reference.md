@@ -331,6 +331,16 @@ cascade promote preflight \
 | `--allow-breaking` | bool | false | Allow breaking changes past the prerelease boundary |
 | `--deploys` | string | `all` | Deploys to promote (comma-separated names or `all`) |
 | `--rollback-on-failure` | bool | true | Revert successful deploys if any fails |
+| `--allow-downgrade` | bool | false | Permit promoting an older version onto an env (a downgrade). Blocked by default; prod always requires this flag |
+
+A promotion that would place a strictly older semver version onto an env than the
+version it currently holds is a downgrade. Preflight blocks it by default, naming
+both versions and the env. Pass `--allow-downgrade` to permit it. The terminal
+(prod) env always requires the flag, even when a lower env in the same cascade
+already permitted the same downgrade. Equal versions are an idempotent
+re-promote and are never treated as a downgrade. When either version is not
+parseable as semver the gate fails open with a warning rather than blocking, so
+non-semver pipelines keep working.
 
 ##### Output
 

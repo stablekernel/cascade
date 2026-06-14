@@ -10,6 +10,7 @@ import (
 	"github.com/stablekernel/cascade/internal/changelog"
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
+	"github.com/stablekernel/cascade/internal/version"
 )
 
 // PreflightResult contains all outputs needed by the workflow
@@ -83,6 +84,7 @@ type Preflighter struct {
 	deployChecks      map[string]bool // deploy name -> include in run
 	deploysFilter     []string        // Specific deploys to include (empty = all)
 	rollbackOnFailure bool            // Revert successful deploys if any fails
+	allowDowngrade    bool            // Permit promoting an older version onto an env
 	ancestor          AncestorFunc    // git-ancestry checker for divergence guards
 }
 
@@ -95,6 +97,7 @@ type PreflighterOptions struct {
 	BaseDir           string
 	DeploysFilter     []string // Specific deploys to include (empty = all)
 	RollbackOnFailure bool     // Revert successful deploys if any fails
+	AllowDowngrade    bool     // Permit promoting an older version onto an env
 }
 
 // NewPreflighter creates a new Preflighter instance. Optional behavior (such as
@@ -115,6 +118,7 @@ func NewPreflighter(opts PreflighterOptions, options ...Option) *Preflighter {
 		deployChecks:      make(map[string]bool),
 		deploysFilter:     opts.DeploysFilter,
 		rollbackOnFailure: opts.RollbackOnFailure,
+		allowDowngrade:    opts.AllowDowngrade,
 		ancestor:          gc.ancestor,
 	}
 }
@@ -255,7 +259,79 @@ func (p *Preflighter) Run() (*PreflightResult, error) {
 		return nil, err
 	}
 
+	// 8. Monotonicity / downgrade gate: promoting an older version onto an env
+	// regresses it. Block unless --allow-downgrade is set; prod always requires
+	// the flag even if a lower env permitted the same downgrade.
+	if err := p.checkDowngrade(promoResult.Promotions, result, prodEnv); err != nil {
+		return nil, err
+	}
+
 	return result, nil
+}
+
+// checkDowngrade enforces version monotonicity across the planned promotions.
+// For each target env, the incoming SourceVersion must be greater than or equal
+// to the env's current version under semver precedence. A strictly older
+// incoming version is a downgrade: it is blocked unless allowDowngrade is set,
+// in which case a loud warning is recorded and the promotion proceeds. The prod
+// env always requires the flag explicitly, even when a lower env in the same
+// cascade already permitted the downgrade.
+//
+// The gate fails open on non-semver inputs: when either the incoming or the
+// current version cannot be parsed, it records a warning naming both versions
+// and the env, then continues. Envs with an empty incoming or current version
+// are skipped silently (first promotion, or version-less manifests).
+func (p *Preflighter) checkDowngrade(promotions []EnvPromotion, result *PreflightResult, prodEnv string) error {
+	for _, promo := range promotions {
+		state := p.cicdFile.State[promo.Environment]
+		var currentStr string
+		if state != nil {
+			currentStr = state.Version
+		}
+
+		// Skip if either version is empty (first promotion / version-less).
+		if result.SourceVersion == "" || currentStr == "" {
+			continue
+		}
+
+		incoming, errIn := version.Parse(result.SourceVersion)
+		current, errCur := version.Parse(currentStr)
+		if errIn != nil || errCur != nil {
+			// FAIL-OPEN: non-semver version -> warn and continue.
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"downgrade check skipped on env %q: could not compare current version %s to incoming %s; ensure both are semver to enforce monotonicity",
+				promo.Environment, currentStr, result.SourceVersion,
+			))
+			continue
+		}
+
+		if incoming.Compare(current) >= 0 {
+			// Newer or equal: a forward promotion, allow.
+			continue
+		}
+
+		// DOWNGRADE: incoming is strictly older than current.
+		isProd := promo.Environment == prodEnv
+		if p.allowDowngrade {
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"downgrade on %s from %s to %s permitted via --allow-downgrade",
+				promo.Environment, currentStr, result.SourceVersion,
+			))
+			continue
+		}
+
+		if isProd {
+			return fmt.Errorf(
+				"downgrade blocked on prod env %q: current version %s is newer than incoming %s; prod downgrades always require --allow-downgrade",
+				promo.Environment, currentStr, result.SourceVersion,
+			)
+		}
+		return fmt.Errorf(
+			"downgrade blocked on env %q: current version %s is newer than incoming %s; pass --allow-downgrade to permit",
+			promo.Environment, currentStr, result.SourceVersion,
+		)
+	}
+	return nil
 }
 
 // checkPatchContainment enforces the "promote INTO a diverged env requires the
