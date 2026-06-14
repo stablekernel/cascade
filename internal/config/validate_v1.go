@@ -71,26 +71,27 @@ func validateJobIDSafeName(prefix, name string) []string {
 		"%s %q must contain only letters, digits, hyphens, and underscores", prefix, name)}
 }
 
-// validateWorkflowRunXOR enforces that exactly one of workflow:/run: is set, and
-// that shell: is only present alongside run:.
+// validateWorkflowRunXOR enforces that callbacks are reusable-workflow only.
+// Inline run: and shell: are no longer supported, so each is rejected with an
+// actionable error, and workflow: is required.
 func validateWorkflowRunXOR(prefix, workflow, run, shell string) []string {
 	var errs []string
-	switch {
-	case workflow == "" && run == "":
-		errs = append(errs, fmt.Sprintf("%s: one of workflow or run is required", prefix))
-	case workflow != "" && run != "":
-		errs = append(errs, fmt.Sprintf("%s: workflow and run are mutually exclusive; set exactly one", prefix))
+	if run != "" {
+		errs = append(errs, fmt.Sprintf("%s: inline run: callbacks are no longer supported; provide a reusable workflow via workflow: (see docs/security/hardening or the callback contract)", prefix))
 	}
-	if shell != "" && run == "" {
-		errs = append(errs, fmt.Sprintf("%s: shell is only valid alongside run", prefix))
+	if shell != "" {
+		errs = append(errs, fmt.Sprintf("%s: shell: is no longer supported; inline run callbacks were removed, provide a reusable workflow via workflow:", prefix))
+	}
+	if workflow == "" {
+		errs = append(errs, fmt.Sprintf("%s: workflow is required", prefix))
 	}
 	return errs
 }
 
 // validateExternalDeployWorkflowOnly enforces that external deploys are
-// reusable-workflow only. Inline run: callbacks are emitted as cascade-owned
-// jobs in the primary repo; an external deploy resolves to a workflow in the
+// reusable-workflow only. An external deploy resolves to a workflow in the
 // external repo, so it must declare workflow: and cannot use run:/shell:.
+// Inline run: and shell: are no longer supported anywhere and are rejected here.
 func validateExternalDeployWorkflowOnly(prefix, workflow, run, shell string) []string {
 	var errs []string
 	if run != "" {
@@ -99,15 +100,15 @@ func validateExternalDeployWorkflowOnly(prefix, workflow, run, shell string) []s
 	if shell != "" {
 		errs = append(errs, fmt.Sprintf("%s: external deploys are reusable-workflow only; shell is not supported", prefix))
 	}
-	if run == "" && workflow == "" {
+	if workflow == "" {
 		errs = append(errs, fmt.Sprintf("%s: workflow is required", prefix))
 	}
 	return errs
 }
 
 // validateJobControlFields rejects job-control fields that GHA does not accept on
-// a reusable-workflow (jobs.<id>.uses) callback. runs_on and concurrency apply
-// cleanly only to inline run: callbacks and cascade-owned jobs.
+// a reusable-workflow (jobs.<id>.uses) callback. runs_on and concurrency must be
+// set inside the callback workflow itself, not on the calling job.
 func validateJobControlFields(prefix string, isReusableWorkflow bool, runsOn *RunsOn, concurrency *ConcurrencyConfig) []string {
 	if !isReusableWorkflow {
 		return nil

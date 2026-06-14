@@ -306,37 +306,82 @@ state:
 // --- Structural validation rejections ----------------------------------------
 
 func TestValidateWorkflowRunXOR(t *testing.T) {
-	t.Run("both set rejected", func(t *testing.T) {
-		cfg := parseInline(t, `
+	tests := []struct {
+		name      string
+		manifest  string
+		wantErrs  []string
+		denyErrs  []string
+		wantClean bool
+	}{
+		{
+			name: "run set, no workflow",
+			manifest: `
+builds:
+  - name: app
+    run: go build ./...
+`,
+			wantErrs: []string{
+				"inline run: callbacks are no longer supported",
+				"workflow is required",
+			},
+		},
+		{
+			name: "workflow and run both set",
+			manifest: `
 builds:
   - name: app
     workflow: b.yaml
     run: go build ./...
-`)
-		if errs := Validate(cfg); !hasErrContaining(errs, "mutually exclusive") {
-			t.Fatalf("expected XOR rejection, got %v", errs)
-		}
-	})
-	t.Run("neither set rejected", func(t *testing.T) {
-		cfg := parseInline(t, `
+`,
+			wantErrs: []string{"inline run: callbacks are no longer supported"},
+		},
+		{
+			name: "shell set, no workflow, no run",
+			manifest: `
 builds:
   - name: app
-`)
-		if errs := Validate(cfg); !hasErrContaining(errs, "one of workflow or run is required") {
-			t.Fatalf("expected missing-callback rejection, got %v", errs)
-		}
-	})
-	t.Run("shell without run rejected", func(t *testing.T) {
-		cfg := parseInline(t, `
+    shell: bash
+`,
+			wantErrs: []string{
+				"shell: is no longer supported",
+				"workflow is required",
+			},
+		},
+		{
+			name: "neither run nor workflow",
+			manifest: `
+builds:
+  - name: app
+`,
+			wantErrs: []string{"workflow is required"},
+		},
+		{
+			name: "workflow only is clean",
+			manifest: `
 builds:
   - name: app
     workflow: b.yaml
-    shell: bash
-`)
-		if errs := Validate(cfg); !hasErrContaining(errs, "shell is only valid alongside run") {
-			t.Fatalf("expected shell rejection, got %v", errs)
-		}
-	})
+`,
+			denyErrs:  []string{"inline run: callbacks are no longer supported", "shell: is no longer supported", "workflow is required"},
+			wantClean: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := Validate(parseInline(t, tt.manifest))
+			for _, want := range tt.wantErrs {
+				if !hasErrContaining(errs, want) {
+					t.Fatalf("expected error containing %q, got %v", want, errs)
+				}
+			}
+			for _, deny := range tt.denyErrs {
+				if hasErrContaining(errs, deny) {
+					t.Fatalf("did not expect error containing %q, got %v", deny, errs)
+				}
+			}
+		})
+	}
 }
 
 func TestValidateRunsOnRejectedOnReusableWorkflow(t *testing.T) {
@@ -351,18 +396,42 @@ builds:
 	}
 }
 
-func TestValidateRunsOnAllowedOnInlineRun(t *testing.T) {
-	cfg := parseInline(t, `
+// TestValidateRunRejected asserts a run-only callback is rejected with the
+// inline-removed message, and a shell-only callback is rejected with the
+// shell-removed message, while a workflow-only callback validates clean.
+func TestValidateRunRejected(t *testing.T) {
+	t.Run("run-only rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
 builds:
   - name: app
     run: go build ./...
-    runs_on: ubuntu-latest
 `)
-	for _, e := range Validate(cfg) {
-		if strings.Contains(e, "runs_on") {
-			t.Fatalf("runs_on should be allowed on inline run, got %v", e)
+		if errs := Validate(cfg); !hasErrContaining(errs, "inline run: callbacks are no longer supported") {
+			t.Fatalf("expected inline run rejection, got %v", errs)
 		}
-	}
+	})
+	t.Run("shell-only rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+builds:
+  - name: app
+    shell: bash
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "shell: is no longer supported") {
+			t.Fatalf("expected shell rejection, got %v", errs)
+		}
+	})
+	t.Run("workflow-only clean", func(t *testing.T) {
+		cfg := parseInline(t, `
+builds:
+  - name: app
+    workflow: b.yaml
+`)
+		for _, e := range Validate(cfg) {
+			if strings.Contains(e, "no longer supported") || strings.Contains(e, "workflow is required") {
+				t.Fatalf("workflow-only callback must validate clean, got %v", e)
+			}
+		}
+	})
 }
 
 func TestValidateConcurrencyRejectedOnReusableWorkflow(t *testing.T) {
@@ -526,8 +595,8 @@ validate:
   workflow: v.yaml
   run: go vet ./...
 `)
-		if errs := Validate(cfg); !hasErrContaining(errs, "mutually exclusive") {
-			t.Fatalf("expected XOR rejection, got %v", errs)
+		if errs := Validate(cfg); !hasErrContaining(errs, "inline run: callbacks are no longer supported") {
+			t.Fatalf("expected inline run rejection, got %v", errs)
 		}
 	})
 	t.Run("runs_on rejected on reusable workflow", func(t *testing.T) {
@@ -552,16 +621,13 @@ validate:
 			t.Fatalf("expected concurrency rejection, got %v", errs)
 		}
 	})
-	t.Run("runs_on allowed on inline run validate", func(t *testing.T) {
+	t.Run("run-only validate rejected", func(t *testing.T) {
 		cfg := parseInline(t, `
 validate:
   run: go vet ./...
-  runs_on: ubuntu-latest
 `)
-		for _, e := range Validate(cfg) {
-			if strings.Contains(e, "runs_on") {
-				t.Fatalf("runs_on should be allowed on inline run validate, got %v", e)
-			}
+		if errs := Validate(cfg); !hasErrContaining(errs, "inline run: callbacks are no longer supported") {
+			t.Fatalf("expected inline run rejection on validate, got %v", errs)
 		}
 	})
 }

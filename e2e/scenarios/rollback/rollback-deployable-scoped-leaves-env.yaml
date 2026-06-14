@@ -16,9 +16,11 @@ description: |
   sha stays at commit2, its divergence ref stays cleared, api lands on commit1,
   and web stays on commit2.
 
-  Both deploys are inline run: jobs (no actions/checkout, which act cannot
-  resolve for a reusable callback against the per-scenario gitea), so each deploy
-  job runs observably under act; only deploy-api runs for a scoped dispatch.
+  Both deploys are reusable workflows whose inner jobs echo the resolved env/sha
+  (no actions/checkout, which act cannot resolve for a reusable callback against
+  the per-scenario gitea), so each deploy job runs observably under act. act keys
+  them by their inner job ids apideploy / webdeploy; only apideploy runs for a
+  scoped dispatch.
 
 config:
   trunk_branch: main
@@ -29,12 +31,10 @@ config:
       triggers: ["src/**"]
   deploys:
     - name: api
-      run: |
-        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      workflow: .github/workflows/deploy-api.yaml
       triggers: ["**"]
     - name: web
-      run: |
-        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      workflow: .github/workflows/deploy-web.yaml
       triggers: ["**"]
 
 steps:
@@ -46,6 +46,41 @@ steps:
         src/app.go: |
           package main
           func main() {}
+        # api deploy: unique inner job id apideploy so act keys it distinctly from
+        # the web deploy and the build-app job.
+        .github/workflows/deploy-api.yaml: |
+          name: deploy-api
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            apideploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+        # web deploy: unique inner job id webdeploy.
+        .github/workflows/deploy-web.yaml: |
+          name: deploy-web
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            webdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
 
   - name: "Orchestrate the first commit into dev"
     action: orchestrate
@@ -122,5 +157,5 @@ steps:
               sha: commit2
       jobs:
         preflight: success
-        deploy-api: success
+        apideploy: success
         finalize: success

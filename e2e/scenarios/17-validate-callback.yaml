@@ -18,7 +18,7 @@ config:
       workflow: deploy.yaml
       triggers: ["src/**"]
   validate:
-    run: "echo validate"
+    workflow: validate.yaml
 
 steps:
   - name: "Initial commit; assert validate gate in orchestrate.yaml"
@@ -29,6 +29,25 @@ steps:
         src/app.go: |
           package main
           func main() {}
+        # Reusable validate callback the generated orchestrate.yaml invokes as a
+        # uses: job. Its inner job echoes "validate" so the gate has a real job to
+        # wait on; the orchestrate build jobs gate on needs.validate.result.
+        .github/workflows/validate.yaml: |
+          name: validate
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            runvalidate:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "validate"
     expect:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"

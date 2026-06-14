@@ -199,34 +199,6 @@ func TestOrchestrateDeployCallbackJob_ExplicitSecretsMap(t *testing.T) {
 	assert.NotContains(t, result, "    secrets: inherit\n")
 }
 
-// TestOrchestrateCallbackJob_InlineRunUnaffected verifies that an inline-run
-// callback (run: ...) does not emit any secrets: key at all; inline jobs are
-// cascade-owned, not reusable-workflow calls.
-func TestOrchestrateCallbackJob_InlineRunUnaffected(t *testing.T) {
-	cfg := &config.TrunkConfig{
-		TrunkBranch:  "main",
-		Environments: []string{"dev"},
-		Builds: []config.BuildConfig{
-			{
-				Name:     "smoke",
-				Run:      "go test ./...",
-				Triggers: []string{"**/*.go"},
-				// Secrets field set on an inline-run callback; must be ignored.
-				Secrets: &config.SecretsConfig{
-					Map: map[string]string{"SOME_TOKEN": "MY_TOKEN"},
-				},
-			},
-		},
-	}
-
-	gen := NewGenerator(cfg, t.TempDir())
-	result, err := gen.Generate()
-	require.NoError(t, err)
-
-	// Inline run: jobs are cascade-owned steps; no secrets: key of any form.
-	assert.NotContains(t, result, "secrets:")
-}
-
 // TestPromoteDeployJob_ExplicitSecretsMap verifies that a promote-workflow
 // deploy callback with an explicit secrets map carries the per-entry block in
 // the generated promote workflow.

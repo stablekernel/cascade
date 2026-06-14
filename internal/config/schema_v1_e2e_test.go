@@ -73,12 +73,7 @@ const fullSurfaceManifest = `ci:
           - name: linux-amd64
             path: dist/*.tar.gz
       - name: smoke
-        run: go test ./...
-        shell: bash
-        runs_on: [self-hosted, linux]
-        concurrency:
-          group: smoke-${{ github.ref }}
-          cancel_in_progress: true
+        workflow: .github/workflows/smoke.yaml
         triggers: ["**/*_test.go"]
     deploys:
       - name: app
@@ -151,8 +146,8 @@ func TestFullSurfaceManifestE2E(t *testing.T) {
 	if cfg.Builds[0].Matrix == nil || cfg.Builds[0].Permissions["id-token"] != "write" {
 		t.Fatalf("build reserved fields not parsed: %#v", cfg.Builds[0])
 	}
-	if cfg.Builds[1].Run == "" || cfg.Builds[1].RunsOn == nil {
-		t.Fatalf("inline run build not parsed: %#v", cfg.Builds[1])
+	if cfg.Builds[1].Workflow == "" {
+		t.Fatalf("reusable build not parsed: %#v", cfg.Builds[1])
 	}
 	if cfg.Deploys[0].Rollout.GetType() != "canary" || cfg.Deploys[0].DeployTarget.GetMode() != "gitops" {
 		t.Fatalf("deploy reserved fields not parsed: %#v", cfg.Deploys[0])

@@ -17,9 +17,11 @@ config:
       workflow: build.yaml
       triggers: ["src/**"]
   deploys:
+    # Reusable deploy whose inner job echoes the resolved env/sha. No actions/
+    # checkout: act cannot resolve one for a reusable callback against the
+    # per-scenario gitea. act keys the job by the inner id appdeploy.
     - name: app
-      run: |
-        echo "deployed env=${ENVIRONMENT} sha=${SHA}"
+      workflow: .github/workflows/deploy-app.yaml
       triggers: ["**"]
 
 steps:
@@ -31,6 +33,22 @@ steps:
         src/app.go: |
           package main
           func main() {}
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            appdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
 
   - name: "Orchestrate the first commit into dev"
     action: orchestrate

@@ -15,14 +15,15 @@ description: |
   no rollback ref. This is the safety property that distinguishes a real
   re-deploy from a blind state rewrite.
 
-  The deploy is an inline run: job (no actions/checkout, which act cannot resolve
-  for a reusable callback against the per-scenario gitea), so the deploy job runs
-  observably under act and is asserted as deploy-app: failure. The deploy keys
-  its conditional failure on $GITHUB_WORKFLOW (the invoking workflow's name,
-  which the harness suffixes with [scenario-...], so the deploy matches the
-  Rollback prefix): the Promote workflow succeeds, only the Rollback re-deploy
-  fails, exercising the gateOnDeployResults guard rather than aborting during
-  setup.
+  The deploy is a reusable workflow whose inner job runs under act (no actions/
+  checkout, which act cannot resolve for a reusable callback against the
+  per-scenario gitea), and is asserted as appdeploy: failure. The deploy keys its
+  conditional failure on $GITHUB_WORKFLOW, which inside a reusable callback is the
+  invoking (caller) workflow's name: the generated promote workflow sets
+  name: Promote and the rollback workflow sets name: Rollback, and the harness
+  suffixes each with [scenario-...], so the deploy matches the Rollback prefix.
+  The Promote workflow succeeds, only the Rollback re-deploy fails, exercising the
+  gateOnDeployResults guard rather than aborting during setup.
 
 config:
   trunk_branch: main
@@ -32,29 +33,18 @@ config:
       workflow: build.yaml
       triggers: ["src/**"]
   deploys:
-    # Inline run: deploy that succeeds under the Promote workflow but fails under
-    # the Rollback workflow's re-deploy. Both workflows surface the same env vars
-    # (ENVIRONMENT, SHA) to this inline step, and the rollback target SHA equals
-    # an earlier promote's SHA, so the SHA alone cannot tell the two apart. The
-    # invoking workflow name ($GITHUB_WORKFLOW) does: it is "Promote" during the
-    # two setup promotions and "Rollback" during the re-deploy under test. Failing
-    # only on Rollback forces deploy-app to fail there, so finalize sees
-    # DEPLOY_RESULT_APP=failure and aborts the state write, while setup lands prod
-    # on commit1 then commit2 cleanly. Its caller job id is deploy-app, which the
-    # harness's findJob matches directly.
+    # Reusable deploy that succeeds under the Promote workflow but fails under the
+    # Rollback workflow's re-deploy. Both workflows thread the same with: inputs
+    # (environment, sha) into this callback, and the rollback target SHA equals an
+    # earlier promote's SHA, so the SHA alone cannot tell the two apart. The
+    # invoking workflow name ($GITHUB_WORKFLOW, the caller's name inside a reusable
+    # callback) does: it is "Promote" during the two setup promotions and
+    # "Rollback" during the re-deploy under test. Failing only on Rollback forces
+    # appdeploy to fail there, so finalize sees DEPLOY_RESULT_APP=failure and
+    # aborts the state write, while setup lands prod on commit1 then commit2
+    # cleanly. act keys it by the inner job id appdeploy.
     - name: app
-      run: |
-        echo "deploy of env=${ENVIRONMENT} sha=${SHA} via workflow=${GITHUB_WORKFLOW}"
-        # The harness suffixes each workflow name with [scenario-<tag>], so the
-        # Rollback workflow surfaces GITHUB_WORKFLOW as "Rollback [scenario-...]".
-        # Match the Rollback prefix rather than an exact string.
-        case "${GITHUB_WORKFLOW}" in
-          Rollback*)
-            echo "failing the rollback re-deploy on purpose"
-            exit 1
-            ;;
-        esac
-        echo "promote deploy succeeded"
+      workflow: .github/workflows/deploy-app.yaml
       triggers: ["**"]
 
 steps:
@@ -66,6 +56,37 @@ steps:
         src/app.go: |
           package main
           func main() {}
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            appdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - env:
+                    DEPLOY_ENV: ${{ inputs.environment }}
+                    DEPLOY_SHA: ${{ inputs.sha }}
+                  run: |
+                    echo "deploy of env=$DEPLOY_ENV sha=$DEPLOY_SHA via workflow=$GITHUB_WORKFLOW"
+                    # GITHUB_WORKFLOW inside a reusable callback is the caller
+                    # workflow's name. The harness suffixes each with
+                    # [scenario-<tag>], so the Rollback workflow surfaces it as
+                    # "Rollback [scenario-...]". Match the Rollback prefix.
+                    case "$GITHUB_WORKFLOW" in
+                      Rollback*)
+                        echo "failing the rollback re-deploy on purpose"
+                        exit 1
+                        ;;
+                    esac
+                    echo "promote deploy succeeded"
 
   - name: "Orchestrate the first commit into dev"
     action: orchestrate
@@ -126,4 +147,4 @@ steps:
           unchanged: true
       jobs:
         preflight: success
-        deploy-app: failure
+        appdeploy: failure

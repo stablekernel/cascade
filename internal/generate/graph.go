@@ -26,8 +26,6 @@ type CallbackInfo struct {
 	DisplayName    string // Display name (e.g., "Build (app)")
 	Type           string // "build" or "deploy" or "validate"
 	Workflow       string
-	Run            string // Inline command; when set the callback is emitted as a cascade-owned inline-step job instead of a reusable-workflow call
-	Shell          string // Shell for the inline run step (default bash; only meaningful with Run)
 	RunPolicy      string
 	OnFailure      string
 	Retries        int
@@ -35,10 +33,11 @@ type CallbackInfo struct {
 	Matrix         *config.MatrixConfig // Build fan-out; nil for deploys and validate
 	SupportsDryRun bool                 // When true, dry-run promotes invoke the callback with dry_run: true instead of skipping it
 
-	// Per-callback job attributes for cascade-owned inline run: jobs. These are
-	// emitted only on inline-run jobs (never on reusable-workflow uses: callbacks,
-	// where GHA forbids runs-on/concurrency); schema validation already rejects
-	// runs_on/concurrency on reusable callbacks.
+	// Per-callback job attributes carried from config. GHA forbids
+	// runs-on/permissions/concurrency on a reusable-workflow uses: callback, and
+	// schema validation rejects runs_on/permissions/concurrency on reusable
+	// callbacks. Callbacks are reusable-workflow only, so these fields are
+	// populated from config but never emitted as job-level keys.
 	RunsOn      *config.RunsOn            // Per-callback runner selection (#12)
 	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15)
 	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17)
@@ -74,8 +73,6 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:    "Validate (validate)",
 			Type:           config.CallbackTypeValidate,
 			Workflow:       cfg.Validate.Workflow,
-			Run:            cfg.Validate.Run,
-			Shell:          cfg.Validate.Shell,
 			RunPolicy:      defaultString(cfg.Validate.RunPolicy, config.RunPolicyDefault),
 			OnFailure:      defaultString(cfg.Validate.OnFailure, config.OnFailureAbort),
 			Retries:        cfg.Validate.Retries,
@@ -98,8 +95,6 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:         config.DisplayName(config.CallbackTypeBuild, b.Name),
 			Type:                config.CallbackTypeBuild,
 			Workflow:            b.Workflow,
-			Run:                 b.Run,
-			Shell:               b.Shell,
 			RunPolicy:           defaultString(b.RunPolicy, config.RunPolicyDefault),
 			OnFailure:           defaultString(b.OnFailure, config.OnFailureAbort),
 			Retries:             b.Retries,
@@ -144,8 +139,6 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			DisplayName:         config.DisplayName(config.CallbackTypeDeploy, d.Name),
 			Type:                config.CallbackTypeDeploy,
 			Workflow:            d.Workflow,
-			Run:                 d.Run,
-			Shell:               d.Shell,
 			RunPolicy:           defaultString(d.RunPolicy, config.RunPolicyDefault),
 			OnFailure:           defaultString(d.OnFailure, config.OnFailureAbort),
 			Retries:             d.Retries,

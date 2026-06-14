@@ -117,12 +117,6 @@ func (g *PromoteGenerator) Generate() (string, error) {
 // discoverDeployInputs parses deploy workflow files to discover their inputs
 func (g *PromoteGenerator) discoverDeployInputs() error {
 	for _, d := range g.config.Deploys {
-		// Inline run: deploys have no reusable-workflow file to parse inputs from;
-		// their declared-input set comes from the manifest inputs: keys instead.
-		if d.Run != "" {
-			g.inputs[d.Name] = inputKeys(d.Inputs)
-			continue
-		}
 		workflowPath := filepath.Join(g.baseDir, d.Workflow)
 		data, err := os.ReadFile(workflowPath)
 		if err != nil {
@@ -768,34 +762,6 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 		fmt.Fprintf(sb, "  deploy-%s:\n", d.Name)
 
-		if d.Run != "" {
-			// Inline run: deploy callback. This is a cascade-owned job with an inline run:
-			// step. Inline callbacks declare their inputs via the manifest inputs:
-			// keys (no reusable-workflow with: matrix); the standard environment/
-			// sha/image_tag inputs reach the step as env: vars.
-			fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
-			sb.WriteString("    needs: [preflight, promote]\n")
-			if d.SupportsDryRun {
-				// Callback handles dry-run internally: run it regardless of dry_run,
-				// and let the inline body surface DRY_RUN so the script can emulate.
-				fmt.Fprintf(sb, "    if: ${{ contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
-			} else {
-				fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.deploys_to_run), '%s') }}\n", d.Name)
-			}
-			// environment: wires the job to a GitHub Environment so that the
-			// environment's protection rules apply when gha_environment is configured
-			// for any env. The target env is resolved at runtime by preflight.
-			if anyEnvHasGHAConfig(g.config) {
-				sb.WriteString("    environment: ${{ needs.preflight.outputs.target_env }}\n")
-			}
-			g.writeInlineDeployBody(sb, d,
-				"${{ needs.preflight.outputs.target_env }}",
-				"${{ needs.preflight.outputs.source_sha }}",
-				"${{ needs.preflight.outputs.source_image_tag }}",
-				"${{ needs.preflight.outputs.source_image_digest }}")
-			continue
-		}
-
 		if hasInputs {
 			// Matrix-based deploy job
 			fmt.Fprintf(sb, "    name: Deploy %s (${{ matrix.environment }})\n", d.Name)
@@ -893,30 +859,12 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		} else {
 			sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
 		}
-		// environment: The prod deploy job always targets a single known env
-		// (the final environment in the pipeline), so we can resolve the GitHub
-		// Environment name statically from gha_environment when configured.
-		//
-		// The job-level environment: key is only valid on a steps job (an inline
-		// run: deploy). GitHub Actions forbids it on a reusable-workflow caller
-		// job, so it is gated on d.Run being set. For external (uses:) deploys
-		// the environment name is threaded via the with: environment input below,
-		// and GitHub Environment protection must be declared inside the reusable
+		// The prod deploy job always targets a single known env (the final
+		// environment in the pipeline). This is a reusable-workflow (uses:) caller
+		// job, on which GitHub Actions forbids a job-level environment: key, so the
+		// environment name is threaded via the with: environment input below and
+		// GitHub Environment protection must be declared inside the reusable
 		// workflow's own job.
-		if d.Run != "" {
-			if ec, ok := g.config.EnvironmentConfig[finalEnv]; ok && ec.GHAEnvironment != "" {
-				fmt.Fprintf(sb, "    environment: %s\n", ec.GHAEnvironment)
-			}
-			// The prod path uses prod_version as its tag and has no
-			// prod_image_digest preflight output, so digest pinning is not threaded
-			// here. Pass an empty digest to keep the prod deploy unchanged.
-			g.writeInlineDeployBody(sb, d,
-				finalEnv,
-				"${{ needs.preflight.outputs.prod_sha }}",
-				"${{ needs.preflight.outputs.prod_version }}",
-				"")
-			continue
-		}
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 		sb.WriteString("    with:\n")
 		fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
@@ -938,53 +886,6 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 
 	// Write external deploy jobs (for multi-repo orchestration)
 	g.writeExternalDeployJobs(sb, finalEnv)
-}
-
-// writeInlineDeployBody emits the runs-on / steps body of a cascade-owned inline
-// run: deploy callback in a promote workflow. The standard inputs a reusable
-// deploy callback would receive via with: (environment, sha, image_tag, and
-// image_digest when the callback declares them) are surfaced to the inline step
-// as env: variables. An empty imageDigest means no digest is available for this
-// path (for example the prod path), so IMAGE_DIGEST is omitted.
-func (g *PromoteGenerator) writeInlineDeployBody(sb *strings.Builder, d config.DeployConfig, environment, sha, imageTag, imageDigest string) {
-	// Per-callback job attributes (inline-run deploy jobs only): runner selection
-	// (#12), permissions incl. id-token: write OIDC (#35/#15), and concurrency
-	// (#17). The config-level runs_on default applies when the deploy sets no
-	// runner.
-	writeRunsOn(sb, "    ", d.RunsOn, g.config.RunsOn)
-	writeJobPermissions(sb, "    ", d.Permissions)
-	writeJobConcurrency(sb, "    ", d.Concurrency)
-	sb.WriteString("    steps:\n")
-	fmt.Fprintf(sb, "      - name: Deploy %s\n", d.Name)
-
-	sb.WriteString("        env:\n")
-	fmt.Fprintf(sb, "          ENVIRONMENT: %s\n", environment)
-	fmt.Fprintf(sb, "          SHA: %s\n", sha)
-	if g.deployHasInput(d.Name, "image_tag") {
-		fmt.Fprintf(sb, "          IMAGE_TAG: %s\n", imageTag)
-	}
-	// Additively surface IMAGE_DIGEST when the callback declares image_digest and
-	// a digest is available for this path (imageDigest non-empty).
-	if imageDigest != "" && g.deployHasInput(d.Name, "image_digest") {
-		fmt.Fprintf(sb, "          IMAGE_DIGEST: %s\n", imageDigest)
-	}
-	// When the callback opts in to dry-run emulation, surface the dispatch input
-	// as DRY_RUN so the inline script can branch on it.
-	if d.SupportsDryRun {
-		sb.WriteString("          DRY_RUN: ${{ github.event.inputs.dry_run }}\n")
-	}
-
-	shell := d.Shell
-	if shell == "" {
-		shell = "bash"
-	}
-	fmt.Fprintf(sb, "        shell: %s\n", shell)
-
-	sb.WriteString("        run: |\n")
-	for _, line := range strings.Split(strings.TrimRight(d.Run, "\n"), "\n") {
-		fmt.Fprintf(sb, "          %s\n", line)
-	}
-	sb.WriteString("\n")
 }
 
 func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv string) {
@@ -1081,14 +982,6 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 
 	// Write rollback jobs for local deploys
 	for _, d := range g.config.Deploys {
-		// A rollback job is, by contract, a reusable-workflow call that reverts a
-		// deploy. An inline run: deploy callback has no reusable workflow to call,
-		// so there is nothing to roll back through: skip it. Emitting a rollback
-		// job here would write an empty `uses:` value and invalid workflow YAML.
-		if d.Run != "" {
-			continue
-		}
-
 		jobName := fmt.Sprintf("deploy-%s", d.Name)
 
 		fmt.Fprintf(sb, "  rollback-%s:\n", d.Name)
@@ -1114,13 +1007,6 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 	// Write rollback jobs for external deploys
 	for _, ext := range g.config.External {
 		for _, d := range ext.Deploys {
-			// Inline run: external deploys (Run set, Workflow empty) have no
-			// reusable workflow to call, so they cannot have a rollback job for
-			// the same reason as local inline-run deploys above.
-			if d.Run != "" {
-				continue
-			}
-
 			jobName := fmt.Sprintf("deploy-%s", d.Name)
 
 			fmt.Fprintf(sb, "  rollback-%s:\n", d.Name)

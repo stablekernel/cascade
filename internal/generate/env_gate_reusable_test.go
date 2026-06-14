@@ -115,36 +115,6 @@ func TestEnvGate_Orchestrate_ExternalDeploy_NoJobLevelEnvironment(t *testing.T) 
 		"external (uses:) deploy job must NOT carry a job-level environment: key; block:\n%s", block)
 }
 
-// TestEnvGate_Orchestrate_InlineDeploy_KeepsJobLevelEnvironment asserts that an
-// inline run: deploy (a cascade-owned steps job) still carries a job-level
-// environment: key, which is valid on a steps job and provides GitHub
-// Environment protection.
-func TestEnvGate_Orchestrate_InlineDeploy_KeepsJobLevelEnvironment(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	cfg := &config.TrunkConfig{
-		TrunkBranch:  "main",
-		Environments: []string{"staging", "prod"},
-		Deploys: []config.DeployConfig{
-			{Name: "app", Run: "echo deploying", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
-		},
-	}
-
-	gen := NewGenerator(cfg, tmpDir)
-	result, err := gen.Generate()
-	require.NoError(t, err)
-
-	block := jobBlock(t, result, "deploy-app")
-	require.NotEmpty(t, block, "deploy-app job not found")
-
-	assert.NotContains(t, block, "uses:", "inline deploy must be a steps job, not a uses: caller")
-	assert.True(t, hasJobLevelEnvironment(block),
-		"inline (run:) deploy job must carry a job-level environment: key; block:\n%s", block)
-}
-
 // TestEnvGate_Promote_ExternalSingleDeploy_NoJobLevelEnvironment guards #137 for
 // the promote single-deploy path: an external deploy caller job must not carry
 // a job-level environment: key.
@@ -203,33 +173,6 @@ func TestEnvGate_Promote_ExternalProdDeploy_NoJobLevelEnvironment(t *testing.T) 
 	// The environment name is still threaded as a with: input.
 	assert.Contains(t, block, "      environment: prod",
 		"promote external prod deploy must still pass environment as a with: input")
-}
-
-// TestEnvGate_Promote_InlineProdDeploy_KeepsJobLevelEnvironment asserts that an
-// inline prod deploy still carries a job-level environment: key (valid on a
-// steps job).
-func TestEnvGate_Promote_InlineProdDeploy_KeepsJobLevelEnvironment(t *testing.T) {
-	cfg := &config.TrunkConfig{
-		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
-		Deploys: []config.DeployConfig{
-			{Name: "svc", Run: "echo deploying", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
-		},
-	}
-
-	gen := NewPromoteGenerator(cfg, "")
-	result, err := gen.Generate()
-	require.NoError(t, err)
-
-	block := jobBlock(t, result, "deploy-svc-prod")
-	require.NotEmpty(t, block, "deploy-svc-prod job not found")
-
-	assert.NotContains(t, block, "uses:", "inline prod deploy must be a steps job")
-	assert.True(t, hasJobLevelEnvironment(block),
-		"inline (run:) prod deploy job must carry a job-level environment: key; block:\n%s", block)
 }
 
 // TestEnvGate_Warning_ExternalDeployWithGHAEnvironment asserts that a
