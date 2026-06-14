@@ -14,18 +14,19 @@ import (
 // ---- orchestrate generator tests ----
 
 // TestEnvGates_Orchestrate_DeployJob_WithGHAEnvironment asserts that when
-// environment_config carries a gha_environment for an env and the deploy is an
-// INLINE run: job (a cascade-owned steps job), the generated orchestrate deploy
-// job carries a job-level environment: key. The job-level key is only valid on a
-// steps job; the external (uses:) variant is covered in env_gate_reusable_test.go.
+// environment_config carries a gha_environment for an env, the orchestrate
+// deploy job (always a reusable-workflow uses: caller) threads the environment
+// name via the with: environment: input using the dynamic input expression, and
+// never carries a job-level environment: key (GHA forbids it on a uses: job).
 func TestEnvGates_Orchestrate_DeployJob_WithGHAEnvironment(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeStubWorkflow(t, tmpDir, "deploy.yaml")
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
 		Deploys: []config.DeployConfig{
-			{Name: "svc", Run: "echo deploying", Triggers: []string{"src/**"}},
+			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
 		EnvironmentConfig: map[string]config.EnvironmentConfig{
 			"prod": {GHAEnvironment: "production"},
@@ -39,10 +40,17 @@ func TestEnvGates_Orchestrate_DeployJob_WithGHAEnvironment(t *testing.T) {
 	block := jobBlock(t, result, "deploy-svc")
 	require.NotEmpty(t, block, "deploy-svc job not found in generated orchestrate workflow")
 
-	// Job-level environment: key must be present on an inline steps job.
-	assert.Contains(t, block, "environment:", "inline deploy job must carry job-level environment: key when gha_environment is configured")
-	// It should use the dynamic input expression (env is chosen at runtime).
-	assert.Contains(t, block, "github.event.inputs.environment", "orchestrate environment: key must use the workflow input expression")
+	// Reusable caller: environment is threaded via the with: input using the
+	// dynamic input expression (env is chosen at runtime).
+	assert.Contains(t, block, "uses:", "deploy job must call the reusable workflow via uses:")
+	assert.Contains(t, block, "github.event.inputs.environment", "orchestrate deploy must pass environment via the workflow input expression")
+	// No job-level environment: key on a uses: caller job.
+	lines := strings.Split(block, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "    environment:") && !strings.HasPrefix(line, "      environment:") {
+			t.Errorf("reusable deploy caller must not carry a job-level environment: key; line: %q", line)
+		}
+	}
 }
 
 // TestEnvGates_Orchestrate_DeployJob_WithoutGHAEnvironment asserts that when
@@ -126,31 +134,33 @@ func TestEnvGates_Orchestrate_BuildJob_NoEnvironmentKey(t *testing.T) {
 // ---- promote generator tests ----
 
 // TestEnvGates_Promote_SingleDeployJob_WithGHAEnvironment asserts that the
-// promote generator emits a job-level environment: on the single-mode INLINE
-// run: deploy job when any environment has gha_environment configured. The
-// job-level key is only valid on a steps job; the external (uses:) variant is
-// covered in env_gate_reusable_test.go.
+// promote single-mode deploy job (a reusable-workflow uses: caller) threads the
+// environment via the with: environment: input referencing preflight's
+// target_env output when any environment has gha_environment configured.
 func TestEnvGates_Promote_SingleDeployJob_WithGHAEnvironment(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStubWorkflow(t, tmpDir, "deploy.yaml")
+
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
 		Deploys: []config.DeployConfig{
-			{Name: "svc", Run: "echo deploying", Triggers: []string{"src/**"}},
+			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
 		EnvironmentConfig: map[string]config.EnvironmentConfig{
 			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
-	gen := NewPromoteGenerator(cfg, "")
+	gen := NewPromoteGenerator(cfg, tmpDir)
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
 	block := jobBlock(t, result, "deploy-svc")
 	require.NotEmpty(t, block, "deploy-svc job not found in generated promote workflow")
 
-	assert.Contains(t, block, "environment:", "inline promote deploy job must carry job-level environment: key when gha_environment is configured")
-	assert.Contains(t, block, "needs.preflight.outputs.target_env", "promote deploy environment: key must reference preflight's target_env output")
+	assert.Contains(t, block, "environment:", "promote deploy job must thread the environment via the with: input")
+	assert.Contains(t, block, "needs.preflight.outputs.target_env", "promote deploy environment input must reference preflight's target_env output")
 }
 
 // TestEnvGates_Promote_SingleDeployJob_WithoutGHAEnvironment asserts that the
@@ -181,33 +191,43 @@ func TestEnvGates_Promote_SingleDeployJob_WithoutGHAEnvironment(t *testing.T) {
 	}
 }
 
-// TestEnvGates_Promote_ProdDeployJob_WithGHAEnvironment asserts that the
-// promote generator emits a job-level environment: on the prod deploy job
-// (deploy-<n>-prod) using the static gha_environment name when the final env
-// has gha_environment configured AND the deploy is an INLINE run: job. The
-// job-level key is only valid on a steps job; the external (uses:) variant is
-// covered in env_gate_reusable_test.go.
+// TestEnvGates_Promote_ProdDeployJob_WithGHAEnvironment asserts that the promote
+// prod deploy job (deploy-<n>-prod, always a reusable-workflow uses: caller)
+// threads the target environment via the with: environment: input statically
+// (the prod env is known at generate time) and never carries a job-level
+// environment: key, which GHA forbids on a uses: job.
 func TestEnvGates_Promote_ProdDeployJob_WithGHAEnvironment(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStubWorkflow(t, tmpDir, "deploy.yaml")
+
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
 		Deploys: []config.DeployConfig{
-			{Name: "svc", Run: "echo deploying", Triggers: []string{"src/**"}},
+			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
 		EnvironmentConfig: map[string]config.EnvironmentConfig{
 			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
-	gen := NewPromoteGenerator(cfg, "")
+	gen := NewPromoteGenerator(cfg, tmpDir)
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
 	block := jobBlock(t, result, "deploy-svc-prod")
 	require.NotEmpty(t, block, "deploy-svc-prod job not found in generated promote workflow")
 
-	// The prod deploy job must carry the static resolved GitHub Environment name.
-	assert.Contains(t, block, "environment: production", "inline prod deploy job must carry the gha_environment name statically")
+	// Reusable caller: the target environment is threaded via the with: input.
+	assert.Contains(t, block, "uses:", "prod deploy job must call the reusable workflow via uses:")
+	assert.Contains(t, block, "      environment: prod", "prod deploy must pass the target environment via the with: input")
+	// No job-level environment: key on a uses: caller job.
+	lines := strings.Split(block, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "    environment:") && !strings.HasPrefix(line, "      environment:") {
+			t.Errorf("reusable prod deploy caller must not carry a job-level environment: key; line: %q", line)
+		}
+	}
 }
 
 // TestEnvGates_Promote_ProdDeployJob_WithoutGHAEnvironment asserts that the
@@ -243,13 +263,14 @@ func TestEnvGates_Promote_ProdDeployJob_WithoutGHAEnvironment(t *testing.T) {
 // job does NOT receive a job-level environment: key (since we use a static
 // per-env lookup for the prod job).
 func TestEnvGates_Promote_ProdDeployJob_OnlyFinalEnvGated(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStubWorkflow(t, tmpDir, "deploy.yaml")
+
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "staging", "prod"},
 		Deploys: []config.DeployConfig{
-			// Inline run: deploy so the single job-level environment: key is valid;
-			// the gating-by-env behaviour under test is independent of deploy kind.
-			{Name: "svc", Run: "echo deploying", Triggers: []string{"src/**"}},
+			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
 		EnvironmentConfig: map[string]config.EnvironmentConfig{
 			// Only the intermediate env has gha_environment; prod does not.
@@ -257,7 +278,7 @@ func TestEnvGates_Promote_ProdDeployJob_OnlyFinalEnvGated(t *testing.T) {
 		},
 	}
 
-	gen := NewPromoteGenerator(cfg, "")
+	gen := NewPromoteGenerator(cfg, tmpDir)
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
@@ -271,7 +292,7 @@ func TestEnvGates_Promote_ProdDeployJob_OnlyFinalEnvGated(t *testing.T) {
 		}
 	}
 
-	// The single deploy job (non-prod) SHOULD carry environment: because staging has gha_environment.
+	// The single deploy job (non-prod) SHOULD thread environment: because staging has gha_environment.
 	singleBlock := jobBlock(t, result, "deploy-svc")
 	// deploy-svc-prod starts with "deploy-svc-prod:", so we need to stop at that
 	// boundary. jobBlock already handles that by stopping at the next "  <id>:" line.

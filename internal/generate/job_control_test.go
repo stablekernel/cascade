@@ -90,8 +90,7 @@ func TestGenerator_OwnedJobTimeoutConfigurable(t *testing.T) {
 
 // TestGenerator_TimeoutNotOnReusableCallback asserts a reusable-workflow
 // callback (jobs.<id>.uses) does NOT receive the owned-job timeout. The called
-// workflow owns its own timeout. Inline run: callbacks, which are cascade-owned,
-// DO get it.
+// workflow owns its own timeout.
 func TestGenerator_TimeoutNotOnReusableCallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStubWorkflow(t, tmpDir, "build.yaml")
@@ -102,8 +101,6 @@ func TestGenerator_TimeoutNotOnReusableCallback(t *testing.T) {
 		Builds: []config.BuildConfig{
 			// Reusable-workflow callback (uses:): no timeout-minutes.
 			{Name: "reusable", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
-			// Inline run: callback: cascade-owned, gets the default.
-			{Name: "inline", Run: "go test ./...", Triggers: []string{"src/**"}},
 		},
 	}
 
@@ -113,31 +110,6 @@ func TestGenerator_TimeoutNotOnReusableCallback(t *testing.T) {
 	reusable := jobBlock(t, result, "build-reusable")
 	assert.Contains(t, reusable, "uses:", "sanity: reusable callback is a uses: caller")
 	assert.NotContains(t, reusable, "timeout-minutes:", "reusable-workflow caller must not get a cascade timeout")
-
-	inline := jobBlock(t, result, "build-inline")
-	assert.Contains(t, inline, "timeout-minutes: 30", "inline run: callback is cascade-owned and gets the default")
-}
-
-// TestGenerator_PerCallbackTimeoutWinsOnInline asserts an explicit per-callback
-// timeout_minutes takes precedence over the owned-job default on an inline run:
-// callback.
-func TestGenerator_PerCallbackTimeoutWinsOnInline(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	cfg := &config.TrunkConfig{
-		TrunkBranch:  "main",
-		Environments: []string{"dev"},
-		Builds: []config.BuildConfig{
-			{Name: "inline", Run: "go test ./...", Triggers: []string{"src/**"}, TimeoutMinutes: 7},
-		},
-	}
-
-	result, err := NewGenerator(cfg, tmpDir).Generate()
-	require.NoError(t, err)
-
-	inline := jobBlock(t, result, "build-inline")
-	assert.Contains(t, inline, "timeout-minutes: 7")
-	assert.NotContains(t, inline, "timeout-minutes: 30")
 }
 
 // --- #18: optional_depends_on ----------------------------------------------
@@ -254,8 +226,7 @@ func TestGenerator_BothFieldsUnsetNonBreaking(t *testing.T) {
 // a reusable-workflow (uses:) callback. GitHub forbids timeout-minutes on a job
 // that calls a reusable workflow (allowed caller keys: name, uses, with,
 // secrets, needs, if, permissions, strategy, concurrency); the timeout must live
-// inside the called workflow. An inline run: callback with the same setting DOES
-// carry it, since inline jobs are cascade-owned steps jobs.
+// inside the called workflow.
 func TestGenerator_ExplicitTimeoutNotOnReusableCallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStubWorkflow(t, tmpDir, "build.yaml")
@@ -267,8 +238,6 @@ func TestGenerator_ExplicitTimeoutNotOnReusableCallback(t *testing.T) {
 		Builds: []config.BuildConfig{
 			// Reusable-workflow callback with an explicit timeout: must NOT emit it.
 			{Name: "reusable", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}, TimeoutMinutes: 15},
-			// Inline run: callback with an explicit timeout: DOES emit it.
-			{Name: "inline", Run: "go test ./...", Triggers: []string{"src/**"}, TimeoutMinutes: 15},
 		},
 		Deploys: []config.DeployConfig{
 			// Reusable-workflow deploy callback with an explicit timeout: no emit.
@@ -288,8 +257,4 @@ func TestGenerator_ExplicitTimeoutNotOnReusableCallback(t *testing.T) {
 	assert.Contains(t, reusableDeploy, "uses:", "sanity: reusable deploy is a uses: caller")
 	assert.NotContains(t, reusableDeploy, "timeout-minutes:",
 		"explicit timeout_minutes must not be emitted on a reusable-workflow deploy caller job")
-
-	inline := jobBlock(t, result, "build-inline")
-	assert.Contains(t, inline, "timeout-minutes: 15",
-		"explicit timeout_minutes on an inline run: callback is honored")
 }
