@@ -1,0 +1,92 @@
+name: "Hyphenated Build and Deploy Names Run"
+description: |
+  Runtime regression guard for #127: a build or deploy whose name contains a
+  hyphen (shared-lib, web-api) must actually RUN under act, not be silently
+  skipped.
+
+  The generator emits the change-detection if: condition referencing the
+  underscore-normalized output key (run_build_shared_lib), while the setup job
+  writes and passes through the matching output key. Before #135 the setter and
+  passthrough used the raw hyphenated name (run_build_shared-lib), which GitHub
+  Actions parses as subtraction inside an expression, so the reference never
+  resolved and the consuming job's if: was always false. The build/deploy was
+  skipped with no error.
+
+  Step 1 commits a change touching only the build's lib/** trigger and asserts
+  the hyphenated build runs while the untouched hyphenated deploy skips. Step 2
+  commits a change touching only the deploy's api/** trigger and asserts the
+  hyphenated deploy runs. Each orchestrate therefore pins one hyphenated job to
+  success and the other to skipped on the same run, proving the if: condition
+  tracks its own change-detection key rather than being always-true or
+  always-false. If the hyphen normalization regressed, run_build_shared-lib /
+  run_deploy_web-api would not match their if: reference and the expected-success
+  job would report skipped, failing the assertion.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: shared-lib
+      workflow: build.yaml
+      triggers: ["lib/**"]
+  deploys:
+    - name: web-api
+      workflow: deploy.yaml
+      triggers: ["api/**"]
+
+steps:
+  # Touch only the build's lib/** trigger. Pre-#135 the hyphenated output key
+  # run_build_shared-lib never matched the if: reference, so the build was
+  # silently skipped; here it must run.
+  - name: "Commit touching only the hyphenated build trigger"
+    action: commit
+    commit:
+      message: "feat: add shared-lib source"
+      files:
+        lib/shared.go: |
+          package lib
+
+          // Version is the shared library version marker.
+          const Version = "0.1.0"
+
+  - name: "Orchestrate; hyphenated build runs, untouched hyphenated deploy skips"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        # Load-bearing: the hyphenated build RAN. A skip is the #127 signature.
+        build-shared-lib: success
+        # The deploy's api/** trigger was untouched, so it must skip. This
+        # pins the if: condition to its own change-detection key.
+        deploy-web-api: skipped
+
+  # Touch only the deploy's api/** trigger so the hyphenated deploy must run.
+  - name: "Commit touching only the hyphenated deploy trigger"
+    action: commit
+    commit:
+      message: "feat: add web-api source"
+      files:
+        api/server.go: |
+          package api
+
+          // Listen is the web-api entrypoint marker.
+          func Listen() {}
+
+  - name: "Orchestrate; hyphenated deploy runs, untouched hyphenated build skips"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+          version: "v0.1.0-rc.1"
+          deploys:
+            web-api:
+              sha: commit2
+      jobs:
+        # The build's lib/** trigger was untouched, so it must skip.
+        build-shared-lib: skipped
+        # Load-bearing: the hyphenated deploy RAN. A skip is the #127 signature.
+        deploy-web-api: success
