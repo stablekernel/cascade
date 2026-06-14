@@ -18,9 +18,11 @@ description: |
   The deploy is an inline run: job (no actions/checkout, which act cannot resolve
   for a reusable callback against the per-scenario gitea), so the deploy job runs
   observably under act and is asserted as deploy-app: failure. The deploy keys
-  its conditional failure on $GITHUB_WORKFLOW (the invoking workflow's name): the
-  Promote workflow succeeds, only the Rollback re-deploy fails, exercising the
-  gateOnDeployResults guard rather than aborting during setup.
+  its conditional failure on $GITHUB_WORKFLOW (the invoking workflow's name,
+  which the harness suffixes with [scenario-...], so the deploy matches the
+  Rollback prefix): the Promote workflow succeeds, only the Rollback re-deploy
+  fails, exercising the gateOnDeployResults guard rather than aborting during
+  setup.
 
 config:
   trunk_branch: main
@@ -43,10 +45,15 @@ config:
     - name: app
       run: |
         echo "deploy of env=${ENVIRONMENT} sha=${SHA} via workflow=${GITHUB_WORKFLOW}"
-        if [ "${GITHUB_WORKFLOW}" = "Rollback" ]; then
-          echo "failing the rollback re-deploy on purpose"
-          exit 1
-        fi
+        # The harness suffixes each workflow name with [scenario-<tag>], so the
+        # Rollback workflow surfaces GITHUB_WORKFLOW as "Rollback [scenario-...]".
+        # Match the Rollback prefix rather than an exact string.
+        case "${GITHUB_WORKFLOW}" in
+          Rollback*)
+            echo "failing the rollback re-deploy on purpose"
+            exit 1
+            ;;
+        esac
         echo "promote deploy succeeded"
       triggers: ["**"]
 
