@@ -389,6 +389,17 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 // workflow (e.g. a missing orchestrate.yaml). Without this, such a run
 // masqueraded as Conclusion="success" with 0 jobs. A missing workflow showing
 // up as a green-but-empty scenario (#25).
+//
+// Transient classification is DELIBERATELY narrow. A non-zero act exit is only
+// tagged transient (ExecError true, retryable) when the raw output carries a
+// NAMED host-saturation signature (see detectInfraSaturation): docker
+// address-pool exhaustion (#125), disk-full, OOM, a gitea connection
+// reset/refused (#121), or "Cannot connect to the Docker daemon". Those are
+// genuine, externally-imposed transients a clean-slate retry can clear. Every
+// OTHER non-zero exit with no job failure and no crash signature is now a
+// DETERMINISTIC failure: it fails on the first attempt and surfaces a bug
+// instead of being silently retried away. This closes the masking bucket that
+// let self-inflicted contention burn the whole retry budget.
 func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string, exitCode int) {
 	if exitCode != 0 {
 		// Classify BEFORE forcing the conclusion to "failure": hasJobFailure
@@ -414,10 +425,16 @@ func normalizeWorkflowResult(result *ExtendedWorkflowResult, workflowPath string
 			result.Error = "workflow execution failed"
 		default:
 			// A non-zero exit with no parsed job failure and no crash signature
-			// is a benign act/docker transport or exec hiccup: tag it transient
-			// so the scenario runner may retry from a clean slate.
-			result.ExecError = true
-			result.Error = "workflow execution failed"
+			// is transient ONLY when a named host-saturation signature is in the
+			// raw output; otherwise it is a deterministic real failure that must
+			// surface (not be masked by a retry).
+			if saturated, reason := detectInfraSaturation(infraLogs(result)); saturated {
+				result.ExecError = true
+				result.Error = fmt.Sprintf("infra saturation: %s", reason)
+			} else {
+				result.ExecError = false
+				result.Error = "workflow execution failed"
+			}
 		}
 		// A non-zero exit is always a failure; set the conclusion after
 		// classification so hasJobFailure above saw the pre-exit conclusion.

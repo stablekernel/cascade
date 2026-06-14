@@ -15,13 +15,16 @@ import (
 // scenarioRetryAttempts bounds how many times a single multi-step scenario is
 // run end to end. Each attempt runs against a fresh gitea repo and fresh act
 // containers, so a retry starts from a clean slate with no partial mutation
-// carried over. Only transient act/docker execution failures consume an
-// attempt; real assertion or job-level failures fail on the first attempt.
+// carried over. Only NAMED infra-saturation transients (see
+// detectInfraSaturation) consume an attempt; real assertion, crash, or
+// job-level failures fail deterministically on the first attempt.
 //
-// Five attempts gives contention-driven transients a couple more chances under
-// heavy CI load: the recovery logs show several scenarios passing on attempt 2
-// or 3, so the mechanism works and the extra headroom covers the slowest tail.
-const scenarioRetryAttempts = 5
+// Two attempts (one retry) is the safety net now that the harness concurrency
+// cap (see scenarioConcurrency) removes the self-inflicted contention the old
+// five-attempt budget existed to absorb. With oversubscription gone, a genuine
+// named transient is a rare one-off that a single clean-slate retry clears; a
+// deterministic failure must not be retried at all, so it fails on attempt 1.
+const scenarioRetryAttempts = 2
 
 // scenarioRetryBackoff is the pause between scenario attempts. It lets a burst
 // of container/docker contention subside before the next clean-slate attempt
@@ -157,9 +160,25 @@ func pruneDockerNetworks(ctx context.Context) {
 // to a real conclusion). A real job-level failure, an expect_failure mismatch,
 // or any state/branch/tag assertion mismatch fails deterministically on the
 // first attempt.
+//
+// Each attempt acquires a scenarioConcurrency slot BEFORE standing up its
+// docker/gitea/act stack and releases it AFTER teardown, so no more than the
+// host-derived cap of heavyweight stacks exist at once regardless of
+// `go test -parallel`. This is what prevents the self-inflicted oversubscription
+// (docker address pool / RAM / gitea) that the retry budget used to mask.
 func RunMultiStepScenario(ctx context.Context, t *testing.T, scenario *MultiStepScenario) error {
 	t.Helper()
 	return runScenarioWithRetry(ctx, t, scenario.Name, func(ctx context.Context) error {
+		// Bound concurrent stack standup independent of -parallel. Acquire before
+		// SetupInfra so the docker network + gitea + act containers (and act's
+		// nested job containers) only come up once a slot is free; release after
+		// Cleanup so the slot covers the stack's entire lifetime.
+		release, err := acquireScenarioSlot(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
+
 		h := New(t)
 		defer h.Cleanup()
 

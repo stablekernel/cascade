@@ -114,6 +114,71 @@ func detectCrashSignature(logs string) (bool, string) {
 	return false, ""
 }
 
+// infraSaturationSignatures are the NAMED, externally-imposed host-saturation
+// strings whose presence in act's raw stdout/stderr makes a non-zero act exit a
+// genuine, retryable transient. Each entry names a specific saturation the
+// harness itself can provoke under concurrency (and a clean-slate retry can
+// clear), NOT a generic "act exited non-zero" mystery:
+//
+//   - docker address-pool exhaustion (#125): the daemon has no free subnet left
+//     to create the scenario network.
+//   - disk-full: no host disk for image layers / container writable layers.
+//   - out-of-memory: the host cannot allocate memory for a job container.
+//   - gitea connection reset/refused (#121): gitea is overloaded and dropping or
+//     refusing connections.
+//   - docker daemon unreachable: the socket is momentarily unavailable.
+//
+// Matching is case-insensitive (see detectInfraSaturation). Anything NOT on this
+// list is deterministic: a non-zero act exit with no job failure, no crash
+// signature, and none of these signatures is a real failure that must surface,
+// not a flake to retry away.
+var infraSaturationSignatures = []string{
+	// docker address-pool exhaustion (#125)
+	"all predefined address pools have been fully subnetted",
+	"could not find an available, non-overlapping ipv4 address pool",
+	// disk-full
+	"no space left on device",
+	// out-of-memory
+	"cannot allocate memory",
+	"fatal error: out of memory",
+	"oom-kill",
+	"oomkilled",
+	// gitea overload (#121)
+	"connection reset by peer",
+	"connection refused",
+	// docker daemon unreachable
+	"cannot connect to the docker daemon",
+}
+
+// detectInfraSaturation reports whether raw act stdout/stderr carries a named
+// host-saturation signature (see infraSaturationSignatures), returning the
+// matched signature as the reason. The match is case-insensitive so a signature
+// is caught regardless of how docker/gitea cased it. An empty input never
+// matches. This is the ONLY gate that makes a job-less, crash-free non-zero act
+// exit retryable; every other such exit is deterministic.
+func detectInfraSaturation(logs string) (bool, string) {
+	if logs == "" {
+		return false, ""
+	}
+	lower := strings.ToLower(logs)
+	for _, sig := range infraSaturationSignatures {
+		if strings.Contains(lower, sig) {
+			return true, sig
+		}
+	}
+	return false, ""
+}
+
+// infraLogs returns the raw act stdout/stderr to scan for an infra-saturation
+// signature, tolerating a nil result so the classifier can call it
+// unconditionally.
+func infraLogs(result *ExtendedWorkflowResult) string {
+	if result == nil {
+		return ""
+	}
+	return result.Logs
+}
+
 // JobResultExtended contains detailed result of a single job
 type JobResultExtended struct {
 	Name       string
