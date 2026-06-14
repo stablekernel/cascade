@@ -89,6 +89,13 @@ type BuildConfig struct {
 	RunsOn            any               `yaml:"runs_on,omitempty"`
 	Permissions       map[string]string `yaml:"permissions,omitempty"`
 	Concurrency       *ConcurrencySpec  `yaml:"concurrency,omitempty"`
+	// Secrets carries the per-callback secrets union (scalar "inherit", the
+	// mapping {inherit: true}, or a per-secret map) through to the generated
+	// manifest untouched. A generic value keeps the harness decoupled from the
+	// generator's SecretsConfig shape while preserving every accepted form across
+	// the marshal round-trip. Omitted entirely when unset so the generator sees no
+	// secrets field (the opt-in default emits no secrets block).
+	Secrets any `yaml:"secrets,omitempty"`
 }
 
 // DeployConfig defines a deploy component
@@ -104,6 +111,10 @@ type DeployConfig struct {
 	RunsOn            any               `yaml:"runs_on,omitempty"`
 	Permissions       map[string]string `yaml:"permissions,omitempty"`
 	Concurrency       *ConcurrencySpec  `yaml:"concurrency,omitempty"`
+	// Secrets carries the per-callback secrets union through to the generated
+	// manifest untouched. See BuildConfig.Secrets for the accepted forms and the
+	// rationale for the generic value type.
+	Secrets any `yaml:"secrets,omitempty"`
 }
 
 // ConcurrencySpec defines the per-callback concurrency block written to trunk-config.yaml.

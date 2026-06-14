@@ -783,18 +783,27 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
-// writeSecretsBlock emits the secrets: line for a reusable-workflow job.
-// When s is nil or s.Inherit is true the default "secrets: inherit" is emitted.
-// When s carries an explicit Map each entry is emitted as
+// writeSecretsBlock writes the secrets configuration for a reusable-workflow job
+// call. This function always writes a trailing blank line so callers do not need
+// to manage job-boundary spacing themselves; in the no-op (nil/unset) case a
+// single blank line is still written to preserve correct YAML job separation.
 //
-//	secrets:
-//	  CALLED_NAME: ${{ secrets.CALLER_NAME }}
+// secrets: inherit is opt-in, never the default: a callback with no secrets
+// config emits no secrets block at all, so the called workflow receives only the
+// secrets it explicitly declares (least privilege).
 //
-// The trailing newline that terminates the job block is always written by the
-// caller, so this function writes a trailing "\n" after the last entry only in
-// the map form (matching the blank-line separation written by the inherit path).
+// Behavior by value of s:
+//   - nil (unset): emit no secrets block; write one blank line for job separation.
+//   - s.Inherit == true (explicit opt-in): emit "    secrets: inherit\n\n".
+//   - len(s.Map) > 0: emit the per-entry mapping form
+//     "    secrets:\n      CALLED_NAME: ${{ secrets.CALLER_NAME }}\n...".
+//   - inherit:false with no map: treated as unset (no secrets block).
 func writeSecretsBlock(sb *strings.Builder, s *config.SecretsConfig) {
-	if s == nil || s.Inherit || len(s.Map) == 0 {
+	if s == nil || (!s.Inherit && len(s.Map) == 0) {
+		sb.WriteString("\n")
+		return
+	}
+	if s.Inherit {
 		sb.WriteString("    secrets: inherit\n\n")
 		return
 	}

@@ -59,24 +59,24 @@ func setupWorkflowDir(t *testing.T, relPath string) string {
 	return tmpDir
 }
 
-// TestWriteSecretsBlock_Inherit verifies that nil and inherit-flagged configs
-// both emit the "secrets: inherit" scalar form.
+// TestWriteSecretsBlock_NilNoOp verifies that an unset (nil) secrets config
+// emits NO secrets block at all. Only a single blank line is written to
+// preserve YAML job separation. secrets: inherit is now opt-in.
+func TestWriteSecretsBlock_NilNoOp(t *testing.T) {
+	var sb strings.Builder
+	writeSecretsBlock(&sb, nil)
+	got := sb.String()
+	assert.Equal(t, "\n", got)
+	assert.NotContains(t, got, "secrets:")
+}
+
+// TestWriteSecretsBlock_Inherit verifies that an explicit Inherit:true config
+// still emits the "secrets: inherit" scalar form (opt-in).
 func TestWriteSecretsBlock_Inherit(t *testing.T) {
-	cases := []struct {
-		name string
-		s    *config.SecretsConfig
-	}{
-		{"nil (default)", nil},
-		{"explicit inherit", &config.SecretsConfig{Inherit: true}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var sb strings.Builder
-			writeSecretsBlock(&sb, tc.s)
-			got := sb.String()
-			assert.Equal(t, "    secrets: inherit\n\n", got)
-		})
-	}
+	var sb strings.Builder
+	writeSecretsBlock(&sb, &config.SecretsConfig{Inherit: true})
+	got := sb.String()
+	assert.Equal(t, "    secrets: inherit\n\n", got)
 }
 
 // TestWriteSecretsBlock_ExplicitMap verifies that an explicit map emits the
@@ -105,10 +105,24 @@ func TestWriteSecretsBlock_ExplicitMap(t *testing.T) {
 	assert.Less(t, deployIdx, npmIdx, "keys must be sorted alphabetically")
 }
 
-// TestOrchestrateCallbackJob_InheritSecrets verifies that a reusable-workflow
-// build with no explicit secrets config emits "secrets: inherit".
-func TestOrchestrateCallbackJob_InheritSecrets(t *testing.T) {
+// TestOrchestrateCallbackJob_NoSecretsByDefault verifies that a reusable-workflow
+// build with no explicit secrets config emits NO secrets block at all. secrets:
+// inherit is opt-in, never the default.
+func TestOrchestrateCallbackJob_NoSecretsByDefault(t *testing.T) {
 	cfg, wfPath := orchestrateCfgWithBuildSecrets(nil)
+	tmpDir := setupWorkflowDir(t, wfPath)
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.NotContains(t, result, "secrets:")
+}
+
+// TestOrchestrateCallbackJob_InheritSecrets verifies that a reusable-workflow
+// build with explicit Inherit:true emits "secrets: inherit".
+func TestOrchestrateCallbackJob_InheritSecrets(t *testing.T) {
+	cfg, wfPath := orchestrateCfgWithBuildSecrets(&config.SecretsConfig{Inherit: true})
 	tmpDir := setupWorkflowDir(t, wfPath)
 
 	gen := NewGenerator(cfg, tmpDir)
@@ -138,10 +152,24 @@ func TestOrchestrateCallbackJob_ExplicitSecretsMap(t *testing.T) {
 	assert.NotContains(t, result, "    secrets: inherit\n")
 }
 
-// TestOrchestrateDeployCallbackJob_InheritSecrets verifies that a reusable-workflow
-// deploy with no explicit secrets config emits "secrets: inherit".
-func TestOrchestrateDeployCallbackJob_InheritSecrets(t *testing.T) {
+// TestOrchestrateDeployCallbackJob_NoSecretsByDefault verifies that a
+// reusable-workflow deploy with no explicit secrets config emits NO secrets
+// block at all.
+func TestOrchestrateDeployCallbackJob_NoSecretsByDefault(t *testing.T) {
 	cfg, wfPath := orchestrateCfgWithDeploySecrets(nil)
+	tmpDir := setupWorkflowDir(t, wfPath)
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.NotContains(t, result, "secrets:")
+}
+
+// TestOrchestrateDeployCallbackJob_InheritSecrets verifies that a reusable-workflow
+// deploy with explicit Inherit:true emits "secrets: inherit".
+func TestOrchestrateDeployCallbackJob_InheritSecrets(t *testing.T) {
+	cfg, wfPath := orchestrateCfgWithDeploySecrets(&config.SecretsConfig{Inherit: true})
 	tmpDir := setupWorkflowDir(t, wfPath)
 
 	gen := NewGenerator(cfg, tmpDir)
@@ -231,9 +259,9 @@ func TestPromoteDeployJob_ExplicitSecretsMap(t *testing.T) {
 		"secrets: inherit must not appear when explicit map is configured")
 }
 
-// TestPromoteDeployJob_InheritSecrets verifies that a promote deploy with no
-// explicit secrets config (nil) still emits "secrets: inherit".
-func TestPromoteDeployJob_InheritSecrets(t *testing.T) {
+// TestPromoteDeployJob_NoSecretsByDefault verifies that a promote deploy with no
+// explicit secrets config (nil) emits NO secrets block at all.
+func TestPromoteDeployJob_NoSecretsByDefault(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
@@ -250,6 +278,82 @@ func TestPromoteDeployJob_InheritSecrets(t *testing.T) {
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
+	assert.NotContains(t, result, "secrets:")
+}
+
+// TestPromoteDeployJob_InheritSecrets verifies that a promote deploy with
+// explicit Inherit:true emits "secrets: inherit".
+func TestPromoteDeployJob_InheritSecrets(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		Deploys: []config.DeployConfig{
+			{
+				Name:     "app",
+				Workflow: ".github/workflows/deploy.yaml",
+				Triggers: []string{"src/**"},
+				Secrets:  &config.SecretsConfig{Inherit: true},
+			},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
 	assert.Contains(t, result, "    secrets: inherit\n")
 	assert.NotContains(t, result, "    secrets:\n      ")
+}
+
+// hotfixCfgWithBuildSecrets returns a 2-environment hotfix-capable config whose
+// single reusable-workflow build carries the given SecretsConfig.
+func hotfixCfgWithBuildSecrets(secrets *config.SecretsConfig) *config.TrunkConfig {
+	return &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "app",
+				Workflow: ".github/workflows/build.yaml",
+				Secrets:  secrets,
+			},
+		},
+	}
+}
+
+// TestHotfixBuildJob_NoSecretsByDefault verifies the hotfix build job honors the
+// opt-in model: a reusable-workflow build with no explicit secrets config emits
+// NO secrets block, matching the orchestrate and promote callbacks.
+func TestHotfixBuildJob_NoSecretsByDefault(t *testing.T) {
+	gen := NewHotfixGenerator(hotfixCfgWithBuildSecrets(nil), "")
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The hotfix build job is the only reusable-workflow (uses:) job in the
+	// hotfix workflow, so no secrets: block should appear anywhere.
+	assert.NotContains(t, result, "secrets:")
+}
+
+// TestHotfixBuildJob_InheritSecrets verifies that an explicit Inherit:true on the
+// hotfix build emits "secrets: inherit".
+func TestHotfixBuildJob_InheritSecrets(t *testing.T) {
+	gen := NewHotfixGenerator(hotfixCfgWithBuildSecrets(&config.SecretsConfig{Inherit: true}), "")
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "    secrets: inherit\n")
+	assert.NotContains(t, result, "    secrets:\n      ")
+}
+
+// TestHotfixBuildJob_ExplicitSecretsMap verifies that an explicit secrets map on
+// the hotfix build emits the per-entry least-privilege form.
+func TestHotfixBuildJob_ExplicitSecretsMap(t *testing.T) {
+	gen := NewHotfixGenerator(hotfixCfgWithBuildSecrets(&config.SecretsConfig{
+		Map: map[string]string{"BUILD_TOKEN": "GH_PACKAGES_TOKEN"},
+	}), "")
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "    secrets:\n      BUILD_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}\n")
+	assert.NotContains(t, result, "    secrets: inherit\n")
 }
