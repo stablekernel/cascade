@@ -350,6 +350,12 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	sb.WriteString("      base_sha: ${{ steps.ctx.outputs.base_sha }}\n")
 	sb.WriteString("      rollback_sha: ${{ steps.ctx.outputs.rollback_sha }}\n")
 	sb.WriteString("    steps:\n")
+	// The context job reads the target env's pre-hotfix state SHA from the
+	// committed manifest, so the repo must be checked out first. fetch-depth: 0
+	// matches the other hotfix jobs that need full history available.
+	writeActionStep(sb, g.config, "      ", actionCheckout)
+	sb.WriteString("        with:\n")
+	sb.WriteString("          fetch-depth: 0\n")
 	sb.WriteString("      - name: Derive target environment and hotfix SHAs\n")
 	sb.WriteString("        id: ctx\n")
 	sb.WriteString("        env:\n")
@@ -363,11 +369,20 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	// command enforces that the required SHAs are present.
 	sb.WriteString("          FIX_SHA=$(printf '%s\\n' \"$PR_BODY\" | grep -m1 '^Cascade-Hotfix-Source:' | sed 's/^Cascade-Hotfix-Source:[[:space:]]*//' || true)\n")
 	sb.WriteString("          BASE_SHA=$(printf '%s\\n' \"$PR_BODY\" | grep -m1 '^Cascade-Hotfix-Base:' | sed 's/^Cascade-Hotfix-Base:[[:space:]]*//' || true)\n")
+	// Resolve the auto-rollback target: the target env's state SHA as recorded in
+	// the manifest before this hotfix deploys (the N-1 deployment). yq emits "" for
+	// an absent env/state so the downstream rollback gate (rollback_sha != '')
+	// stays closed until a prior deployment exists. Mirrors the release generator's
+	// ".$MANIFEST_KEY.state.<env>.sha" read.
+	fmt.Fprintf(sb, "          MANIFEST_FILE=\"%s\"\n", g.getManifestFilePath())
+	fmt.Fprintf(sb, "          MANIFEST_KEY=\"%s\"\n", g.config.GetManifestKey())
+	sb.WriteString("          ROLLBACK_SHA=$(yq eval \".$MANIFEST_KEY.state.${TARGET_ENV}.sha // \\\"\\\"\" \"$MANIFEST_FILE\")\n")
+	sb.WriteString("          if [ \"$ROLLBACK_SHA\" = \"null\" ]; then ROLLBACK_SHA=\"\"; fi\n")
 	sb.WriteString("          {\n")
 	sb.WriteString("            echo \"target_env=${TARGET_ENV}\"\n")
 	sb.WriteString("            echo \"fix_sha=${FIX_SHA}\"\n")
 	sb.WriteString("            echo \"base_sha=${BASE_SHA}\"\n")
-	sb.WriteString("            echo \"rollback_sha=\"\n")
+	sb.WriteString("            echo \"rollback_sha=${ROLLBACK_SHA}\"\n")
 	sb.WriteString("          } >> \"$GITHUB_OUTPUT\"\n")
 }
 
@@ -477,6 +492,12 @@ func (g *HotfixGenerator) writeDeployJobs(sb *strings.Builder) {
 
 		// Rollback job: gated on a rollback sha being available and the deploy
 		// failing, mirroring the promote workflow's rollback shape.
+		//
+		// Hotfix auto-rollback is always-on when an N-1 SHA exists (rollback_sha
+		// non-empty). Unlike promote, hotfix has no preflight job to carry an
+		// explicit rollback_on_failure opt-in signal. Adding a new manifest knob is
+		// out of scope; always-on matches the inherent N-1 model of hotfix
+		// deployments.
 		fmt.Fprintf(sb, "  rollback-%s:\n", d.Name)
 		fmt.Fprintf(sb, "    name: Rollback %s\n", d.Name)
 		fmt.Fprintf(sb, "    needs: [context, deploy-%s]\n", d.Name)

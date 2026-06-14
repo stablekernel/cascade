@@ -9,6 +9,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestReleaseGenerator_NoRollbackJob documents the rollback-parity decision: the
+// release workflow tags, generates the changelog, and publishes a GitHub release.
+// It performs no environment deploy, so there is no deploy to auto-roll-back
+// (unlike promote/hotfix). The generated workflow must therefore name no rollback
+// job at all.
+func TestReleaseGenerator_NoRollbackJob(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+	}
+
+	gen := NewReleaseGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	for _, line := range strings.Split(content, "\n") {
+		assert.NotContains(t, strings.ToLower(line), "rollback",
+			"release workflow must not emit any rollback job or step")
+	}
+}
+
 func TestReleaseGenerator_Generate(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
