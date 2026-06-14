@@ -1,0 +1,39 @@
+name: "Promote allow_downgrade dispatch input"
+description: |
+  Verifies that the generated promote.yaml includes the allow_downgrade
+  workflow_dispatch input and wires it through to the preflight run step.
+
+  Covers:
+  - allow_downgrade boolean input appears in workflow_dispatch.inputs
+  - description and default fields are emitted correctly
+  - ALLOW_DOWNGRADE is bound in the preflight env block
+  - --allow-downgrade flag is passed to the preflight run command
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  deploys:
+    - name: app
+      workflow: .github/workflows/deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit generates promote.yaml; assert allow_downgrade input is wired"
+    action: commit
+    commit:
+      message: "feat: add app source"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "      allow_downgrade:"
+            - "        description: 'Permit promoting an older version (downgrade); prod always requires this'"
+            - "        type: boolean"
+            - "          ALLOW_DOWNGRADE: ${{ github.event.inputs.allow_downgrade }}"
+            - "            --allow-downgrade=\"${ALLOW_DOWNGRADE:-false}\" \\"

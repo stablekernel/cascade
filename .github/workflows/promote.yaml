@@ -48,6 +48,10 @@ on:
         description: 'Revert successful deploys if any fails (atomic promotion)'
         type: boolean
         default: true
+      allow_downgrade:
+        description: 'Permit promoting an older version (downgrade); prod always requires this'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -102,6 +106,7 @@ jobs:
           ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}
           DEPLOYS: ${{ github.event.inputs.deploys }}
           ROLLBACK_ON_FAILURE: ${{ github.event.inputs.rollback_on_failure }}
+          ALLOW_DOWNGRADE: ${{ github.event.inputs.allow_downgrade }}
         run: |
           cascade promote preflight \
             --mode "${PROMOTION_MODE:-default}" \
@@ -110,6 +115,7 @@ jobs:
             --allow-breaking="${ALLOW_BREAKING:-false}" \
             --deploys="${DEPLOYS:-all}" \
             --rollback-on-failure="${ROLLBACK_ON_FAILURE:-true}" \
+            --allow-downgrade="${ALLOW_DOWNGRADE:-false}" \
             --gha-output
       - name: Fail if Cannot Proceed
         if: steps.preflight.outputs.can_proceed == 'false'

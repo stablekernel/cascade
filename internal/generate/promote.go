@@ -584,6 +584,12 @@ func (g *PromoteGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("        type: boolean\n")
 	sb.WriteString("        default: true\n")
 
+	// Allow downgrade option
+	sb.WriteString("      allow_downgrade:\n")
+	sb.WriteString("        description: 'Permit promoting an older version (downgrade); prod always requires this'\n")
+	sb.WriteString("        type: boolean\n")
+	sb.WriteString("        default: false\n")
+
 	// Per-deploy checkboxes (kept for backwards compatibility, deprecated)
 	if len(g.config.Deploys) > 0 {
 		sb.WriteString("      # Per-deploy selection (deprecated, use 'deploys' input instead)\n")
@@ -673,6 +679,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("          ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n")
 	sb.WriteString("          DEPLOYS: ${{ github.event.inputs.deploys }}\n")
 	sb.WriteString("          ROLLBACK_ON_FAILURE: ${{ github.event.inputs.rollback_on_failure }}\n")
+	sb.WriteString("          ALLOW_DOWNGRADE: ${{ github.event.inputs.allow_downgrade }}\n")
 	for _, d := range g.config.Deploys {
 		fmt.Fprintf(sb, "          DEPLOY_%s: ${{ github.event.inputs.deploy_%s }}\n",
 			strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_")), d.Name)
@@ -685,6 +692,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("            --allow-breaking=\"${ALLOW_BREAKING:-false}\" \\\n")
 	sb.WriteString("            --deploys=\"${DEPLOYS:-all}\" \\\n")
 	sb.WriteString("            --rollback-on-failure=\"${ROLLBACK_ON_FAILURE:-true}\" \\\n")
+	sb.WriteString("            --allow-downgrade=\"${ALLOW_DOWNGRADE:-false}\" \\\n")
 	sb.WriteString("            --gha-output\n")
 
 	// Fail if cannot proceed

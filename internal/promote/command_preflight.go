@@ -17,6 +17,7 @@ var (
 	allowBreaking     bool
 	deploysFilter     string
 	rollbackOnFailure bool
+	allowDowngrade    bool
 	deployCheckFlags  map[string]bool
 )
 
@@ -47,6 +48,7 @@ With --gha-output, writes directly to $GITHUB_OUTPUT for use in workflows.`,
 	cmd.Flags().BoolVar(&allowBreaking, "allow-breaking", false, "Allow breaking changes")
 	cmd.Flags().StringVar(&deploysFilter, "deploys", "all", "Deploys to promote (comma-separated names or 'all')")
 	cmd.Flags().BoolVar(&rollbackOnFailure, "rollback-on-failure", true, "Revert successful deploys if any fails")
+	cmd.Flags().BoolVar(&allowDowngrade, "allow-downgrade", false, "Permit promoting an older version onto an env (downgrade); prod always requires this even if a lower env allowed it")
 
 	return cmd
 }
@@ -102,6 +104,7 @@ func runPreflight(cmd *cobra.Command, args []string) error {
 		BaseDir:           "",
 		DeploysFilter:     deploysFilterList,
 		RollbackOnFailure: rollbackOnFailure,
+		AllowDowngrade:    allowDowngrade,
 	})
 	for name, include := range deployCheckFlags {
 		pf.SetDeployCheck(name, include)
