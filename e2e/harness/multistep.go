@@ -142,8 +142,16 @@ type CommitStep struct {
 
 // PromoteStep defines a promote action
 type PromoteStep struct {
-	Mode          string `yaml:"mode"`             // default, cascade
-	Target        string `yaml:"target,omitempty"` // for cascade: dev-to-prod
+	Mode string `yaml:"mode"` // default, cascade
+	// Target is the destination env for a cascade promote; the harness builds the
+	// "<source>-to-<target>" mode string from Source and Target.
+	Target string `yaml:"target,omitempty"`
+	// Source overrides the cascade source env. When unset the harness defaults to
+	// Environments[0] (the trunk-rooted leg), matching the generator's dev-rooted
+	// cascade options. Set it to drive a non-default leg, e.g. source: test with
+	// target: prod runs the test-to-prod hop so a promote sourced from a diverged
+	// env exercises the diverged-source guard.
+	Source        string `yaml:"source,omitempty"`
 	AllowBreaking bool   `yaml:"allow_breaking,omitempty"`
 	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
 	// Force sets the promote workflow's "force" dispatch input to "true",

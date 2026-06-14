@@ -7,7 +7,9 @@ description: |
   succeed, leaving trunk state exactly where it was.
 
   prod is advanced through two published versions, then a rollback is requested.
-  The inline deploy job exits non-zero on purpose, so finalize sees
+  The inline deploy succeeds while it is invoked by the Promote workflow (so the
+  two setup promotions land prod on commit1 then commit2), and exits non-zero
+  only when invoked by the Rollback workflow's re-deploy. finalize then sees
   DEPLOY_RESULT_APP=failure, aborts before writing, and the run concludes in
   failure. prod state therefore stays on the second version: no rolled-back SHA,
   no rollback ref. This is the safety property that distinguishes a real
@@ -15,7 +17,10 @@ description: |
 
   The deploy is an inline run: job (no actions/checkout, which act cannot resolve
   for a reusable callback against the per-scenario gitea), so the deploy job runs
-  observably under act and is asserted as deploy-app: failure.
+  observably under act and is asserted as deploy-app: failure. The deploy keys
+  its conditional failure on $GITHUB_WORKFLOW (the invoking workflow's name): the
+  Promote workflow succeeds, only the Rollback re-deploy fails, exercising the
+  gateOnDeployResults guard rather than aborting during setup.
 
 config:
   trunk_branch: main
@@ -25,14 +30,24 @@ config:
       workflow: build.yaml
       triggers: ["src/**"]
   deploys:
-    # Inline run: deploy that always fails. The non-zero exit forces
-    # deploy-app to fail, so finalize sees DEPLOY_RESULT_APP=failure and aborts
-    # the state write. Its caller job id is deploy-app, which the harness's
-    # findJob matches directly.
+    # Inline run: deploy that succeeds under the Promote workflow but fails under
+    # the Rollback workflow's re-deploy. Both workflows surface the same env vars
+    # (ENVIRONMENT, SHA) to this inline step, and the rollback target SHA equals
+    # an earlier promote's SHA, so the SHA alone cannot tell the two apart. The
+    # invoking workflow name ($GITHUB_WORKFLOW) does: it is "Promote" during the
+    # two setup promotions and "Rollback" during the re-deploy under test. Failing
+    # only on Rollback forces deploy-app to fail there, so finalize sees
+    # DEPLOY_RESULT_APP=failure and aborts the state write, while setup lands prod
+    # on commit1 then commit2 cleanly. Its caller job id is deploy-app, which the
+    # harness's findJob matches directly.
     - name: app
       run: |
-        echo "rollback deploy of env=${ENVIRONMENT} sha=${SHA} failing on purpose"
-        exit 1
+        echo "deploy of env=${ENVIRONMENT} sha=${SHA} via workflow=${GITHUB_WORKFLOW}"
+        if [ "${GITHUB_WORKFLOW}" = "Rollback" ]; then
+          echo "failing the rollback re-deploy on purpose"
+          exit 1
+        fi
+        echo "promote deploy succeeded"
       triggers: ["**"]
 
 steps:

@@ -549,7 +549,7 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 	// the literal "cascade". Translate scenarios that use the cascade+target
 	// pair into the "<source>-to-<target>" form. Source defaults to the first
 	// env (typically dev) since the workflow generator only emits dev-rooted
-	// cascade options.
+	// cascade options, but a step may set Source to drive a non-default leg.
 	var inputs map[string]string
 	if len(config.Environments) == 1 {
 		// Single-environment repos generate a Release workflow (see
@@ -570,9 +570,16 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 	} else {
 		mode := promote.Mode
 		if mode == "cascade" {
+			// Source defaults to the first env (typically dev, the trunk-rooted
+			// leg the generator emits cascade options for). A scenario can override
+			// it to drive a non-default leg, e.g. test-to-prod sourced from a
+			// diverged env to exercise the diverged-source guard.
 			source := "dev"
 			if len(config.Environments) > 0 {
 				source = config.Environments[0]
+			}
+			if promote.Source != "" {
+				source = promote.Source
 			}
 			mode = fmt.Sprintf("%s-to-%s", source, promote.Target)
 		}

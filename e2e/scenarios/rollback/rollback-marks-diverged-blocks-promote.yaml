@@ -88,10 +88,13 @@ steps:
 
   # An onward promote sourced FROM the rolled-back test env is guarded: the
   # test-to-prod leg's preflight sees test diverged and trips the diverged-source
-  # guard, so the promote concludes in failure.
+  # guard, so the promote concludes in failure. source: test drives the
+  # test-to-prod cascade leg directly (the harness default of Environments[0]
+  # would source from on-trunk dev and never exercise the guard).
   - name: "Promote from the rolled-back test env is blocked"
     action: promote
     promote:
       mode: cascade
+      source: test
       target: prod
       expect_failure: true
