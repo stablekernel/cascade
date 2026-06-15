@@ -67,6 +67,8 @@ ci:
 
 cascade manages `state:` and `latest_release:`; the empty skeleton is enough. See the [Manifest Reference](/cascade/configuration/) for every field.
 
+For autocomplete and inline validation while you edit the manifest, register the JSON Schema with your editor. See [Editor support](/cascade/configuration/#editor-support).
+
 ### 3. Provide the callback workflows
 
 Each callback is a reusable workflow with an `on: workflow_call` trigger. cascade passes a fixed set of inputs and reads back any `outputs:` you declare. The exact, full YAML for each lives in the [Callback Contract](/cascade/callback-contract/); the contract below is the summary.

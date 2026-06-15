@@ -29,6 +29,43 @@ ci:
 
 The wrapper key (`ci:` by default) is configurable via `config.manifest_key`. The file path is configurable via `config.manifest_file`.
 
+## Editor support
+
+cascade ships a hand-authored JSON Schema for the manifest. Registering it with your editor gives you autocomplete, type checking, enum hints, and hover documentation while you author `.github/manifest.yaml`. The schema covers structure, types, and enums; `cascade parse-config` remains the authority for semantic and cross-field rules.
+
+The schema is published at:
+
+```
+https://stablekernel.github.io/cascade/manifest.schema.json
+```
+
+You can also print the embedded copy with `cascade schema` (write it to a file with `cascade schema --output manifest.schema.json`).
+
+### YAML language server directive
+
+Add this comment to the top of `.github/manifest.yaml`. The YAML language server (used by VS Code, Neovim, and others) reads it automatically:
+
+```yaml
+# yaml-language-server: $schema=https://stablekernel.github.io/cascade/manifest.schema.json
+ci:
+  config:
+    trunk_branch: main
+```
+
+### VS Code settings
+
+Alternatively, map the schema to your manifest path in `settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "https://stablekernel.github.io/cascade/manifest.schema.json": ".github/manifest.yaml"
+  }
+}
+```
+
+If your manifest uses a different path or wrapper key, point the mapping at your file. Either registration path works; the directive travels with the file, while the settings mapping is per-workspace.
+
 ## Config Section
 
 ### Top-Level Fields

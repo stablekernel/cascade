@@ -544,6 +544,26 @@ cascade reset --state --push
 
 Deletes all GitHub releases and tags. With `--state`, also clears the state section.
 
+### schema
+
+Print the manifest JSON Schema. Point your editor at it for autocomplete, type checking, and hover docs while authoring `.github/manifest.yaml`. See [Editor support](/cascade/configuration/#editor-support) for registration.
+
+```bash
+# Print the schema to stdout
+cascade schema
+
+# Write the schema to a file
+cascade schema --output manifest.schema.json
+```
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--output`, `-o` | string | stdout | Write the schema to a file instead of stdout |
+
+The same schema is published at `https://stablekernel.github.io/cascade/manifest.schema.json`. `parse-config` remains the authority for semantic and cross-field rules; the schema covers structure, types, enums, and hover docs.
+
 ## Environment Variables
 
 | Variable | Description |
