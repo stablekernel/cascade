@@ -1,0 +1,622 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://stablekernel.github.io/cascade/manifest.schema.json",
+  "title": "cascade manifest",
+  "description": "Structure, types, and enums for a cascade manifest file. The manifest is nested under a top key (default \"ci\", configurable via config.manifest_key) and carries the authoring surface (config), plus cascade-managed promotion state (state, latest_release). This schema powers editor autocomplete and hover docs; cascade parse-config remains the authority for semantic and cross-field rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer to this JSON Schema for editor validation."
+    },
+    "ci": {
+      "$ref": "#/definitions/manifestBody",
+      "description": "The cascade manifest body. The key name is configurable via config.manifest_key (default \"ci\")."
+    }
+  },
+  "definitions": {
+    "manifestBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "$ref": "#/definitions/trunkConfig",
+          "description": "The pipeline configuration: the authoring surface for cascade."
+        },
+        "state": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "cascade-managed promotion state keyed by environment name. Authored by cascade, not by hand; modeled permissively so real manifests validate."
+        },
+        "latest_release": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "cascade-managed record of the most recent published release. Authored by cascade, not by hand."
+        }
+      }
+    },
+    "trunkConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trunk_branch"],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Manifest schema generation. Defaults to the current generation when omitted. A single monotonic integer, not a semver string."
+        },
+        "trunk_branch": {
+          "type": "string",
+          "description": "The trunk branch that cascade orchestrates from (for example \"main\")."
+        },
+        "triggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Global path patterns for the orchestrate workflow paths filter. When set, these are used exclusively instead of per-callback triggers."
+        },
+        "environments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of promotion environments. Empty means a no-environment setup (library or CLI projects)."
+        },
+        "cli_version": {
+          "type": "string",
+          "description": "cascade CLI version pinned into generated workflows (for example \"v1.0.0\"). Defaults to the pinned release tag when unset or \"latest\"."
+        },
+        "tag_prefix": {
+          "type": "string",
+          "description": "Version tag prefix (default: \"v\")."
+        },
+        "release_token": {
+          "type": "string",
+          "description": "GitHub Actions secret expression for release operations (default: ${{ secrets.GITHUB_TOKEN }})."
+        },
+        "state_token": {
+          "type": "string",
+          "description": "GitHub Actions secret expression for writing manifest state back to the trunk branch (default: ${{ secrets.GITHUB_TOKEN }})."
+        },
+        "manifest_file": {
+          "type": "string",
+          "description": "Path to the manifest file (default: \".github/manifest.yaml\")."
+        },
+        "manifest_key": {
+          "type": "string",
+          "description": "Nested key in the manifest file that holds the body (default: \"ci\")."
+        },
+        "action_folder": {
+          "type": "string",
+          "description": "Folder name for the manage-release action (default: \"manage-release\")."
+        },
+        "git": { "$ref": "#/definitions/gitConfig" },
+        "validate": { "$ref": "#/definitions/validateConfig" },
+        "builds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/buildConfig" },
+          "description": "Build callbacks. Empty means no orchestrated builds."
+        },
+        "deploys": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/deployConfig" },
+          "description": "Deploy callbacks. Empty means no deploys (library or CLI projects)."
+        },
+        "publish": { "$ref": "#/definitions/publishConfig" },
+        "external": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/externalRepoConfig" },
+          "description": "External repositories this primary coordinates."
+        },
+        "notify": { "$ref": "#/definitions/notifyConfig" },
+        "release": { "$ref": "#/definitions/releaseConfig" },
+        "changelog": { "$ref": "#/definitions/changelogConfig" },
+        "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
+        "runs_on": {
+          "$ref": "#/definitions/runsOn",
+          "description": "Default runner for cascade-owned jobs."
+        },
+        "job_timeout_minutes": {
+          "type": "integer",
+          "description": "Default timeout-minutes for cascade-owned jobs."
+        },
+        "dispatch_inputs": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/dispatchInput" },
+          "description": "Operator-facing manual-run inputs."
+        },
+        "extra_triggers": { "$ref": "#/definitions/extraTriggers" },
+        "pr_preview": { "$ref": "#/definitions/prPreviewConfig" },
+        "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
+        "merge_queue": { "$ref": "#/definitions/mergeQueueConfig" },
+        "pin_mode": {
+          "type": "string",
+          "enum": ["tag", "sha"],
+          "description": "How action references are pinned (default: tag)."
+        },
+        "action_pins": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Explicit action reference pins keyed by action name."
+        },
+        "telemetry": { "$ref": "#/definitions/telemetryConfig" },
+        "environment_config": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/environmentConfig" },
+          "description": "Per-environment settings keyed by environment name."
+        }
+      }
+    },
+    "secrets": {
+      "description": "Secrets passing for a callback. Either the scalar \"inherit\" (pass all caller secrets), the mapping {inherit: true}, or an explicit map of called-workflow secret name to caller secret name (least-privilege). inherit cannot be mixed with explicit keys.",
+      "oneOf": [
+        { "type": "string", "const": "inherit" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inherit"],
+          "properties": { "inherit": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "not": { "required": ["inherit"] }
+        }
+      ]
+    },
+    "runsOn": {
+      "description": "Runner selection. A single label, a list of labels, or a {group, labels} object (at least one of group or labels).",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "group": { "type": "string", "description": "Runner group name." },
+            "labels": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Runner labels."
+            }
+          },
+          "anyOf": [
+            { "required": ["group"] },
+            { "required": ["labels"] }
+          ]
+        }
+      ]
+    },
+    "concurrencyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Concurrency control for the generated orchestrate workflow.",
+      "properties": {
+        "group": {
+          "type": "string",
+          "description": "Concurrency group expression (default: orchestrate-${{ github.ref }})."
+        },
+        "cancel_in_progress": {
+          "type": "boolean",
+          "description": "Cancel older in-progress runs (default: true). Set false to queue runs instead."
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "description": "GITHUB_TOKEN permission scopes mapped to access levels.",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["read", "write", "none"]
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Freeform inputs passed to the callback workflow."
+    },
+    "envInputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "description": "Per-environment inputs: a map of environment name to a freeform inputs map."
+    },
+    "gitConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Git identity and signing configuration.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["default", "custom", "external"],
+          "description": "Git identity mode: default (github-actions bot), custom (use user_name/user_email), or external (pre-configured)."
+        },
+        "user_name": { "type": "string", "description": "git user.name (when mode is custom)." },
+        "user_email": { "type": "string", "description": "git user.email (when mode is custom)." },
+        "gpg_key_id": { "type": "string", "description": "GPG key ID for signing." },
+        "gpg_key_secret": { "type": "string", "description": "Secret name containing the GPG key." }
+      }
+    },
+    "validateConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The singleton validation callback.",
+      "properties": {
+        "workflow": { "type": "string", "description": "Path to the reusable validation workflow." },
+        "triggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Path patterns that should trigger validation."
+        },
+        "supports_dry_run": { "type": "boolean" },
+        "inputs": { "$ref": "#/definitions/inputs" },
+        "env_inputs": { "$ref": "#/definitions/envInputs" },
+        "run_policy": { "$ref": "#/definitions/runPolicy" },
+        "on_failure": { "$ref": "#/definitions/onFailure" },
+        "retries": { "type": "integer" },
+        "timeout_minutes": { "type": "integer" },
+        "secrets": { "$ref": "#/definitions/secrets" },
+        "permissions": { "$ref": "#/definitions/permissions" },
+        "runs_on": { "$ref": "#/definitions/runsOn" },
+        "concurrency": { "$ref": "#/definitions/concurrencyConfig" }
+      }
+    },
+    "buildConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "A build callback.",
+      "properties": {
+        "name": { "type": "string", "description": "Build identifier." },
+        "workflow": { "type": "string", "description": "Path to the reusable build workflow." },
+        "triggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Path patterns for change detection."
+        },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "state_tags": { "type": "array", "items": { "type": "string" } },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/artifactConfig" }
+        },
+        "run_policy": { "$ref": "#/definitions/runPolicy" },
+        "on_failure": { "$ref": "#/definitions/onFailure" },
+        "retries": { "type": "integer" },
+        "timeout_minutes": { "type": "integer" },
+        "inputs": { "$ref": "#/definitions/inputs" },
+        "env_inputs": { "$ref": "#/definitions/envInputs" },
+        "secrets": { "$ref": "#/definitions/secrets" },
+        "permissions": { "$ref": "#/definitions/permissions" },
+        "runs_on": { "$ref": "#/definitions/runsOn" },
+        "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
+        "matrix": { "$ref": "#/definitions/matrixConfig" },
+        "optional_depends_on": { "type": "array", "items": { "type": "string" } },
+        "auto_commits": { "type": "boolean" },
+        "artifact": { "$ref": "#/definitions/passthroughArtifact" }
+      }
+    },
+    "deployConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "A deploy callback.",
+      "properties": {
+        "name": { "type": "string", "description": "Deploy identifier." },
+        "workflow": { "type": "string", "description": "Path to the reusable deploy workflow." },
+        "triggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Path patterns for change detection."
+        },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "state_tags": { "type": "array", "items": { "type": "string" } },
+        "supports_dry_run": { "type": "boolean" },
+        "run_policy": { "$ref": "#/definitions/runPolicy" },
+        "on_failure": { "$ref": "#/definitions/onFailure" },
+        "retries": { "type": "integer" },
+        "timeout_minutes": { "type": "integer" },
+        "inputs": { "$ref": "#/definitions/inputs" },
+        "env_inputs": { "$ref": "#/definitions/envInputs" },
+        "secrets": { "$ref": "#/definitions/secrets" },
+        "permissions": { "$ref": "#/definitions/permissions" },
+        "runs_on": { "$ref": "#/definitions/runsOn" },
+        "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
+        "rollout": { "$ref": "#/definitions/rolloutConfig" },
+        "deploy_target": { "$ref": "#/definitions/deployTarget" },
+        "optional_depends_on": { "type": "array", "items": { "type": "string" } },
+        "auto_commits": { "type": "boolean" },
+        "artifact": { "$ref": "#/definitions/passthroughArtifact" }
+      }
+    },
+    "artifactConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "description": "A release artifact produced by a build.",
+      "properties": {
+        "name": { "type": "string", "description": "Artifact identifier (for example \"linux-amd64\")." },
+        "path": { "type": "string", "description": "Glob pattern for files to include (for example \"dist/*.tar.gz\")." },
+        "required": { "type": "boolean", "description": "Fail the release if the artifact is missing (default: true)." }
+      }
+    },
+    "passthroughArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitHub Actions artifact passing between jobs within a single orchestrate run.",
+      "properties": {
+        "upload": { "type": "string", "description": "Path glob to upload after this job completes." },
+        "downloads": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of upstream build jobs whose artifacts to download first."
+        }
+      }
+    },
+    "matrixConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Build fan-out via a matrix. Builds only.",
+      "properties": {
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "description": "Cross-product axes (for example os, arch)."
+        },
+        "max_parallel": { "type": "integer", "description": "Cap on concurrent matrix legs (0 means the platform default)." },
+        "fail_fast": { "type": "boolean" }
+      }
+    },
+    "rolloutConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Deploy rollout strategy. Deploys only.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["default", "rolling", "canary", "blue_green"],
+          "description": "Rollout strategy (default: default)."
+        },
+        "max_parallel": { "type": "integer", "description": "Cap on concurrent rollout waves." },
+        "fail_fast": { "type": "boolean" },
+        "canary": { "$ref": "#/definitions/canaryConfig" },
+        "blue_green": { "$ref": "#/definitions/blueGreenConfig" }
+      }
+    },
+    "canaryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Canary rollout sub-block, used when rollout type is canary.",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Percent waves (for example [10, 50, 100])."
+        },
+        "analysis": { "type": "string", "description": "Workflow path that gates each wave." }
+      }
+    },
+    "blueGreenConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Blue/green rollout sub-block, used when rollout type is blue_green.",
+      "properties": {
+        "switch": { "type": "string", "description": "Workflow path that performs the blue/green cutover." }
+      }
+    },
+    "deployTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitOps-mirror deploy variant.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["dispatch", "gitops"],
+          "description": "Target mode (default: dispatch via external/notify)."
+        },
+        "repo": { "type": "string", "description": "GitOps config repo (for example org/gitops-config)." },
+        "path": { "type": "string", "description": "File to mutate in the target repo." },
+        "field": { "type": "string", "description": "Field to bump (for example image.tag)." },
+        "value": { "type": "string", "description": "Value to write (may be a GitHub Actions expression)." }
+      }
+    },
+    "publishConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow"],
+      "description": "Publish callback invoked after a release is published.",
+      "properties": {
+        "workflow": { "type": "string", "description": "Path to the reusable publish workflow." }
+      }
+    },
+    "releaseConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Release management settings.",
+      "properties": {
+        "disabled": { "type": "boolean", "description": "Disable cascade-managed releases." },
+        "tag": { "type": "string", "description": "callback.output reference for releases created by an external tool." }
+      }
+    },
+    "changelogConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Changelog generation settings.",
+      "properties": {
+        "disabled": { "type": "boolean", "description": "Disable changelog generation." },
+        "workflow": { "type": "string", "description": "Custom changelog workflow." },
+        "contributors": { "type": "boolean", "description": "Include a contributors section." }
+      }
+    },
+    "notifyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo"],
+      "description": "How a satellite repo notifies its primary after dev deploys.",
+      "properties": {
+        "repo": { "type": "string", "description": "Primary repo to notify (for example org/my-backend)." },
+        "workflow": { "type": "string", "description": "Workflow to dispatch (default: external-update.yaml)." },
+        "token": { "type": "string", "description": "Secret name for cross-repo dispatch (default: PRIMARY_REPO_TOKEN)." }
+      }
+    },
+    "externalRepoConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "deploys"],
+      "description": "An external repository this primary coordinates.",
+      "properties": {
+        "repo": { "type": "string", "description": "External repo (for example org/cdk-infra)." },
+        "ref": { "type": "string", "description": "Branch or tag reference (default: trunk_branch)." },
+        "deploys": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/externalDeployConfig" },
+          "description": "Deployables from this repo."
+        }
+      }
+    },
+    "externalDeployConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "A deployable from an external repository.",
+      "properties": {
+        "name": { "type": "string", "description": "Deploy identifier." },
+        "workflow": { "type": "string", "description": "Workflow path, local or cross-repo (org/repo/.github/...@ref)." },
+        "triggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Path patterns for change detection."
+        },
+        "secrets": { "$ref": "#/definitions/secrets" },
+        "permissions": { "$ref": "#/definitions/permissions" },
+        "runs_on": { "$ref": "#/definitions/runsOn" },
+        "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
+        "rollout": { "$ref": "#/definitions/rolloutConfig" },
+        "deploy_target": { "$ref": "#/definitions/deployTarget" },
+        "optional_depends_on": { "type": "array", "items": { "type": "string" } },
+        "auto_commits": { "type": "boolean" }
+      }
+    },
+    "dispatchInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A single operator-facing workflow_dispatch input.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "boolean", "choice", "environment", "number"],
+          "description": "Input type."
+        },
+        "options": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Valid values for a choice input."
+        },
+        "default": { "description": "Default value (any supported type)." },
+        "description": { "type": "string", "description": "Operator-facing help text." },
+        "required": { "type": "boolean", "description": "Mark the input as required." }
+      }
+    },
+    "extraTriggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Config-level non-push trigger types.",
+      "properties": {
+        "schedule": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/scheduleEntry" },
+          "description": "Cron schedule entries."
+        },
+        "repository_dispatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Enables the repository_dispatch trigger.",
+          "properties": {
+            "types": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "workflow_run": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Enables the workflow_run trigger.",
+          "properties": {
+            "workflows": { "type": "array", "items": { "type": "string" } },
+            "types": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "merge_group": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "When present (even empty), wires the merge-queue trigger."
+        }
+      }
+    },
+    "scheduleEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cron"],
+      "description": "A single cron schedule.",
+      "properties": {
+        "cron": { "type": "string", "description": "Cron expression." }
+      }
+    },
+    "prPreviewConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read-only PR plan-preview lane.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "comment": { "type": "boolean" }
+      }
+    },
+    "validateCheckConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Manifest-validation-as-a-PR-check lane.",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "mergeQueueConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Merge-queue validation lane.",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "telemetryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Vendor-neutral metrics seam.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "adapter": { "type": "string", "description": "Metrics adapter (for example none, datadog)." }
+      }
+    },
+    "environmentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-environment settings block.",
+      "properties": {
+        "gha_environment": {
+          "type": "string",
+          "description": "Maps this environment to a GitHub Environment (deployment records, required reviewers, wait timers, env-scoped secrets)."
+        }
+      }
+    },
+    "runPolicy": {
+      "type": "string",
+      "enum": ["default", "always", "force"],
+      "description": "Run policy for the callback."
+    },
+    "onFailure": {
+      "type": "string",
+      "enum": ["abort", "continue"],
+      "description": "Behavior when the callback fails."
+    }
+  }
+}
