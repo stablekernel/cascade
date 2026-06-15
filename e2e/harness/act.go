@@ -3,11 +3,13 @@ package harness
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/testcontainers/testcontainers-go"
@@ -269,23 +271,22 @@ func (a *ActRunner) RunWorkflow(ctx context.Context, opts RunOpts) (*ExtendedWor
 		return nil, fmt.Errorf("failed to run act: %w", err)
 	}
 
-	// Read logs from the reader
-	var logs bytes.Buffer
-	if reader != nil {
-		_, err = io.Copy(&logs, reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read act output: %w", err)
-		}
+	// Read and demultiplex the container's hijacked-attach stream. Without
+	// demuxing, a TTY-less exec (CI Linux) prefixes each chunk with Docker's
+	// 8-byte stream header, which corrupts the JSON the parser consumes.
+	logs, err := readDemuxedStream(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read act output: %w", err)
 	}
 
 	// Parse JSON output
-	result, err := ParseActOutput(logs.String())
+	result, err := ParseActOutput(logs)
 	if err != nil {
 		// Fall back to basic result if parsing fails
 		result = &ExtendedWorkflowResult{
 			Conclusion: "success",
 			Jobs:       make(map[string]*JobResultExtended),
-			Logs:       logs.String(),
+			Logs:       logs,
 		}
 	}
 
@@ -352,21 +353,21 @@ func (a *ActRunner) RunWorkflowFromRepo(ctx context.Context, opts RunOpts) (*Ext
 		return nil, fmt.Errorf("failed to run act: %w", err)
 	}
 
-	var logs bytes.Buffer
-	if reader != nil {
-		_, _ = io.Copy(&logs, reader)
+	// Read and demultiplex the container's hijacked-attach stream so the JSON
+	// the parser consumes is free of Docker's per-chunk stream headers. On a
+	// TTY-less exec (CI Linux) those headers would otherwise corrupt the
+	// conclusion, job-failure, infra-saturation, and crash detection.
+	cleanedLogs, err := readDemuxedStream(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read act output: %w", err)
 	}
-
-	// Clean the output: strip Docker's multiplexed stream headers
-	// Docker exec output contains 8-byte headers for each chunk
-	cleanedLogs := stripDockerStreamHeaders(logs.String())
 
 	result, err := ParseActOutput(cleanedLogs)
 	if err != nil {
 		result = &ExtendedWorkflowResult{
 			Conclusion: "success",
 			Jobs:       make(map[string]*JobResultExtended),
-			Logs:       logs.String(),
+			Logs:       cleanedLogs,
 		}
 		// The parse fallback bypasses ParseActOutput's crash detection, so run
 		// it directly here against the raw logs: a crash dump is the most likely
@@ -491,41 +492,68 @@ func (a *ActRunner) buildActArgs(opts RunOpts, eventPath string) string {
 	return args
 }
 
-// stripDockerStreamHeaders removes Docker's multiplexed stream headers from output.
-// Docker exec output contains 8-byte headers for each chunk:
-// - 1 byte: stream type (0=stdin, 1=stdout, 2=stderr)
-// - 3 bytes: padding
-// - 4 bytes: payload size (big endian)
-func stripDockerStreamHeaders(input string) string {
-	var result bytes.Buffer
-	data := []byte(input)
+// dockerStreamHeaderLen is the size, in bytes, of the header Docker prepends to
+// each frame of a multiplexed (non-TTY) hijacked-attach stream:
+//   - 1 byte: stream type (0=stdin, 1=stdout, 2=stderr)
+//   - 3 bytes: padding (always zero)
+//   - 4 bytes: payload size (big-endian uint32)
+const dockerStreamHeaderLen = 8
 
-	for i := 0; i < len(data); {
-		// Look for the start of a JSON object
-		if data[i] == '{' {
-			// Find the end of this JSON line (newline or end of data)
-			end := i
-			braceCount := 0
-			for end < len(data) {
-				if data[end] == '{' {
-					braceCount++
-				} else if data[end] == '}' {
-					braceCount--
-					if braceCount == 0 {
-						end++
-						break
-					}
-				}
-				end++
-			}
-			result.Write(data[i:end])
-			result.WriteByte('\n')
-			i = end
-		} else {
-			// Skip non-JSON bytes (headers, control chars, etc.)
-			i++
-		}
+// readDemuxedStream drains a container exec's hijacked-attach reader and returns
+// clean text with Docker's per-frame stream headers removed.
+//
+// A container created without a TTY (every act run here, and notably CI Linux
+// where Docker allocates no TTY) returns a MULTIPLEXED stream: each chunk is
+// prefixed with an 8-byte header (stream type + big-endian length). A raw
+// io.Copy leaves those headers interspersed in the captured logs, which lands a
+// `\x02\x00...` prefix on JSON lines and corrupts conclusion, job-failure,
+// infra-saturation, and crash parsing. Docker Desktop happens to demux for us,
+// which is why the corruption never reproduces locally and only bites in CI.
+//
+// We demultiplex with stdcopy.StdCopy (the same primitive testcontainers'
+// exec.Multiplexed uses), merging stdout and stderr into a single buffer; act
+// writes its --json log to stderr, so both streams must be captured. If the
+// stream is NOT framed (a raw TTY attach), it is returned unchanged.
+func readDemuxedStream(reader io.Reader) (string, error) {
+	if reader == nil {
+		return "", nil
 	}
 
-	return result.String()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("reading container stream: %w", err)
+	}
+
+	if !looksMultiplexed(raw) {
+		// Raw (TTY) attach: no framing to strip.
+		return string(raw), nil
+	}
+
+	var out bytes.Buffer
+	// destOut and destErr both target out so stdout and stderr merge into one
+	// clean log buffer (act emits its JSON event stream on stderr).
+	if _, err := stdcopy.StdCopy(&out, &out, bytes.NewReader(raw)); err != nil {
+		return "", fmt.Errorf("demultiplexing container stream: %w", err)
+	}
+	return out.String(), nil
+}
+
+// looksMultiplexed reports whether data begins with a well-formed Docker stream
+// frame header: a known stream type, zeroed padding, and a length that does not
+// overrun the buffer. This distinguishes a multiplexed (non-TTY) attach from a
+// raw (TTY) attach so demuxing is only applied when there is framing to strip.
+func looksMultiplexed(data []byte) bool {
+	if len(data) < dockerStreamHeaderLen {
+		return false
+	}
+	switch data[0] {
+	case byte(stdcopy.Stdin), byte(stdcopy.Stdout), byte(stdcopy.Stderr):
+	default:
+		return false
+	}
+	if data[1] != 0 || data[2] != 0 || data[3] != 0 {
+		return false
+	}
+	frameSize := binary.BigEndian.Uint32(data[4:dockerStreamHeaderLen])
+	return uint64(dockerStreamHeaderLen)+uint64(frameSize) <= uint64(len(data))
 }
