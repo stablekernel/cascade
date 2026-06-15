@@ -22,6 +22,21 @@ The flow in one line: you write a manifest plus callback workflows, run `cascade
 
 ## Build a pipeline from scratch
 
+**Fast path:** `cascade init` does the first three steps below for you. It
+scaffolds the manifest and the callback stubs, verifies them through the real
+generator, and writes them into your repository:
+
+```bash
+cascade init --topology two-env          # dev, prod
+cascade init --envs staging,production   # your own ordered names
+```
+
+Pick a preset with `--topology` (`no-env`, `two-env`, `three-env`, `four-env`)
+or supply your own ordered list with `--envs`. Then jump to step 4 to generate
+and commit. The walkthrough below explains each piece `init` produces, so you
+understand what you are filling in. See the [CLI Reference](/cascade/cli-reference/#init)
+for every flag.
+
 ### 1. Choose your environments
 
 Environments are **positional**, not named by meaning. cascade attaches no semantics to a name like `prod`; it reads the list by position:

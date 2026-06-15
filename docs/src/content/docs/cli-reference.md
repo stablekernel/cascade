@@ -160,6 +160,37 @@ Breaking changes detected via:
 - `!` suffix: `feat!: breaking change`
 - Footer: `BREAKING CHANGE: description` (case-sensitive, line start)
 
+### init
+
+Scaffold a starter manifest and matching callback workflow stubs, verified through the real generator before anything is written.
+
+```bash
+# Two-environment pipeline (dev, prod) in the current directory
+cascade init --topology two-env
+
+# Custom ordered environments; the last is the release stage
+cascade init --envs staging,production --name my-service
+
+# Preview without writing
+cascade init --topology three-env --dry-run
+```
+
+`init` renders `.github/manifest.yaml` plus build (and, when environments are set, deploy) stubs under `.github/workflows`, runs the manifest through parse, validation, and generation, and only then writes the files. The manifest carries a `$schema` directive for editor autocomplete and validation. After running it, fill in the stub callbacks, commit, and run `cascade generate-workflow`.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--topology` | string | `two-env` | Preset shape: one of `no-env`, `two-env`, `three-env`, `four-env` |
+| `--envs` | string | - | Comma-separated ordered environment names; the last is the release stage (overrides `--topology`) |
+| `--name` | string | dir base name | Project name woven into the stubs |
+| `--dir` | string | `.` | Target directory to scaffold into |
+| `--cli-version` | string | pinned release | cascade CLI version pinned in the manifest |
+| `--force`, `-f` | bool | false | Overwrite existing files |
+| `--dry-run` | bool | false | Print what would be written without writing anything |
+
+Environment names are positional, not semantic: the last name is the release stage. An empty list (`--topology no-env`) produces a release-only project with no deploy stub. If any target file already exists and `--force` is not set, `init` aborts and lists the conflicts, writing nothing.
+
 ### generate-workflow
 
 Generate the orchestrate and promote workflows from the manifest.
