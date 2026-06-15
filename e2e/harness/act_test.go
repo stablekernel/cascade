@@ -1,13 +1,119 @@
 package harness
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// frameDockerStream builds a single Docker hijacked-attach frame: an 8-byte
+// header (1-byte stream type, 3 zero padding bytes, big-endian uint32 length)
+// followed by the payload. This is the exact framing a TTY-less container exec
+// produces on CI Linux, and the framing a raw io.Copy would leave interspersed
+// in the captured logs.
+func frameDockerStream(t *testing.T, stream stdcopy.StdType, payload string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	header := make([]byte, dockerStreamHeaderLen)
+	header[0] = byte(stream)
+	binary.BigEndian.PutUint32(header[4:], uint32(len(payload)))
+	buf.Write(header)
+	buf.WriteString(payload)
+	return buf.Bytes()
+}
+
+// TestReadDemuxedStream_MultiplexedFramesAreCleaned is the load-bearing proof
+// for the CI-only act-output corruption: it feeds a hand-constructed MULTIPLEXED
+// stream (stdout + stderr frames, each carrying Docker's 8-byte header) through
+// readDemuxedStream and asserts the result is clean text with the streams merged
+// and NO header bytes left behind. Before the demux fix the capture used a raw
+// io.Copy, so these header bytes would remain interspersed and corrupt the JSON
+// the act parser consumes.
+func TestReadDemuxedStream_MultiplexedFramesAreCleaned(t *testing.T) {
+	t.Parallel()
+
+	stdoutPayload := "hello world\n"
+	stderrPayload := `{"level":"info","msg":"Using docker host..."}` + "\n"
+
+	var raw bytes.Buffer
+	raw.Write(frameDockerStream(t, stdcopy.Stdout, stdoutPayload))
+	raw.Write(frameDockerStream(t, stdcopy.Stderr, stderrPayload))
+
+	got, err := readDemuxedStream(bytes.NewReader(raw.Bytes()))
+	require.NoError(t, err)
+
+	// stdout and stderr are merged into a single clean log buffer.
+	assert.Contains(t, got, "hello world")
+	assert.Contains(t, got, `{"level":"info","msg":"Using docker host..."}`)
+
+	// No Docker stream-header bytes survive. \x02\x00 is the stderr-frame
+	// header signature seen leading the corrupted CI logs; \x01\x00 is stdout.
+	assert.NotContains(t, got, "\x02\x00")
+	assert.NotContains(t, got, "\x01\x00")
+	assert.False(t, strings.ContainsRune(got, '\x00'), "no NUL padding bytes should remain")
+}
+
+// TestReadDemuxedStream_RawStreamPassesThrough verifies a raw (TTY) attach with
+// no Docker framing is returned unchanged, so the demux path never mangles an
+// already-clean stream (the Docker Desktop / TTY case).
+func TestReadDemuxedStream_RawStreamPassesThrough(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"level":"info","msg":"already clean"}` + "\nplain line\n"
+	got, err := readDemuxedStream(strings.NewReader(raw))
+	require.NoError(t, err)
+	assert.Equal(t, raw, got)
+}
+
+// TestReadDemuxedStream_NilReader confirms a nil reader yields empty output
+// rather than panicking (the Exec call can return a nil reader).
+func TestReadDemuxedStream_NilReader(t *testing.T) {
+	t.Parallel()
+
+	got, err := readDemuxedStream(nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// TestLooksMultiplexed table-checks the frame-header detector that gates demux:
+// a valid stdout/stderr frame is multiplexed; raw JSON, short input, bad
+// padding, an unknown stream type, and an overrunning length are not.
+func TestLooksMultiplexed(t *testing.T) {
+	t.Parallel()
+
+	validFrame := frameDockerStream(t, stdcopy.Stdout, "hello world\n")
+	badPadding := append([]byte{1, 1, 0, 0, 0, 0, 0, 3}, []byte("abc")...)
+	unknownType := append([]byte{9, 0, 0, 0, 0, 0, 0, 3}, []byte("abc")...)
+	overrun := []byte{1, 0, 0, 0, 0, 0, 0, 255}
+
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{name: "valid stdout frame", data: validFrame, want: true},
+		{name: "raw json is not framed", data: []byte(`{"level":"info"}`), want: false},
+		{name: "shorter than header", data: []byte{1, 0, 0}, want: false},
+		{name: "non-zero padding", data: badPadding, want: false},
+		{name: "unknown stream type", data: unknownType, want: false},
+		{name: "length overruns buffer", data: overrun, want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, looksMultiplexed(tt.data))
+		})
+	}
+}
 
 func TestActRunner_Start(t *testing.T) {
 	if testing.Short() {
