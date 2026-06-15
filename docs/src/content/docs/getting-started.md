@@ -40,6 +40,34 @@ If you need to invoke it manually:
 
 The setup action downloads the release archive (`tar.gz`) from GoReleaser and installs the `cascade` binary on `PATH`.
 
+## Fast path: scaffold with `cascade init`
+
+If you want a working configuration in one step, run `cascade init`. It renders
+the manifest and the callback workflow stubs for you, verifies them through the
+real generator, and writes them into your repository:
+
+```bash
+# Two-environment pipeline (dev, prod) in the current directory
+cascade init --topology two-env
+
+# Or choose your own ordered environments; the last is the release stage
+cascade init --envs staging,production --name my-service
+
+# Preview without writing anything
+cascade init --topology two-env --dry-run
+```
+
+This produces `.github/manifest.yaml` plus build and deploy stubs under
+`.github/workflows`. The manifest already carries a `$schema` directive, so your
+editor gives you autocomplete and validation while you fill in the stubs. If a
+target file already exists, `init` aborts and lists the conflicts unless you
+pass `--force`.
+
+Once scaffolded, skip ahead to [Step 3](#step-3-create-callback-workflows) to
+fill in the callbacks, then generate the orchestration workflows. The manual
+walkthrough below covers the same files step by step if you would rather build
+them yourself.
+
 ## Step 2: Create the manifest
 
 Create `.github/manifest.yaml` in your repository:
