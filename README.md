@@ -137,6 +137,27 @@ flowchart TD
 
 ---
 
+## Is cascade right for your repo?
+
+cascade earns its keep when you promote a built artifact through a chain of environments. It is a strong fit when most of these hold:
+
+- You deploy to **two or more environments** (say dev, test, prod) and want the *same* artifact promoted through them, never rebuilt per stage.
+- You are on **GitHub Actions** and would rather own your deploy logic in reusable workflows than run a separate CD platform.
+- You want **promotion gates, hotfix-to-any-environment, and rollback** without hand-wiring that state machine.
+- You can adopt **conventional commits** (cascade derives versions, changelogs, and the breaking-change gate from them).
+
+It is likely overkill for a single environment with a plain build-and-release on push, or a repo with no deployments at all, though the no-environment mode still gives you conventional-commit versioning and releases.
+
+**Not trunk-based yet?** cascade promotes *from trunk*: you merge to one trunk branch and cascade promotes that line through your environments. If you run release branches or a GitFlow model today, adopting cascade means moving promotion onto a trunk-based flow. That is a deliberate shift, but cascade is a practical vehicle for it: your existing build and deploy steps become reusable-workflow callbacks, and cascade takes over the promotion, state, and release wiring on top of them.
+
+### What adopting looks like
+
+Keep the build and deploy logic you already have, wrap each as a `workflow_call` reusable workflow, describe your environments and callbacks in the manifest, and let cascade generate the orchestration. Tooling you already rely on stays yours: point cascade's changelog or release step at your own workflow, or switch it off, while cascade owns the promotion cascade.
+
+Start with the [Getting Started guide](https://stablekernel.github.io/cascade/getting-started/), the [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) for the inputs cascade passes your workflows, and the [hardening guide](https://stablekernel.github.io/cascade/security/hardening/) for the GitHub setup (branch protection, environments, scoped tokens) to put in place.
+
+---
+
 ## Quick start
 
 ### 1. Install the CLI
