@@ -71,6 +71,7 @@ export default defineConfig({
       // Sidebar order mirrors the previous MkDocs nav exactly.
       sidebar: [
         { label: 'Getting Started', link: '/getting-started/' },
+        { label: 'Adoption Guide', link: '/adoption/' },
         { label: 'Manifest Reference', link: '/configuration/' },
         { label: 'Callback Contract', link: '/callback-contract/' },
         {
