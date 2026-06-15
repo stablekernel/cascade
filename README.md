@@ -154,7 +154,7 @@ It is likely overkill for a single environment with a plain build-and-release on
 
 Keep the build and deploy logic you already have, wrap each as a `workflow_call` reusable workflow, describe your environments and callbacks in the manifest, and let cascade generate the orchestration. Tooling you already rely on stays yours: point cascade's changelog or release step at your own workflow, or switch it off, while cascade owns the promotion cascade.
 
-Start with the [Getting Started guide](https://stablekernel.github.io/cascade/getting-started/), the [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) for the inputs cascade passes your workflows, and the [hardening guide](https://stablekernel.github.io/cascade/security/hardening/) for the GitHub setup (branch protection, environments, scoped tokens) to put in place.
+See the **[Adoption guide](https://stablekernel.github.io/cascade/adoption/)** for the full walkthrough on migrating an existing pipeline and wiring in tooling you already use. For reference: the [Getting Started guide](https://stablekernel.github.io/cascade/getting-started/), the [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) for the inputs cascade passes your workflows, and the [hardening guide](https://stablekernel.github.io/cascade/security/hardening/) for the GitHub setup (branch protection, environments, scoped tokens).
 
 ---
 
