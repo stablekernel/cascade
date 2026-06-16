@@ -17,6 +17,13 @@ type DependencyGraph struct {
 	// contribute a skip-gate to its if: condition. The job still runs when an
 	// optional dep was skipped because its triggers didn't match (#18).
 	OptionalEdges map[string][]string
+
+	// Order lists every job ID in manifest declaration order (validate, then
+	// builds, then deploys, each in the order they appear in config). It is the
+	// deterministic seed for TopologicalSort: iterating Nodes (a map) directly
+	// would randomize emitted job order, needs: lists, and if: conditions across
+	// runs because Go randomizes map range order per process.
+	Order []string
 }
 
 // CallbackInfo holds information about a callback
@@ -84,6 +91,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Secrets:        cfg.Validate.Secrets,
 		}
 		g.Edges[jobID] = nil
+		g.Order = append(g.Order, jobID)
 	}
 
 	// Add builds
@@ -106,6 +114,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			PassthroughArtifact: b.PassthroughArtifact,
 			Secrets:             b.Secrets,
 		}
+		g.Order = append(g.Order, jobID)
 
 		// Resolve dependencies to job IDs
 		var deps []string
@@ -150,6 +159,7 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			SupportsDryRun:      d.SupportsDryRun,
 			Secrets:             d.Secrets,
 		}
+		g.Order = append(g.Order, jobID)
 
 		// Resolve dependencies to job IDs
 		var deps []string
@@ -204,7 +214,12 @@ func (g *DependencyGraph) TopologicalSort() ([]string, error) {
 		return nil
 	}
 
-	for node := range g.Nodes {
+	// Seed the walk in manifest declaration order (Order), not by ranging
+	// g.Nodes: a map range is randomized per process, which would shuffle the
+	// emitted job order, needs: lists, and if: conditions run to run. With a
+	// stable seed the result is a deterministic topological order that follows
+	// declaration order wherever the dependency DAG leaves it free.
+	for _, node := range g.Order {
 		if err := visit(node); err != nil {
 			return nil, err
 		}
