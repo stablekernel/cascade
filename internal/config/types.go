@@ -272,13 +272,42 @@ func (c *TrunkConfig) GetTagPrefix() string {
 	return c.TagPrefix
 }
 
-// GetReleaseToken returns the configured release token expression or "${{ secrets.GITHUB_TOKEN }}" if not specified.
-// Users should provide the full GitHub Actions expression, e.g. "${{ secrets.MY_TOKEN }}".
+// normalizeTokenExpression returns a GitHub Actions expression that resolves to
+// a token at run time. It accepts either a full expression
+// ("${{ secrets.MY_TOKEN }}"), an unwrapped context form ("secrets.MY_TOKEN",
+// "vars.MY_TOKEN"), or a bare secret name ("MY_TOKEN") and always returns a
+// wrapped "${{ ... }}" expression. A bare name is treated as a secret, matching
+// the documented "GitHub secret name" intent of the token fields. This prevents
+// a bare name from being emitted verbatim into a workflow, which would resolve
+// to a literal string token and fail authentication.
+func normalizeTokenExpression(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	// Already a full expression: leave it untouched.
+	if strings.HasPrefix(trimmed, "${{") && strings.HasSuffix(trimmed, "}}") {
+		return trimmed
+	}
+	// Unwrapped context form (secrets.X, vars.X, env.X, ...): wrap it.
+	if i := strings.IndexByte(trimmed, '.'); i > 0 {
+		switch trimmed[:i] {
+		case "secrets", "vars", "env", "inputs", "github":
+			return "${{ " + trimmed + " }}"
+		}
+	}
+	// Bare name: treat it as a secret.
+	return "${{ secrets." + trimmed + " }}"
+}
+
+// GetReleaseToken returns the configured release token as a resolvable GitHub
+// Actions expression, or "${{ secrets.GITHUB_TOKEN }}" if not specified. A bare
+// secret name (e.g. "MY_TOKEN") is normalized to "${{ secrets.MY_TOKEN }}".
 func (c *TrunkConfig) GetReleaseToken() string {
 	if c.ReleaseToken == "" {
 		return "${{ secrets.GITHUB_TOKEN }}"
 	}
-	return c.ReleaseToken
+	return normalizeTokenExpression(c.ReleaseToken)
 }
 
 // GetStateToken returns the configured state-write token expression or
@@ -292,7 +321,7 @@ func (c *TrunkConfig) GetStateToken() string {
 	if c.StateToken == "" {
 		return "${{ secrets.GITHUB_TOKEN }}"
 	}
-	return c.StateToken
+	return normalizeTokenExpression(c.StateToken)
 }
 
 // GetManifestFile returns the configured manifest file path or ".github/manifest.yaml" if not specified
@@ -552,7 +581,7 @@ func (n *NotifyConfig) GetToken() string {
 	if n.Token == "" {
 		return "${{ secrets.PRIMARY_REPO_TOKEN }}"
 	}
-	return n.Token
+	return normalizeTokenExpression(n.Token)
 }
 
 // ChangelogConfig defines changelog generation settings

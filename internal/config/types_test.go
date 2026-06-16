@@ -426,6 +426,16 @@ func TestGetReleaseToken(t *testing.T) {
 	// Configured value (full expression)
 	cfg.ReleaseToken = "${{ secrets.CUSTOM_RELEASE_TOKEN }}"
 	assert.Equal(t, "${{ secrets.CUSTOM_RELEASE_TOKEN }}", cfg.GetReleaseToken())
+
+	// Bare secret name is normalized to a resolvable secrets expression.
+	// The field doc advertises a "GitHub secret name", so a bare name must
+	// not be emitted verbatim (that produces a literal token and a 401).
+	cfg.ReleaseToken = "CASCADE_STATE_TOKEN"
+	assert.Equal(t, "${{ secrets.CASCADE_STATE_TOKEN }}", cfg.GetReleaseToken())
+
+	// Unwrapped context form is also wrapped.
+	cfg.ReleaseToken = "secrets.CASCADE_STATE_TOKEN"
+	assert.Equal(t, "${{ secrets.CASCADE_STATE_TOKEN }}", cfg.GetReleaseToken())
 }
 
 func TestGetStateToken(t *testing.T) {
@@ -436,6 +446,45 @@ func TestGetStateToken(t *testing.T) {
 	// Configured value (full expression)
 	cfg.StateToken = "${{ secrets.CASCADE_BOT_TOKEN }}"
 	assert.Equal(t, "${{ secrets.CASCADE_BOT_TOKEN }}", cfg.GetStateToken())
+
+	// Bare secret name is normalized.
+	cfg.StateToken = "CASCADE_BOT_TOKEN"
+	assert.Equal(t, "${{ secrets.CASCADE_BOT_TOKEN }}", cfg.GetStateToken())
+}
+
+func TestNotifyConfigGetToken(t *testing.T) {
+	// Default when not set
+	n := &NotifyConfig{}
+	assert.Equal(t, "${{ secrets.PRIMARY_REPO_TOKEN }}", n.GetToken())
+
+	// Full expression passes through.
+	n.Token = "${{ secrets.CROSS_REPO_TOKEN }}"
+	assert.Equal(t, "${{ secrets.CROSS_REPO_TOKEN }}", n.GetToken())
+
+	// Bare secret name is normalized.
+	n.Token = "CROSS_REPO_TOKEN"
+	assert.Equal(t, "${{ secrets.CROSS_REPO_TOKEN }}", n.GetToken())
+}
+
+func TestNormalizeTokenExpression(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "full secrets expression", input: "${{ secrets.X }}", want: "${{ secrets.X }}"},
+		{name: "full vars expression", input: "${{ vars.Y }}", want: "${{ vars.Y }}"},
+		{name: "bare secret name", input: "CASCADE_STATE_TOKEN", want: "${{ secrets.CASCADE_STATE_TOKEN }}"},
+		{name: "unwrapped secrets context", input: "secrets.MY_TOKEN", want: "${{ secrets.MY_TOKEN }}"},
+		{name: "unwrapped vars context", input: "vars.MY_VAR", want: "${{ vars.MY_VAR }}"},
+		{name: "surrounding whitespace trimmed", input: "  CASCADE_STATE_TOKEN  ", want: "${{ secrets.CASCADE_STATE_TOKEN }}"},
+		{name: "empty stays empty", input: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeTokenExpression(tt.input))
+		})
+	}
 }
 
 func TestGetGitMode(t *testing.T) {
