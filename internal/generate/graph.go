@@ -274,17 +274,18 @@ func defaultString(s, def string) string {
 // (notably id-token: write for OIDC) must be granted by the calling workflow's
 // top-level permissions block instead. The result is that union keyed by scope.
 //
-// Precedence when two callbacks set the same scope to different values: "write"
-// always wins over any other value, since GHA permission scopes are monotonic
-// (write subsumes read). Otherwise the last-declared value for the scope is
-// kept; in practice callbacks agree on a scope's value, so this only matters
-// for the read/write distinction handled above.
+// Precedence when two callbacks set the same scope to different values: the
+// lexicographically greatest value wins. This keeps "write" ahead of "read"
+// ahead of "none", matching the monotonic GHA permission order (write subsumes
+// read), and is independent of map iteration order so the union is fully
+// deterministic. In practice callbacks agree on a scope's value, so this only
+// matters for the read/write distinction.
 func collectCallbackPermissions(cfg *config.TrunkConfig) map[string]string {
 	graph := BuildDependencyGraph(cfg)
 	union := make(map[string]string)
 	for _, node := range graph.Nodes {
 		for scope, value := range node.Permissions {
-			if existing, ok := union[scope]; ok && existing == "write" {
+			if existing, ok := union[scope]; ok && existing >= value {
 				continue
 			}
 			union[scope] = value
@@ -310,9 +311,10 @@ func writeTopLevelPermissions(sb *strings.Builder, base [][2]string, callbackUni
 	for _, kv := range base {
 		scope, value := kv[0], kv[1]
 		inBase[scope] = true
-		// Promote to write if a callback requires write on this base scope.
-		if value != "write" && callbackUnion[scope] == "write" {
-			value = "write"
+		// Promote the base scope if a callback requires a more-permissive value
+		// (e.g. write over read), using the same lexicographic order as the union.
+		if cb, ok := callbackUnion[scope]; ok && cb > value {
+			value = cb
 		}
 		fmt.Fprintf(sb, "  %s: %s\n", scope, value)
 	}
