@@ -596,13 +596,16 @@ func (g *PromoteGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 	}
 	sb.WriteString("\n")
 
-	// Permissions needed for release management, state commits, and job queries.
-	// actions:write is required to dispatch the Release workflow from the
-	// finalize job when a final release is published.
-	sb.WriteString("permissions:\n")
-	sb.WriteString("  contents: write\n")
-	sb.WriteString("  actions: write\n")
-	sb.WriteString("\n")
+	// Base: permissions needed for release management, state commits, and job
+	// queries. actions:write is required to dispatch the Release workflow from
+	// the finalize job when a final release is published. A reusable callback
+	// cannot set its own job permissions, so any scope a deploy callback declares
+	// (e.g. id-token: write for OIDC) is unioned in at the top level here.
+	base := [][2]string{
+		{"contents", "write"},
+		{"actions", "write"},
+	}
+	writeTopLevelPermissions(sb, base, collectCallbackPermissions(g.config))
 }
 
 func (g *PromoteGenerator) writeJobs(sb *strings.Builder) {

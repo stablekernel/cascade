@@ -80,6 +80,10 @@ func determinismConfig() *config.TrunkConfig {
 						"arch": {"amd64", "arm64"},
 					},
 				},
+				// A second callback contributing to the top-level permissions
+				// union, so the union spans multiple nodes (map iteration order
+				// across nodes must not leak into output).
+				Permissions: map[string]string{"attestations": "write"},
 			},
 			{
 				Name:      "bundle",
@@ -102,6 +106,13 @@ func determinismConfig() *config.TrunkConfig {
 				Workflow:  ".github/workflows/deploy.yaml",
 				Triggers:  []string{"src/**"},
 				DependsOn: []string{"bundle"},
+				// Per-callback permissions exercise the top-level permissions
+				// union, whose appended scopes are map-sourced and must emit in a
+				// stable sorted order run to run.
+				Permissions: map[string]string{
+					"id-token": "write",
+					"packages": "read",
+				},
 			},
 			// sidecar is an independent deploy root, again adding parallel
 			// nodes to the graph so seed order can diverge run to run.
