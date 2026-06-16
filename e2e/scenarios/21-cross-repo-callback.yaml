@@ -1,0 +1,55 @@
+name: "Cross-Repo Reusable-Workflow Callback"
+description: |
+  Verifies that a build callback whose workflow: points at a reusable workflow
+  in another repository (org/repo/.github/workflows/file.yaml@ref) is generated
+  without attempting a local read of the unreachable @ref path, and that the
+  generated orchestrate.yaml wires the cross-repo caller job with the standard
+  callback-contract inputs plus the artifact_id output.
+
+  Generator-output verification only.
+
+  The harness intentionally does NOT seed a local stub for the cross-repo
+  callback (normalizeCallbackStubPath skips @ref paths), so generation runs
+  against the same conditions the live fleet hits: no local file for the
+  external workflow. A pre-fix generator aborts here reading the @ref path; the
+  fixed generator emits the caller job from the callback contract instead.
+
+config:
+  trunk_branch: main
+  environments: [staging, prod]
+  builds:
+    - name: app
+      workflow: build-app.yaml
+      triggers: ["src/**"]
+    - name: sharedlib
+      workflow: stablekernel/cascade-example-artifact-a/.github/workflows/build-shared.yaml@main
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy-app.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit; assert cross-repo caller job in orchestrate.yaml"
+    action: commit
+    commit:
+      message: "feat: add app and cross-repo sharedlib build"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # The cross-repo build is wired as a uses: caller to the external
+            # reusable workflow, verbatim with its @ref.
+            - "uses: stablekernel/cascade-example-artifact-a/.github/workflows/build-shared.yaml@main"
+            # The caller carries the standard callback-contract with: inputs.
+            - "environment: ${{ github.event.inputs.environment || 'staging' }}"
+            - "sha: ${{ needs.setup.outputs.head_sha }}"
+            # The cross-repo build's artifact_id output flows downstream.
+            - "needs.build-sharedlib.outputs.artifact_id"
+          not_contains:
+            # The literal @ref must never leak into a local-path read or job id.
+            - "build-shared.yaml@main:"
