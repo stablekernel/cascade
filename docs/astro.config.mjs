@@ -68,8 +68,10 @@ export default defineConfig({
           attrs: { name: 'twitter:card', content: 'summary_large_image' },
         },
       ],
-      // Sidebar order mirrors the previous MkDocs nav exactly.
+      // Sidebar order mirrors the previous MkDocs nav, with the decision-aid
+      // "Why Cascade" page first so readers can self-qualify before onboarding.
       sidebar: [
+        { label: 'Why Cascade', link: '/comparison/' },
         { label: 'Getting Started', link: '/getting-started/' },
         { label: 'Adoption Guide', link: '/adoption/' },
         { label: 'Manifest Reference', link: '/configuration/' },

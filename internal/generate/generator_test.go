@@ -3,6 +3,7 @@ package generate
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -2022,6 +2023,140 @@ func TestGenerator_PassthroughArtifact_DownloadNeedsUploadJob(t *testing.T) {
 	needs := downloadJobNeeds(t, result, "build-bundle-download")
 	assert.Contains(t, needs, "build-image-upload",
 		"download pre-job must depend on the producer's -upload job, otherwise it races the upload and fails with 'Artifact not found'")
+}
+
+// uploadJobBody returns the text of the "  <jobID>:\n" block from a generated
+// workflow, spanning until the next two-space-indented job header (or EOF). It
+// lets a test assert on the step ordering inside a single owned job.
+func uploadJobBody(t *testing.T, workflow, jobID string) string {
+	t.Helper()
+	header := "\n  " + jobID + ":\n"
+	idx := strings.Index(workflow, header)
+	require.NotEqual(t, -1, idx, "job %q not found in generated workflow", jobID)
+	start := idx + len(header)
+	rest := workflow[start:]
+	// Find the next job header at two-space indentation (a line "  word:").
+	re := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\n`)
+	if loc := re.FindStringIndex(rest); loc != nil {
+		return rest[:loc[0]]
+	}
+	return rest
+}
+
+// TestGenerator_PassthroughArtifact_MatrixUploadCollectsLegs asserts that a
+// matrix build's cascade-owned -upload post-job collects the per-leg artifacts
+// before consolidating them into the single build-<name> artifact consumers
+// download. cascade cannot inject upload steps into the reusable callback's
+// matrix legs, so each leg uploads a per-leg artifact following the
+// "<build-name>-*" convention, and the upload post-job downloads that pattern
+// (merge-multiple) into the upload path, then uploads the consolidated
+// build-<name>. The manifest mirrors 2env: a matrix "image" build feeding a
+// "bundle" consumer, where the legs upload image-<os>-<arch>.
+func TestGenerator_PassthroughArtifact_MatrixUploadCollectsLegs(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build-image.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build-bundle.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"staging"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "image",
+				Workflow: ".github/workflows/build-image.yaml",
+				Triggers: []string{"src/**"},
+				Matrix: &config.MatrixConfig{
+					Dimensions: map[string][]string{
+						"os":   {"linux"},
+						"arch": {"amd64", "arm64"},
+					},
+				},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/**",
+				},
+			},
+			{
+				Name:     "bundle",
+				Workflow: ".github/workflows/build-bundle.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Downloads: []string{"image"},
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	body := uploadJobBody(t, result, "build-image-upload")
+
+	// The post-job must collect the per-leg artifacts first.
+	assert.Contains(t, body, "uses: actions/download-artifact@v4",
+		"matrix upload post-job must download per-leg artifacts before uploading")
+	assert.Contains(t, body, "pattern: image-*",
+		"collect step must use the <build-name>-* convention pattern")
+	assert.Contains(t, body, "merge-multiple: true",
+		"collect step must merge per-leg artifacts into one path")
+	assert.Contains(t, body, "path: dist",
+		"collect step must download into the upload directory (glob stripped)")
+
+	// The collect step must precede the upload step.
+	collectIdx := strings.Index(body, "actions/download-artifact")
+	uploadIdx := strings.Index(body, "actions/upload-artifact")
+	require.NotEqual(t, -1, collectIdx)
+	require.NotEqual(t, -1, uploadIdx)
+	assert.Less(t, collectIdx, uploadIdx,
+		"collect (download) step must come before the consolidating upload step")
+
+	// The consolidation still uploads build-image, and the bundle download
+	// references the same name: end-to-end name consistency.
+	assert.Contains(t, body, "name: build-image",
+		"consolidation must upload the build-<name> artifact consumers download")
+	assert.Contains(t, result, "build-bundle-download:",
+		"consumer must emit its download pre-job")
+
+	downloadBody := uploadJobBody(t, result, "build-bundle-download")
+	assert.Contains(t, downloadBody, "name: build-image",
+		"bundle download must reference the consolidated build-image artifact")
+}
+
+// TestGenerator_PassthroughArtifact_NonMatrixUploadNoCollect asserts that a
+// non-matrix build's -upload post-job uploads directly with no collect step,
+// since its callback runs on a single runner whose artifacts already live at
+// the upload path. A spurious download-artifact in a non-matrix upload job
+// would look for per-leg artifacts that never exist.
+func TestGenerator_PassthroughArtifact_NonMatrixUploadNoCollect(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "compile",
+				Workflow: ".github/workflows/build.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/",
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	body := uploadJobBody(t, result, "build-compile-upload")
+	assert.NotContains(t, body, "actions/download-artifact",
+		"non-matrix upload job must not emit a per-leg collect step")
+	assert.Contains(t, body, "uses: actions/upload-artifact@v4",
+		"non-matrix upload job must still upload directly")
 }
 
 // TestGenerator_DispatchInputs_StringType asserts that a string dispatch_input

@@ -1876,14 +1876,51 @@ func (g *Generator) writePassthroughDownloadJob(sb *strings.Builder, info Callba
 	}
 }
 
+// passthroughLegPattern returns the download-artifact pattern that a matrix
+// build's per-leg artifacts must match to be collected into the consolidated
+// build-{name} upload. cascade cannot inject upload steps into a reusable
+// callback's matrix legs, so each leg is expected to upload an artifact named
+// "{build-name}-{leg-suffix}" (e.g. image-linux-amd64 for a build named
+// "image"). The "{build-name}-*" pattern collects every leg deterministically
+// without hardcoding any dimension values.
+func passthroughLegPattern(buildName string) string {
+	return fmt.Sprintf("%s-*", buildName)
+}
+
+// passthroughUploadDir converts an upload path into a directory suitable as the
+// download-artifact destination. download-artifact writes into a directory, so
+// a trailing recursive glob ("dist/**", "dist/", "dist") is reduced to the
+// base directory ("dist"). A bare "**" (upload the whole workspace) maps to "."
+// so the merged legs land back at the workspace root.
+func passthroughUploadDir(upload string) string {
+	dir := strings.TrimSuffix(upload, "**")
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" {
+		return "."
+	}
+	return dir
+}
+
 // writePassthroughUploadJob emits a cascade-owned post-job that runs
 // actions/upload-artifact after info's reusable-workflow callback completes.
 // The artifact is named "build-{job-name}".
 // Used for reusable-workflow callbacks where steps cannot be injected into the
 // jobs.<id>.uses block.
+//
+// For matrix builds the callback fans out across legs that each run on their
+// own runner, so the upload-path files only ever exist on those leg runners,
+// never on this fresh post-job runner. Uploading directly here would find an
+// empty path and produce no artifact, and a downstream consumer's download then
+// fails with "Artifact not found". To consolidate, this job first downloads the
+// per-leg artifacts (which the legs are expected to upload under the
+// "{build-name}-*" convention; see passthroughLegPattern), merges them into the
+// upload directory, and only then uploads the single consolidated build-{name}
+// artifact consumers download. Non-matrix builds run on one runner whose files
+// already live at the upload path, so they upload directly with no collect step.
 func (g *Generator) writePassthroughUploadJob(sb *strings.Builder, info CallbackInfo) {
 	postJobID := fmt.Sprintf("%s-upload", info.JobID)
 	name := passthroughArtifactName(info.Name)
+	isMatrix := info.Matrix != nil && len(info.Matrix.Dimensions) > 0
 	fmt.Fprintf(sb, "  %s:\n", postJobID)
 	fmt.Fprintf(sb, "    name: Upload artifact %s\n", name)
 	fmt.Fprintf(sb, "    needs: [%s]\n", info.JobID)
@@ -1891,6 +1928,17 @@ func (g *Generator) writePassthroughUploadJob(sb *strings.Builder, info Callback
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    steps:\n")
+	if isMatrix {
+		// Collect the per-leg artifacts before consolidating. The legs upload
+		// "{build-name}-*" artifacts; merge them into the upload directory.
+		dir := passthroughUploadDir(info.PassthroughArtifact.Upload)
+		sb.WriteString("      - name: Collect matrix leg artifacts\n")
+		writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
+		sb.WriteString("        with:\n")
+		fmt.Fprintf(sb, "          pattern: %s\n", passthroughLegPattern(info.Name))
+		fmt.Fprintf(sb, "          path: %s\n", dir)
+		sb.WriteString("          merge-multiple: true\n")
+	}
 	fmt.Fprintf(sb, "      - name: Upload artifact %s\n", name)
 	writeActionUses(sb, g.config, "        ", actionUploadArtifact)
 	sb.WriteString("        with:\n")
