@@ -263,23 +263,6 @@ jobs:
           delete_tag: ${{ steps.release-data.outputs.rc_version }}
           changelog: ${{ steps.changelog.outputs.changelog }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Trigger Release Build
-        if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.is_final_env == 'true' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release-data.outputs.sem_version }}
-        run: |
-          # Only dispatch on real GitHub. In act/gitea e2e environments
-          # GITHUB_SERVER_URL is http://gitea:3000 and the Release workflow
-          # doesn't exist, so skip silently.
-          if [[ "$GITHUB_SERVER_URL" != "https://github.com" ]]; then
-            echo "Skipping Release dispatch (not running on github.com: $GITHUB_SERVER_URL)"
-            exit 0
-          fi
-          gh workflow run Release \
-            --repo "${{ github.repository }}" \
-            --ref "$TAG"
-
       - name: Finalize Promotion
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
