@@ -268,8 +268,10 @@ func (g *Generator) Validate() []string {
 		return g.warnings
 	}
 
-	// Check that dependents have inputs for dependency outputs
-	for _, node := range g.graph.Nodes {
+	// Check that dependents have inputs for dependency outputs. Iterate in
+	// declaration order so emitted warnings are stable across runs.
+	for _, jobID := range g.graph.Order {
+		node := g.graph.Nodes[jobID]
 		deps := g.graph.GetDirectDependencies(node.JobID)
 		declaredInputs := g.inputs[node.JobID]
 		inputSet := make(map[string]bool)
@@ -404,7 +406,9 @@ func (g *Generator) validateRequiredInputs() error {
 
 	var errors []string
 
-	for _, node := range g.graph.Nodes {
+	// Iterate in declaration order so the validation error list is stable.
+	for _, jobID := range g.graph.Order {
+		node := g.graph.Nodes[jobID]
 		requiredInputs := g.requiredInputs[node.JobID]
 		if len(requiredInputs) == 0 {
 			continue
@@ -1728,10 +1732,13 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		parts := strings.SplitN(g.config.Release.Tag, ".", 2)
 		callbackName := parts[0]
 		outputName := parts[1]
-		// Find the job ID for this callback name
+		// Find the job ID for this callback name. Iterate in declaration order
+		// (Order), not by ranging the Nodes map: a map range is randomized per
+		// process, so when two callbacks share a name across sections the break
+		// could pick either one run to run.
 		var jobID string
-		for jid, info := range g.graph.Nodes {
-			if info.Name == callbackName {
+		for _, jid := range g.graph.Order {
+			if g.graph.Nodes[jid].Name == callbackName {
 				jobID = jid
 				break
 			}
