@@ -175,9 +175,12 @@ on:
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	// dry_run must be forwarded in the with: block to the deploy job.
+	// dry_run must be forwarded in the with: block to the deploy job using the
+	// null-safe github.event.inputs accessor. The bare inputs.dry_run form renders
+	// empty on push/schedule/workflow_run, which is invalid for a boolean callback
+	// input and fails the reusable-workflow dispatch.
 	assert.Contains(t, content,
-		"dry_run: ${{ inputs.dry_run }}",
+		"dry_run: ${{ github.event.inputs.dry_run }}",
 		"orchestrate generator must pass dry_run to a supports_dry_run callback")
 }
 
@@ -219,7 +222,7 @@ on:
 
 	deploySection := extractJobSection(t, content, "deploy-app:")
 	assert.NotContains(t, deploySection,
-		"dry_run: ${{ inputs.dry_run }}",
+		"dry_run: ${{ github.event.inputs.dry_run }}",
 		"non-supports_dry_run callback must not receive dry_run in orchestrate")
 }
 

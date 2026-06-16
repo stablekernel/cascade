@@ -112,6 +112,7 @@ type DeployConfig struct {
 	DependsOn         []string          `yaml:"depends_on"`
 	OptionalDependsOn []string          `yaml:"optional_depends_on,omitempty"`
 	TimeoutMinutes    int               `yaml:"timeout_minutes,omitempty"`
+	SupportsDryRun    bool              `yaml:"supports_dry_run,omitempty"`
 	RunsOn            any               `yaml:"runs_on,omitempty"`
 	Permissions       map[string]string `yaml:"permissions,omitempty"`
 	Concurrency       *ConcurrencySpec  `yaml:"concurrency,omitempty"`

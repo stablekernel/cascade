@@ -1,0 +1,47 @@
+name: "Dry-Run Passthrough Uses Null-Safe Expression"
+description: |
+  Verifies that the generator emits the null-safe github.event.inputs.dry_run
+  accessor when a deploy callback has supports_dry_run: true.
+
+  The orchestrate workflow is triggered by push, schedule, and workflow_run
+  events -- none of which populate the inputs context. A bare inputs.dry_run
+  expression renders as an empty string on those triggers, which breaks the
+  boolean dispatch to the reusable callback workflow. The generator must use
+  github.event.inputs.dry_run instead so the value is null (and the boolean
+  coercion to false) rather than an empty string that fails type validation.
+
+  Generator-output verification scenario; the assertion runs on the staged repo
+  after StageRepoFromConfig generates workflows but before any orchestrate run,
+  so Docker and act are not required to validate the generated YAML.
+
+config:
+  trunk_branch: main
+  environments: ["dev", "prod"]
+  builds:
+    - name: app
+      workflow: build-app.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy-app.yaml
+      triggers: []
+      supports_dry_run: true
+
+steps:
+  - name: "Initial commit; assert dry_run passthrough uses null-safe accessor"
+    action: commit
+    commit:
+      message: "feat: add app build and deploy with dry-run support"
+      files:
+        src/main.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # The null-safe accessor works across push, schedule, and workflow_run triggers.
+            - "dry_run: ${{ github.event.inputs.dry_run }}"
+          not_contains:
+            # The bare inputs accessor renders empty on non-dispatch triggers and must not appear.
+            - "dry_run: ${{ inputs.dry_run }}"

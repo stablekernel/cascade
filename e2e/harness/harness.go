@@ -383,7 +383,9 @@ func generateStubWorkflow(name, scenarioTag string) string {
 	// generator discovers them and threads the matching preflight outputs through
 	// each deploy's with: block. image_tag drives the source_image_tag passthrough
 	// and image_digest drives the source_image_digest passthrough in the generated
-	// promote workflow.
+	// promote workflow. dry_run is declared so that deploys with supports_dry_run
+	// enabled receive the null-safe passthrough from the orchestrate workflow.
+	// Declaring it here is harmless for callbacks that do not use it.
 	return fmt.Sprintf(`name: %s
 on:
   workflow_call:
@@ -400,6 +402,9 @@ on:
       image_digest:
         required: false
         type: string
+      dry_run:
+        required: false
+        type: boolean
 jobs:
   %s:
     runs-on: ubuntu-latest
