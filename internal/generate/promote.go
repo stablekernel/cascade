@@ -785,7 +785,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			// When the callback opts in to dry-run passthrough, forward the
 			// dispatch input so it can emulate internally.
 			if d.SupportsDryRun {
-				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run == 'true' }}\n")
 			}
 
 			// Passthrough-expression inputs (e.g. ${{ vars.X }}) are excluded
@@ -844,7 +844,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			// When the callback opts in to dry-run passthrough, forward the
 			// dispatch input so it can emulate internally.
 			if d.SupportsDryRun {
-				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+				sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run == 'true' }}\n")
 			}
 		}
 		writeSecretsBlock(sb, d.Secrets)
@@ -882,7 +882,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		// When the callback opts in to dry-run passthrough, forward the
 		// dispatch input so it can emulate internally.
 		if d.SupportsDryRun {
-			sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run }}\n")
+			sb.WriteString("      dry_run: ${{ github.event.inputs.dry_run == 'true' }}\n")
 		}
 		writeSecretsBlock(sb, d.Secrets)
 	}

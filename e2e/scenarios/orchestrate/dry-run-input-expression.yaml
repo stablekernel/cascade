@@ -1,14 +1,16 @@
-name: "Dry-Run Passthrough Uses Null-Safe Expression"
+name: "Dry-Run Passthrough Uses Coerced Null-Safe Expression"
 description: |
   Verifies that the generator emits the null-safe github.event.inputs.dry_run
-  accessor when a deploy callback has supports_dry_run: true.
+  accessor, coerced to a real boolean, when a deploy callback has
+  supports_dry_run: true.
 
   The orchestrate workflow is triggered by push, schedule, and workflow_run
   events -- none of which populate the inputs context. A bare inputs.dry_run
   expression renders as an empty string on those triggers, which breaks the
   boolean dispatch to the reusable callback workflow. The generator must use
-  github.event.inputs.dry_run instead so the value is null (and the boolean
-  coercion to false) rather than an empty string that fails type validation.
+  github.event.inputs.dry_run and compare it against 'true' so the forwarded
+  value is a real boolean rather than an empty string that fails the callback's
+  boolean type validation.
 
   Generator-output verification scenario; the assertion runs on the staged repo
   after StageRepoFromConfig generates workflows but before any orchestrate run,
@@ -40,8 +42,13 @@ steps:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
-            # The null-safe accessor works across push, schedule, and workflow_run triggers.
-            - "dry_run: ${{ github.event.inputs.dry_run }}"
+            # The null-safe accessor, coerced to a boolean, works across push,
+            # schedule, and workflow_run triggers and satisfies the callback's
+            # boolean dry_run input.
+            - "dry_run: ${{ github.event.inputs.dry_run == 'true' }}"
           not_contains:
             # The bare inputs accessor renders empty on non-dispatch triggers and must not appear.
             - "dry_run: ${{ inputs.dry_run }}"
+            # The uncoerced accessor yields an empty string for a boolean callback
+            # input and must not appear in the with: block.
+            - "dry_run: ${{ github.event.inputs.dry_run }}\n"
