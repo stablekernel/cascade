@@ -1243,12 +1243,11 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	fmt.Fprintf(sb, "    name: %s - Retry %d\n", info.DisplayName, retryNum)
 	fmt.Fprintf(sb, "    needs: [setup, %s]\n", prevJobName)
 	fmt.Fprintf(sb, "    if: needs.%s.result == 'failure'\n", prevJobName)
-	// An explicit per-callback timeout-minutes is valid only on a steps job, not
-	// on a reusable-workflow caller job. A retry shim re-invokes the reusable
-	// workflow via uses:, so the timeout must live inside the called workflow.
-	if info.TimeoutMinutes > 0 {
-		fmt.Fprintf(sb, "    timeout-minutes: %d\n", info.TimeoutMinutes)
-	}
+	// timeout-minutes is forbidden on a reusable-workflow caller job
+	// (jobs.<id>.uses): GitHub rejects the workflow at parse time. A retry shim
+	// re-invokes the reusable workflow via uses:, so no timeout is emitted here.
+	// Per-callback timeout_minutes is rejected at config validation
+	// (validateCallbackTimeout); the timeout must live inside the called workflow.
 
 	// Propagate the matrix strategy to the retry job so that ${{ matrix.* }}
 	// references in the reusable workflow's inputs remain bound. Without this,

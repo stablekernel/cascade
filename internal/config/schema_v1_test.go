@@ -434,6 +434,93 @@ builds:
 	})
 }
 
+// TestValidate_TimeoutMinutesOnCallback_Rejected asserts that a per-callback
+// timeout_minutes on a reusable-workflow callback (builds, deploys, validate) is
+// rejected at validation. GitHub forbids timeout-minutes on a job that calls a
+// reusable workflow, and every cascade callback is a reusable-workflow uses: job,
+// so the timeout must live inside the called workflow instead.
+func TestValidate_TimeoutMinutesOnCallback_Rejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+	}{
+		{
+			name: "build callback",
+			manifest: `
+builds:
+  - name: app
+    workflow: b.yaml
+    timeout_minutes: 15
+`,
+		},
+		{
+			name: "deploy callback",
+			manifest: `
+deploys:
+  - name: app
+    workflow: d.yaml
+    timeout_minutes: 15
+`,
+		},
+		{
+			name: "validate callback",
+			manifest: `
+validate:
+  workflow: v.yaml
+  timeout_minutes: 15
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := Validate(parseInline(t, tt.manifest))
+			if !hasErrContaining(errs, "timeout_minutes is not valid on a reusable-workflow callback") {
+				t.Fatalf("expected timeout_minutes rejection, got %v", errs)
+			}
+			if !hasErrContaining(errs, "set timeout-minutes inside your callback workflow") {
+				t.Fatalf("expected actionable timeout-minutes guidance, got %v", errs)
+			}
+		})
+	}
+}
+
+// TestValidate_CallbackWithoutTimeout_Clean asserts the control cases that must
+// keep validating clean: a callback without timeout_minutes, and a manifest-level
+// config.job_timeout_minutes (the cascade-owned job timeout, a different field).
+func TestValidate_CallbackWithoutTimeout_Clean(t *testing.T) {
+	t.Run("callback without timeout_minutes clean", func(t *testing.T) {
+		cfg := parseInline(t, `
+builds:
+  - name: app
+    workflow: b.yaml
+deploys:
+  - name: svc
+    workflow: d.yaml
+`)
+		for _, e := range Validate(cfg) {
+			if strings.Contains(e, "timeout_minutes is not valid") {
+				t.Fatalf("callback without timeout_minutes must validate clean, got %v", e)
+			}
+		}
+	})
+	t.Run("config.job_timeout_minutes not rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+job_timeout_minutes: 20
+builds:
+  - name: app
+    workflow: b.yaml
+`)
+		if cfg.JobTimeoutMinutes != 20 {
+			t.Fatalf("job_timeout_minutes should parse to 20, got %d", cfg.JobTimeoutMinutes)
+		}
+		for _, e := range Validate(cfg) {
+			if strings.Contains(e, "timeout_minutes is not valid") {
+				t.Fatalf("manifest-level job_timeout_minutes must not be rejected, got %v", e)
+			}
+		}
+	})
+}
+
 func TestValidateConcurrencyRejectedOnReusableWorkflow(t *testing.T) {
 	cfg := parseInline(t, `
 deploys:
