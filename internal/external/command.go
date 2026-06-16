@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -121,7 +123,7 @@ func runUpdate(sourceRepo, deployName, environment, sha, version, artifactsJSON 
 		log.Info("%sRunning in dry-run mode", log.DryRunPrefix())
 	}
 
-	// Parse manifest
+	// Parse manifest for validation. Validation runs once, before the retry loop.
 	manifest, err := config.ParseManifestFile(configPath, manifestKey)
 	if err != nil {
 		return fmt.Errorf("parsing manifest: %w", err)
@@ -144,12 +146,11 @@ func runUpdate(sourceRepo, deployName, environment, sha, version, artifactsJSON 
 	}
 
 	// Validate environment
-	envState := manifest.State[environment]
-	if envState == nil {
+	if manifest.State[environment] == nil {
 		return fmt.Errorf("environment '%s' not found in state", environment)
 	}
 
-	// Parse artifacts if provided
+	// Parse artifacts once, before the retry loop.
 	var artifacts map[string]string
 	if artifactsJSON != "" {
 		if err := json.Unmarshal([]byte(artifactsJSON), &artifacts); err != nil {
@@ -157,25 +158,45 @@ func runUpdate(sourceRepo, deployName, environment, sha, version, artifactsJSON 
 		}
 	}
 
-	// Initialize external state map if needed
-	if envState.External == nil {
-		envState.External = make(map[string]*config.ExternalDeployState)
-	}
-
-	// Update or create external deploy state
+	// Capture a single timestamp and actor so retries do not drift them.
 	now := time.Now().UTC().Format(time.RFC3339)
 	actor := os.Getenv("GITHUB_ACTOR")
 	if actor == "" {
 		actor = "unknown"
 	}
 
-	envState.External[deployName] = &config.ExternalDeployState{
-		Repo:       sourceRepo,
-		SHA:        sha,
-		Version:    version,
-		DeployedAt: now,
-		DeployedBy: actor,
-		Artifacts:  artifacts,
+	// applyUpdate re-reads the manifest from disk and applies the external-state
+	// mutation, then writes it back. It re-reads on every call so that after a
+	// fetch-and-reset the mutation merges onto the freshly-fetched remote state
+	// rather than onto a stale in-memory copy.
+	applyUpdate := func() error {
+		m, err := config.ParseManifestFile(configPath, manifestKey)
+		if err != nil {
+			return fmt.Errorf("parsing manifest: %w", err)
+		}
+
+		envState := m.State[environment]
+		if envState == nil {
+			return fmt.Errorf("environment '%s' not found in state", environment)
+		}
+
+		if envState.External == nil {
+			envState.External = make(map[string]*config.ExternalDeployState)
+		}
+
+		envState.External[deployName] = &config.ExternalDeployState{
+			Repo:       sourceRepo,
+			SHA:        sha,
+			Version:    version,
+			DeployedAt: now,
+			DeployedBy: actor,
+			Artifacts:  artifacts,
+		}
+
+		if err := writeManifest(configPath, manifestKey, m); err != nil {
+			return fmt.Errorf("writing manifest: %w", err)
+		}
+		return nil
 	}
 
 	log.Info("Updated external state for %s in %s", deployName, environment)
@@ -185,19 +206,76 @@ func runUpdate(sourceRepo, deployName, environment, sha, version, artifactsJSON 
 		return nil
 	}
 
-	// Write manifest back
-	if err := writeManifest(configPath, manifestKey, manifest); err != nil {
-		return fmt.Errorf("writing manifest: %w", err)
-	}
-
-	// Commit and push
+	// Commit and push with application-level retry. Concurrent external updates
+	// (multiple upstream artifacts notifying the same primary repo) each hold a
+	// checkout whose parent may be stale by push time. Both writes land in the
+	// same YAML region, so a git-level rebase hits a textual conflict it cannot
+	// resolve. commitWithApplicationRetry instead fetches the remote tip, resets
+	// onto it, and re-applies the mutation, so each artifact's slot is preserved.
 	commitMsg := fmt.Sprintf("chore: update %s external state from %s [skip ci]", environment, sourceRepo)
-	if err := git.CommitAndPush(configPath, commitMsg); err != nil {
+	if err := commitWithApplicationRetry(configPath, commitMsg, 5, applyUpdate); err != nil {
 		return fmt.Errorf("committing state: %w", err)
 	}
 
 	log.Info("State committed and pushed")
 	return nil
+}
+
+// commitWithApplicationRetry writes the manifest by calling applyUpdate(), commits
+// filePath with message, and pushes. If the push is rejected non-fast-forward,
+// it fetches the remote tip, resets the working tree to it, and re-applies the
+// mutation before retrying. It retries up to maxAttempts times (starting at 1).
+// applyUpdate must re-read the manifest from disk on each call so it merges onto
+// the freshly-fetched remote state.
+func commitWithApplicationRetry(filePath, commitMsg string, maxAttempts int, applyUpdate func() error) error {
+	var lastPushErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := applyUpdate(); err != nil {
+			return err
+		}
+
+		if out, err := exec.Command("git", "add", filePath).CombinedOutput(); err != nil {
+			return fmt.Errorf("git add failed: %s: %w", string(out), err)
+		}
+
+		out, err := exec.Command("git", "commit", "-m", commitMsg).CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(out), "nothing to commit") {
+				// The on-disk state already matches: re-applying produced no diff.
+				return nil
+			}
+			return fmt.Errorf("git commit failed: %s: %w", string(out), err)
+		}
+
+		_, pushErr := exec.Command("git", "push").CombinedOutput()
+		if pushErr == nil {
+			return nil
+		}
+		lastPushErr = pushErr
+
+		// The push did not succeed (typically a non-fast-forward rejection because
+		// a competing update advanced the remote). Recover by resetting onto the
+		// freshly-fetched remote tip so the next attempt re-applies the mutation on
+		// top of it. A genuinely unrecoverable push error surfaces on the next
+		// fetch/reset, which return wrapped.
+		branch, err := git.CurrentBranch()
+		if err != nil {
+			return fmt.Errorf("determining current branch: %w", err)
+		}
+
+		if out, err := exec.Command("git", "fetch", "origin", branch).CombinedOutput(); err != nil {
+			return fmt.Errorf("git fetch origin %s failed: %s: %w", branch, string(out), err)
+		}
+
+		if out, err := exec.Command("git", "reset", "--hard", "origin/"+branch).CombinedOutput(); err != nil {
+			return fmt.Errorf("git reset --hard origin/%s failed: %s: %w", branch, string(out), err)
+		}
+
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+
+	return fmt.Errorf("git push failed after %d attempts: %w", maxAttempts, lastPushErr)
 }
 
 // writeManifest writes the CICD file back to the manifest under the specified key.
