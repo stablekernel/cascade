@@ -1832,6 +1832,30 @@ func (g *Generator) writePassthroughDownloadJob(sb *strings.Builder, info Callba
 
 	needs := []string{"setup"}
 	needs = append(needs, g.graph.GetDirectDependencies(info.JobID)...)
+
+	// Each consumed artifact is produced by a sibling <producer>-upload post-job
+	// (writePassthroughUploadJob), not by the producer callback itself. The
+	// download must wait for that upload job, otherwise it races ahead and fails
+	// at runtime with "Artifact not found". A consumer's depends_on (if any) only
+	// sequences it after the producer callback, which can finish before its
+	// upload job does, so the upload edge is required independently. Only add the
+	// edge when the producer actually declares an upload (its -upload job exists).
+	seen := make(map[string]bool, len(needs))
+	for _, n := range needs {
+		seen[n] = true
+	}
+	for _, src := range info.PassthroughArtifact.Downloads {
+		producerJobID := config.JobID(config.CallbackTypeBuild, src)
+		producer, ok := g.graph.Nodes[producerJobID]
+		if !ok || producer.PassthroughArtifact == nil || producer.PassthroughArtifact.Upload == "" {
+			continue
+		}
+		uploadJobID := fmt.Sprintf("%s-upload", producerJobID)
+		if !seen[uploadJobID] {
+			seen[uploadJobID] = true
+			needs = append(needs, uploadJobID)
+		}
+	}
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
 
 	// Mirror the callback's if: condition so this job is skipped when the

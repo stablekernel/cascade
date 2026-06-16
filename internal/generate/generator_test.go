@@ -1939,6 +1939,91 @@ func TestGenerator_PassthroughArtifact_ReusableWorkflowDownloadJob(t *testing.T)
 		"compile build with artifact.upload must emit its post-upload job")
 }
 
+// downloadJobNeeds extracts the comma-separated job IDs from the "needs: [...]"
+// line of the named job block in a generated workflow. It returns the raw
+// contents between the brackets (whitespace trimmed per entry). The job block is
+// identified by its "  <jobID>:\n" header at two-space indentation.
+func downloadJobNeeds(t *testing.T, workflow, jobID string) []string {
+	t.Helper()
+	header := "\n  " + jobID + ":\n"
+	idx := strings.Index(workflow, header)
+	require.NotEqual(t, -1, idx, "job %q not found in generated workflow", jobID)
+	rest := workflow[idx+len(header):]
+	// The needs line is emitted immediately after name: for these owned jobs.
+	const marker = "needs: ["
+	nidx := strings.Index(rest, marker)
+	require.NotEqual(t, -1, nidx, "job %q has no needs: line", jobID)
+	rest = rest[nidx+len(marker):]
+	end := strings.Index(rest, "]")
+	require.NotEqual(t, -1, end, "job %q needs: line is malformed", jobID)
+	raw := rest[:end]
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, strings.TrimSpace(p))
+	}
+	return out
+}
+
+// TestGenerator_PassthroughArtifact_DownloadNeedsUploadJob asserts that the
+// cascade-owned download pre-job depends on the producer's -upload post-job for
+// every artifact it consumes. Without this happens-after edge the download job
+// races the upload and fails at runtime with "Artifact not found", which is what
+// a live matrix-build orchestrate run exposed (the bundle build's download ran
+// before the image build's upload completed). The producing build here is a
+// matrix build and the consumer declares no depends_on, mirroring that manifest.
+func TestGenerator_PassthroughArtifact_DownloadNeedsUploadJob(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build-image.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build-bundle.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"staging"},
+		Builds: []config.BuildConfig{
+			{
+				Name:     "image",
+				Workflow: ".github/workflows/build-image.yaml",
+				Triggers: []string{"src/**"},
+				Matrix: &config.MatrixConfig{
+					Dimensions: map[string][]string{
+						"os":   {"linux"},
+						"arch": {"amd64", "arm64"},
+					},
+				},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Upload: "dist/**",
+				},
+			},
+			{
+				// No depends_on: the artifact edge alone must sequence this
+				// download after the producer's upload, exactly as 2env declares.
+				Name:     "bundle",
+				Workflow: ".github/workflows/build-bundle.yaml",
+				Triggers: []string{"src/**"},
+				PassthroughArtifact: &config.PassthroughArtifact{
+					Downloads: []string{"image"},
+				},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The producer must emit its upload post-job.
+	require.Contains(t, result, "build-image-upload:",
+		"matrix build with artifact.upload must emit a post-upload job")
+
+	// The consumer's download pre-job must wait for that upload job so the
+	// artifact exists before the download runs.
+	needs := downloadJobNeeds(t, result, "build-bundle-download")
+	assert.Contains(t, needs, "build-image-upload",
+		"download pre-job must depend on the producer's -upload job, otherwise it races the upload and fails with 'Artifact not found'")
+}
+
 // TestGenerator_DispatchInputs_StringType asserts that a string dispatch_input
 // is emitted correctly in the workflow_dispatch.inputs block.
 func TestGenerator_DispatchInputs_StringType(t *testing.T) {
