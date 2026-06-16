@@ -166,13 +166,16 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 
 // writeConcurrency emits a top-level concurrency: block on the external-update
 // workflow. Every external update writes back the single shared manifest file
-// (cascade external update writes --config under --manifest-key, then
-// git.CommitAndPush of that same path) regardless of source_repo or environment, so
-// ALL concurrent external-update runs race on that one non-fast-forward push. The
-// group key is therefore the bare workflow name, which serializes every
-// external-update run. Queueing (cancel-in-progress: false) is safer than cancelling
-// because the update writes durable manifest state; dropping a mid-flight write
-// leaves the manifest inconsistent.
+// (cascade external update writes --config under --manifest-key, then commits and
+// pushes that same path) regardless of source_repo or environment, so ALL
+// concurrent external-update runs contend for that one push. The group key is
+// therefore the bare workflow name, which serializes every external-update run.
+// Queueing (cancel-in-progress: false) is safer than cancelling because the update
+// writes durable manifest state; dropping a mid-flight write leaves the manifest
+// inconsistent. Serialization alone is not sufficient: a queued run still holds a
+// stale-parent checkout, so cascade external update recovers a rejected push by
+// resetting onto the fetched remote tip and re-applying its state mutation, which
+// absorbs any change that landed while it waited.
 func (g *ExternalUpdateGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
 	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {

@@ -206,6 +206,21 @@ func CommitAndPushWithRetry(filePath, message string) error {
 	return fmt.Errorf("git push failed after 3 retries")
 }
 
+// CurrentBranch returns the name of the currently checked-out branch.
+// It returns an error if the HEAD is detached or the command fails.
+func CurrentBranch() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --abbrev-ref HEAD: %w", err)
+	}
+	branch := strings.TrimSpace(string(output))
+	if branch == "HEAD" {
+		return "", fmt.Errorf("git rev-parse --abbrev-ref HEAD: HEAD is detached")
+	}
+	return branch, nil
+}
+
 // CommitAndPush stages a file, commits with the given message, and pushes to origin.
 func CommitAndPush(filePath, message string) error {
 	// Stage the file

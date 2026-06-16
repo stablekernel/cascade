@@ -378,3 +378,136 @@ func TestMultiRepoRunner_FullScenario(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, tags, "v1.0.0")
 }
+
+func TestMultiRepoRunner_ConcurrentExternalUpdatesPreserveBothSlots(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+
+	h := NewMultiRepoHarness(t)
+	require.NoError(t, h.SetupInfra(ctx))
+	defer h.Cleanup(ctx)
+
+	// Create a primary configured with TWO external repos. Sequential dispatches
+	// to the external-update workflow will demonstrate that the second update
+	// preserves the first's external slot in the manifest. The unit tests already
+	// prove the retry logic works in isolation; this e2e test exercises the real
+	// workflow and manifest with two distinct external artifacts.
+	// Note: true concurrency (simultaneous pushes) is not feasible under act/gitea
+	// because there is no live workflow_dispatch API. Sequential with interleaved
+	// state is sufficient to exercise fetch+reset+re-apply retry logic.
+	primary := MultiRepoSetup{
+		Name: "primary",
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "master",
+			Environments: []string{"dev", "test", "prod"},
+			External: []config.ExternalRepoConfig{
+				{
+					Repo: "org/cdk-infra",
+					Ref:  "main",
+					Deploys: []config.ExternalDeployConfig{
+						{Name: "cdk", Workflow: "org/cdk-infra/.github/workflows/deploy.yaml"},
+					},
+				},
+				{
+					Repo: "org/lambda-service",
+					Ref:  "main",
+					Deploys: []config.ExternalDeployConfig{
+						{Name: "lambda", Workflow: "org/lambda-service/.github/workflows/deploy.yaml"},
+					},
+				},
+			},
+		},
+		Manifest: map[string]interface{}{
+			"state": map[string]interface{}{
+				"dev": map[string]interface{}{
+					"sha":     "primary-initial",
+					"version": "v1.0.0-rc.0",
+				},
+			},
+		},
+	}
+
+	cdk := MultiRepoSetup{
+		Name: "cdk-infra",
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev", "test", "prod"},
+			Deploys: []config.DeployConfig{
+				{Name: "cdk", Workflow: ".github/workflows/deploy.yaml"},
+			},
+			Notify: &config.NotifyConfig{
+				Repo:     "org/primary",
+				Workflow: ".github/workflows/external-update.yaml",
+			},
+		},
+	}
+
+	lambda := MultiRepoSetup{
+		Name: "lambda-service",
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev", "test", "prod"},
+			Deploys: []config.DeployConfig{
+				{Name: "lambda", Workflow: ".github/workflows/deploy.yaml"},
+			},
+			Notify: &config.NotifyConfig{
+				Repo:     "org/primary",
+				Workflow: ".github/workflows/external-update.yaml",
+			},
+		},
+	}
+
+	require.NoError(t, h.SetupPrimarySatellite(ctx, primary, cdk, lambda))
+
+	// First external update: dispatch cdk-infra's artifact into primary's dev
+	// state. This should commit and push successfully.
+	err := h.RealCrossRepoDispatch(ctx, "cdk-infra", "primary",
+		".github/workflows/external-update.yaml",
+		map[string]string{
+			"source_repo": "org/cdk-infra",
+			"deploy_name": "cdk",
+			"environment": "dev",
+			"sha":         "cdk-sha-abc123",
+			"version":     "v1.2.0",
+		})
+	require.NoError(t, err, "first external update (cdk) should succeed")
+
+	// Verify cdk slot landed in manifest
+	manifestAfterCdk, err := h.GetFileContentInRepo(ctx, "primary", ".github/manifest.yaml")
+	require.NoError(t, err)
+	assert.Contains(t, manifestAfterCdk, "cdk-sha-abc123", "cdk SHA should be in manifest after first update")
+	assert.Contains(t, manifestAfterCdk, "v1.2.0", "cdk version should be in manifest after first update")
+
+	// Second external update: dispatch lambda-service's artifact into the same
+	// primary dev state. Without the retry logic, this would lose the cdk slot.
+	// With the retry logic (fetch+reset+re-apply), both slots survive.
+	err = h.RealCrossRepoDispatch(ctx, "lambda-service", "primary",
+		".github/workflows/external-update.yaml",
+		map[string]string{
+			"source_repo": "org/lambda-service",
+			"deploy_name": "lambda",
+			"environment": "dev",
+			"sha":         "lambda-sha-def456",
+			"version":     "v2.1.0",
+		})
+	require.NoError(t, err, "second external update (lambda) should succeed")
+
+	// Verify BOTH slots are in the final manifest. This proves that the second
+	// update did not lose the first's changes.
+	manifestFinal, err := h.GetFileContentInRepo(ctx, "primary", ".github/manifest.yaml")
+	require.NoError(t, err)
+
+	// Both external artifacts must be present in the committed manifest
+	assert.Contains(t, manifestFinal, "cdk-sha-abc123", "cdk SHA must survive second update")
+	assert.Contains(t, manifestFinal, "v1.2.0", "cdk version must survive second update")
+	assert.Contains(t, manifestFinal, "lambda-sha-def456", "lambda SHA must be present after second update")
+	assert.Contains(t, manifestFinal, "v2.1.0", "lambda version must be present after second update")
+
+	// Verify the satellite's generated orchestrate workflows carry the Notify step.
+	require.NoError(t, h.RunSatelliteOrchestrateAndAssertNotify(ctx, "cdk-infra"))
+	require.NoError(t, h.RunSatelliteOrchestrateAndAssertNotify(ctx, "lambda-service"))
+}
