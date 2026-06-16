@@ -31,6 +31,10 @@ type Config struct {
 	TrunkBranch       string         `yaml:"trunk_branch"`
 	Environments      []string       `yaml:"environments"`
 	JobTimeoutMinutes int            `yaml:"job_timeout_minutes,omitempty"`
+	// ReleaseToken carries the release_token field through to the generated
+	// manifest. It accepts a full ${{ secrets.* }} expression or a bare secret
+	// name; the generator normalizes a bare name to a resolvable expression.
+	ReleaseToken string `yaml:"release_token,omitempty"`
 	Builds            []BuildConfig  `yaml:"builds"`
 	Deploys           []DeployConfig `yaml:"deploys"`
 	Publish           *PublishConfig `yaml:"publish,omitempty"`

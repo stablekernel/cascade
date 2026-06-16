@@ -45,6 +45,76 @@ func TestGenerator_OrchestrateHasConcurrencyBlock(t *testing.T) {
 	assert.Contains(t, result, "cancel-in-progress: true", "default concurrency cancels in-progress")
 }
 
+// bareTokenPattern matches a `token: NAME` (or `GH_TOKEN: NAME`) line whose
+// value is a bare, unresolved identifier rather than a `${{ ... }}` expression.
+// Such a value reaches a step as a literal string and fails authentication.
+var bareTokenPattern = regexp.MustCompile(`(?m)^\s*(?:GH_)?[Tt][Oo][Kk][Ee][Nn]:\s+([A-Za-z_][A-Za-z0-9_]*)\s*$`)
+
+// TestGenerator_ReleaseTokenBareSecretNameIsWrapped reproduces the
+// cascade-example-primary manifest shape: a `release_token` set to a bare
+// secret name. The generator previously emitted that name verbatim into the
+// Setup CLI step (`token: CASCADE_STATE_TOKEN`), which `gh release download`
+// then treated as a literal token and rejected with 401. The token input must
+// be a resolvable `${{ secrets.* }}` expression.
+func TestGenerator_ReleaseTokenBareSecretNameIsWrapped(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "test", "staging", "prod"},
+		ReleaseToken: "CASCADE_STATE_TOKEN", // bare secret name, as in the primary example
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The Setup CLI token must be the wrapped, resolvable expression.
+	assert.Contains(t, result, "token: ${{ secrets.CASCADE_STATE_TOKEN }}",
+		"Setup CLI token must be a resolvable secrets expression")
+	// And must never appear as the bare name.
+	assert.NotContains(t, result, "token: CASCADE_STATE_TOKEN\n",
+		"Setup CLI token must not be a bare secret name")
+
+	// Regression guard: no emitted token: (or GH_TOKEN:) line may be a bare
+	// identifier. Every token must be a ${{ ... }} expression.
+	if m := bareTokenPattern.FindStringSubmatch(result); m != nil {
+		t.Errorf("generated workflow emits a bare, unresolved token value %q; tokens must be ${{ ... }} expressions", m[1])
+	}
+}
+
+// TestGenerator_DefaultReleaseTokenIsGitHubToken confirms the single-env shape
+// (no release_token configured) still emits the GITHUB_TOKEN expression, which
+// can read public releases.
+func TestGenerator_DefaultReleaseTokenIsGitHubToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "token: ${{ secrets.GITHUB_TOKEN }}",
+		"default Setup CLI token must be GITHUB_TOKEN")
+	if m := bareTokenPattern.FindStringSubmatch(result); m != nil {
+		t.Errorf("generated workflow emits a bare token value %q", m[1])
+	}
+}
+
 // TestGenerator_OrchestrateConcurrencyOverride asserts manifest config
 // can override both group and cancel-in-progress.
 func TestGenerator_OrchestrateConcurrencyOverride(t *testing.T) {
