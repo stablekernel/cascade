@@ -449,6 +449,7 @@ func (g *Generator) discoverOutputsAndInputs() error {
 	allCallbacks := []struct {
 		jobID    string
 		name     string
+		cbType   string
 		workflow string
 		inputs   map[string]interface{}
 	}{}
@@ -457,30 +458,48 @@ func (g *Generator) discoverOutputsAndInputs() error {
 		allCallbacks = append(allCallbacks, struct {
 			jobID    string
 			name     string
+			cbType   string
 			workflow string
 			inputs   map[string]interface{}
-		}{"validate", "validate", g.config.Validate.Workflow, g.config.Validate.Inputs})
+		}{"validate", "validate", config.CallbackTypeValidate, g.config.Validate.Workflow, g.config.Validate.Inputs})
 	}
 	for _, b := range g.config.Builds {
 		jobID := config.JobID(config.CallbackTypeBuild, b.Name)
 		allCallbacks = append(allCallbacks, struct {
 			jobID    string
 			name     string
+			cbType   string
 			workflow string
 			inputs   map[string]interface{}
-		}{jobID, b.Name, b.Workflow, b.Inputs})
+		}{jobID, b.Name, config.CallbackTypeBuild, b.Workflow, b.Inputs})
 	}
 	for _, d := range g.config.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
 		allCallbacks = append(allCallbacks, struct {
 			jobID    string
 			name     string
+			cbType   string
 			workflow string
 			inputs   map[string]interface{}
-		}{jobID, d.Name, d.Workflow, d.Inputs})
+		}{jobID, d.Name, config.CallbackTypeDeploy, d.Workflow, d.Inputs})
 	}
 
 	for _, cb := range allCallbacks {
+		// Cross-repo callbacks reference a reusable workflow in another
+		// repository (org/repo/.github/workflows/file.yaml@ref). That file does
+		// not exist on local disk, so we cannot parse it to discover its inputs
+		// and outputs. Seed the callback's contract surface instead of doing a
+		// local read that would always fail on the literal "@ref" path.
+		if config.IsExternalWorkflow(cb.workflow) {
+			g.inputs[cb.jobID] = crossRepoInputs(cb.cbType, cb.inputs)
+			g.outputs[cb.jobID] = crossRepoOutputs(cb.cbType)
+			// The framework always provides environment/sha/dry_run, so a
+			// cross-repo callback has no required input cascade cannot satisfy
+			// from its own knowledge. Leave required empty rather than guessing.
+			g.requiredInputs[cb.jobID] = nil
+			continue
+		}
+
 		// Read the stub from the normalized location so a bare filename
 		// (build.yaml) resolves to .github/workflows/build.yaml, which is where
 		// GitHub requires local reusable workflows to live and where the emitted
@@ -510,6 +529,45 @@ func (g *Generator) discoverOutputsAndInputs() error {
 		g.requiredInputs[cb.jobID] = requiredInputs
 	}
 
+	return nil
+}
+
+// crossRepoInputs returns the set of input names a cross-repo callback is
+// assumed to declare. Because the external workflow is in another repository and
+// cannot be parsed locally, this falls back to the callback contract: every
+// validate/build/deploy callback declares the standard environment, sha, and
+// dry_run inputs, plus any inputs the operator wired explicitly in the manifest
+// (inputs:/env_inputs:). Returning these makes writeWithInputs emit the standard
+// with: wiring (environment, sha, dry_run when supported) for the caller job, so
+// the live cross-repo call receives the contract inputs the external workflow
+// expects. Names are de-duplicated; order is not significant to callers.
+func crossRepoInputs(callbackType string, operatorInputs map[string]interface{}) []string {
+	// Standard callback-contract inputs (see docs callback-contract.md).
+	names := []string{"environment", "sha", "dry_run"}
+	seen := map[string]struct{}{"environment": {}, "sha": {}, "dry_run": {}}
+
+	// Operator-declared manifest inputs are passed through by writeWithInputs
+	// only when the callback declares them, so surface them here too.
+	for name := range operatorInputs {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	_ = callbackType // reserved for future per-type input differences
+	return names
+}
+
+// crossRepoOutputs returns the output names a cross-repo callback is assumed to
+// declare. Build callbacks follow the contract's recommended artifact_id output
+// (captured to state and forwarded to dependents), which matches what the
+// example fleet's external build callbacks expose. Validate and deploy callbacks
+// declare no standard outputs, so none are assumed.
+func crossRepoOutputs(callbackType string) []string {
+	if callbackType == config.CallbackTypeBuild {
+		return []string{"artifact_id"}
+	}
 	return nil
 }
 
