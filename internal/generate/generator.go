@@ -1097,9 +1097,11 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 	// renders empty. Passing "" into a callback's boolean dry_run input fails the
 	// reusable-workflow dispatch. The github.event.inputs accessor is null-safe on
 	// those events (the callback falls back to its dry_run default), and on dispatch
-	// it still forwards the operator's value.
+	// it still forwards the operator's value. Compare against 'true' so the result is
+	// a real boolean: the callback input is type: boolean, and GitHub Actions rejects
+	// the empty string that github.event.inputs.dry_run yields on non-dispatch events.
 	if info.SupportsDryRun {
-		inputs = append(inputs, "      dry_run: ${{ github.event.inputs.dry_run }}")
+		inputs = append(inputs, "      dry_run: ${{ github.event.inputs.dry_run == 'true' }}")
 	}
 
 	// For build callbacks with a matrix, pass each dimension's current value to
@@ -1128,7 +1130,15 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 		sort.Strings(names)
 		for _, name := range names {
 			if g.jobHasInput(info.JobID, name) {
-				inputs = append(inputs, fmt.Sprintf("      %s: ${{ inputs.%s }}", name, name))
+				// Boolean dispatch_inputs forward through the inputs context, which is
+				// a string. A callback declaring the matching input as type: boolean
+				// rejects the bare string, so compare against 'true' to coerce it to a
+				// real boolean. Non-boolean inputs are forwarded verbatim.
+				if g.config.DispatchInputs[name].Type == config.DispatchInputTypeBoolean {
+					inputs = append(inputs, fmt.Sprintf("      %s: ${{ inputs.%s == 'true' }}", name, name))
+				} else {
+					inputs = append(inputs, fmt.Sprintf("      %s: ${{ inputs.%s }}", name, name))
+				}
 			}
 		}
 	}

@@ -13,7 +13,7 @@ import (
 
 // TestPromote_SupportsDryRun_SingleDeploy verifies that a deploy callback with
 // supports_dry_run: true is invoked (not skipped) during a dry-run promote and
-// receives dry_run: ${{ github.event.inputs.dry_run }} in its with: block.
+// receives dry_run: ${{ github.event.inputs.dry_run == 'true' }} in its with: block.
 func TestPromote_SupportsDryRun_SingleDeploy(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
@@ -41,10 +41,18 @@ func TestPromote_SupportsDryRun_SingleDeploy(t *testing.T) {
 		"contains(fromJSON(needs.preflight.outputs.deploys_to_run), 'app')",
 		"supports_dry_run deploy must still be gated on deploys_to_run")
 
-	// dry_run must be forwarded in the with: block.
+	// dry_run must be forwarded in the with: block, coerced to a real boolean so
+	// the reusable callback's boolean dry_run input accepts it on every trigger.
 	assert.Contains(t, content,
-		"dry_run: ${{ github.event.inputs.dry_run }}",
-		"supports_dry_run deploy must receive dry_run input")
+		"dry_run: ${{ github.event.inputs.dry_run == 'true' }}",
+		"supports_dry_run deploy must receive coerced dry_run input")
+
+	// The bare (uncoerced) form must not appear in the with: block; it renders as
+	// an empty string on push/schedule/workflow_run and fails boolean validation.
+	jobSection := extractJobSection(t, content, "deploy-app:")
+	assert.NotContains(t, jobSection,
+		"dry_run: ${{ github.event.inputs.dry_run }}\n",
+		"supports_dry_run deploy must not forward the uncoerced dry_run value")
 }
 
 // TestPromote_NoSupportsDryRun_SingleDeploy verifies that a deploy callback
@@ -75,7 +83,7 @@ func TestPromote_NoSupportsDryRun_SingleDeploy(t *testing.T) {
 	// (Check within the deploy-app job block only to avoid false matches.)
 	jobSection := extractJobSection(t, content, "deploy-app:")
 	assert.NotContains(t, jobSection,
-		"dry_run: ${{ github.event.inputs.dry_run }}",
+		"dry_run: ${{",
 		"non-supports_dry_run deploy must not receive dry_run input")
 }
 
@@ -137,9 +145,9 @@ func TestPromote_SupportsDryRun_NormalRunUnaffected(t *testing.T) {
 }
 
 // TestOrchestrate_SupportsDryRun_WithInputPassthrough verifies that the
-// orchestrate generator passes dry_run: ${{ inputs.dry_run }} to a deploy
-// callback that declares supports_dry_run: true, given the workflow file
-// declares a dry_run input.
+// orchestrate generator passes a coerced dry_run value to a deploy callback that
+// declares supports_dry_run: true, given the workflow file declares a dry_run
+// boolean input.
 func TestOrchestrate_SupportsDryRun_WithInputPassthrough(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
@@ -176,12 +184,17 @@ on:
 	require.NoError(t, err)
 
 	// dry_run must be forwarded in the with: block to the deploy job using the
-	// null-safe github.event.inputs accessor. The bare inputs.dry_run form renders
-	// empty on push/schedule/workflow_run, which is invalid for a boolean callback
-	// input and fails the reusable-workflow dispatch.
+	// null-safe github.event.inputs accessor, coerced to a real boolean. The bare
+	// (uncoerced) form renders empty on push/schedule/workflow_run, which is
+	// invalid for a boolean callback input and fails the reusable-workflow dispatch.
 	assert.Contains(t, content,
-		"dry_run: ${{ github.event.inputs.dry_run }}",
-		"orchestrate generator must pass dry_run to a supports_dry_run callback")
+		"dry_run: ${{ github.event.inputs.dry_run == 'true' }}",
+		"orchestrate generator must pass coerced dry_run to a supports_dry_run callback")
+
+	// The uncoerced form must not appear in the with: block.
+	assert.NotContains(t, content,
+		"dry_run: ${{ github.event.inputs.dry_run }}\n",
+		"orchestrate generator must not forward the uncoerced dry_run value")
 }
 
 // TestOrchestrate_NoSupportsDryRun_NoDryRunInput verifies that a deploy
@@ -222,8 +235,115 @@ on:
 
 	deploySection := extractJobSection(t, content, "deploy-app:")
 	assert.NotContains(t, deploySection,
-		"dry_run: ${{ github.event.inputs.dry_run }}",
+		"dry_run: ${{",
 		"non-supports_dry_run callback must not receive dry_run in orchestrate")
+}
+
+// TestOrchestrate_SupportsDryRun_CoercedNotBare verifies the orchestrate
+// generator emits the boolean-coerced dry_run passthrough and never the bare
+// uncoerced expression inside a with: block.
+func TestOrchestrate_SupportsDryRun_CoercedNotBare(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+
+	deployWorkflow := `
+name: Deploy
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+      dry_run:
+        type: boolean
+`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".github/workflows/deploy.yaml"),
+		[]byte(deployWorkflow), 0644,
+	))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Deploys: []config.DeployConfig{
+			{
+				Name:           "app",
+				Workflow:       ".github/workflows/deploy.yaml",
+				SupportsDryRun: true,
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content,
+		"dry_run: ${{ github.event.inputs.dry_run == 'true' }}",
+		"orchestrate must forward the coerced dry_run value")
+	assert.NotContains(t, content,
+		"dry_run: ${{ github.event.inputs.dry_run }}\n",
+		"orchestrate must not forward the bare dry_run value in a with: block")
+}
+
+// TestOrchestrate_DispatchInputs_BooleanCoercion verifies that a boolean
+// dispatch_input forwarded into a callback with: block is coerced
+// (NAME: ${{ inputs.NAME == 'true' }}) while a string dispatch_input stays bare
+// (NAME: ${{ inputs.NAME }}).
+func TestOrchestrate_DispatchInputs_BooleanCoercion(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+
+	deployWorkflow := `
+name: Deploy
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+      verbose:
+        type: boolean
+      region:
+        type: string
+`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".github/workflows/deploy.yaml"),
+		[]byte(deployWorkflow), 0644,
+	))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Deploys: []config.DeployConfig{
+			{
+				Name:     "app",
+				Workflow: ".github/workflows/deploy.yaml",
+			},
+		},
+		DispatchInputs: map[string]config.DispatchInput{
+			"verbose": {Type: config.DispatchInputTypeBoolean},
+			"region":  {Type: config.DispatchInputTypeString},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// Boolean dispatch input must be coerced to a real boolean.
+	assert.Contains(t, content,
+		"verbose: ${{ inputs.verbose == 'true' }}",
+		"boolean dispatch_input must be coerced in the callback with: block")
+	assert.NotContains(t, content,
+		"verbose: ${{ inputs.verbose }}\n",
+		"boolean dispatch_input must not be forwarded uncoerced")
+
+	// String dispatch input stays bare.
+	assert.Contains(t, content,
+		"region: ${{ inputs.region }}",
+		"string dispatch_input must be forwarded verbatim")
+	assert.NotContains(t, content,
+		"region: ${{ inputs.region == 'true' }}",
+		"string dispatch_input must not be coerced")
 }
 
 // extractJobSection returns the YAML lines for a named job block, stopping at
