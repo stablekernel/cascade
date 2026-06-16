@@ -657,3 +657,68 @@ func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
 	assert.Contains(t, content, "group: my-custom-external", "custom group must propagate to external-update")
 	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to external-update")
 }
+
+// TestNotifyPrimaryStep_BuildOnlySatellite_EmitsDeployName verifies that a
+// build-only satellite (builds + notify, zero deploys) still emits a non-empty
+// deploy_name in the dispatch to the primary's external-update workflow. The
+// consumer declares deploy_name as required: true, so omitting it produces a
+// live 422 "Required input 'deploy_name' not provided". The fallback is the
+// first build name, which represents this satellite's artifact.
+func TestNotifyPrimaryStep_BuildOnlySatellite_EmitsDeployName(t *testing.T) {
+	baseDir := t.TempDir()
+	createMockWorkflow(t, baseDir, ".github/workflows/build-shared.yaml")
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "shared", Workflow: ".github/workflows/build-shared.yaml", Triggers: []string{"src/**"}},
+		},
+		// No deploys: this is a build-only artifact satellite.
+		Notify: &config.NotifyConfig{
+			Repo:     "example/primary-backend",
+			Workflow: ".github/workflows/external-update.yaml",
+		},
+	}
+
+	require.True(t, cfg.IsSatellite())
+	require.Empty(t, cfg.Deploys)
+
+	gen := NewGenerator(cfg, baseDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	require.Contains(t, content, "Notify Primary Repo")
+	// The dispatch inputs MUST include a non-empty deploy_name. Falls back to
+	// the first build name when there are no deploys.
+	assert.Contains(t, content, "deploy_name: 'shared',",
+		"build-only satellite must emit a non-empty deploy_name (consumer requires it)")
+}
+
+// TestNotifyPrimaryStep_NoStrayDotInJobsAccessor verifies the github-script
+// context accessor uses context.jobs['id'] form with no stray dot before the
+// bracket. The earlier context.jobs.['id'] form is invalid JavaScript and would
+// fail at runtime for any satellite that collects deploy outputs.
+func TestNotifyPrimaryStep_NoStrayDotInJobsAccessor(t *testing.T) {
+	baseDir := t.TempDir()
+	createMockWorkflow(t, baseDir, ".github/workflows/deploy-cdk.yaml")
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Deploys: []config.DeployConfig{
+			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml", Triggers: []string{"cdk/**"}},
+		},
+		Notify: &config.NotifyConfig{
+			Repo:     "example/primary-backend",
+			Workflow: ".github/workflows/external-update.yaml",
+		},
+	}
+
+	gen := NewGenerator(cfg, baseDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.NotContains(t, content, "context.jobs.[",
+		"github-script accessor must not have a stray dot before the bracket")
+}
