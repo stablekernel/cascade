@@ -129,7 +129,7 @@ The dotted form is deliberate. Under semver precedence the pre-release field lis
 v1.4.0-rc.2 < v1.4.0-rc.2.hotfix.1 < v1.4.0-rc.2.hotfix.2 < v1.4.0-rc.3
 ```
 
-A hotfix version therefore slots cleanly between its base rc and the next rc, and it never collides with the orchestrator's rc sequence. The rc-shaped tag and draft cleanup logic matches only `vX.Y.Z-rc.N`, so it is inert on hotfix tags; hotfix tags and drafts are cleaned up explicitly when the divergence ends.
+A hotfix version therefore slots cleanly between its base rc and the next rc, and it never collides with the orchestrator's rc sequence. The rc-shaped tag and draft cleanup logic matches the plain `<prefix>X.Y.Z-rc.N` shape for the configured `tag_prefix` (the default `v`, a custom prefix such as `rel-`, or no prefix), so it is inert on hotfix tags; hotfix tags and drafts are cleaned up explicitly when the divergence ends.
 
 ### Published (no rc) base
 

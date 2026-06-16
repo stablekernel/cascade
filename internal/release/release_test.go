@@ -467,6 +467,92 @@ func TestManager_Publish(t *testing.T) {
 	assert.NotContains(t, deletedTags, "v0.9.0-rc.2") // Different base version
 }
 
+// TestManager_Publish_CustomTagPrefix verifies that publishing a release with a
+// custom tag prefix (e.g. "rel-") cleans up the superseded RC git tags. The RC
+// cleanup must match the configured prefix, not assume the default "v".
+func TestManager_Publish_CustomTagPrefix(t *testing.T) {
+	deletedTags := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// GET /releases/tags/rel-0.1.0-rc.0 - find release by RC tag
+		if r.Method == "GET" && strings.Contains(r.URL.Path, "/releases/tags/") {
+			_ = json.NewEncoder(w).Encode(GitHubRelease{
+				ID:              777,
+				TagName:         "rel-0.1.0-rc.0",
+				TargetCommitish: "abc123",
+				Draft:           false,
+				Prerelease:      true,
+				Body:            "## Status: Deployed to Release\n\n## Changes\n- Release ready",
+			})
+			return
+		}
+
+		// POST /git/refs - create semver tag
+		if r.Method == "POST" && strings.Contains(r.URL.Path, "/git/refs") {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+
+		// GET /git/refs/tags - list tags for cleanup
+		if r.Method == "GET" && r.URL.Path == "/repos/owner/repo/git/refs/tags" {
+			_ = json.NewEncoder(w).Encode([]map[string]string{
+				{"ref": "refs/tags/rel-0.1.0-rc.0"},
+				{"ref": "refs/tags/rel-0.1.0-rc.1"},
+				{"ref": "refs/tags/rel-0.2.0-rc.0"}, // Different base version - should NOT be deleted
+				{"ref": "refs/tags/v0.1.0-rc.0"},    // Different prefix - should NOT be deleted
+			})
+			return
+		}
+
+		// DELETE /git/refs/tags/* - delete RC tags
+		if r.Method == "DELETE" && strings.Contains(r.URL.Path, "/git/refs/tags/") {
+			tag := strings.TrimPrefix(r.URL.Path, "/repos/owner/repo/git/refs/tags/")
+			deletedTags = append(deletedTags, tag)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		// PATCH /releases/777 - update release
+		if r.Method == "PATCH" {
+			var payload map[string]interface{}
+			err := json.NewDecoder(r.Body).Decode(&payload)
+			require.NoError(t, err)
+			assert.Equal(t, "rel-0.1.0", payload["tag_name"])
+			_ = json.NewEncoder(w).Encode(GitHubRelease{
+				ID:      777,
+				URL:     "https://api.github.com/repos/owner/repo/releases/777",
+				HTMLURL: "https://github.com/owner/repo/releases/tag/rel-0.1.0",
+			})
+			return
+		}
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL,
+		token:   "test-token",
+		repo:    "owner/repo",
+	}
+
+	result, err := manager.Manage(Options{
+		Action:      ActionPublish,
+		Environment: "prod",
+		SHA:         "abc123",
+		Tag:         "rel-0.1.0",
+		DeleteTag:   "rel-0.1.0-rc.0",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(777), result.ReleaseID)
+
+	// Only the rel-0.1.0 RC tags are deleted; other bases and prefixes survive.
+	assert.Len(t, deletedTags, 2)
+	assert.Contains(t, deletedTags, "rel-0.1.0-rc.0")
+	assert.Contains(t, deletedTags, "rel-0.1.0-rc.1")
+	assert.NotContains(t, deletedTags, "rel-0.2.0-rc.0") // Different base version
+	assert.NotContains(t, deletedTags, "v0.1.0-rc.0")    // Different prefix
+}
+
 func TestManager_Create_CleansUpStaleDrafts(t *testing.T) {
 	deletedIDs := []int64{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -569,12 +655,18 @@ func TestParseRCTag(t *testing.T) {
 		{"v1.0.0-rc.1", "v1.0.0", 1, true},
 		{"v1.2.3-rc.42", "v1.2.3", 42, true},
 		{"v0.1.0-rc.3", "v0.1.0", 3, true},
-		{"v1.0.0", "", -1, false},     // No RC suffix
-		{"1.0.0-rc.1", "", -1, false}, // Missing v prefix
-		{"v1.0-rc.1", "", -1, false},  // Invalid semver
-		{"v1.0.0-1", "", -1, false},   // Legacy format (no rc. prefix)
-		{"invalid", "", -1, false},    // Not a version
-		{"", "", -1, false},           // Empty
+		{"rel-0.1.0-rc.0", "rel-0.1.0", 0, true},         // Custom prefix
+		{"rel-1.2.3-rc.7", "rel-1.2.3", 7, true},         // Custom prefix
+		{"release/2.0.0-rc.4", "release/2.0.0", 4, true}, // Slash-style prefix
+		{"1.0.0-rc.1", "1.0.0", 1, true},                 // Empty prefix
+		{"0.1.0-rc.0", "0.1.0", 0, true},                 // Empty prefix
+		{"v1.0.0", "", -1, false},               // No RC suffix
+		{"v1.0-rc.1", "", -1, false},            // Invalid semver
+		{"v1.0.0-1", "", -1, false},             // Legacy format (no rc. prefix)
+		{"v1.0.0-rc.2.hotfix.1", "", -1, false}, // Hotfix suffix is not a plain RC tag
+		{"v1.0.0-rc.x", "", -1, false},          // Non-numeric RC
+		{"invalid", "", -1, false},              // Not a version
+		{"", "", -1, false},                     // Empty
 	}
 
 	for _, tt := range tests {
