@@ -1091,8 +1091,15 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 
 	// When a callback opts in to dry-run emulation, pass the dry_run dispatch
 	// input through so the callback can emulate internally instead of being skipped.
+	// Use github.event.inputs.dry_run rather than the bare inputs.dry_run context:
+	// orchestrate is triggered by push/schedule/workflow_run as well as dispatch,
+	// and on the non-dispatch events the inputs context is null so ${{ inputs.dry_run }}
+	// renders empty. Passing "" into a callback's boolean dry_run input fails the
+	// reusable-workflow dispatch. The github.event.inputs accessor is null-safe on
+	// those events (the callback falls back to its dry_run default), and on dispatch
+	// it still forwards the operator's value.
 	if info.SupportsDryRun {
-		inputs = append(inputs, "      dry_run: ${{ inputs.dry_run }}")
+		inputs = append(inputs, "      dry_run: ${{ github.event.inputs.dry_run }}")
 	}
 
 	// For build callbacks with a matrix, pass each dimension's current value to
