@@ -496,6 +496,13 @@ type PublishConfig struct {
 type ReleaseConfig struct {
 	Disabled bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"` // true = disabled
 	Tag      string `yaml:"tag,omitempty" json:"tag,omitempty"`           // callback.output reference for external releases
+
+	// Workflow is the optional reusable-workflow path dispatched after a final
+	// release is published, for example to build and attach release binaries to
+	// the published release (e.g. ".github/workflows/release-build.yaml"). When
+	// unset, no release-build dispatch is emitted and publishing a release does
+	// not trigger any follow-on workflow.
+	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"`
 }
 
 // ExternalRepoConfig defines an external repository that this primary coordinates

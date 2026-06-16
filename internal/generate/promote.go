@@ -1199,28 +1199,26 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
-	// Trigger the Release workflow to build and attach binaries. GitHub does
-	// not reliably fire release event webhooks when a draft release is
-	// PATCHed to non-draft via API calls inside a workflow run (cf. #86).
-	// An explicit workflow_dispatch is the only reliably-triggered path.
-	// Only runs on publish (final release creation), not on prerelease
+	// Trigger the configured release-build workflow to build and attach binaries.
+	// GitHub does not reliably fire release event webhooks when a draft release is
+	// PATCHed to non-draft via API calls inside a workflow run (cf. #86), so an
+	// explicit workflow_dispatch is the only reliably-triggered path. This step is
+	// emitted only when `release.workflow` is set, dispatches that configured
+	// workflow, and runs on publish (final release creation) but not on prerelease
 	// or env-to-env promotions.
-	sb.WriteString("      - name: Trigger Release Build\n")
-	sb.WriteString("        if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.is_final_env == 'true' }}\n")
-	sb.WriteString("        env:\n")
-	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
-	sb.WriteString("          TAG: ${{ steps.release-data.outputs.sem_version }}\n")
-	sb.WriteString("        run: |\n")
-	sb.WriteString("          # Only dispatch on real GitHub. In act/gitea e2e environments\n")
-	sb.WriteString("          # GITHUB_SERVER_URL is http://gitea:3000 and the Release workflow\n")
-	sb.WriteString("          # doesn't exist, so skip silently.\n")
-	sb.WriteString("          if [[ \"$GITHUB_SERVER_URL\" != \"https://github.com\" ]]; then\n")
-	sb.WriteString("            echo \"Skipping Release dispatch (not running on github.com: $GITHUB_SERVER_URL)\"\n")
-	sb.WriteString("            exit 0\n")
-	sb.WriteString("          fi\n")
-	sb.WriteString("          gh workflow run Release \\\n")
-	sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
-	sb.WriteString("            --ref \"$TAG\"\n\n")
+	if g.config.Release != nil && g.config.Release.Workflow != "" {
+		sb.WriteString("      - name: Trigger Release Build\n")
+		sb.WriteString("        if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.is_final_env == 'true' }}\n")
+		sb.WriteString("        env:\n")
+		fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
+		sb.WriteString("          TAG: ${{ steps.release-data.outputs.sem_version }}\n")
+		sb.WriteString("        run: |\n")
+		sb.WriteString("          # Dispatch the configured release-build workflow against the\n")
+		sb.WriteString("          # published tag so it can build and attach release binaries.\n")
+		sb.WriteString("          gh workflow run " + normalizeWorkflowPath(g.config.Release.Workflow) + " \\\n")
+		sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
+		sb.WriteString("            --ref \"$TAG\"\n\n")
+	}
 
 	// Publish callback: invoke once per configured build so users can retag
 	// artifacts in their registries (Docker, Helm, npm, etc.). Only emitted
