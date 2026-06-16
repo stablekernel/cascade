@@ -1,0 +1,55 @@
+name: "Callback Permissions Union (OIDC)"
+description: |
+  Verifies that per-callback permissions declared on a build callback are
+  unioned into the calling orchestrate.yaml's top-level permissions block. A
+  reusable-workflow caller job cannot carry job-level permissions, so any scope
+  a callback needs (notably id-token: write for OIDC) must be granted at the top
+  level of the calling workflow instead.
+
+  The api build declares permissions: {id-token: write, packages: read}. The
+  generated orchestrate.yaml must keep its base scopes (contents: write,
+  actions: read) and append the callback scopes in deterministic alphabetical
+  order (id-token before packages). The caller job itself must NOT carry a
+  job-level permissions block, since GitHub Actions forbids permissions on a
+  reusable-workflow call.
+
+  Generator-output verification scenario; the assertion runs on the staged repo
+  after StageRepoFromConfig generates workflows but before any orchestrate runs.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: api
+      workflow: build-api.yaml
+      triggers: ["src/**"]
+      permissions:
+        id-token: write
+        packages: read
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert callback permissions union in orchestrate.yaml"
+    action: commit
+    commit:
+      message: "feat: add api callback requiring id-token for oidc"
+      files:
+        src/main.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # Base scopes are preserved.
+            - "contents: write"
+            - "actions: read"
+            # Callback scopes are unioned in at the top level.
+            - "id-token: write"
+            - "packages: read"
+          not_contains:
+            # A reusable-workflow caller job cannot carry job-level permissions;
+            # the scopes live only in the top-level block, so the per-callback
+            # OIDC grant never appears as a job-scoped permissions line directly
+            # under the build-api caller's uses:.
+            - "uses: ./.github/workflows/build-api.yaml\n    permissions:"

@@ -2,6 +2,8 @@ package generate
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
 )
@@ -264,6 +266,70 @@ func defaultString(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// collectCallbackPermissions unions the per-callback permissions of every
+// callback in the manifest (validate, builds, deploys). A reusable-workflow
+// caller job cannot carry job-level permissions, so any scope a callback needs
+// (notably id-token: write for OIDC) must be granted by the calling workflow's
+// top-level permissions block instead. The result is that union keyed by scope.
+//
+// Precedence when two callbacks set the same scope to different values: "write"
+// always wins over any other value, since GHA permission scopes are monotonic
+// (write subsumes read). Otherwise the last-declared value for the scope is
+// kept; in practice callbacks agree on a scope's value, so this only matters
+// for the read/write distinction handled above.
+func collectCallbackPermissions(cfg *config.TrunkConfig) map[string]string {
+	graph := BuildDependencyGraph(cfg)
+	union := make(map[string]string)
+	for _, node := range graph.Nodes {
+		for scope, value := range node.Permissions {
+			if existing, ok := union[scope]; ok && existing == "write" {
+				continue
+			}
+			union[scope] = value
+		}
+	}
+	return union
+}
+
+// writeTopLevelPermissions emits a top-level permissions: block. The base scopes
+// are written first in their given order (preserving each generator's historical
+// output), then any callback-union scope not already present in base is appended
+// in alphabetical order for deterministic output. When a scope appears in both
+// base and the callback union, the more-permissive value wins ("write" over a
+// non-write value), so base scopes can be promoted to write by a callback that
+// requires it. A trailing blank line is emitted to match the prior blocks.
+//
+// When the callback union is empty and contributes nothing, the output is
+// byte-identical to the historical hardcoded base block.
+func writeTopLevelPermissions(sb *strings.Builder, base [][2]string, callbackUnion map[string]string) {
+	sb.WriteString("permissions:\n")
+
+	inBase := make(map[string]bool, len(base))
+	for _, kv := range base {
+		scope, value := kv[0], kv[1]
+		inBase[scope] = true
+		// Promote to write if a callback requires write on this base scope.
+		if value != "write" && callbackUnion[scope] == "write" {
+			value = "write"
+		}
+		fmt.Fprintf(sb, "  %s: %s\n", scope, value)
+	}
+
+	// Append callback-only scopes (not in base) in deterministic sorted order.
+	extra := make([]string, 0, len(callbackUnion))
+	for scope := range callbackUnion {
+		if !inBase[scope] {
+			extra = append(extra, scope)
+		}
+	}
+	sort.Strings(extra)
+	for _, scope := range extra {
+		fmt.Fprintf(sb, "  %s: %s\n", scope, callbackUnion[scope])
+	}
+
+	sb.WriteString("\n")
 }
 
 // ensureValidateDependency adds "validate" to deps if not already present
