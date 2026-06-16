@@ -190,6 +190,7 @@ func Validate(cfg *TrunkConfig) []string {
 		// rejects on a jobs.<id>.uses call. matrix: is builds-only.
 		isReusable := b.Workflow != ""
 		errors = append(errors, validateJobControlFields(fmt.Sprintf("builds[%d]", i), isReusable, b.RunsOn, b.Concurrency)...)
+		errors = append(errors, validateCallbackTimeout(fmt.Sprintf("builds[%d]", i), isReusable, b.TimeoutMinutes)...)
 		errors = append(errors, validatePermissions(fmt.Sprintf("builds[%d]", i), b.Permissions)...)
 		errors = append(errors, validateSecrets(fmt.Sprintf("builds[%d]", i), b.Secrets)...)
 
@@ -250,6 +251,7 @@ func Validate(cfg *TrunkConfig) []string {
 		// rejects on a jobs.<id>.uses call. rollout: is deploys-only.
 		isReusable := d.Workflow != ""
 		errors = append(errors, validateJobControlFields(fmt.Sprintf("deploys[%d]", i), isReusable, d.RunsOn, d.Concurrency)...)
+		errors = append(errors, validateCallbackTimeout(fmt.Sprintf("deploys[%d]", i), isReusable, d.TimeoutMinutes)...)
 		errors = append(errors, validatePermissions(fmt.Sprintf("deploys[%d]", i), d.Permissions)...)
 		errors = append(errors, validateSecrets(fmt.Sprintf("deploys[%d]", i), d.Secrets)...)
 		errors = append(errors, validateRollout(fmt.Sprintf("deploys[%d]", i), d.Rollout, cfg.Environments)...)
@@ -300,6 +302,7 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validateLocalCallbackWorkflowPath("validate", v.Workflow)...)
 		isReusable := v.Workflow != ""
 		errors = append(errors, validateJobControlFields("validate", isReusable, v.RunsOn, v.Concurrency)...)
+		errors = append(errors, validateCallbackTimeout("validate", isReusable, v.TimeoutMinutes)...)
 		errors = append(errors, validatePermissions("validate", v.Permissions)...)
 		errors = append(errors, validateSecrets("validate", v.Secrets)...)
 	}

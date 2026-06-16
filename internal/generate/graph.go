@@ -29,15 +29,15 @@ type CallbackInfo struct {
 	RunPolicy      string
 	OnFailure      string
 	Retries        int
-	TimeoutMinutes int                  // Job-level timeout-minutes (omitted when 0)
 	Matrix         *config.MatrixConfig // Build fan-out; nil for deploys and validate
 	SupportsDryRun bool                 // When true, dry-run promotes invoke the callback with dry_run: true instead of skipping it
 
 	// Per-callback job attributes carried from config. GHA forbids
-	// runs-on/permissions/concurrency on a reusable-workflow uses: callback, and
-	// schema validation rejects runs_on/permissions/concurrency on reusable
-	// callbacks. Callbacks are reusable-workflow only, so these fields are
-	// populated from config but never emitted as job-level keys.
+	// runs-on/permissions/concurrency/timeout-minutes on a reusable-workflow uses:
+	// callback, and schema validation rejects runs_on/permissions/concurrency/
+	// timeout_minutes on reusable callbacks. Callbacks are reusable-workflow only,
+	// so these fields are populated from config but never emitted as job-level keys.
+	TimeoutMinutes int                       // Per-callback timeout-minutes; validated-against, never emitted (belongs inside the called workflow)
 	RunsOn      *config.RunsOn            // Per-callback runner selection (#12)
 	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15)
 	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17)
