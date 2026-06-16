@@ -1596,7 +1596,7 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	for _, d := range g.config.Deploys {
 		jobID := config.JobID(config.CallbackTypeDeploy, d.Name)
 		for _, out := range g.outputs[jobID] {
-			fmt.Fprintf(sb, "            if (context.jobs.['%s']?.outputs?.%s) {\n", jobID, out)
+			fmt.Fprintf(sb, "            if (context.jobs['%s']?.outputs?.%s) {\n", jobID, out)
 			fmt.Fprintf(sb, "              artifacts['%s'] = context.jobs['%s'].outputs.%s;\n", out, jobID, out)
 			sb.WriteString("            }\n")
 		}
@@ -1612,9 +1612,18 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	sb.WriteString("              inputs: {\n")
 	sb.WriteString("                source_repo: context.repo.owner + '/' + context.repo.repo,\n")
 
-	// Use first deploy name as the deploy_name (satellites typically have one deploy)
-	if len(g.config.Deploys) > 0 {
+	// deploy_name is required: true by the primary's external-update consumer, so
+	// it must always be present and non-empty. Prefer the first deploy name
+	// (satellites typically have one deploy); fall back to the first build name
+	// for build-only artifact satellites; otherwise use the satellite's own repo
+	// name from the runtime context as a last-resort identifier.
+	switch {
+	case len(g.config.Deploys) > 0:
 		fmt.Fprintf(sb, "                deploy_name: '%s',\n", g.config.Deploys[0].Name)
+	case len(g.config.Builds) > 0:
+		fmt.Fprintf(sb, "                deploy_name: '%s',\n", g.config.Builds[0].Name)
+	default:
+		sb.WriteString("                deploy_name: context.repo.repo,\n")
 	}
 
 	if len(g.config.Environments) > 0 {
