@@ -711,14 +711,14 @@ func (g *Generator) writeConcurrency(sb *strings.Builder) {
 
 func (g *Generator) writePermissions(sb *strings.Builder) {
 	// Base: permissions needed for release management (tags, releases) and state
-	// commits. A reusable callback cannot set its own job permissions, so any
-	// scope a callback declares (e.g. id-token: write for OIDC) is unioned in at
-	// the top level here.
+	// commits. Callback scopes (e.g. id-token: write for OIDC) are scoped to
+	// their own caller job via writeCallbackPermissions, not granted here, so the
+	// top-level block stays least privilege for cascade's own orchestration jobs.
 	base := [][2]string{
 		{"contents", "write"},
 		{"actions", "read"},
 	}
-	writeTopLevelPermissions(sb, base, collectCallbackPermissions(g.config))
+	writeTopLevelPermissions(sb, base)
 }
 
 func (g *Generator) writeJobs(sb *strings.Builder) {

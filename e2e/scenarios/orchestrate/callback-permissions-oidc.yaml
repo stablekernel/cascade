@@ -1,20 +1,22 @@
 name: "Callback Permissions (OIDC)"
 description: |
-  Verifies that per-callback permissions declared on a build callback are
-  rendered as a job-level permissions: block on the reusable-workflow caller
-  job, and are also unioned into the calling orchestrate.yaml's top-level
-  permissions block.
+  Verifies that per-callback permissions declared on a build callback are scoped
+  to the reusable-workflow caller job (least privilege) rather than widened into
+  the calling orchestrate.yaml's top-level permissions block.
 
   GitHub Actions allows a permissions: key on a job that calls a reusable
-  workflow (jobs.<id>.uses), so cascade scopes the caller job to least privilege
-  per callback. This is what enables id-token: write for cloud OIDC on exactly
-  the callback that needs it.
+  workflow (jobs.<id>.uses), so cascade renders the callback's declared scopes on
+  that one caller job. This confines the elevated scopes (notably id-token: write
+  for cloud OIDC) to the exact callback that needs them, shrinking the OIDC blast
+  radius instead of granting those scopes to every job in the workflow.
 
   The api build declares permissions: {id-token: write, packages: read}. The
-  generated orchestrate.yaml must keep its base top-level scopes (contents:
-  write, actions: read) and append the callback scopes in deterministic
-  alphabetical order (id-token before packages). The build-api caller job must
-  additionally carry its own job-level permissions: block with those scopes.
+  generated orchestrate.yaml must keep its top-level block at the base scopes only
+  (contents: write, actions: read) and render a separate job-level permissions:
+  block on the build-api caller job with the callback's scopes in deterministic
+  alphabetical order (id-token before packages). The declared map is the complete
+  permission set for that job; cascade emits exactly what is declared and does not
+  inject any implicit scope.
 
   Generator-output verification scenario; the assertion runs on the staged repo
   after StageRepoFromConfig generates workflows but before any orchestrate runs.
@@ -47,13 +49,13 @@ steps:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
-            # Base top-level scopes are preserved.
-            - "contents: write"
-            - "actions: read"
-            # Callback scopes are unioned in at the top level.
-            - "id-token: write"
-            - "packages: read"
+            # The top-level block is exactly the base scopes: matching the whole
+            # block (permissions: through its trailing blank line) proves the
+            # callback scopes are absent from the top level. A plain not_contains
+            # over the file cannot exclude the job-level occurrence below.
+            - "permissions:\n  contents: write\n  actions: read\n\n"
             # The build-api caller job renders its own job-level permissions:
             # block (GitHub allows permissions: on a uses: caller job), scoped to
-            # the callback's declared scopes in sorted order.
+            # the callback's declared scopes in sorted order, immediately before
+            # the uses: line.
             - "    permissions:\n      id-token: write\n      packages: read\n    uses: ./.github/workflows/build-api.yaml"

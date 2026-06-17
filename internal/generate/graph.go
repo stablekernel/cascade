@@ -45,9 +45,12 @@ type CallbackInfo struct {
 	// runs-on/concurrency/timeout-minutes on a reusable-workflow uses: caller
 	// job, and schema validation rejects runs_on/concurrency/timeout_minutes on
 	// reusable callbacks, so those fields are populated from config but never
-	// emitted as job-level keys. permissions: is the exception: GitHub allows it
-	// on a uses: caller job, so Permissions IS rendered as a job-level
-	// permissions: block (see writeCallbackPermissions).
+	// emitted as job-level keys. permissions: is different: GitHub allows it on a
+	// uses: caller job, so Permissions IS rendered as a job-level permissions:
+	// block scoped to exactly this callback (least privilege; see
+	// writeCallbackPermissions). These scopes are not merged into the workflow's
+	// top-level permissions block, keeping the OIDC blast radius confined to this
+	// one caller job.
 	TimeoutMinutes int                       // Per-callback timeout-minutes; validated-against, never emitted (belongs inside the called workflow)
 	RunsOn      *config.RunsOn            // Per-callback runner selection (#12); validated-against, never emitted
 	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15); emitted as job-level permissions:
@@ -270,69 +273,19 @@ func defaultString(s, def string) string {
 	return s
 }
 
-// collectCallbackPermissions unions the per-callback permissions of every
-// callback in the manifest (validate, builds, deploys). A reusable-workflow
-// caller job cannot carry job-level permissions, so any scope a callback needs
-// (notably id-token: write for OIDC) must be granted by the calling workflow's
-// top-level permissions block instead. The result is that union keyed by scope.
-//
-// Precedence when two callbacks set the same scope to different values: the
-// lexicographically greatest value wins. This keeps "write" ahead of "read"
-// ahead of "none", matching the monotonic GHA permission order (write subsumes
-// read), and is independent of map iteration order so the union is fully
-// deterministic. In practice callbacks agree on a scope's value, so this only
-// matters for the read/write distinction.
-func collectCallbackPermissions(cfg *config.TrunkConfig) map[string]string {
-	graph := BuildDependencyGraph(cfg)
-	union := make(map[string]string)
-	for _, node := range graph.Nodes {
-		for scope, value := range node.Permissions {
-			if existing, ok := union[scope]; ok && existing >= value {
-				continue
-			}
-			union[scope] = value
-		}
-	}
-	return union
-}
-
-// writeTopLevelPermissions emits a top-level permissions: block. The base scopes
-// are written first in their given order (preserving each generator's historical
-// output), then any callback-union scope not already present in base is appended
-// in alphabetical order for deterministic output. When a scope appears in both
-// base and the callback union, the more-permissive value wins ("write" over a
-// non-write value), so base scopes can be promoted to write by a callback that
-// requires it. A trailing blank line is emitted to match the prior blocks.
-//
-// When the callback union is empty and contributes nothing, the output is
-// byte-identical to the historical hardcoded base block.
-func writeTopLevelPermissions(sb *strings.Builder, base [][2]string, callbackUnion map[string]string) {
+// writeTopLevelPermissions emits a top-level permissions: block carrying only
+// the given base scopes, in their given order (preserving each generator's
+// historical output), followed by a trailing blank line to match the prior
+// blocks. Callback scopes are deliberately NOT merged here: each callback's
+// declared scopes are rendered on its own caller job by writeCallbackPermissions
+// so the GITHUB_TOKEN is scoped to least privilege per callback (shrinking the
+// OIDC blast radius). The top-level block grants only what cascade's own
+// orchestration jobs need.
+func writeTopLevelPermissions(sb *strings.Builder, base [][2]string) {
 	sb.WriteString("permissions:\n")
-
-	inBase := make(map[string]bool, len(base))
 	for _, kv := range base {
-		scope, value := kv[0], kv[1]
-		inBase[scope] = true
-		// Promote the base scope if a callback requires a more-permissive value
-		// (e.g. write over read), using the same lexicographic order as the union.
-		if cb, ok := callbackUnion[scope]; ok && cb > value {
-			value = cb
-		}
-		fmt.Fprintf(sb, "  %s: %s\n", scope, value)
+		fmt.Fprintf(sb, "  %s: %s\n", kv[0], kv[1])
 	}
-
-	// Append callback-only scopes (not in base) in deterministic sorted order.
-	extra := make([]string, 0, len(callbackUnion))
-	for scope := range callbackUnion {
-		if !inBase[scope] {
-			extra = append(extra, scope)
-		}
-	}
-	sort.Strings(extra)
-	for _, scope := range extra {
-		fmt.Fprintf(sb, "  %s: %s\n", scope, callbackUnion[scope])
-	}
-
 	sb.WriteString("\n")
 }
 

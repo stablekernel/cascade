@@ -171,16 +171,17 @@ func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
 // (required before gh pr create --label), pull-requests:write to open the
 // resolution PR, and actions:read for workflow introspection.
 func (g *HotfixGenerator) writePermissions(sb *strings.Builder) {
-	// Base scopes the hotfix workflow needs. A reusable callback cannot set its
-	// own job permissions, so any scope a callback declares (e.g. id-token: write
-	// for OIDC) is unioned in at the top level here.
+	// Base scopes the hotfix workflow needs. A callback's own scopes (e.g.
+	// id-token: write for OIDC) are scoped to its caller job via
+	// writeCallbackPermissions, not granted here, so the top-level block stays
+	// least privilege.
 	base := [][2]string{
 		{"contents", "write"},
 		{"issues", "write"},
 		{"pull-requests", "write"},
 		{"actions", "read"},
 	}
-	writeTopLevelPermissions(sb, base, collectCallbackPermissions(g.config))
+	writeTopLevelPermissions(sb, base)
 }
 
 // writeConcurrency keys the group per target environment. On dispatch the env is

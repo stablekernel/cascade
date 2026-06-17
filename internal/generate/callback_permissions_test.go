@@ -48,12 +48,12 @@ func writeCallWorkflow(t *testing.T, dir, rel string) {
 	require.NoError(t, os.WriteFile(full, []byte("on:\n  workflow_call:\n"), 0644))
 }
 
-// TestOrchestrate_TopLevelPermissions_UnionIncludesCallbackScopes asserts that a
-// build callback declaring id-token: write propagates into the calling
-// workflow's top-level permissions union, alongside the base contents/actions
-// scopes. A reusable-workflow caller job cannot set job-level permissions, so the
-// top-level block must grant the union.
-func TestOrchestrate_TopLevelPermissions_UnionIncludesCallbackScopes(t *testing.T) {
+// TestOrchestrate_TopLevelPermissions_ExcludesCallbackScopes asserts that a build
+// callback declaring id-token: write does NOT widen the calling workflow's
+// top-level permissions block. The callback scope is scoped to the caller job
+// (least privilege); the top-level block carries only cascade's own
+// orchestration scopes.
+func TestOrchestrate_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
 	writeCallWorkflow(t, tmpDir, ".github/workflows/build.yaml")
@@ -78,13 +78,15 @@ func TestOrchestrate_TopLevelPermissions_UnionIncludesCallbackScopes(t *testing.
 	perms := topLevelPermissions(t, result)
 	assert.Contains(t, perms, "contents: write")
 	assert.Contains(t, perms, "actions: read")
-	assert.Contains(t, perms, "id-token: write")
+	assert.NotContains(t, perms, "id-token: write",
+		"callback-only scopes must not leak into the top-level block")
 }
 
-// TestOrchestrate_TopLevelPermissions_Deterministic asserts the appended
-// callback-only scopes are emitted in stable sorted order and that repeated
-// generation is byte-identical.
-func TestOrchestrate_TopLevelPermissions_Deterministic(t *testing.T) {
+// TestOrchestrate_CallbackJobPermissions_CarryDeclaredScopes asserts that the
+// build callback's declared scopes are rendered on the caller job's own
+// job-level permissions: block, in deterministic sorted order, and that
+// repeated generation is byte-identical.
+func TestOrchestrate_CallbackJobPermissions_CarryDeclaredScopes(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
 	writeCallWorkflow(t, tmpDir, ".github/workflows/build.yaml")
@@ -117,14 +119,22 @@ func TestOrchestrate_TopLevelPermissions_Deterministic(t *testing.T) {
 		assert.Equal(t, first, result, "generation must be byte-identical across runs")
 	}
 
-	perms := topLevelPermissions(t, first)
-	// Base scopes keep their existing order; callback-only scopes are appended
-	// sorted alphabetically: id-token before packages.
-	idIdx := strings.Index(perms, "id-token: write")
-	pkgIdx := strings.Index(perms, "packages: read")
+	job := jobSection(first, "build-app:")
+	assert.Contains(t, job, "permissions:")
+	assert.Contains(t, job, "id-token: write")
+	assert.Contains(t, job, "packages: read")
+	// Scopes render in sorted order so output is deterministic (id-token before
+	// packages).
+	idIdx := strings.Index(job, "id-token: write")
+	pkgIdx := strings.Index(job, "packages: read")
 	require.NotEqual(t, -1, idIdx)
 	require.NotEqual(t, -1, pkgIdx)
-	assert.Less(t, idIdx, pkgIdx, "callback-only scopes must be sorted alphabetically")
+	assert.Less(t, idIdx, pkgIdx, "callback scopes must be emitted in sorted order")
+
+	// The top-level block must not carry the callback-only scopes.
+	perms := topLevelPermissions(t, first)
+	assert.NotContains(t, perms, "id-token: write")
+	assert.NotContains(t, perms, "packages: read")
 }
 
 // TestOrchestrate_TopLevelPermissions_NoCallbackPermsByteIdentical asserts that
@@ -153,10 +163,10 @@ func TestOrchestrate_TopLevelPermissions_NoCallbackPermsByteIdentical(t *testing
 	assert.Contains(t, result, "permissions:\n  contents: write\n  actions: read\n")
 }
 
-// TestPromote_TopLevelPermissions_UnionIncludesCallbackScopes asserts deploy
-// callback OIDC permissions propagate into the promote workflow's top-level
-// union, alongside its base contents/actions scopes.
-func TestPromote_TopLevelPermissions_UnionIncludesCallbackScopes(t *testing.T) {
+// TestPromote_TopLevelPermissions_ExcludesCallbackScopes asserts deploy callback
+// OIDC permissions do NOT widen the promote workflow's top-level block; they are
+// scoped to the caller job instead.
+func TestPromote_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
@@ -176,13 +186,14 @@ func TestPromote_TopLevelPermissions_UnionIncludesCallbackScopes(t *testing.T) {
 	perms := topLevelPermissions(t, result)
 	assert.Contains(t, perms, "contents: write")
 	assert.Contains(t, perms, "actions: write")
-	assert.Contains(t, perms, "id-token: write")
+	assert.NotContains(t, perms, "id-token: write",
+		"callback-only scopes must not leak into the top-level block")
 }
 
-// TestRollback_TopLevelPermissions_UnionIncludesCallbackScopes asserts deploy
-// callback OIDC permissions propagate into the rollback workflow's top-level
-// union, alongside its base contents/actions scopes.
-func TestRollback_TopLevelPermissions_UnionIncludesCallbackScopes(t *testing.T) {
+// TestRollback_TopLevelPermissions_ExcludesCallbackScopes asserts deploy callback
+// OIDC permissions do NOT widen the rollback workflow's top-level block; they are
+// scoped to the caller job instead.
+func TestRollback_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
@@ -202,5 +213,6 @@ func TestRollback_TopLevelPermissions_UnionIncludesCallbackScopes(t *testing.T) 
 	perms := topLevelPermissions(t, result)
 	assert.Contains(t, perms, "contents: write")
 	assert.Contains(t, perms, "actions: write")
-	assert.Contains(t, perms, "id-token: write")
+	assert.NotContains(t, perms, "id-token: write",
+		"callback-only scopes must not leak into the top-level block")
 }

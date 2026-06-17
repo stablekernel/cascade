@@ -139,15 +139,15 @@ func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("\n")
 
 	// Base: contents:write to commit the rolled-back state; actions:write for
-	// parity with the promote workflow's release/dispatch surface. A reusable
-	// callback cannot set its own job permissions, so any scope a deploy callback
-	// declares (e.g. id-token: write for OIDC) is unioned in at the top level
-	// here.
+	// parity with the promote workflow's release/dispatch surface. A deploy
+	// callback's own scopes (e.g. id-token: write for OIDC) are scoped to its
+	// caller job via writeCallbackPermissions, not granted here, so the top-level
+	// block stays least privilege.
 	base := [][2]string{
 		{"contents", "write"},
 		{"actions", "write"},
 	}
-	writeTopLevelPermissions(sb, base, collectCallbackPermissions(g.config))
+	writeTopLevelPermissions(sb, base)
 }
 
 // writeConcurrency serializes rollback runs so concurrent state writes cannot
