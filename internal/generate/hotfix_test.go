@@ -763,6 +763,49 @@ func TestHotfixGenerator_ApplySkippedOnNoOp(t *testing.T) {
 		"apply job must skip when the plan reports a no-op")
 }
 
+// TestHotfixGenerator_FinalizeWritesStateWithStateToken guards the trunk
+// branch-protection block on the finalize state write. The finalize step runs
+// `cascade hotfix finalize`, which performs a Contents REST API write to the
+// trunk manifest. Authored by the default GITHUB_TOKEN (github-actions[bot]) that
+// write is rejected by trunk's require-pull-request rule with a 409. The state
+// token is an admin PAT configured to bypass that rule (enforce_admins=false),
+// exactly as the promote and orchestrate finalize state writes do. The step's
+// GH_TOKEN must therefore carry the configured state token, not bare
+// GITHUB_TOKEN.
+func TestHotfixGenerator_FinalizeWritesStateWithStateToken(t *testing.T) {
+	cfg := threeEnvHotfixConfig()
+	cfg.StateToken = "${{ secrets.CASCADE_BOT_TOKEN }}"
+	gen := NewHotfixGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	finalizeJob := extractJobSection(t, content, "finalize:")
+	require.NotEmpty(t, finalizeJob, "finalize job section should be present")
+
+	// The Contents API write that finalize performs against the protected trunk
+	// must authenticate with the trigger-capable state token, mirroring promote.
+	assert.Contains(t, finalizeJob, "GH_TOKEN: ${{ secrets.CASCADE_BOT_TOKEN }}",
+		"finalize must write trunk state with the state token so it bypasses trunk's require-PR protection; bare GITHUB_TOKEN is blocked with a 409")
+	assert.NotContains(t, finalizeJob, "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+		"finalize GH_TOKEN must not be the bot GITHUB_TOKEN when a state token is configured")
+}
+
+// TestHotfixGenerator_FinalizeStateTokenDefaultsToGitHubToken confirms back-compat:
+// with no state token configured the finalize step's GH_TOKEN degrades to the
+// default GITHUB_TOKEN expression, matching the token plumbing used by the apply,
+// merge, promote, and orchestrate state writes. A repo with a protected trunk
+// must configure a bypass-capable state_token for finalize to succeed there.
+func TestHotfixGenerator_FinalizeStateTokenDefaultsToGitHubToken(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	finalizeJob := extractJobSection(t, content, "finalize:")
+	require.NotEmpty(t, finalizeJob, "finalize job section should be present")
+	assert.Contains(t, finalizeJob, "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+		"with no state token configured the finalize GH_TOKEN must fall back to GITHUB_TOKEN")
+}
+
 // TestHotfixGenerator_FinalizeFetchesEnvBranches guards that the finalize job
 // fetches the env/* branches before running the verb. finalize cross-checks the
 // merge SHA against the env-branch tip; without the fetch the branch is absent
