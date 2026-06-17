@@ -131,6 +131,20 @@ steps:
       # head and replays the check, so the resolution path stays covered.
       prs:
         open_with_label: "cascade-hotfix"
+      # The gitea harness creates PR labels on demand, so it cannot reproduce the
+      # real-GitHub behavior where "gh pr create --label X" fails hard when X does
+      # not yet exist. That gap let a missing label seed ship undetected: the
+      # generated apply job opened the conflict PR with --label
+      # cascade-hotfix-conflict but never created that label. Assert against the
+      # materialized workflow that real GitHub runs verbatim: the apply job must
+      # seed both labels before any PR is opened, and the workflow must request
+      # issues:write so "gh label create" is authorized.
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          contains:
+            - "gh label create cascade-hotfix "
+            - "gh label create cascade-hotfix-conflict "
+            - "issues: write"
 
   - name: "Resolve conflict with patched content for Version 1 base"
     action: resolve_conflict
