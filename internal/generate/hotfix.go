@@ -30,6 +30,9 @@ const hotfixConflictLabel = "cascade-hotfix-conflict"
 // The workflow carries two triggers in one file: a workflow_dispatch entry that
 // plans and applies the cherry-pick, and a pull_request (closed) entry that runs
 // the build, deploy, and finalize stages when the resolution pull request merges.
+// The clean-path merge runs as the configured state token so the merge is
+// trigger capable and the pull_request (closed) chain actually fires; a merge
+// authored by the default GITHUB_TOKEN would not emit that event.
 //
 // This generator is gated on the configured environment count: it emits only
 // when two or more environments are declared, because a single-environment
@@ -46,6 +49,18 @@ func NewHotfixGenerator(cfg *config.TrunkConfig, baseDir string) *HotfixGenerato
 		config:  cfg,
 		baseDir: baseDir,
 	}
+}
+
+// getStateTokenRef returns the token expression used to merge the clean-path
+// resolution PR. It mirrors the release and promote generators: users configure
+// the full expression via the state_token config option, and it defaults to the
+// GITHUB_TOKEN expression when unset. The clean-path merge must run as this
+// actor so the merge emits a pull_request(closed) event and reaches the build,
+// deploy, and finalize chain; the default GITHUB_TOKEN does not emit that event,
+// so a hotfix into a repo with no configured state token records no state until
+// the operator supplies a trigger-capable token here.
+func (g *HotfixGenerator) getStateTokenRef() string {
+	return g.config.GetStateToken()
 }
 
 // Enabled reports whether the hotfix workflow should be emitted. The workflow is
@@ -238,9 +253,11 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 }
 
 // writeApplyJob emits the apply job, run on dispatch when not a dry-run. It
-// cherry-picks the commit onto a hotfix branch and opens a resolution PR. Clean
-// cherry-picks auto-merge; conflicting ones open a labeled PR for local
-// resolution and do not auto-merge.
+// cherry-picks the commit onto a hotfix branch and opens a resolution PR. A
+// clean cherry-pick is merged by the dedicated merge step as the configured
+// state token, which polls until the PR is mergeable so a protected env branch
+// with a required check still gates the merge. A conflicting cherry-pick opens a
+// labeled PR for local resolution and is merged by a human via the UI.
 func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("  apply:\n")
 	sb.WriteString("    name: Apply Hotfix Cherry-Pick\n")
@@ -316,15 +333,15 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "              --label %s \\\n", hotfixLabel)
 	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA}\" \\\n")
 	sb.WriteString("              --body \"$BODY\"\n")
-	// Prefer auto-merge so required checks gate the merge on protected
-	// branches. GitHub rejects enablePullRequestAutoMerge when the target
-	// branch has no protection rule, so fall back to an immediate squash
-	// merge. The `if !` guard keeps the failing attempt from tripping
-	// `set -e` and aborting the step.
-	sb.WriteString("            if ! gh pr merge --auto --squash \"$BRANCH\"; then\n")
-	sb.WriteString("              echo \"::notice::auto-merge unavailable (branch likely unprotected); merging directly\"\n")
-	sb.WriteString("              gh pr merge --squash --delete-branch \"$BRANCH\"\n")
-	sb.WriteString("            fi\n")
+	// Hand the resolution branch to the dedicated merge step. The merge runs
+	// as the configured state token (a trigger-capable actor), which the
+	// job-level GH_TOKEN is not, so it has to be a separate step with its own
+	// env. The clean path is the only one that auto-merges; the conflict path
+	// leaves the merge to a human via the UI.
+	sb.WriteString("            {\n")
+	sb.WriteString("              echo \"HOTFIX_BRANCH=$BRANCH\"\n")
+	sb.WriteString("              echo \"HOTFIX_CLEAN_MERGE=true\"\n")
+	sb.WriteString("            } >> \"$GITHUB_ENV\"\n")
 	sb.WriteString("          else\n")
 	sb.WriteString("            echo \"::warning::Cherry-pick conflicted; opening resolution PR for manual resolve\"\n")
 	sb.WriteString("            CONFLICTS=$(git diff --name-only --diff-filter=U)\n")
@@ -338,6 +355,57 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "              --label %s \\\n", hotfixConflictLabel)
 	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA} (conflicts)\" \\\n")
 	sb.WriteString("              --body \"$CONFLICT_BODY\"\n")
+	sb.WriteString("          fi\n")
+
+	g.writeCleanMergeStep(sb)
+}
+
+// writeCleanMergeStep emits the clean-path merge step. It runs only after a
+// clean cherry-pick (signalled by HOTFIX_CLEAN_MERGE) and merges the resolution
+// PR as the configured state token. The merge must be authored by a
+// trigger-capable actor: a merge authored by the default GITHUB_TOKEN does not
+// emit a pull_request(closed) event, so the build, deploy, and finalize chain
+// would never run and the target environment's state would never be recorded.
+//
+// The step polls PR mergeability before merging, so a protected env branch with
+// a required status check still gates the merge until that check is green. An
+// unprotected branch reports mergeable on the first poll, so the same loop
+// merges immediately. On timeout it fails loudly so the operator sees the stuck
+// resolution PR rather than a silently skipped finalize.
+func (g *HotfixGenerator) writeCleanMergeStep(sb *strings.Builder) {
+	sb.WriteString("      - name: Merge clean resolution PR\n")
+	sb.WriteString("        if: env.HOTFIX_CLEAN_MERGE == 'true'\n")
+	sb.WriteString("        env:\n")
+	// Merge as the configured state token so the merge is trigger capable and
+	// reaches finalize. Defaults to GITHUB_TOKEN when unset; that default does
+	// not emit the pull_request event, so operators that need finalize after a
+	// hotfix must configure a trigger-capable state_token.
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
+	sb.WriteString("          BRANCH: ${{ env.HOTFIX_BRANCH }}\n")
+	sb.WriteString("        run: |\n")
+	// Poll mergeability for up to ~5 minutes (20 attempts, 15s apart) so a
+	// required status check on a protected env branch has time to report. The
+	// `if` guard keeps an individual non-fatal gh call from aborting the loop;
+	// only the timeout path exits non-zero.
+	sb.WriteString("          ATTEMPTS=20\n")
+	sb.WriteString("          SLEEP=15\n")
+	sb.WriteString("          MERGED=false\n")
+	sb.WriteString("          for i in $(seq 1 \"$ATTEMPTS\"); do\n")
+	sb.WriteString("            STATE=$(gh pr view \"$BRANCH\" --json mergeable,mergeStateStatus -q '.mergeable + \" \" + .mergeStateStatus' 2>/dev/null || echo \"UNKNOWN UNKNOWN\")\n")
+	sb.WriteString("            MERGEABLE=$(echo \"$STATE\" | cut -d' ' -f1)\n")
+	sb.WriteString("            STATUS=$(echo \"$STATE\" | cut -d' ' -f2)\n")
+	sb.WriteString("            echo \"::notice::resolution PR mergeable=$MERGEABLE state=$STATUS (attempt $i/$ATTEMPTS)\"\n")
+	sb.WriteString("            if [ \"$MERGEABLE\" = \"MERGEABLE\" ] && [ \"$STATUS\" != \"BLOCKED\" ]; then\n")
+	sb.WriteString("              if gh pr merge --squash --delete-branch \"$BRANCH\"; then\n")
+	sb.WriteString("                MERGED=true\n")
+	sb.WriteString("                break\n")
+	sb.WriteString("              fi\n")
+	sb.WriteString("            fi\n")
+	sb.WriteString("            sleep \"$SLEEP\"\n")
+	sb.WriteString("          done\n")
+	sb.WriteString("          if [ \"$MERGED\" != \"true\" ]; then\n")
+	sb.WriteString("            echo \"::error::Resolution PR for $BRANCH did not become mergeable within the timeout; merge it manually to run the hotfix finalize chain\"\n")
+	sb.WriteString("            exit 1\n")
 	sb.WriteString("          fi\n")
 }
 

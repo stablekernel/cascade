@@ -150,27 +150,54 @@ func TestHotfixGenerator_CleanPath(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, content, "--label cascade-hotfix")
-	assert.Contains(t, content, "gh pr merge --auto")
+	assert.Contains(t, content, "gh pr merge --squash --delete-branch \"$BRANCH\"")
 }
 
-// TestHotfixGenerator_CleanPathMergeFallback guards the regression where the
-// clean cherry-pick path merged with `gh pr merge --auto`, which calls GitHub's
-// enablePullRequestAutoMerge mutation. GitHub rejects that mutation on a branch
-// with no protection rule, so the hotfix step exited non-zero under `set -e` and
-// the PR was left open on unprotected env branches. The clean path must prefer
-// auto-merge but fall back to an immediate squash merge when auto-merge cannot
-// be enabled, and the `--auto` attempt must be guarded so its failure does not
-// abort the step.
-func TestHotfixGenerator_CleanPathMergeFallback(t *testing.T) {
+// TestHotfixGenerator_CleanPathPATMerge guards the structural fix where the
+// clean cherry-pick path merged with `gh pr merge --auto`. GitHub auto-merge
+// completes the merge as github-actions[bot] under GITHUB_TOKEN, and merges
+// authored by GITHUB_TOKEN do not emit pull_request events, so the
+// pull_request(closed) finalize chain never fired and state was never recorded
+// after a hotfix. The clean path must instead poll until the resolution PR is
+// mergeable (so a protected env branch with a required check still gates the
+// merge) and then merge with the configured state token, which is trigger
+// capable and reaches the finalize chain.
+func TestHotfixGenerator_CleanPathPATMerge(t *testing.T) {
+	cfg := threeEnvHotfixConfig()
+	cfg.StateToken = "${{ secrets.CASCADE_BOT_TOKEN }}"
+	gen := NewHotfixGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The clean path no longer relies on auto-merge, which suppresses the
+	// finalize trigger.
+	assert.NotContains(t, content, "gh pr merge --auto",
+		"clean path must not use auto-merge; it suppresses the pull_request finalize trigger")
+
+	// The merge step authenticates with the configured state token so the
+	// merge actor is trigger capable and finalize is reachable.
+	assert.Contains(t, content, "GH_TOKEN: ${{ secrets.CASCADE_BOT_TOKEN }}",
+		"the clean-path merge step must authenticate with the configured state token")
+
+	// A poll-until-mergeable construct gates the merge so a protected env
+	// branch with a required check still blocks until the check is green.
+	assert.Contains(t, content, "gh pr view \"$BRANCH\" --json mergeable",
+		"the clean path must poll PR mergeability before merging")
+	assert.Contains(t, content, "gh pr merge --squash --delete-branch \"$BRANCH\"",
+		"the clean path must squash-merge once the PR is mergeable")
+}
+
+// TestHotfixGenerator_CleanPathMergeDefaultsToGitHubToken confirms that when no
+// state token is configured the merge step degrades to the default
+// GITHUB_TOKEN expression, matching the state-write token plumbing used by the
+// release and promote generators.
+func TestHotfixGenerator_CleanPathMergeDefaultsToGitHubToken(t *testing.T) {
 	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	// The auto-merge attempt is guarded by `if !` so a failure on an
-	// unprotected branch does not trip `set -e` and abort the step.
-	assert.Contains(t, content, "if ! gh pr merge --auto --squash \"$BRANCH\"; then")
-	// The fallback merges immediately when auto-merge is unavailable.
-	assert.Contains(t, content, "gh pr merge --squash --delete-branch \"$BRANCH\"")
+	assert.NotContains(t, content, "gh pr merge --auto")
+	assert.Contains(t, content, "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}")
 }
 
 // TestHotfixGenerator_SeedsLabels guards the regression where the apply job ran

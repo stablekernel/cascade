@@ -259,7 +259,7 @@ flowchart TD
     RF["<b>Roll forward first (default)</b><br/>fix merged to trunk; refused if not an ancestor of trunk tip"]
     RF -- "env must run base + fix only" --> IB["<b>env/&lt;env&gt;</b> integration branch<br/>created on demand at recorded state SHA"]
     IB --> CP["cherry-pick onto <b>hotfix/&lt;env&gt;/&lt;short-sha&gt;</b>"]
-    CP -- "clean" --> PRclean["resolution PR · <b>cascade-hotfix</b><br/>auto-merge, gated by env checks"]
+    CP -- "clean" --> PRclean["resolution PR · <b>cascade-hotfix</b><br/>state_token merge, gated by env checks"]
     CP -- "conflict" --> PRconf["resolution PR · <b>cascade-hotfix-conflict</b><br/>markers committed; human force-pushes head"]
     PRclean --> MERGE["on merge"]
     PRconf --> MERGE
@@ -294,7 +294,7 @@ state:
 
 ### Cherry-pick and resolution pull request
 
-A clean cherry-pick opens a pull request labeled `cascade-hotfix` with auto-merge enabled. The required checks configured on `env/<env>` gate the merge, and the pull request is the audit record even when no human touches it.
+A clean cherry-pick opens a pull request labeled `cascade-hotfix` and merges it as the configured `state_token`. The apply job polls the pull request until it is mergeable, so the required checks configured on `env/<env>` still gate the merge, and the pull request is the audit record even when no human touches it. The merge runs as `state_token` rather than the default `GITHUB_TOKEN` on purpose: a merge authored by `GITHUB_TOKEN` does not emit the `pull_request` close event, so the build, deploy, and finalize stages would never run and the diverged state would never be recorded. Configure `state_token` with a trigger-capable token (the same one used for state writes) to get the post-merge stages after an automated hotfix.
 
 On conflict, the conflicted tree is committed with its conflict markers intact, the branch is pushed, and the pull request is opened labeled `cascade-hotfix-conflict`. Committing the markers makes the resolution pull request a real, checkout-able branch: the diff shows exactly where the conflict is, and a human resolves it locally by force-pushing the head branch.
 
@@ -332,7 +332,7 @@ Its jobs:
 | Job | Trigger | Role |
 | --- | --- | --- |
 | plan | dispatch | Fetch env branches and tags, run `cascade hotfix plan`, surface branch-protection suggestions as `::notice::` lines |
-| apply | dispatch (not dry-run) | Cherry-pick onto `hotfix/<env>/<sha>`, open the resolution pull request (clean auto-merges; conflict opens the labeled resolution pull request) |
+| apply | dispatch (not dry-run) | Cherry-pick onto `hotfix/<env>/<sha>`, open the resolution pull request (clean polls until mergeable then merges as `state_token`; conflict opens the labeled resolution pull request) |
 | check | open pull request to `env/*` | Validate the manifest while the hotfix pull request is open |
 | build | merged hotfix | Build the merge SHA, since a cherry-picked commit has no prebuilt artifact |
 | deploy | merged hotfix | Deploy to the target environment, paired with a rollback job mirroring the promote workflow |
