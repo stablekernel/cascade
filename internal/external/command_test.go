@@ -284,9 +284,14 @@ func TestCommitWithApplicationRetry_PushFailureIncludesOutput(t *testing.T) {
 		require.NoErrorf(t, err, "git -C work %v failed: %s", args, out)
 	}
 
-	// Seed the remote and working tree.
+	// Seed the remote and working tree. Pin the working-tree branch to "main"
+	// explicitly: `git init` honours the caller's init.defaultBranch config
+	// (CI runners default to "master"), and commitWithApplicationRetry fetches
+	// the current branch by name, so the local branch must match the remote ref
+	// pushed below for the test to be hermetic.
 	gitRemote("init", "--bare")
 	gitWork("init")
+	gitWork("checkout", "-B", "main")
 	gitWork("config", "user.email", "test@example.com")
 	gitWork("config", "user.name", "Test")
 	gitWork("remote", "add", "origin", remoteDir)
