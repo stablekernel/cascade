@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -69,14 +71,12 @@ func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string,
 		return nil, fmt.Errorf("failed to start act container: %w", err)
 	}
 
-	// Install act in the container
-	_, _, err = container.Exec(ctx, []string{
-		"bash", "-c",
-		"curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | bash -s -- -b /usr/local/bin",
-	})
-	if err != nil {
+	// Install act in the container, verifying the binary actually lands and
+	// retrying the transient network hiccups that the install script is prone
+	// to. The real *DockerContainer satisfies containerExecer directly.
+	if err := installActWithVerify(ctx, container, actInstallMaxAttempts); err != nil {
 		_ = container.Terminate(ctx) // Best-effort cleanup
-		return nil, fmt.Errorf("failed to install act: %w", err)
+		return nil, err
 	}
 
 	// Network override is passed on the CLI as `--network=<name>`. Act's
@@ -110,6 +110,94 @@ EOF`
 		giteaToken:  giteaToken,
 		networkName: networkName,
 	}, nil
+}
+
+// containerExecer is the slice of the container surface the act install needs:
+// running a command and getting back its exit code plus an output reader. The
+// real *DockerContainer satisfies it, and a fake satisfies it in tests, so the
+// install/verify/retry logic is exercisable without Docker or the network.
+type containerExecer interface {
+	Exec(ctx context.Context, cmd []string, options ...tcexec.ProcessOption) (int, io.Reader, error)
+}
+
+// actInstallMaxAttempts bounds how many times we try the act install before
+// giving up. The install failure mode is a transient network hiccup (registry
+// rate-limit, a dropped connection while fetching the install script), which a
+// clean retry reliably clears, so a small fixed budget is enough.
+const actInstallMaxAttempts = 3
+
+// actInstallBackoff returns the pause before the retry that follows a failed
+// install attempt (attempt is 1-based). It grows 2s then 4s so a momentary
+// network blip has time to clear without stalling the suite. It is a var so
+// tests can zero the wait and stay fast.
+var actInstallBackoff = func(attempt int) time.Duration {
+	return time.Duration(attempt*2) * time.Second
+}
+
+// installActWithVerify installs the act binary into the container and confirms
+// it is actually runnable, retrying transient failures up to maxAttempts.
+//
+// This exists because container Exec returns a non-nil error ONLY for a Docker
+// API/transport failure, NOT when the executed command exits non-zero. The
+// original install discarded the exit code, so a failed `curl | bash` (a
+// registry rate-limit or a dropped connection) looked like success: the runner
+// came back "healthy" and the first workflow run died with
+// `bash: act: command not found`. Here we check the exit code, then prove the
+// binary resolves with `command -v act`, and only trust an attempt that clears
+// both gates. A bounded retry with backoff absorbs the transient hiccup that is
+// the usual cause; the final failure surfaces the failing command output so the
+// real reason is not lost.
+func installActWithVerify(ctx context.Context, exec containerExecer, maxAttempts int) error {
+	const installScript = "curl -sSf https://raw.githubusercontent.com/nektos/act/master/install.sh | bash -s -- -b /usr/local/bin"
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("act install cancelled after %d attempt(s): %w", attempt-1, ctx.Err())
+			case <-time.After(actInstallBackoff(attempt - 1)):
+			}
+		}
+
+		installCode, installReader, err := exec.Exec(ctx, []string{"bash", "-c", installScript})
+		if err != nil {
+			lastErr = fmt.Errorf("act install exec failed: %w", err)
+			continue
+		}
+		if installCode != 0 {
+			lastErr = fmt.Errorf("act install exited with code %d: %s", installCode, readExecOutput(installReader))
+			continue
+		}
+
+		verifyCode, verifyReader, err := exec.Exec(ctx, []string{"bash", "-c", "command -v act"})
+		if err != nil {
+			lastErr = fmt.Errorf("act verify exec failed: %w", err)
+			continue
+		}
+		if verifyCode != 0 {
+			lastErr = fmt.Errorf("act binary not resolvable after install (command -v act exited %d): %s", verifyCode, readExecOutput(verifyReader))
+			continue
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("failed to install act after %d attempt(s): %w", maxAttempts, lastErr)
+}
+
+// readExecOutput drains an exec output reader into a trimmed string for error
+// messages, tolerating a nil reader. Output here is short (a curl error line or
+// a `command -v` result), so reading it whole is fine.
+func readExecOutput(reader io.Reader) string {
+	if reader == nil {
+		return ""
+	}
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Sprintf("(failed to read command output: %v)", err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Container returns the underlying testcontainers.Container
