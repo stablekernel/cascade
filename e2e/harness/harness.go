@@ -869,6 +869,16 @@ const actionLocalizeSedExpr = `s|stablekernel/cascade/\.github/actions/\([^@]*\)
 // gaining a second `./` prefix.
 const usesLocalizeSedExpr = `s|uses: \([^./@][^/@]*\.yaml\)|uses: ./\1|g`
 
+// unlocalizedActionRefPattern is the extended-regex the post-localize verify
+// step greps for. It matches only the action ref the sed actually rewrites,
+// `stablekernel/cascade/.github/actions/`, so a verbatim cross-repo callback
+// such as `stablekernel/cascade-example-artifact-a/.github/workflows/...@ref`
+// is not mistaken for an un-localized ref. The trailing `/.github/actions/`
+// anchor is what distinguishes the localizable action ref (slash after
+// `cascade`) from the distinct `cascade-example-artifact-a` repo (hyphen after
+// `cascade`).
+const unlocalizedActionRefPattern = `stablekernel/cascade/\.github/actions/`
+
 func (h *Harness) localizeWorkflows(ctx context.Context) error {
 	const maxAttempts = 3
 	const retryDelay = 200 * time.Millisecond
@@ -883,9 +893,18 @@ func (h *Harness) localizeWorkflows(ctx context.Context) error {
 	}
 	// grep -l exits 0 on match (= un-localized ref still present, which we
 	// treat as a failure to localize). Negation gives us 0 = clean.
+	//
+	// The pattern is anchored to the exact ref the sed rewrites,
+	// `stablekernel/cascade/.github/actions/`, rather than a bare
+	// `stablekernel/cascade` substring. A bare substring also matches a
+	// cross-repo reusable-workflow callback such as
+	// `stablekernel/cascade-example-artifact-a/.github/workflows/...@ref`
+	// (scenario 21), which is an intentional verbatim ref the sed leaves
+	// untouched. Treating that as un-localized made verify fail deterministically
+	// for every scenario that wires a cross-repo callback.
 	verify := []string{
 		"bash", "-c",
-		"cd /tmp/repo && ! grep -l 'stablekernel/cascade' .github/workflows/*.yaml",
+		"cd /tmp/repo && ! grep -lE '" + unlocalizedActionRefPattern + "' .github/workflows/*.yaml",
 	}
 
 	var lastErr error
