@@ -44,6 +44,57 @@ type gitTipReader interface {
 	LocalBranchSHA(name string) (string, error)
 }
 
+// trunkStateReader returns the raw manifest bytes as they exist on the trunk
+// branch, so finalize can read prior env state from trunk rather than from the
+// checked-out env branch. Promote finalize writes env state only to trunk, so
+// the env branch the hotfix merged into lags trunk and can record a stale or
+// absent state SHA for the target env; reading at trunk is the source of truth.
+// The default implementation reads via the GitHub Contents API on real GitHub
+// and plain git under act; tests inject a stub.
+type trunkStateReader interface {
+	ReadManifest(path, trunk string) ([]byte, error)
+}
+
+// gitOrAPITrunkReader reads the manifest at the trunk ref. On real GitHub it
+// fetches the file through the Contents REST API at the trunk ref; under
+// act/gitea it fetches the trunk branch and shows the blob at that ref.
+type gitOrAPITrunkReader struct{}
+
+func (gitOrAPITrunkReader) ReadManifest(path, trunk string) ([]byte, error) {
+	if isRealGitHub() {
+		return readManifestViaAPI(path, trunk)
+	}
+	return readManifestViaGit(path, trunk)
+}
+
+// readManifestViaAPI fetches the manifest at the trunk ref through the GitHub
+// Contents REST API using the gh CLI, returning the raw file bytes.
+func readManifestViaAPI(path, trunk string) ([]byte, error) {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return nil, fmt.Errorf("GITHUB_REPOSITORY is not set; cannot read trunk state via API")
+	}
+	apiPath := fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, path, trunk)
+	out, err := exec.Command("gh", "api", apiPath, "-H", "Accept: application/vnd.github.raw").Output()
+	if err != nil {
+		return nil, fmt.Errorf("reading trunk manifest via API at %s: %w", trunk, err)
+	}
+	return out, nil
+}
+
+// readManifestViaGit fetches the trunk branch and returns the manifest blob at
+// that ref. Used in the act/gitea e2e environment, where there is no GitHub API.
+func readManifestViaGit(path, trunk string) ([]byte, error) {
+	if out, err := exec.Command("git", "fetch", "origin", trunk).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("git fetch origin %s failed: %s: %w", trunk, strings.TrimSpace(string(out)), err)
+	}
+	out, err := exec.Command("git", "show", "origin/"+trunk+":"+path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("reading trunk manifest via git at origin/%s: %w", trunk, err)
+	}
+	return out, nil
+}
+
 // envTipReader resolves an env branch tip in a CI checkout. The finalize job
 // checks out trunk and fetches env/* into refs/remotes/origin/*, so the branch
 // is usually a remote-tracking ref rather than a local one. It resolves the
@@ -171,10 +222,11 @@ type Finalizer struct {
 	deployResults map[string]string
 	buildResults  map[string]string
 
-	releaseMgr releaseManager
-	tagLister  tagLister
-	pusher     statePusher
-	tipReader  gitTipReader
+	releaseMgr  releaseManager
+	tagLister   tagLister
+	pusher      statePusher
+	tipReader   gitTipReader
+	trunkReader trunkStateReader
 }
 
 // FinalizerOptions carries the required inputs for NewFinalizer.
@@ -222,6 +274,19 @@ func WithStatePusher(p statePusher) FinalizeOption {
 	}
 }
 
+// WithTrunkStateReader injects the reader that returns the manifest as it exists
+// on the trunk branch. Finalize uses it to read prior env state from trunk, the
+// source of truth, rather than from the lagging env branch the hotfix merged
+// into. The default reads via the GitHub Contents API on real GitHub and plain
+// git under act.
+func WithTrunkStateReader(r trunkStateReader) FinalizeOption {
+	return func(f *Finalizer) {
+		if r != nil {
+			f.trunkReader = r
+		}
+	}
+}
+
 // NewFinalizer constructs a Finalizer over the manifest at opts.ConfigPath.
 func NewFinalizer(opts FinalizerOptions, options ...FinalizeOption) (*Finalizer, error) {
 	key := opts.ManifestKey
@@ -253,6 +318,7 @@ func NewFinalizer(opts FinalizerOptions, options ...FinalizeOption) (*Finalizer,
 		tagLister:     execTagLister{},
 		pusher:        gitStatePusher{},
 		tipReader:     envTipReader{},
+		trunkReader:   gitOrAPITrunkReader{},
 	}
 	for _, o := range options {
 		o(f)
@@ -295,10 +361,34 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		return fmt.Errorf("%q is not a configured environment", targetEnv)
 	}
 
-	prior := f.cicd.State[targetEnv]
+	// Resolve trunk the same way the state write does: the configured trunk
+	// branch, defaulting to "main".
+	trunk := cfg.TrunkBranch
+	if trunk == "" {
+		trunk = "main"
+	}
+
+	// Read prior env state from trunk, not from the checked-out env branch.
+	// Promote finalize writes env state only to trunk, so the env branch the
+	// hotfix merged into lags trunk and can record a stale or absent state SHA;
+	// trunk is the source of truth. The in-memory f.cicd remains the target of
+	// the WRITE below, preserving any env-branch-only edits to other fields.
+	trunkState, err := f.readTrunkState(trunk)
+	if err != nil {
+		return err
+	}
+
+	prior := trunkState[targetEnv]
 	if prior == nil || prior.SHA == "" {
 		return fmt.Errorf("environment %q has no recorded state SHA", targetEnv)
 	}
+	// Carry the trunk-resolved prior state into the in-memory manifest so the
+	// snapshot, divergence fields, and substates are applied over trunk's view
+	// and persisted by the write below.
+	if f.cicd.State == nil {
+		f.cicd.State = make(map[string]*config.EnvState)
+	}
+	f.cicd.State[targetEnv] = prior
 
 	branch := envBranch(targetEnv)
 
@@ -358,10 +448,6 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		return err
 	}
 
-	trunk := cfg.TrunkBranch
-	if trunk == "" {
-		trunk = "main"
-	}
 	message := fmt.Sprintf("chore: record hotfix %s on %s [skip ci]", hotfixVersion, targetEnv)
 	if err := f.pusher.CommitAndPush(f.configPath, trunk, message); err != nil {
 		return fmt.Errorf("committing hotfix state: %w", err)
@@ -373,6 +459,22 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 	}
 
 	return nil
+}
+
+// readTrunkState fetches the manifest as it exists on the trunk branch and
+// returns its env state map. Prior env state must be read from trunk because
+// promote finalize writes env state only to trunk; the env branch the hotfix
+// merged into lags trunk and can record a stale or absent state SHA.
+func (f *Finalizer) readTrunkState(trunk string) (map[string]*config.EnvState, error) {
+	data, err := f.trunkReader.ReadManifest(f.configPath, trunk)
+	if err != nil {
+		return nil, fmt.Errorf("reading trunk state: %w", err)
+	}
+	cicd, err := config.ParseManifestBytes(data, f.manifestKey)
+	if err != nil {
+		return nil, fmt.Errorf("parsing trunk manifest: %w", err)
+	}
+	return cicd.State, nil
 }
 
 // allocateVersion returns the next free hotfix version over priorVersion.

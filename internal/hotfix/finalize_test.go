@@ -48,6 +48,27 @@ func (r *recordingPusher) CommitAndPush(path, branch, message string) error {
 	return nil
 }
 
+// stubTrunkReader returns fixed manifest bytes as the trunk view, decoupling the
+// prior-state read from the working tree. When bytes is set it is returned
+// verbatim; otherwise the on-disk manifest at path is returned, modeling a trunk
+// that matches the checked-out tree.
+type stubTrunkReader struct {
+	bytes  []byte
+	branch string // records the trunk branch finalize resolved
+	err    error
+}
+
+func (s *stubTrunkReader) ReadManifest(path, trunk string) ([]byte, error) {
+	s.branch = trunk
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.bytes != nil {
+		return s.bytes, nil
+	}
+	return os.ReadFile(path) //nolint:gosec // test path under t.TempDir
+}
+
 type envFixture struct {
 	sha     string
 	version string
@@ -92,10 +113,15 @@ func writeFinalizeManifest(t *testing.T, envs []string, states map[string]envFix
 	return path
 }
 
-// newFinalizer builds a Finalizer over the manifest with the supplied stubs.
+// newFinalizer builds a Finalizer over the manifest with the supplied stubs. It
+// injects a default trunk reader that returns the on-disk manifest bytes so
+// tests that do not exercise the trunk-vs-tree distinction model a trunk that
+// matches the checked-out tree. A caller-supplied WithTrunkStateReader appears
+// later in opts and wins.
 func newFinalizer(t *testing.T, manifest string, opts ...FinalizeOption) *Finalizer {
 	t.Helper()
-	f, err := NewFinalizer(FinalizerOptions{ConfigPath: manifest, ManifestKey: "ci", Actor: "tester"}, opts...)
+	all := append([]FinalizeOption{WithTrunkStateReader(&stubTrunkReader{})}, opts...)
+	f, err := NewFinalizer(FinalizerOptions{ConfigPath: manifest, ManifestKey: "ci", Actor: "tester"}, all...)
 	if err != nil {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
@@ -462,6 +488,143 @@ func TestFinalize_StateWriteTargetsTrunkBranch(t *testing.T) {
 
 	if len(pusher.branches) != 1 || pusher.branches[0] != "trunk" {
 		t.Errorf("state write branch = %v, want [trunk]", pusher.branches)
+	}
+}
+
+// TestFinalize_ReadsPriorStateFromTrunk guards the trunk-state read: the
+// checked-out (env-branch) manifest records no state SHA for the target env,
+// because promote finalize writes env state only to trunk. Finalize must read
+// prior state from the trunk manifest the reader returns and succeed, rather
+// than erroring on the stale env-branch view.
+func TestFinalize_ReadsPriorStateFromTrunk(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix on trunk")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cherry-pick fix")
+	runGit(t, "checkout", "main")
+
+	// On-disk (env-branch) manifest: test has an EMPTY state block (no sha).
+	onDisk := writeFinalizeManifest(t, []string{"dev", "test", "prod"}, map[string]envFixture{
+		"dev":  {sha: fix, version: "v1.4.0-rc.2"},
+		"test": {}, // empty: no recorded SHA on the lagging env branch
+		"prod": {sha: base, version: "v1.4.0-rc.2"},
+	})
+
+	// Trunk manifest: test records the real prior state SHA.
+	trunkBytes := []byte("ci:\n  config:\n    environments:\n" +
+		"      - dev\n      - test\n      - prod\n" +
+		"  state:\n" +
+		"    dev:\n      sha: " + fix + "\n      version: v1.4.0-rc.2\n" +
+		"    test:\n      sha: " + base + "\n      version: v1.4.0-rc.2\n" +
+		"    prod:\n      sha: " + base + "\n      version: v1.4.0-rc.2\n")
+
+	reader := &stubTrunkReader{bytes: trunkBytes}
+	rm := &stubReleaseManager{}
+	f := newFinalizer(t, onDisk,
+		WithReleaseManager(rm),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(&recordingPusher{}),
+		WithTrunkStateReader(reader),
+	)
+
+	if err := f.Finalize("test", merge, fix, base); err != nil {
+		t.Fatalf("Finalize should succeed reading prior state from trunk: %v", err)
+	}
+
+	st := loadState(t, onDisk, "test")
+	if st.SHA != merge {
+		t.Errorf("state.sha = %q, want merge SHA %q", st.SHA, merge)
+	}
+	// The Previous snapshot must derive from the trunk prior SHA (base), proving
+	// the prior state came from trunk and not the empty env-branch view.
+	if len(st.Previous) != 1 || st.Previous[0].SHA != base {
+		t.Errorf("Previous snapshot = %+v, want one entry with prior trunk sha %q", st.Previous, base)
+	}
+}
+
+// TestFinalize_TrunkIsSourceOfPriorState proves trunk wins over the working
+// tree: the on-disk manifest records sha=A for the target env while trunk
+// records sha=B. The snapshot's Previous entry must derive from B (trunk), not A.
+func TestFinalize_TrunkIsSourceOfPriorState(t *testing.T) {
+	newScratchRepo(t)
+	shaA := commitFile(t, "a.txt", "one", "A on env branch")
+	shaB := commitFile(t, "b.txt", "two", "B on trunk")
+	fix := commitFile(t, "f.txt", "fix", "fix on trunk")
+	runGit(t, "branch", "env/test", shaA)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cherry-pick")
+	runGit(t, "checkout", "main")
+
+	// On-disk env-branch manifest records the stale sha=A.
+	onDisk := writeFinalizeManifest(t, []string{"dev", "test", "prod"}, map[string]envFixture{
+		"dev":  {sha: fix, version: "v1.4.0-rc.2"},
+		"test": {sha: shaA, version: "v1.4.0-rc.2"},
+		"prod": {sha: shaA, version: "v1.4.0-rc.2"},
+	})
+
+	// Trunk records the real prior sha=B.
+	trunkBytes := []byte("ci:\n  config:\n    environments:\n" +
+		"      - dev\n      - test\n      - prod\n" +
+		"  state:\n" +
+		"    test:\n      sha: " + shaB + "\n      version: v1.4.0-rc.2\n")
+
+	f := newFinalizer(t, onDisk,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(&recordingPusher{}),
+		WithTrunkStateReader(&stubTrunkReader{bytes: trunkBytes}),
+	)
+	if err := f.Finalize("test", merge, fix, shaB); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	st := loadState(t, onDisk, "test")
+	if len(st.Previous) != 1 {
+		t.Fatalf("expected one Previous snapshot, got %d: %+v", len(st.Previous), st.Previous)
+	}
+	if st.Previous[0].SHA != shaB {
+		t.Errorf("Previous snapshot sha = %q, want trunk prior sha %q (not on-disk %q)", st.Previous[0].SHA, shaB, shaA)
+	}
+}
+
+// TestFinalize_TrunkStateAbsent_Errors confirms that when the target env has no
+// recorded state on trunk either, finalize still reports the missing-state error
+// rather than silently proceeding.
+func TestFinalize_TrunkStateAbsent_Errors(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cp")
+	runGit(t, "checkout", "main")
+
+	onDisk := writeFinalizeManifest(t, []string{"dev", "test", "prod"}, map[string]envFixture{
+		"dev":  {sha: fix, version: "v1.4.0-rc.2"},
+		"test": {sha: base, version: "v1.4.0-rc.2"},
+		"prod": {sha: base, version: "v1.4.0-rc.2"},
+	})
+
+	// Trunk manifest has test present but with no sha recorded.
+	trunkBytes := []byte("ci:\n  config:\n    environments:\n" +
+		"      - dev\n      - test\n      - prod\n" +
+		"  state:\n" +
+		"    dev:\n      sha: " + fix + "\n      version: v1.4.0-rc.2\n")
+
+	f := newFinalizer(t, onDisk,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(&recordingPusher{}),
+		WithTrunkStateReader(&stubTrunkReader{bytes: trunkBytes}),
+	)
+	err := f.Finalize("test", merge, fix, base)
+	if err == nil {
+		t.Fatal("expected missing-state error when trunk has no recorded SHA for the target env")
+	}
+	if !strings.Contains(err.Error(), "no recorded state SHA") {
+		t.Errorf("error %q should report the missing recorded state SHA", err.Error())
 	}
 }
 
