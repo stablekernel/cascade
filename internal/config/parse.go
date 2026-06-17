@@ -24,6 +24,23 @@ func ParseManifestFile(path, key string) (*CICDFile, error) {
 		return nil, fmt.Errorf("reading manifest file: %w", err)
 	}
 
+	file, err := ParseManifestBytes(data, key)
+	if err != nil {
+		return nil, err
+	}
+
+	if file.Config != nil {
+		file.Config.ManifestFile = path
+	}
+	return file, nil
+}
+
+// ParseManifestBytes parses manifest bytes with config under a specific key,
+// mirroring ParseManifestFile without reading from disk. The manifest must have
+// the specified key (default: "ci") at the top level. Returns an error if the
+// key is not found. This is the entry point for reading a manifest fetched from
+// a branch ref (for example, trunk) rather than the working tree.
+func ParseManifestBytes(data []byte, key string) (*CICDFile, error) {
 	if key == "" {
 		key = DefaultManifestKey
 	}
@@ -56,7 +73,6 @@ func ParseManifestFile(path, key string) (*CICDFile, error) {
 
 	// Ensure all environments have state entries
 	if file.Config != nil {
-		file.Config.ManifestFile = path
 		file.Config.ManifestKey = key
 		for _, env := range file.Config.Environments {
 			if file.State[env] == nil {
