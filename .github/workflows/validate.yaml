@@ -1,12 +1,15 @@
 # Tests & Lint - runs go test -race + coverage and golangci-lint.
 #
 # Triggers:
-#   workflow_call    invoked by orchestrate.yaml on PRs (keep - do not remove).
-#   push: tags       standalone run on every release/rc tag.
-#   workflow_dispatch  manual standalone run against any ref.
+#   push: branches main  standalone run on every push to trunk - this is what
+#                        populates the ?branch=main status badge.
+#   pull_request         gate every PR before merge.
+#   workflow_call        invoked by orchestrate.yaml (keep - do not remove).
+#   workflow_dispatch    manual standalone run against any ref.
 #
-# The standalone triggers give this workflow runs of its own so its status
-# badge renders; a workflow_call-only workflow has no standalone runs to badge.
+# The push/pull_request triggers give this workflow runs of its own so its
+# status badge renders; a workflow_call-only workflow has no standalone runs
+# to badge.
 name: Tests & Lint
 
 on:
@@ -22,8 +25,8 @@ on:
         description: 'Validation result (success/failure)'
         value: ${{ jobs.validate.outputs.result }}
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:

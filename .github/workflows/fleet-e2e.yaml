@@ -7,19 +7,25 @@
 # token, own main, own manifest). It is the release-candidate fleet gate.
 #
 # Triggers:
-#   workflow_run  of "Integration (act + gitea)" on completion - makes the E2E
-#                 dependency NATIVE: Fleet only fans out once Integration is
-#                 green for an rc tag. No runner held open polling for it.
+#   workflow_run  of "Release" on completion - the fleet validates the PUBLISHED
+#                 artifact. Release runs GoReleaser on every rc tag push, so a
+#                 successful Release run means the binary the suites install is
+#                 actually on the releases page. Fleet only fans out once that
+#                 publish succeeded for an rc tag. No runner held open polling.
 #   workflow_dispatch  manual override (bypasses the rc-tag gate intentionally),
 #                 with an optional cascade_version input.
 #
+# We key off "Release" rather than the `release:` event because promote-driven
+# API releases do not reliably emit `release: published` (see release.yaml #86);
+# the rc-tag push that drives GoReleaser is the dependable signal.
+#
 # IMPORTANT: the workflow_run trigger references the source workflow by its
-# `name:` ("Integration (act + gitea)"). Keep that name in sync with e2e.yaml.
+# `name:` ("Release"). Keep that name in sync with release.yaml.
 name: Fleet E2E (live GitHub)
 
 on:
   workflow_run:
-    workflows: ["Integration (act + gitea)"]
+    workflows: ["Release"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -52,8 +58,8 @@ jobs:
     name: Resolve version under test
     runs-on: ubuntu-latest
     # Top-level guard: only fan out for a manual dispatch, or a green
-    # Integration run that was a push of an rc tag. This filters out
-    # merge_group / non-rc completions.
+    # Release run that was a push of an rc tag. This filters out
+    # non-rc tag publishes and any non-success completions.
     #
     # workflow_run.head_branch carries the short ref name of whatever triggered
     # the source run. For a tag push that is the tag's short name (e.g.

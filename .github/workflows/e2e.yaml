@@ -1,11 +1,14 @@
 # Integration test workflow (act + gitea testcontainers).
 # Triggers:
-#   push:tags        every release tag (existing)
-#   workflow_dispatch  manual run against any ref (existing)
-#   merge_group      runs as a merge-queue gate before merging to main
+#   push: branches main  standalone run on trunk - populates the status badge.
+#   pull_request         gate every PR before merge.
+#   merge_group          runs as a merge-queue gate before merging to main.
+#   workflow_dispatch    manual run against any ref (existing).
 #
-# This workflow uses act + gitea testcontainers and is too slow + flaky to run
-# per PR. Run locally (`go test -v ./e2e/...`) before pushing instead.
+# This is a ~27min testcontainers run. The paths filter keeps it off docs-only
+# changes (mirrors orchestrate.yaml), and the concurrency group cancels a
+# superseded run on the same ref so a fast follow-up push does not stack two
+# 27min runs. Run locally (`go test -v ./e2e/...`) before pushing too.
 #
 # NOTE: the `name:` below is referenced by fleet-e2e.yaml's workflow_run trigger
 # ("Integration (act + gitea)"). Keep the two in sync if this is ever renamed.
@@ -13,8 +16,20 @@ name: Integration (act + gitea)
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'e2e/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+  pull_request:
+    paths:
+      - 'cmd/**'
+      - 'e2e/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
   merge_group:
   workflow_dispatch:
     inputs:
@@ -30,6 +45,13 @@ on:
         description: 'Subtest parallelism (lower = slower but more reliable)'
         required: false
         default: '1'
+
+# A superseded run on the same ref is cancelled rather than left to burn a full
+# ~27min testcontainers slot. Keyed on github.ref so each branch/PR/tag is its
+# own lane; merge_group runs key on their own ref and never collide with main.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
