@@ -27,7 +27,7 @@ on:
         description: >-
           cascade version to validate (e.g. v1.2.0-rc.1). Default empty resolves
           to the rc tag on the workflow_run path. NOTE: passing this to the
-          suites is wired but inert until they accept the input (Part B).
+          suites is wired but inert until the suites accept the input.
         required: false
         default: ''
 
@@ -94,9 +94,11 @@ jobs:
             # Fallback: head_branch was empty; resolve the rc tag pointing at the
             # source run's head_sha. Tolerated to be empty (dispatch with no
             # input), so guard the lookup.
+            # A sha can carry more than one rc tag; pick the highest by version
+            # sort so selection is deterministic regardless of API ordering.
             VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
               --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
-              | grep -- '-rc\.' | head -n 1 || true)
+              | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
           else
             VERSION=""
           fi
@@ -110,7 +112,7 @@ jobs:
             echo ""
             echo "> Version passing to suites is computed and logged here but"
             echo "> currently INERT: the suites do not yet accept a"
-            echo "> \`cascade_version\` input (wired in Part B / fleet resume)."
+            echo "> \`cascade_version\` input."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Stage 1: primary must run and pass before its dependents.
@@ -175,7 +177,12 @@ jobs:
   aggregate:
     name: Fleet gate
     needs: [resolve, primary, dependents, independents]
-    if: always()
+    # Only render a verdict when the fleet actually fanned out. On filtered-out
+    # completions (merge_group, non-rc tags, dispatch with no rc) resolve is
+    # skipped, so this job is skipped too and the run is a clean no-op rather
+    # than a false-red. A genuine fan-out failure still reds the run because
+    # resolve succeeded and the result checks below catch the failed stage.
+    if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -201,7 +208,7 @@ jobs:
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
             echo "> the rc tag. rc -> release promotion should consume the latest"
-            echo "> fleet-e2e conclusion for that tag before promoting (wiring TBD)."
+            echo "> fleet-e2e conclusion for that tag before promoting."
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail=0

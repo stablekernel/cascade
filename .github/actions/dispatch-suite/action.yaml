@@ -38,8 +38,9 @@ runs:
     # pattern research), so we cannot await the run we just created directly. We
     # recover it by listing the target's scenario-suite runs created at/after the
     # dispatch timestamp (event = workflow_dispatch) and taking the newest. This
-    # is the v1 approach; Part B will switch to a distinct_id marker echoed into
-    # the suite run-name for race-free recovery once the fleet resumes.
+    # is the current approach; a future refinement could echo a distinct_id
+    # marker into the suite run-name for race-free recovery once the suites
+    # carry one.
     - name: Dispatch and watch
       shell: bash
       env:
@@ -58,9 +59,9 @@ runs:
         echo "Dispatching $TARGET_WORKFLOW in $TARGET_REPO @ $TARGET_REF (since $DISPATCH_TS)"
 
         # NOTE: do NOT pass -f cascade_version=... here. The suites do not define
-        # that input yet (Part B), so an extra input would error with
-        # "unexpected inputs". The version under test is computed and logged by
-        # the orchestrator but is inert until the suites accept the input.
+        # that input yet, so an extra input would error with "unexpected inputs".
+        # The version under test is computed and logged by the orchestrator but
+        # is inert until the suites accept the input.
         gh workflow run "$TARGET_WORKFLOW" \
           --repo "$TARGET_REPO" \
           --ref "$TARGET_REF"
