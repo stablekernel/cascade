@@ -1,6 +1,13 @@
-# Validation workflow - runs tests and lint
-# Called by orchestrate workflow during CI/CD
-name: Validate
+# Tests & Lint - runs go test -race + coverage and golangci-lint.
+#
+# Triggers:
+#   workflow_call    invoked by orchestrate.yaml on PRs (keep - do not remove).
+#   push: tags       standalone run on every release/rc tag.
+#   workflow_dispatch  manual standalone run against any ref.
+#
+# The standalone triggers give this workflow runs of its own so its status
+# badge renders; a workflow_call-only workflow has no standalone runs to badge.
+name: Tests & Lint
 
 on:
   workflow_call:
@@ -14,6 +21,10 @@ on:
       result:
         description: 'Validation result (success/failure)'
         value: ${{ jobs.validate.outputs.result }}
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read

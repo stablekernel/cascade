@@ -1,0 +1,224 @@
+# Fleet E2E - revalidates the downstream cascade-example fleet on live GitHub.
+#
+# This is maintainer CI: hand-written tooling that lives in cascade's repo, not
+# a product feature and not part of cascade's generated output. A green Fleet
+# run means: this cascade version validated across all 8 example
+# repos, each running its own scenario-suite.yaml in its OWN repo context (own
+# token, own main, own manifest). It is the release-candidate fleet gate.
+#
+# Triggers:
+#   workflow_run  of "Integration (act + gitea)" on completion - makes the E2E
+#                 dependency NATIVE: Fleet only fans out once Integration is
+#                 green for an rc tag. No runner held open polling for it.
+#   workflow_dispatch  manual override (bypasses the rc-tag gate intentionally),
+#                 with an optional cascade_version input.
+#
+# IMPORTANT: the workflow_run trigger references the source workflow by its
+# `name:` ("Integration (act + gitea)"). Keep that name in sync with e2e.yaml.
+name: Fleet E2E (live GitHub)
+
+on:
+  workflow_run:
+    workflows: ["Integration (act + gitea)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      cascade_version:
+        description: >-
+          cascade version to validate (e.g. v1.2.0-rc.1). Default empty resolves
+          to the rc tag on the workflow_run path. NOTE: passing this to the
+          suites is wired but inert until the suites accept the input.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Single in-flight fleet run per rc tag; a newer rc supersedes an older queued
+# fleet run rather than piling up live cross-repo dispatches.
+concurrency:
+  group: fleet-e2e-${{ github.event.workflow_run.head_branch || github.event.inputs.cascade_version || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  # Eight downstream example repos. primary must finish before its two dependents
+  # (they mutate primary's shared external state); the rest are independent.
+  FLEET_OWNER: stablekernel
+
+jobs:
+  # Resolve the cascade version under test and re-assert the rc-tag gate as a
+  # job output so every fan-out job can gate on it cheaply.
+  resolve:
+    name: Resolve version under test
+    runs-on: ubuntu-latest
+    # Top-level guard: only fan out for a manual dispatch, or a green
+    # Integration run that was a push of an rc tag. This filters out
+    # merge_group / non-rc completions.
+    #
+    # workflow_run.head_branch carries the short ref name of whatever triggered
+    # the source run. For a tag push that is the tag's short name (e.g.
+    # v1.2.0-rc.1). We gate on it here AND, in the compute step below, resolve
+    # the tag from head_sha as a fallback in case head_branch is ever empty for
+    # a tag-triggered source run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       contains(github.event.workflow_run.head_branch, '-rc.'))
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      cascade_version: ${{ steps.compute.outputs.cascade_version }}
+    steps:
+      - name: Compute cascade version under test
+        id: compute
+        env:
+          # PAT is only needed for the head_sha -> tag fallback (a cross-ref
+          # lookup against this repo's tags). GITHUB_TOKEN would also work for
+          # same-repo reads, but we standardise on the fleet PAT.
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.cascade_version }}
+          WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [ -n "$WR_HEAD_BRANCH" ]; then
+            # Primary path: the rc tag short-name from the source push run.
+            VERSION="$WR_HEAD_BRANCH"
+          elif [ -n "$WR_HEAD_SHA" ]; then
+            # Fallback: head_branch was empty; resolve the rc tag pointing at the
+            # source run's head_sha. Tolerated to be empty (dispatch with no
+            # input), so guard the lookup.
+            # A sha can carry more than one rc tag; pick the highest by version
+            # sort so selection is deterministic regardless of API ordering.
+            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+              --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
+              | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
+          else
+            VERSION=""
+          fi
+
+          echo "cascade_version=$VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Fleet E2E"
+            echo ""
+            echo "Trigger: \`$EVENT_NAME\`"
+            echo "cascade version under test: \`${VERSION:-<empty>}\`"
+            echo ""
+            echo "> Version passing to suites is computed and logged here but"
+            echo "> currently INERT: the suites do not yet accept a"
+            echo "> \`cascade_version\` input."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stage 1: primary must run and pass before its dependents.
+  primary:
+    name: primary
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Dispatch and watch primary
+        uses: ./.github/actions/dispatch-suite
+        with:
+          repo: ${{ env.FLEET_OWNER }}/cascade-example-primary
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+
+  # Stage 2: dependents of primary (mutate primary's shared external state),
+  # so they only start after primary is green.
+  dependents:
+    name: dependents (${{ matrix.repo }})
+    needs: primary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [artifact-a, artifact-b]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Dispatch and watch
+        uses: ./.github/actions/dispatch-suite
+        with:
+          repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+
+  # Stage 3: independent suites, run in parallel with no ordering constraint.
+  independents:
+    name: independents (${{ matrix.repo }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [4env, 3env, 2env, single-env, release-only]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Dispatch and watch
+        uses: ./.github/actions/dispatch-suite
+        with:
+          repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+
+  # Fan-in: this job's conclusion is the rc fleet gate. It fails if any upstream
+  # fan-out job failed and emits a per-repo pass/fail table to the summary.
+  aggregate:
+    name: Fleet gate
+    needs: [resolve, primary, dependents, independents]
+    # Only render a verdict when the fleet actually fanned out. On filtered-out
+    # completions (merge_group, non-rc tags, dispatch with no rc) resolve is
+    # skipped, so this job is skipped too and the run is a clean no-op rather
+    # than a false-red. A genuine fan-out failure still reds the run because
+    # resolve succeeded and the result checks below catch the failed stage.
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Aggregate fleet result
+        env:
+          R_PRIMARY: ${{ needs.primary.result }}
+          R_DEPENDENTS: ${{ needs.dependents.result }}
+          R_INDEPENDENTS: ${{ needs.independents.result }}
+          VERSION: ${{ needs.resolve.outputs.cascade_version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Fleet E2E result"
+            echo ""
+            echo "cascade version under test: \`${VERSION:-<empty>}\`"
+            echo ""
+            echo "| Stage | Result |"
+            echo "|---|---|"
+            echo "| primary | $R_PRIMARY |"
+            echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
+            echo "| independents (4env, 3env, 2env, single-env, release-only) | $R_INDEPENDENTS |"
+            echo ""
+            echo "> rc gate: this conclusion is the fleet validation signal for"
+            echo "> the rc tag. rc -> release promotion should consume the latest"
+            echo "> fleet-e2e conclusion for that tag before promoting."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          for r in "$R_PRIMARY" "$R_DEPENDENTS" "$R_INDEPENDENTS"; do
+            if [ "$r" != "success" ]; then
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Fleet E2E failed: one or more suites did not pass"
+            exit 1
+          fi
+          echo "Fleet E2E passed across all suites"
