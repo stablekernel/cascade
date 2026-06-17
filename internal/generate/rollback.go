@@ -248,6 +248,7 @@ func (g *RollbackGenerator) writeDeployJobs(sb *strings.Builder) {
 		// Reusable (uses:) deploy: thread the resolved env and SHA via with:. The
 		// environment name is carried as an input; GitHub Environment protection
 		// must be declared inside the reusable workflow's own job.
+		writeCallbackPermissions(sb, "    ", d.Permissions)
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 		sb.WriteString("    with:\n")
 		sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")

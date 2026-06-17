@@ -1,20 +1,26 @@
-name: "Callback Permissions Union (OIDC)"
+name: "Callback Permissions (OIDC)"
 description: |
   Verifies that per-callback permissions declared on a build callback are
-  unioned into the calling orchestrate.yaml's top-level permissions block. A
-  reusable-workflow caller job cannot carry job-level permissions, so any scope
-  a callback needs (notably id-token: write for OIDC) must be granted at the top
-  level of the calling workflow instead.
+  rendered as a job-level permissions: block on the reusable-workflow caller
+  job, and are also unioned into the calling orchestrate.yaml's top-level
+  permissions block.
+
+  GitHub Actions allows a permissions: key on a job that calls a reusable
+  workflow (jobs.<id>.uses), so cascade scopes the caller job to least privilege
+  per callback. This is what enables id-token: write for cloud OIDC on exactly
+  the callback that needs it.
 
   The api build declares permissions: {id-token: write, packages: read}. The
-  generated orchestrate.yaml must keep its base scopes (contents: write,
-  actions: read) and append the callback scopes in deterministic alphabetical
-  order (id-token before packages). The caller job itself must NOT carry a
-  job-level permissions block, since GitHub Actions forbids permissions on a
-  reusable-workflow call.
+  generated orchestrate.yaml must keep its base top-level scopes (contents:
+  write, actions: read) and append the callback scopes in deterministic
+  alphabetical order (id-token before packages). The build-api caller job must
+  additionally carry its own job-level permissions: block with those scopes.
 
   Generator-output verification scenario; the assertion runs on the staged repo
   after StageRepoFromConfig generates workflows but before any orchestrate runs.
+  A real OIDC token exchange needs a cloud identity provider the local act/gitea
+  harness cannot provide, so this scenario verifies the rendered permissions and
+  does not attempt a live OIDC exchange.
 
 config:
   trunk_branch: main
@@ -29,7 +35,7 @@ config:
   deploys: []
 
 steps:
-  - name: "Initial commit; assert callback permissions union in orchestrate.yaml"
+  - name: "Initial commit; assert callback permissions in orchestrate.yaml"
     action: commit
     commit:
       message: "feat: add api callback requiring id-token for oidc"
@@ -41,15 +47,13 @@ steps:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
-            # Base scopes are preserved.
+            # Base top-level scopes are preserved.
             - "contents: write"
             - "actions: read"
             # Callback scopes are unioned in at the top level.
             - "id-token: write"
             - "packages: read"
-          not_contains:
-            # A reusable-workflow caller job cannot carry job-level permissions;
-            # the scopes live only in the top-level block, so the per-callback
-            # OIDC grant never appears as a job-scoped permissions line directly
-            # under the build-api caller's uses:.
-            - "uses: ./.github/workflows/build-api.yaml\n    permissions:"
+            # The build-api caller job renders its own job-level permissions:
+            # block (GitHub allows permissions: on a uses: caller job), scoped to
+            # the callback's declared scopes in sorted order.
+            - "    permissions:\n      id-token: write\n      packages: read\n    uses: ./.github/workflows/build-api.yaml"

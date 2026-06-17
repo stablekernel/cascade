@@ -11,13 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestReusableWorkflowCallbackHasNoJobAttributes asserts that a reusable
-// workflow: callback (jobs.<id>.uses) never carries runs-on / permissions /
-// concurrency on the job. GHA forbids them there and schema validation rejects
-// runs_on/concurrency on reusable callbacks. Only permissions is structurally
-// accepted on the config, but the generator must not emit any of the three on a
-// uses: job.
-func TestReusableWorkflowCallbackHasNoJobAttributes(t *testing.T) {
+// TestReusableWorkflowCallbackRendersPermissionsNotForbiddenAttributes asserts
+// that a reusable workflow: callback (jobs.<id>.uses) renders its configured
+// job-level permissions:, while still never carrying runs-on or concurrency.
+// GitHub allows permissions: on a uses: caller job (it is least-privilege per
+// callback), but forbids runs-on and the concurrency group key there. Schema
+// validation rejects runs_on/concurrency on reusable callbacks, so those never
+// reach the generator.
+func TestReusableWorkflowCallbackRendersPermissionsNotForbiddenAttributes(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
@@ -41,10 +42,49 @@ func TestReusableWorkflowCallbackHasNoJobAttributes(t *testing.T) {
 
 	job := jobSection(result, "build-app:")
 	assert.Contains(t, job, "uses: ./.github/workflows/build.yaml")
-	// None of the cascade-owned job attributes appear on a reusable uses: job.
+	// permissions: IS rendered on the caller job, carrying the configured scope.
+	assert.Contains(t, job, "permissions:")
+	assert.Contains(t, job, "contents: read")
+	// runs-on and the concurrency group key remain forbidden on a uses: job.
 	assert.NotContains(t, job, "runs-on:")
-	assert.NotContains(t, job, "permissions:")
 	assert.NotContains(t, job, "concurrency:")
+}
+
+// TestReusableWorkflowCallbackRendersOIDCPermissions asserts that a build
+// callback declaring the OIDC scopes (id-token: write plus contents: read)
+// renders both on the caller job's permissions: block, in deterministic sorted
+// order. This is the motivating case: id-token: write enables cloud OIDC auth
+// scoped to exactly the callback that needs it.
+func TestReusableWorkflowCallbackRendersOIDCPermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{
+				Name:        "app",
+				Workflow:    ".github/workflows/build.yaml",
+				Triggers:    []string{"src/**"},
+				Permissions: map[string]string{"id-token": "write", "contents": "read"},
+			},
+		},
+	}
+
+	gen := NewGenerator(cfg, tmpDir)
+	result, err := gen.Generate()
+	require.NoError(t, err)
+
+	job := jobSection(result, "build-app:")
+	assert.Contains(t, job, "permissions:")
+	assert.Contains(t, job, "contents: read")
+	assert.Contains(t, job, "id-token: write")
+	// Scopes render in sorted order so output is deterministic (contents before
+	// id-token).
+	assert.Less(t, strings.Index(job, "contents: read"), strings.Index(job, "id-token: write"),
+		"permission scopes must be emitted in sorted order")
 }
 
 // TestValidationRejectsJobAttributesOnReusableCallback confirms schema validation

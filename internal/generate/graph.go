@@ -42,14 +42,16 @@ type CallbackInfo struct {
 	SupportsDryRun bool                 // When true, dry-run promotes invoke the callback with dry_run: true instead of skipping it
 
 	// Per-callback job attributes carried from config. GHA forbids
-	// runs-on/permissions/concurrency/timeout-minutes on a reusable-workflow uses:
-	// callback, and schema validation rejects runs_on/permissions/concurrency/
-	// timeout_minutes on reusable callbacks. Callbacks are reusable-workflow only,
-	// so these fields are populated from config but never emitted as job-level keys.
+	// runs-on/concurrency/timeout-minutes on a reusable-workflow uses: caller
+	// job, and schema validation rejects runs_on/concurrency/timeout_minutes on
+	// reusable callbacks, so those fields are populated from config but never
+	// emitted as job-level keys. permissions: is the exception: GitHub allows it
+	// on a uses: caller job, so Permissions IS rendered as a job-level
+	// permissions: block (see writeCallbackPermissions).
 	TimeoutMinutes int                       // Per-callback timeout-minutes; validated-against, never emitted (belongs inside the called workflow)
-	RunsOn      *config.RunsOn            // Per-callback runner selection (#12)
-	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15)
-	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17)
+	RunsOn      *config.RunsOn            // Per-callback runner selection (#12); validated-against, never emitted
+	Permissions map[string]string         // Per-callback job permissions, incl. id-token: write OIDC (#35, #15); emitted as job-level permissions:
+	Concurrency *config.ConcurrencyConfig // Per-callback concurrency override (#17); validated-against, never emitted
 
 	// PassthroughArtifact declares GHA artifact upload/download steps to inject
 	// around this job's callback invocation, enabling inter-job artifact passing
@@ -332,6 +334,33 @@ func writeTopLevelPermissions(sb *strings.Builder, base [][2]string, callbackUni
 	}
 
 	sb.WriteString("\n")
+}
+
+// writeCallbackPermissions emits a job-level permissions: block for a
+// reusable-workflow caller job (jobs.<id>.uses) from the callback's configured
+// permissions map. GitHub Actions allows permissions: on a uses: caller job, so
+// rendering it scopes the GITHUB_TOKEN to least privilege per callback and
+// enables OIDC (id-token: write) and build provenance (attestations: write) for
+// exactly the callbacks that need them. When perms is empty nothing is emitted,
+// so callbacks without an explicit permissions: stanza are byte-identical to the
+// prior output. Scopes are emitted in sorted order for deterministic output
+// (cascade gates generation on determinism).
+//
+// indent is the two-space job-body indent for the job whose block this is (e.g.
+// "    " for orchestrate/promote jobs).
+func writeCallbackPermissions(sb *strings.Builder, indent string, perms map[string]string) {
+	if len(perms) == 0 {
+		return
+	}
+	scopes := make([]string, 0, len(perms))
+	for scope := range perms {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
+	fmt.Fprintf(sb, "%spermissions:\n", indent)
+	for _, scope := range scopes {
+		fmt.Fprintf(sb, "%s  %s: %s\n", indent, scope, perms[scope])
+	}
 }
 
 // ensureValidateDependency adds "validate" to deps if not already present

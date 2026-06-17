@@ -522,6 +522,7 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("    needs: context\n")
 		fmt.Fprintf(sb, "    if: %s\n", mergedHotfixGuard())
 		if b.Workflow != "" {
+			writeCallbackPermissions(sb, "    ", b.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(b.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      sha: ${{ github.event.pull_request.merge_commit_sha }}\n")
