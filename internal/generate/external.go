@@ -37,6 +37,13 @@ func (g *ExternalUpdateGenerator) getReleaseTokenRef() string {
 	return g.config.GetReleaseToken()
 }
 
+// getStateTokenRef returns the token expression used to write manifest state to
+// the trunk branch. Users configure the full expression via the state_token
+// config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
+func (g *ExternalUpdateGenerator) getStateTokenRef() string {
+	return g.config.GetStateToken()
+}
+
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 func (g *ExternalUpdateGenerator) getManifestFilePath() string {
 	return g.config.GetManifestFile()
@@ -111,10 +118,15 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("    name: Update External State\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	// The receiver checks out with the state token (the push identity) so that
+	// the manifest push is not blocked by branch protection rules on the primary
+	// repo. fetch-depth: 0 is required for parity with orchestrate/promote/hotfix
+	// state-writers, which also need the full history. When state_token is unset
+	// this falls back to GITHUB_TOKEN for back-compat.
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
-	sb.WriteString("          fetch-depth: 1\n")
-	sb.WriteString("          token: ${{ secrets.GITHUB_TOKEN }}\n")
+	sb.WriteString("          fetch-depth: 0\n")
+	fmt.Fprintf(sb, "          token: %s\n", g.getStateTokenRef())
 	sb.WriteString("\n")
 
 	// Setup CLI
@@ -165,24 +177,20 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 }
 
 // writeConcurrency emits a top-level concurrency: block on the external-update
-// workflow. Every external update writes back the single shared manifest file
-// (cascade external update writes --config under --manifest-key, then commits and
-// pushes that same path) regardless of source_repo or environment, so ALL
-// concurrent external-update runs contend for that one push. The group key is
-// therefore the bare workflow name, which serializes every external-update run.
-// Queueing (cancel-in-progress: false) is safer than cancelling because the update
-// writes durable manifest state; dropping a mid-flight write leaves the manifest
-// inconsistent. Serialization alone is not sufficient: a queued run still holds a
-// stale-parent checkout, so cascade external update recovers a rejected push by
-// resetting onto the fetched remote tip and re-applying its state mutation, which
-// absorbs any change that landed while it waited.
+// workflow. The default group is the same ref-scoped key orchestrate uses
+// ("orchestrate-${{ github.ref }}"), so external and internal state writes
+// serialize on a shared non-cancelling queue and never race on the manifest
+// push. cancel-in-progress is always false by default: dropping a mid-flight
+// write leaves the manifest inconsistent, and a live orchestrate pipeline must
+// never be cancelled by an incoming external notification.
+//
+// When the manifest explicitly sets concurrency.group, that value is forwarded
+// as-is (via GetConcurrencyGroup) so operators can override the group if needed.
+// cancel-in-progress follows the explicit config value when set, and defaults to
+// false otherwise.
 func (g *ExternalUpdateGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
-	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
-		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
-	} else {
-		sb.WriteString("  group: \"${{ github.workflow }}\"\n")
-	}
+	fmt.Fprintf(sb, "  group: %s\n", g.config.GetConcurrencyGroup())
 	if g.config.Concurrency != nil {
 		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
 	} else {

@@ -229,6 +229,7 @@ func runUpdate(sourceRepo, deployName, environment, sha, version, artifactsJSON 
 // the freshly-fetched remote state.
 func commitWithApplicationRetry(filePath, commitMsg string, maxAttempts int, applyUpdate func() error) error {
 	var lastPushErr error
+	var lastPushOut []byte
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if err := applyUpdate(); err != nil {
@@ -248,11 +249,12 @@ func commitWithApplicationRetry(filePath, commitMsg string, maxAttempts int, app
 			return fmt.Errorf("git commit failed: %s: %w", string(out), err)
 		}
 
-		_, pushErr := exec.Command("git", "push").CombinedOutput()
+		pushOut, pushErr := exec.Command("git", "push").CombinedOutput()
 		if pushErr == nil {
 			return nil
 		}
 		lastPushErr = pushErr
+		lastPushOut = pushOut
 
 		// The push did not succeed (typically a non-fast-forward rejection because
 		// a competing update advanced the remote). Recover by resetting onto the
@@ -275,7 +277,7 @@ func commitWithApplicationRetry(filePath, commitMsg string, maxAttempts int, app
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
 
-	return fmt.Errorf("git push failed after %d attempts: %w", maxAttempts, lastPushErr)
+	return fmt.Errorf("git push failed after %d attempts: %s: %w", maxAttempts, strings.TrimSpace(string(lastPushOut)), lastPushErr)
 }
 
 // writeManifest writes the CICD file back to the manifest under the specified key.

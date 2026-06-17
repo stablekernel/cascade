@@ -2,6 +2,7 @@ package external
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -259,4 +260,75 @@ func TestUpdateCommand_EnvironmentNotFound(t *testing.T) {
 	err = runUpdate("org/cdk-infra", "cdk", "nonexistent", "sha123", "", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "environment 'nonexistent' not found")
+}
+
+// TestCommitWithApplicationRetry_PushFailureIncludesOutput asserts that when
+// all push attempts fail the returned error includes the captured git push
+// output so operators can diagnose push-rejection failures from logs alone
+// without re-running the workflow.
+func TestCommitWithApplicationRetry_PushFailureIncludesOutput(t *testing.T) {
+	// Use a local bare repo as the fetch remote (so fetch succeeds) but configure
+	// a non-existent path as the push URL (so push fails with a recognisable
+	// "does not appear to be a git repository" message every attempt).
+	remoteDir := t.TempDir()
+	workDir := t.TempDir()
+
+	gitRemote := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", remoteDir}, args...)...).CombinedOutput()
+		require.NoErrorf(t, err, "git -C remote %v failed: %s", args, out)
+	}
+	gitWork := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", workDir}, args...)...).CombinedOutput()
+		require.NoErrorf(t, err, "git -C work %v failed: %s", args, out)
+	}
+
+	// Seed the remote and working tree. Pin the working-tree branch to "main"
+	// explicitly: `git init` honours the caller's init.defaultBranch config
+	// (CI runners default to "master"), and commitWithApplicationRetry fetches
+	// the current branch by name, so the local branch must match the remote ref
+	// pushed below for the test to be hermetic.
+	gitRemote("init", "--bare")
+	gitWork("init")
+	gitWork("checkout", "-B", "main")
+	gitWork("config", "user.email", "test@example.com")
+	gitWork("config", "user.name", "Test")
+	gitWork("remote", "add", "origin", remoteDir)
+
+	manifestPath := filepath.Join(workDir, "manifest.yaml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte("initial: true\n"), 0644))
+	gitWork("add", "manifest.yaml")
+	gitWork("commit", "-m", "init")
+	gitWork("push", "-u", "origin", "HEAD:main")
+
+	// Redirect push to a non-existent path so every push fails with a message
+	// while fetch from the real remote continues to succeed.
+	gitWork("remote", "set-url", "--push", "origin", "/nonexistent-cascade-test-remote")
+
+	// Change to the work dir so git commands in commitWithApplicationRetry run there.
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(workDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	callCount := 0
+	applyUpdate := func() error {
+		callCount++
+		return os.WriteFile(manifestPath, []byte("value: "+string(rune('a'+callCount))+"\n"), 0644)
+	}
+
+	// Two attempts so the retry loop exhausts maxAttempts and reaches the final
+	// "git push failed after N attempts" return path.
+	err = commitWithApplicationRetry(manifestPath, "chore: test [skip ci]", 2, applyUpdate)
+	require.Error(t, err, "must fail when all push attempts are rejected")
+
+	// The error must carry the git push output so operators can diagnose the
+	// failure without re-running the workflow.
+	assert.Contains(t, err.Error(), "git push failed after 2 attempts",
+		"error must state how many attempts were made")
+	// git prints a diagnostic when the push URL is unreachable; verify it is
+	// captured and included in the error (not silently discarded).
+	assert.Contains(t, err.Error(), "does not appear to be a git repository",
+		"error must include the captured git push output so failures are diagnosable from logs")
 }
