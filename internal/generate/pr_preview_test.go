@@ -49,6 +49,46 @@ func TestPRPreviewGenerator_PRFieldsAreNotInterpolatedIntoRun(t *testing.T) {
 	assert.Contains(t, content, "HEAD_SHA: ${{ github.event.pull_request.head.sha }}")
 }
 
+// TestPRPreviewGenerator_DryRunResolvesEnvironment asserts that the plan
+// dry-run step targets a concrete environment so version calculation succeeds.
+//
+// orchestrate setup looks the --environment value up in the manifest's
+// environments list; an empty value resolves to no match and fails with
+// `environment "" not found`. For a manifest that declares environments the
+// preview must pass --environment with the first (lowest) environment, mirroring
+// how the orchestrate workflow defaults its setup environment. For a manifest
+// with no environments the flag must be omitted entirely.
+func TestPRPreviewGenerator_DryRunResolvesEnvironment(t *testing.T) {
+	t.Run("multi-env passes first environment", func(t *testing.T) {
+		cfg := prPreviewConfig(false)
+		cfg.Environments = []string{"staging", "prod"}
+
+		gen := NewPRPreviewGenerator(cfg, "")
+		content, err := gen.Generate()
+		require.NoError(t, err)
+
+		planBody := stepRunBody(t, content, "Compute plan (dry-run)")
+		assert.Contains(t, planBody, "--environment staging",
+			"plan dry-run must target the first environment so version calc succeeds")
+		assert.NotContains(t, planBody, "--environment \"\"",
+			"plan dry-run must never pass an empty environment")
+	})
+
+	t.Run("no-env omits the environment flag", func(t *testing.T) {
+		cfg := prPreviewConfig(false)
+		cfg.Environments = nil
+
+		gen := NewPRPreviewGenerator(cfg, "")
+		content, err := gen.Generate()
+		require.NoError(t, err)
+
+		planBody := stepRunBody(t, content, "Compute plan (dry-run)")
+		assert.NotContains(t, planBody, "--environment",
+			"no-env manifest must not pass --environment")
+		assert.Contains(t, planBody, "cascade --dry-run orchestrate setup")
+	})
+}
+
 func TestPRPreviewGenerator_Disabled(t *testing.T) {
 	// nil pr_preview
 	gen := NewPRPreviewGenerator(&config.TrunkConfig{TrunkBranch: "main"}, "")
