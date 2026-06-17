@@ -153,6 +153,26 @@ func TestHotfixGenerator_CleanPath(t *testing.T) {
 	assert.Contains(t, content, "gh pr merge --auto")
 }
 
+// TestHotfixGenerator_CleanPathMergeFallback guards the regression where the
+// clean cherry-pick path merged with `gh pr merge --auto`, which calls GitHub's
+// enablePullRequestAutoMerge mutation. GitHub rejects that mutation on a branch
+// with no protection rule, so the hotfix step exited non-zero under `set -e` and
+// the PR was left open on unprotected env branches. The clean path must prefer
+// auto-merge but fall back to an immediate squash merge when auto-merge cannot
+// be enabled, and the `--auto` attempt must be guarded so its failure does not
+// abort the step.
+func TestHotfixGenerator_CleanPathMergeFallback(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The auto-merge attempt is guarded by `if !` so a failure on an
+	// unprotected branch does not trip `set -e` and abort the step.
+	assert.Contains(t, content, "if ! gh pr merge --auto --squash \"$BRANCH\"; then")
+	// The fallback merges immediately when auto-merge is unavailable.
+	assert.Contains(t, content, "gh pr merge --squash --delete-branch \"$BRANCH\"")
+}
+
 // TestHotfixGenerator_SeedsLabels guards the regression where the apply job ran
 // `gh pr create --label cascade-hotfix[-conflict]` without ever creating those
 // labels. `gh pr create --label X` hard-fails when label X does not exist, so
