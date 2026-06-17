@@ -1,0 +1,101 @@
+name: 'Dispatch scenario suite'
+description: >-
+  Dispatch a downstream cascade-example repo's scenario-suite.yaml on its own
+  main, recover the run id it created, and watch that run to its conclusion.
+
+inputs:
+  repo:
+    description: 'Target repo slug, e.g. stablekernel/cascade-example-primary'
+    required: true
+  token:
+    description: >-
+      PAT with Actions read/write on the target repo. GITHUB_TOKEN cannot
+      dispatch cross-repo, so a fleet-wide fine-grained PAT is mandatory.
+    required: true
+  workflow:
+    description: 'Workflow file to dispatch in the target repo'
+    required: false
+    default: 'scenario-suite.yaml'
+  ref:
+    description: "Target ref to dispatch against (must be the target's default branch)"
+    required: false
+    default: 'main'
+  recover-attempts:
+    description: 'How many times to poll for the dispatched run before giving up'
+    required: false
+    default: '30'
+  recover-interval:
+    description: 'Seconds between recovery polls'
+    required: false
+    default: '10'
+
+runs:
+  using: 'composite'
+  steps:
+    # Reconciliation, dispatch -> recover -> watch, with zero target-side change.
+    #
+    # Cross-repo workflow_dispatch returns 204 with no run id (CONFIRMED in the
+    # pattern research), so we cannot await the run we just created directly. We
+    # recover it by listing the target's scenario-suite runs created at/after the
+    # dispatch timestamp (event = workflow_dispatch) and taking the newest. This
+    # is the v1 approach; Part B will switch to a distinct_id marker echoed into
+    # the suite run-name for race-free recovery once the fleet resumes.
+    - name: Dispatch and watch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TARGET_REPO: ${{ inputs.repo }}
+        TARGET_WORKFLOW: ${{ inputs.workflow }}
+        TARGET_REF: ${{ inputs.ref }}
+        RECOVER_ATTEMPTS: ${{ inputs.recover-attempts }}
+        RECOVER_INTERVAL: ${{ inputs.recover-interval }}
+      run: |
+        set -euo pipefail
+
+        # Capture a UTC timestamp BEFORE dispatching so the recovery filter only
+        # matches runs this action created, not pre-existing ones.
+        DISPATCH_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        echo "Dispatching $TARGET_WORKFLOW in $TARGET_REPO @ $TARGET_REF (since $DISPATCH_TS)"
+
+        # NOTE: do NOT pass -f cascade_version=... here. The suites do not define
+        # that input yet (Part B), so an extra input would error with
+        # "unexpected inputs". The version under test is computed and logged by
+        # the orchestrator but is inert until the suites accept the input.
+        gh workflow run "$TARGET_WORKFLOW" \
+          --repo "$TARGET_REPO" \
+          --ref "$TARGET_REF"
+
+        # Recover the run id. Cross-repo dispatch is async; the run may not be
+        # listable immediately, so poll with a bounded retry.
+        RUN_ID=""
+        for attempt in $(seq 1 "$RECOVER_ATTEMPTS"); do
+          RUN_ID=$(gh run list \
+            --repo "$TARGET_REPO" \
+            --workflow "$TARGET_WORKFLOW" \
+            --event workflow_dispatch \
+            --created ">=$DISPATCH_TS" \
+            --limit 20 \
+            --json databaseId,status,conclusion,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')
+          if [ -n "$RUN_ID" ]; then
+            echo "Recovered run id $RUN_ID on attempt $attempt"
+            break
+          fi
+          echo "Run not visible yet (attempt $attempt/$RECOVER_ATTEMPTS); sleeping ${RECOVER_INTERVAL}s"
+          sleep "$RECOVER_INTERVAL"
+        done
+
+        if [ -z "$RUN_ID" ]; then
+          echo "::error::Could not recover a $TARGET_WORKFLOW run in $TARGET_REPO after dispatch"
+          exit 1
+        fi
+
+        RUN_URL="https://github.com/$TARGET_REPO/actions/runs/$RUN_ID"
+        echo "Watching $RUN_URL"
+        {
+          echo "- **$TARGET_REPO**: [run $RUN_ID]($RUN_URL)"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Block on the recovered run's conclusion. --exit-status makes gh return
+        # non-zero if the run concluded with a non-success result.
+        gh run watch "$RUN_ID" --repo "$TARGET_REPO" --exit-status
