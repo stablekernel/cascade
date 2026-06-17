@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
 // frameDockerStream builds a single Docker hijacked-attach frame: an 8-byte
@@ -398,4 +400,119 @@ func TestNormalizeWorkflowResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+// scriptedExec is a per-call response the fake execer hands back: an exit code
+// and the text the returned reader yields. The install path keys its decisions
+// off both, so the fake must control them independently.
+type scriptedExec struct {
+	exitCode int
+	output   string
+}
+
+// fakeExecer is a containerExecer that scripts responses without Docker. It
+// classifies each call as an install (the curl|bash command) or a verify
+// (`command -v act`) by inspecting the command string, and pops the next
+// scripted response from the matching queue. This lets the tests drive the
+// transient-failure and binary-missing paths deterministically.
+type fakeExecer struct {
+	installResponses []scriptedExec
+	verifyResponses  []scriptedExec
+	installCalls     int
+	verifyCalls      int
+}
+
+func (f *fakeExecer) Exec(_ context.Context, cmd []string, _ ...tcexec.ProcessOption) (int, io.Reader, error) {
+	joined := strings.Join(cmd, " ")
+	switch {
+	case strings.Contains(joined, "command -v act"):
+		resp := f.verifyResponses[f.verifyCalls]
+		f.verifyCalls++
+		return resp.exitCode, strings.NewReader(resp.output), nil
+	default:
+		resp := f.installResponses[f.installCalls]
+		f.installCalls++
+		return resp.exitCode, strings.NewReader(resp.output), nil
+	}
+}
+
+// noInstallBackoff zeroes the install retry pause for the duration of a test so
+// the retry path runs instantly. These install tests therefore do not call
+// t.Parallel: they share the package-level backoff var.
+func noInstallBackoff(t *testing.T) {
+	t.Helper()
+	prev := actInstallBackoff
+	actInstallBackoff = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { actInstallBackoff = prev })
+}
+
+// TestInstallActWithVerify_TransientInstallFailureThenSuccess proves the install
+// path survives a transient non-zero curl|bash exit: the first attempt fails
+// (the silent-non-zero-exit footgun this code closes), and a clean retry
+// installs and verifies act. Before the fix the discarded exit code let a failed
+// install masquerade as success, so the first real workflow run died with
+// `bash: act: command not found`.
+func TestInstallActWithVerify_TransientInstallFailureThenSuccess(t *testing.T) {
+	noInstallBackoff(t)
+
+	fake := &fakeExecer{
+		installResponses: []scriptedExec{
+			{exitCode: 1, output: "curl: (28) timed out"},
+			{exitCode: 0, output: ""},
+		},
+		verifyResponses: []scriptedExec{
+			{exitCode: 0, output: "/usr/local/bin/act"},
+		},
+	}
+
+	err := installActWithVerify(context.Background(), fake, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fake.installCalls, "install should be retried once after the transient failure")
+	assert.Equal(t, 1, fake.verifyCalls, "verify runs once, after the successful install")
+}
+
+// TestInstallActWithVerify_BinaryMissingThenRecovers proves the install path
+// does not trust a zero-exit install alone. The first attempt's install exits 0
+// but `command -v act` cannot resolve the binary (a partial or interrupted
+// install), so the attempt is rejected and retried; the second attempt both
+// installs and verifies cleanly.
+func TestInstallActWithVerify_BinaryMissingThenRecovers(t *testing.T) {
+	noInstallBackoff(t)
+
+	fake := &fakeExecer{
+		installResponses: []scriptedExec{
+			{exitCode: 0, output: ""},
+			{exitCode: 0, output: ""},
+		},
+		verifyResponses: []scriptedExec{
+			{exitCode: 1, output: ""},
+			{exitCode: 0, output: "/usr/local/bin/act"},
+		},
+	}
+
+	err := installActWithVerify(context.Background(), fake, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 2, fake.installCalls, "install should be retried after the binary check failed")
+	assert.Equal(t, 2, fake.verifyCalls, "verify runs once per attempt")
+}
+
+// TestInstallActWithVerify_AllAttemptsFail proves the bounded retry gives up and
+// returns an error (rather than a falsely healthy runner) when every attempt
+// fails, and that the failing command output is surfaced for debugging.
+func TestInstallActWithVerify_AllAttemptsFail(t *testing.T) {
+	noInstallBackoff(t)
+
+	fake := &fakeExecer{
+		installResponses: []scriptedExec{
+			{exitCode: 1, output: "curl: (6) could not resolve host"},
+			{exitCode: 1, output: "curl: (6) could not resolve host"},
+			{exitCode: 1, output: "curl: (6) could not resolve host"},
+		},
+		verifyResponses: []scriptedExec{},
+	}
+
+	err := installActWithVerify(context.Background(), fake, 3)
+	require.Error(t, err)
+	assert.Equal(t, 3, fake.installCalls, "all attempts should be exhausted")
+	assert.Contains(t, err.Error(), "could not resolve host", "failing command output should be surfaced")
 }
