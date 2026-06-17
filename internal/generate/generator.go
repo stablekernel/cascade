@@ -711,14 +711,14 @@ func (g *Generator) writeConcurrency(sb *strings.Builder) {
 
 func (g *Generator) writePermissions(sb *strings.Builder) {
 	// Base: permissions needed for release management (tags, releases) and state
-	// commits. A reusable callback cannot set its own job permissions, so any
-	// scope a callback declares (e.g. id-token: write for OIDC) is unioned in at
-	// the top level here.
+	// commits. Callback scopes (e.g. id-token: write for OIDC) are scoped to
+	// their own caller job via writeCallbackPermissions, not granted here, so the
+	// top-level block stays least privilege for cascade's own orchestration jobs.
 	base := [][2]string{
 		{"contents", "write"},
 		{"actions", "read"},
 	}
-	writeTopLevelPermissions(sb, base, collectCallbackPermissions(g.config))
+	writeTopLevelPermissions(sb, base)
 }
 
 func (g *Generator) writeJobs(sb *strings.Builder) {
@@ -928,6 +928,11 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	if info.OnFailure == config.OnFailureContinue {
 		sb.WriteString("    continue-on-error: true\n")
 	}
+
+	// permissions: is allowed on a reusable-workflow caller job. Render the
+	// callback's configured scopes so the GITHUB_TOKEN is least-privilege per
+	// callback and OIDC (id-token: write) / provenance (attestations: write) work.
+	writeCallbackPermissions(sb, "    ", info.Permissions)
 
 	// Every callback is emitted as a jobs.<id>.uses reusable-workflow call.
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
@@ -1277,6 +1282,10 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	if info.Matrix != nil && len(info.Matrix.Dimensions) > 0 {
 		g.writeStrategyBlock(sb, info.Matrix)
 	}
+
+	// The retry shim re-invokes the same reusable workflow, so it needs the same
+	// least-privilege job-level permissions: as the original callback.
+	writeCallbackPermissions(sb, "    ", info.Permissions)
 
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 	g.writeWithInputs(sb, info)

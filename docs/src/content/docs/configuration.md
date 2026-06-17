@@ -215,8 +215,17 @@ ci:
 | `run_policy` | string | No | Execution policy |
 | `on_failure` | string | No | Failure handling |
 | `retries` | int | No | Retry attempts (0-3) |
+| `permissions` | map | No | `GITHUB_TOKEN` scopes for this callback's caller job |
 
 The build's `artifact_id` output (if declared) is captured automatically into state. Any other declared outputs are forwarded to dependent deploys as inputs.
+
+A `permissions` map is rendered as a job-level `permissions:` block on the caller job that invokes this callback, scoping the `GITHUB_TOKEN` to least privilege for that one job. GitHub Actions treats a job-level block as the **complete** permission set: it replaces the workflow default rather than merging with it. Declare the full set the callback needs, including `contents: read` if the callback checks out code and `id-token: write` for OIDC. cascade emits exactly the scopes you declare and never injects an implicit scope.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+```
 
 ### deploys Section
 
@@ -253,6 +262,9 @@ ci:
 | `run_policy` | string | No | Execution policy |
 | `on_failure` | string | No | Failure handling |
 | `retries` | int | No | Retry attempts (0-3) |
+| `permissions` | map | No | `GITHUB_TOKEN` scopes for this callback's caller job |
+
+As with builds, a deploy's `permissions` map is the complete permission set for its caller job (it replaces the workflow default, not merges). Include every scope the deploy needs, such as `contents: read` for checkout and `id-token: write` for OIDC.
 
 ### Deploy Types
 

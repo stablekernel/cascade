@@ -598,14 +598,15 @@ func (g *PromoteGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 
 	// Base: permissions needed for release management, state commits, and job
 	// queries. actions:write is required to dispatch the Release workflow from
-	// the finalize job when a final release is published. A reusable callback
-	// cannot set its own job permissions, so any scope a deploy callback declares
-	// (e.g. id-token: write for OIDC) is unioned in at the top level here.
+	// the finalize job when a final release is published. A deploy callback's own
+	// scopes (e.g. id-token: write for OIDC) are scoped to its caller job via
+	// writeCallbackPermissions, not granted here, so the top-level block stays
+	// least privilege.
 	base := [][2]string{
 		{"contents", "write"},
 		{"actions", "write"},
 	}
-	writeTopLevelPermissions(sb, base, collectCallbackPermissions(g.config))
+	writeTopLevelPermissions(sb, base)
 }
 
 func (g *PromoteGenerator) writeJobs(sb *strings.Builder) {
@@ -779,6 +780,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			g.writeDeployStrategyOptions(sb, d.Rollout)
 			sb.WriteString("      matrix:\n")
 			fmt.Fprintf(sb, "        include: ${{ fromJSON(needs.preflight.outputs.deploy_%s_matrix) }}\n", outputName)
+			writeCallbackPermissions(sb, "    ", d.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 
@@ -827,6 +829,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			// reusable-workflow caller job. The environment name is threaded via
 			// the with: environment input below, and GitHub Environment protection
 			// must be declared inside the reusable workflow's own job.
+			writeCallbackPermissions(sb, "    ", d.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
@@ -868,6 +871,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		// environment name is threaded via the with: environment input below and
 		// GitHub Environment protection must be declared inside the reusable
 		// workflow's own job.
+		writeCallbackPermissions(sb, "    ", d.Permissions)
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 		sb.WriteString("    with:\n")
 		fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
@@ -904,6 +908,7 @@ func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv
 			fmt.Fprintf(sb, "    name: Deploy %s (external)\n", d.Name)
 			sb.WriteString("    needs: [preflight, promote]\n")
 			fmt.Fprintf(sb, "    if: ${{ github.event.inputs.dry_run != 'true' && contains(fromJSON(needs.preflight.outputs.external_deploys_to_run), '%s') }}\n", d.Name)
+			writeCallbackPermissions(sb, "    ", d.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", g.resolveExternalWorkflow(ext, d.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
@@ -917,6 +922,7 @@ func (g *PromoteGenerator) writeExternalDeployJobs(sb *strings.Builder, finalEnv
 			fmt.Fprintf(sb, "    name: Deploy %s (%s, external)\n", d.Name, finalEnv)
 			sb.WriteString("    needs: [preflight, promote]\n")
 			sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.has_prod_deployment == 'true' }}\n")
+			writeCallbackPermissions(sb, "    ", d.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", g.resolveExternalWorkflow(ext, d.Workflow))
 			sb.WriteString("    with:\n")
 			fmt.Fprintf(sb, "      environment: %s\n", finalEnv)
@@ -996,6 +1002,7 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 		sb.WriteString("      needs.preflight.outputs.rollback_sha != '' &&\n")
 		fmt.Fprintf(sb, "      needs.%s.result == 'success' &&\n", jobName)
 		fmt.Fprintf(sb, "      (%s)\n", anyFailure)
+		writeCallbackPermissions(sb, "    ", d.Permissions)
 		fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 		sb.WriteString("    with:\n")
 		sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
@@ -1021,6 +1028,7 @@ func (g *PromoteGenerator) writeRollbackJobs(sb *strings.Builder) {
 			sb.WriteString("      needs.preflight.outputs.rollback_sha != '' &&\n")
 			fmt.Fprintf(sb, "      needs.%s.result == 'success' &&\n", jobName)
 			fmt.Fprintf(sb, "      (%s)\n", anyFailure)
+			writeCallbackPermissions(sb, "    ", d.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", g.resolveExternalWorkflow(ext, d.Workflow))
 			sb.WriteString("    with:\n")
 			sb.WriteString("      environment: ${{ needs.preflight.outputs.target_env }}\n")
