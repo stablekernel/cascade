@@ -200,6 +200,61 @@ func TestHotfixGenerator_CleanPathMergeDefaultsToGitHubToken(t *testing.T) {
 	assert.Contains(t, content, "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}")
 }
 
+// applyJobGHToken extracts the apply job's job-level GH_TOKEN expression from a
+// generated hotfix workflow. It parses the workflow as YAML so the assertion
+// targets the job-level env value rather than any step-level override, isolating
+// the actor that authors the resolution PR via gh pr create.
+func applyJobGHToken(t *testing.T, content string) string {
+	t.Helper()
+	var wf struct {
+		Jobs map[string]struct {
+			Env map[string]string `yaml:"env"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(content), &wf))
+	apply, ok := wf.Jobs["apply"]
+	require.True(t, ok, "apply job must be present")
+	return apply.Env["GH_TOKEN"]
+}
+
+// TestHotfixGenerator_ApplyCreatesPRWithStateToken guards the structural fix for
+// the protected-env-branch deadlock. The apply job opens the resolution PR with
+// gh pr create, which authenticates with the job-level GH_TOKEN. When that token
+// is the default GITHUB_TOKEN the PR is authored by github-actions[bot], and a
+// bot-authored PR does not trigger on: pull_request workflows. The env-branch
+// required check then can only post via on: workflow_run after the hotfix run
+// finishes, but the apply job will not finish until the PR merges, the PR cannot
+// merge until the check posts, and the check cannot post until the apply job
+// finishes: a deadlock. Authoring the PR with the trigger-capable state token
+// fires on: pull_request so the required check posts on PR open, independent of
+// the apply job, breaking the cycle.
+func TestHotfixGenerator_ApplyCreatesPRWithStateToken(t *testing.T) {
+	cfg := threeEnvHotfixConfig()
+	cfg.StateToken = "${{ secrets.CASCADE_BOT_TOKEN }}"
+	gen := NewHotfixGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The apply job's job-level GH_TOKEN, which gh pr create uses to author the
+	// resolution PR, must be the configured state token, not bare GITHUB_TOKEN.
+	assert.Equal(t, "${{ secrets.CASCADE_BOT_TOKEN }}", applyJobGHToken(t, content),
+		"the apply job must author the resolution PR with the trigger-capable state token so on: pull_request fires and the env-branch required check posts on PR open")
+}
+
+// TestHotfixGenerator_ApplyTokenDefaultsToGitHubToken confirms back-compat: when
+// no state token is configured the apply job's GH_TOKEN degrades to the default
+// GITHUB_TOKEN expression, matching the token plumbing used elsewhere. Post-hotfix
+// automation (the env-branch check firing on PR open and the finalize chain)
+// requires a configured state_token, consistent with the merge step's caveat.
+func TestHotfixGenerator_ApplyTokenDefaultsToGitHubToken(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Equal(t, "${{ secrets.GITHUB_TOKEN }}", applyJobGHToken(t, content),
+		"with no state token configured the apply job must fall back to GITHUB_TOKEN")
+}
+
 // TestHotfixGenerator_SeedsLabels guards the regression where the apply job ran
 // `gh pr create --label cascade-hotfix[-conflict]` without ever creating those
 // labels. `gh pr create --label X` hard-fails when label X does not exist, so

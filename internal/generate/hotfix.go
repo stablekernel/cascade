@@ -253,11 +253,14 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 }
 
 // writeApplyJob emits the apply job, run on dispatch when not a dry-run. It
-// cherry-picks the commit onto a hotfix branch and opens a resolution PR. A
-// clean cherry-pick is merged by the dedicated merge step as the configured
-// state token, which polls until the PR is mergeable so a protected env branch
-// with a required check still gates the merge. A conflicting cherry-pick opens a
-// labeled PR for local resolution and is merged by a human via the UI.
+// cherry-picks the commit onto a hotfix branch and opens a resolution PR via gh
+// pr create. The job-level GH_TOKEN is the configured state token so the PR is
+// authored by a trigger-capable actor: this fires on: pull_request, which lets a
+// protected env branch's required check post on PR open rather than only after
+// this run finishes. A clean cherry-pick is then merged by the dedicated merge
+// step (also as the state token), which polls until the PR is mergeable so the
+// required check still gates the merge. A conflicting cherry-pick opens a labeled
+// PR for local resolution and is merged by a human via the UI.
 func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("  apply:\n")
 	sb.WriteString("    name: Apply Hotfix Cherry-Pick\n")
@@ -268,7 +271,18 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true' && needs.plan.outputs.no_op != 'true'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    env:\n")
-	sb.WriteString("      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
+	// Author the resolution PR with the configured state token so gh pr create
+	// runs as a trigger-capable actor. A PR opened under the default GITHUB_TOKEN
+	// is authored by github-actions[bot], and a bot-authored PR does not fire
+	// on: pull_request workflows; the env-branch required check would then post
+	// only via on: workflow_run after this run finishes, deadlocking against the
+	// merge step that waits for that check. A PAT-authored PR fires on:
+	// pull_request so the check posts on PR open, independent of this job. The
+	// merge step (writeCleanMergeStep) inherits this same job-level token. When
+	// no state token is configured this degrades to GITHUB_TOKEN, in which case
+	// post-hotfix automation (early check + finalize) requires the operator to
+	// supply a trigger-capable state_token, matching the merge step's caveat.
+	fmt.Fprintf(sb, "      GH_TOKEN: %s\n", g.getStateTokenRef())
 	sb.WriteString("      COMMIT: ${{ github.event.inputs.commit }}\n")
 	sb.WriteString("      TARGET_ENV: ${{ github.event.inputs.target_env }}\n")
 	sb.WriteString("      BASE_SHA: ${{ needs.plan.outputs.base_sha }}\n")
@@ -333,11 +347,11 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "              --label %s \\\n", hotfixLabel)
 	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA}\" \\\n")
 	sb.WriteString("              --body \"$BODY\"\n")
-	// Hand the resolution branch to the dedicated merge step. The merge runs
-	// as the configured state token (a trigger-capable actor), which the
-	// job-level GH_TOKEN is not, so it has to be a separate step with its own
-	// env. The clean path is the only one that auto-merges; the conflict path
-	// leaves the merge to a human via the UI.
+	// Hand the resolution branch to the dedicated merge step. Both gh pr create
+	// above and the merge step run as the job-level GH_TOKEN (the configured
+	// state token), so the resolution PR is authored by a trigger-capable actor
+	// and the merge is too. The clean path is the only one that auto-merges; the
+	// conflict path leaves the merge to a human via the UI.
 	sb.WriteString("            {\n")
 	sb.WriteString("              echo \"HOTFIX_BRANCH=$BRANCH\"\n")
 	sb.WriteString("              echo \"HOTFIX_CLEAN_MERGE=true\"\n")
