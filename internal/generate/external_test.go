@@ -563,11 +563,15 @@ func TestExternalUpdateGenerator_NotPrimary(t *testing.T) {
 }
 
 // TestExternalUpdateGenerator_HasConcurrencyBlock asserts the generated
-// external-update workflow declares a top-level concurrency: block that shares
-// orchestrate's ref-scoped group ("orchestrate-${{ github.ref }}"). This
-// serializes external and internal state writes on the same non-cancelling
-// queue so they never race on the manifest push (#31). cancel-in-progress is
-// false because a dropped mid-flight write leaves the manifest inconsistent.
+// external-update workflow declares a top-level concurrency: block scoped per
+// component and per ref ("cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}").
+// Distinct upstream components land in distinct groups so both run when they
+// notify the same downstream repo at the same time; a component still
+// serializes against itself. The group must NOT be orchestrate's shared
+// ref-scoped key, which would let GitHub cancel all-but-the-latest pending run
+// and silently drop a component's state write. cancel-in-progress is false
+// because a dropped mid-flight write leaves the manifest inconsistent;
+// cross-writer manifest contention is handled by commitWithApplicationRetry.
 func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
@@ -589,11 +593,52 @@ func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 
 	assert.Contains(t, content, "\nconcurrency:\n", "external-update workflow must declare top-level concurrency:")
 	group := concurrencyGroupLine(t, content)
-	assert.Equal(t, "  group: orchestrate-${{ github.ref }}", group,
-		"external-update default concurrency group must share orchestrate's ref-scoped queue to serialize state writes")
-	assert.NotContains(t, group, "inputs.source_repo", "external-update group must NOT scope by source_repo: all runs push the same manifest")
-	assert.NotContains(t, group, "inputs.environment", "external-update group must NOT scope by environment: all runs push the same manifest")
+	assert.Equal(t, "  group: cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}", group,
+		"external-update default concurrency group must be scoped per component so distinct components run concurrently")
+	assert.NotContains(t, group, "orchestrate-${{ github.ref }}",
+		"external-update group must NOT share orchestrate's shared group: that cancels concurrent component updates")
+	assert.Contains(t, group, "inputs.deploy_name", "external-update group must scope by deploy_name so distinct components do not collide")
+	assert.NotContains(t, group, "inputs.source_repo", "external-update group must NOT scope by source_repo")
+	assert.NotContains(t, group, "inputs.environment", "external-update group must NOT scope by environment")
 	assert.Contains(t, content, "cancel-in-progress: false", "external-update default must queue, not cancel")
+}
+
+// TestExternalUpdateGenerator_DistinctComponentsGetDistinctGroups asserts that
+// two different components (distinct deploy_name) end up in DIFFERENT
+// concurrency groups, so artifact-a and artifact-b both run to completion when
+// they notify the same downstream repo concurrently. The group key is the same
+// expression text for every run; what differs at runtime is the deploy_name
+// input GitHub substitutes. We assert the key carries inputs.deploy_name (and
+// is not the shared orchestrate group) because that is what makes the runtime
+// groups distinct.
+func TestExternalUpdateGenerator_DistinctComponentsGetDistinctGroups(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "artifact-a", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+					{Name: "artifact-b", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	group := concurrencyGroupLine(t, content)
+	// The generated key parameterizes on inputs.deploy_name, so at runtime
+	// artifact-a -> cascade-external-artifact-a-<ref> and
+	// artifact-b -> cascade-external-artifact-b-<ref>: distinct groups, both run.
+	assert.Equal(t, "  group: cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}", group,
+		"the concurrency group must parameterize on inputs.deploy_name so distinct components resolve to distinct groups")
+	assert.NotEqual(t, "  group: orchestrate-${{ github.ref }}", group,
+		"the shared orchestrate group would put all components in one queue and cancel all but the latest pending run")
 }
 
 // TestExternalUpdateGenerator_InputsAreNotInterpolatedIntoRun asserts that the
@@ -743,12 +788,14 @@ func TestExternalUpdateGenerator_CheckoutUsesStateToken(t *testing.T) {
 	})
 }
 
-// TestExternalUpdateGenerator_DefaultConcurrencySharesOrchestrateGroup asserts
-// that, with no explicit concurrency config, the external-update workflow uses
-// the same ref-scoped group as orchestrate ("orchestrate-${{ github.ref }}")
-// so external and internal state writes serialize on a shared non-cancelling
-// queue. cancel-in-progress must remain false to never drop a live pipeline.
-func TestExternalUpdateGenerator_DefaultConcurrencySharesOrchestrateGroup(t *testing.T) {
+// TestExternalUpdateGenerator_DefaultConcurrencyIsPerComponent asserts that,
+// with no explicit concurrency config, the external-update workflow uses a
+// per-component, per-ref group ("cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}")
+// rather than orchestrate's shared group. The per-component key lets distinct
+// upstream components run concurrently against the same downstream repo;
+// commitWithApplicationRetry serializes the actual manifest push.
+// cancel-in-progress must remain false to never drop a live state write.
+func TestExternalUpdateGenerator_DefaultConcurrencyIsPerComponent(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
@@ -769,10 +816,12 @@ func TestExternalUpdateGenerator_DefaultConcurrencySharesOrchestrateGroup(t *tes
 
 	assert.Contains(t, content, "\nconcurrency:\n", "external-update workflow must declare top-level concurrency:")
 	group := concurrencyGroupLine(t, content)
-	assert.Equal(t, "  group: orchestrate-${{ github.ref }}", group,
-		"external-update default concurrency group must share orchestrate's ref-scoped group to serialize state writes")
+	assert.Equal(t, "  group: cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}", group,
+		"external-update default concurrency group must be per-component so distinct components do not cancel each other")
+	assert.NotEqual(t, "  group: orchestrate-${{ github.ref }}", group,
+		"external-update must NOT reuse orchestrate's shared group: that is the cancellation regression")
 	assert.Contains(t, content, "cancel-in-progress: false",
-		"external-update must never cancel a live pipeline; cancel-in-progress must be false")
+		"external-update must never cancel a live state write; cancel-in-progress must be false")
 }
 
 // TestNotifyPrimaryStep_BuildOnlySatellite_EmitsDeployName verifies that a

@@ -177,20 +177,42 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 }
 
 // writeConcurrency emits a top-level concurrency: block on the external-update
-// workflow. The default group is the same ref-scoped key orchestrate uses
-// ("orchestrate-${{ github.ref }}"), so external and internal state writes
-// serialize on a shared non-cancelling queue and never race on the manifest
-// push. cancel-in-progress is always false by default: dropping a mid-flight
-// write leaves the manifest inconsistent, and a live orchestrate pipeline must
-// never be cancelled by an incoming external notification.
+// workflow. The default group is scoped PER COMPONENT and per ref
+// ("cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}"). Each
+// upstream component (distinct deploy_name) lands in its own queue, so two
+// components notifying the same downstream repo at the same time both run to
+// completion instead of one cancelling the other. A given component still
+// serializes against itself: GitHub keeps only the latest pending run per
+// group, so a burst from one component collapses to the newest, which is the
+// intended last-writer-wins for that single slot.
 //
-// When the manifest explicitly sets concurrency.group, that value is forwarded
-// as-is (via GetConcurrencyGroup) so operators can override the group if needed.
-// cancel-in-progress follows the explicit config value when set, and defaults to
-// false otherwise.
+// Cross-component contention on the shared manifest file, and contention with
+// the orchestrate state-writer, is resolved by commitWithApplicationRetry in
+// the external update verb (fetch / reset / re-apply on a non-fast-forward
+// push), not by a shared concurrency group. A single shared group would
+// serialize distinct components and let GitHub's "keep only the latest pending
+// run" rule drop all but one component's write, which is the regression this
+// per-component key fixes.
+//
+// inputs.deploy_name is a workflow-level expression here, not shell text, so it
+// is inert in the concurrency key and carries none of the run-body injection
+// risk that the env-bound inputs guard against.
+//
+// cancel-in-progress is always false by default: dropping a mid-flight write
+// leaves the manifest inconsistent. When the manifest explicitly sets
+// concurrency.group, that value is forwarded as-is (via GetConcurrencyGroup)
+// so operators can override the group, and cancel-in-progress follows the
+// explicit config value.
 func (g *ExternalUpdateGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
-	fmt.Fprintf(sb, "  group: %s\n", g.config.GetConcurrencyGroup())
+	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
+		// Operator override: forward the explicit group verbatim.
+		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
+	} else {
+		// Default: per-component, per-ref group so distinct upstream components
+		// run concurrently against the same downstream repo.
+		sb.WriteString("  group: cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}\n")
+	}
 	if g.config.Concurrency != nil {
 		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
 	} else {
