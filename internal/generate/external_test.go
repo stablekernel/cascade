@@ -31,6 +31,35 @@ jobs:
       - run: echo "deploying"
 `
 
+// checkoutStepBlock returns the slice of the generated workflow content that
+// covers the actions/checkout step and its "with:" block, stopping at the next
+// "- name:" or "- uses:" step boundary. This lets tests assert on the checkout
+// token and fetch-depth in isolation, without false matches from tokens used in
+// other steps such as setup-cli.
+func checkoutStepBlock(t *testing.T, content string) string {
+	t.Helper()
+	lines := strings.Split(content, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.Contains(line, "uses: actions/checkout") {
+			start = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, start, 0, "no actions/checkout step found in generated content")
+	var sb strings.Builder
+	for i := start; i < len(lines); i++ {
+		// Stop at the next step boundary (a "- name:" or "- uses:" line that is
+		// not the checkout line itself).
+		if i > start && (strings.Contains(lines[i], "- name:") || strings.Contains(lines[i], "- uses:")) {
+			break
+		}
+		sb.WriteString(lines[i])
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 // createMockWorkflow creates a mock workflow file in a temp directory
 func createMockWorkflow(t *testing.T, baseDir, workflowPath string) {
 	t.Helper()
@@ -534,13 +563,11 @@ func TestExternalUpdateGenerator_NotPrimary(t *testing.T) {
 }
 
 // TestExternalUpdateGenerator_HasConcurrencyBlock asserts the generated
-// external-update workflow declares a top-level concurrency: block keyed by the bare
-// workflow name. Every external update writes back the single shared manifest file
-// (cascade external update writes --config then git-pushes that same path)
-// regardless of source_repo or environment, so ALL external-update runs race on that
-// one non-fast-forward push (#31); the group must serialize every run. cancel-in
-// -progress is false because a dropped mid-flight write leaves the manifest in an
-// inconsistent state.
+// external-update workflow declares a top-level concurrency: block that shares
+// orchestrate's ref-scoped group ("orchestrate-${{ github.ref }}"). This
+// serializes external and internal state writes on the same non-cancelling
+// queue so they never race on the manifest push (#31). cancel-in-progress is
+// false because a dropped mid-flight write leaves the manifest inconsistent.
 func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
@@ -562,7 +589,8 @@ func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 
 	assert.Contains(t, content, "\nconcurrency:\n", "external-update workflow must declare top-level concurrency:")
 	group := concurrencyGroupLine(t, content)
-	assert.Equal(t, "  group: \"${{ github.workflow }}\"", group, "external-update concurrency group must be the bare workflow name to serialize all runs")
+	assert.Equal(t, "  group: orchestrate-${{ github.ref }}", group,
+		"external-update default concurrency group must share orchestrate's ref-scoped queue to serialize state writes")
 	assert.NotContains(t, group, "inputs.source_repo", "external-update group must NOT scope by source_repo: all runs push the same manifest")
 	assert.NotContains(t, group, "inputs.environment", "external-update group must NOT scope by environment: all runs push the same manifest")
 	assert.Contains(t, content, "cancel-in-progress: false", "external-update default must queue, not cancel")
@@ -656,6 +684,95 @@ func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
 
 	assert.Contains(t, content, "group: my-custom-external", "custom group must propagate to external-update")
 	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to external-update")
+}
+
+// TestExternalUpdateGenerator_CheckoutUsesStateToken asserts that the receiver
+// checkout step uses the configured state token (not the hardcoded GITHUB_TOKEN)
+// so that manifest pushes are not blocked by branch protection rules on the
+// primary repo. When state_token is unset the checkout falls back to the
+// default GITHUB_TOKEN expression for back-compat.
+func TestExternalUpdateGenerator_CheckoutUsesStateToken(t *testing.T) {
+	externalRepos := []config.ExternalRepoConfig{
+		{
+			Repo: "example/cdk-infra",
+			Ref:  "main",
+			Deploys: []config.ExternalDeployConfig{
+				{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+			},
+		},
+	}
+
+	t.Run("state_token configured", func(t *testing.T) {
+		cfg := &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev", "prod"},
+			External:     externalRepos,
+			StateToken:   "CASCADE_STATE_TOKEN",
+		}
+		gen := NewExternalUpdateGenerator(cfg, "/tmp")
+		content, err := gen.Generate()
+		require.NoError(t, err)
+
+		// Extract the checkout step block (everything up to the next "- name:" step)
+		// so we assert on the checkout token in isolation, not on tokens used in
+		// other steps (e.g., the setup-cli step which uses the release token).
+		checkoutSection := checkoutStepBlock(t, content)
+		assert.Contains(t, checkoutSection, "token: ${{ secrets.CASCADE_STATE_TOKEN }}",
+			"checkout must use the configured state token so the manifest push is not blocked by branch protection")
+		assert.NotContains(t, checkoutSection, "token: ${{ secrets.GITHUB_TOKEN }}",
+			"when state_token is set, GITHUB_TOKEN must not appear as the checkout token")
+		assert.Contains(t, checkoutSection, "fetch-depth: 0",
+			"checkout must use fetch-depth: 0 for parity with other state-writers")
+	})
+
+	t.Run("state_token unset uses GITHUB_TOKEN back-compat", func(t *testing.T) {
+		cfg := &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev", "prod"},
+			External:     externalRepos,
+		}
+		gen := NewExternalUpdateGenerator(cfg, "/tmp")
+		content, err := gen.Generate()
+		require.NoError(t, err)
+
+		checkoutSection := checkoutStepBlock(t, content)
+		assert.Contains(t, checkoutSection, "token: ${{ secrets.GITHUB_TOKEN }}",
+			"when state_token is unset, checkout must fall back to the default GITHUB_TOKEN for back-compat")
+		assert.Contains(t, checkoutSection, "fetch-depth: 0",
+			"checkout must use fetch-depth: 0 regardless of token configuration")
+	})
+}
+
+// TestExternalUpdateGenerator_DefaultConcurrencySharesOrchestrateGroup asserts
+// that, with no explicit concurrency config, the external-update workflow uses
+// the same ref-scoped group as orchestrate ("orchestrate-${{ github.ref }}")
+// so external and internal state writes serialize on a shared non-cancelling
+// queue. cancel-in-progress must remain false to never drop a live pipeline.
+func TestExternalUpdateGenerator_DefaultConcurrencySharesOrchestrateGroup(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "\nconcurrency:\n", "external-update workflow must declare top-level concurrency:")
+	group := concurrencyGroupLine(t, content)
+	assert.Equal(t, "  group: orchestrate-${{ github.ref }}", group,
+		"external-update default concurrency group must share orchestrate's ref-scoped group to serialize state writes")
+	assert.Contains(t, content, "cancel-in-progress: false",
+		"external-update must never cancel a live pipeline; cancel-in-progress must be false")
 }
 
 // TestNotifyPrimaryStep_BuildOnlySatellite_EmitsDeployName verifies that a
