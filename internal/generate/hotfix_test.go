@@ -104,6 +104,11 @@ func TestHotfixGenerator_Permissions(t *testing.T) {
 	assert.Contains(t, content, "contents: write")
 	assert.Contains(t, content, "pull-requests: write")
 	assert.Contains(t, content, "actions: read")
+	// issues: write is required so the apply job can call `gh label create` to
+	// seed the cascade-hotfix and cascade-hotfix-conflict labels. Without it
+	// GitHub returns HTTP 403, the || true swallows it silently, and the
+	// subsequent `gh pr create --label` hard-fails.
+	assert.Contains(t, content, "issues: write")
 }
 
 func TestHotfixGenerator_Jobs(t *testing.T) {
@@ -146,6 +151,31 @@ func TestHotfixGenerator_CleanPath(t *testing.T) {
 
 	assert.Contains(t, content, "--label cascade-hotfix")
 	assert.Contains(t, content, "gh pr merge --auto")
+}
+
+// TestHotfixGenerator_SeedsLabels guards the regression where the apply job ran
+// `gh pr create --label cascade-hotfix[-conflict]` without ever creating those
+// labels. `gh pr create --label X` hard-fails when label X does not exist, so
+// both the clean and conflict resolution PR paths broke. The apply job must seed
+// both labels before the cherry-pick step opens any PR.
+func TestHotfixGenerator_SeedsLabels(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// Both labels the resolution PRs reference must be created in the workflow.
+	assert.Contains(t, content, "gh label create cascade-hotfix ",
+		"apply job must seed the clean-path label so gh pr create --label does not hard-fail")
+	assert.Contains(t, content, "gh label create cascade-hotfix-conflict ",
+		"apply job must seed the conflict-path label so gh pr create --label does not hard-fail")
+
+	// The seed must run before the cherry-pick step that opens the labeled PRs.
+	seedIdx := strings.Index(content, "gh label create cascade-hotfix ")
+	cherryPickIdx := strings.Index(content, "Cherry-pick and open resolution PR")
+	require.NotEqual(t, -1, seedIdx, "label seed step must be present")
+	require.NotEqual(t, -1, cherryPickIdx, "cherry-pick step must be present")
+	assert.Less(t, seedIdx, cherryPickIdx,
+		"the label seed step must appear before the cherry-pick/open-PR step")
 }
 
 func TestHotfixGenerator_Q2BranchProtectionWarn(t *testing.T) {

@@ -8,6 +8,20 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
+// hotfixLabel is the GitHub label applied to clean hotfix resolution PRs.
+//
+// The literal must stay in sync with hotfixPRLabel in internal/hotfix/plan.go:
+// the planner's protection suggestions seed the same label, and the two live in
+// separate packages without a shared constant.
+const hotfixLabel = "cascade-hotfix"
+
+// hotfixConflictLabel is the GitHub label applied to hotfix resolution PRs
+// that require manual conflict resolution.
+//
+// The literal must stay in sync with hotfixConflictPRLabel in
+// internal/hotfix/plan.go.
+const hotfixConflictLabel = "cascade-hotfix-conflict"
+
 // HotfixGenerator emits the cascade-hotfix workflow. It cherry-picks a trunk fix
 // onto a diverged intermediate environment by replaying the commit on an
 // env/<env> integration branch, opening a resolution pull request, and then
@@ -138,14 +152,16 @@ func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
 }
 
 // writePermissions grants the scopes the hotfix workflow needs: contents:write
-// to push the cherry-pick branch, pull-requests:write to open the resolution PR,
-// and actions:read for workflow introspection.
+// to push the cherry-pick branch, issues:write to seed labels via gh label create
+// (required before gh pr create --label), pull-requests:write to open the
+// resolution PR, and actions:read for workflow introspection.
 func (g *HotfixGenerator) writePermissions(sb *strings.Builder) {
 	// Base scopes the hotfix workflow needs. A reusable callback cannot set its
 	// own job permissions, so any scope a callback declares (e.g. id-token: write
 	// for OIDC) is unioned in at the top level here.
 	base := [][2]string{
 		{"contents", "write"},
+		{"issues", "write"},
 		{"pull-requests", "write"},
 		{"actions", "read"},
 	}
@@ -264,6 +280,16 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("            echo \"::warning::Configure protection: gh api \\\"$PROT_PATH\\\" -X PUT -f required_status_checks.strict=true -F required_status_checks.contexts[]=hotfix-check\"\n")
 	sb.WriteString("          fi\n")
 
+	// Seed both resolution-PR labels before any PR is opened. gh pr create
+	// --label fails hard on a missing label; seeding here guarantees both the
+	// clean and conflict PR paths can open. The `|| true` keeps the step green on
+	// a repeated run where the label already exists, matching the seed command
+	// the planner surfaces (protectionSuggestions in internal/hotfix/plan.go).
+	sb.WriteString("      - name: Ensure hotfix labels exist\n")
+	sb.WriteString("        run: |\n")
+	fmt.Fprintf(sb, "          gh label create %s --color B60205 --description \"Cascade hotfix resolution PR\" || true\n", hotfixLabel)
+	fmt.Fprintf(sb, "          gh label create %s --color D93F0B --description \"Cascade hotfix resolution PR with cherry-pick conflicts\" || true\n", hotfixConflictLabel)
+
 	// Cherry-pick. Clean and conflict paths diverge after the cherry-pick result.
 	sb.WriteString("      - name: Cherry-pick and open resolution PR\n")
 	sb.WriteString("        run: |\n")
@@ -287,7 +313,7 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("            gh pr create \\\n")
 	sb.WriteString("              --base \"env/${TARGET_ENV}\" \\\n")
 	sb.WriteString("              --head \"$BRANCH\" \\\n")
-	sb.WriteString("              --label cascade-hotfix \\\n")
+	fmt.Fprintf(sb, "              --label %s \\\n", hotfixLabel)
 	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA}\" \\\n")
 	sb.WriteString("              --body \"$BODY\"\n")
 	sb.WriteString("            gh pr merge --auto --squash \"$BRANCH\"\n")
@@ -301,7 +327,7 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("            gh pr create \\\n")
 	sb.WriteString("              --base \"env/${TARGET_ENV}\" \\\n")
 	sb.WriteString("              --head \"$BRANCH\" \\\n")
-	sb.WriteString("              --label cascade-hotfix-conflict \\\n")
+	fmt.Fprintf(sb, "              --label %s \\\n", hotfixConflictLabel)
 	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA} (conflicts)\" \\\n")
 	sb.WriteString("              --body \"$CONFLICT_BODY\"\n")
 	sb.WriteString("          fi\n")
@@ -346,6 +372,7 @@ func (g *HotfixGenerator) writeCheckJob(sb *strings.Builder) {
 func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	sb.WriteString("  context:\n")
 	sb.WriteString("    name: Hotfix Context\n")
+	// The 'cascade-hotfix' literal must match hotfixLabel.
 	sb.WriteString("    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'cascade-hotfix')\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    outputs:\n")
@@ -393,6 +420,7 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 // mergedHotfixGuard is the if-condition gating the post-merge stages: the PR
 // merged and carried the cascade-hotfix label.
 func mergedHotfixGuard() string {
+	// The 'cascade-hotfix' literal must match hotfixLabel.
 	return "github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'cascade-hotfix')"
 }
 

@@ -20,7 +20,19 @@ import (
 const defaultRemote = "origin"
 
 // hotfixPRLabel is the label that identifies an in-flight hotfix resolution PR.
+//
+// The literal must stay in sync with hotfixLabel in
+// internal/generate/hotfix.go, which seeds and applies the same label in the
+// generated workflow. The two live in separate packages without a shared
+// constant.
 const hotfixPRLabel = "cascade-hotfix"
+
+// hotfixConflictPRLabel is the label applied to a hotfix resolution PR that
+// carries cherry-pick conflicts for a human to resolve.
+//
+// The literal must stay in sync with hotfixConflictLabel in
+// internal/generate/hotfix.go.
+const hotfixConflictPRLabel = "cascade-hotfix-conflict"
 
 // OpenPR is a minimal view of an open pull request returned by a PRChecker.
 type OpenPR struct {
@@ -360,6 +372,7 @@ func protectionSuggestions(branch string) []string {
 			"-F required_status_checks=null "+
 			"-F restrictions=null", branch),
 		fmt.Sprintf("gh label create %s --color B60205 --description \"Cascade hotfix resolution PR\" || true", hotfixPRLabel),
+		fmt.Sprintf("gh label create %s --color D93F0B --description \"Cascade hotfix resolution PR with cherry-pick conflicts\" || true", hotfixConflictPRLabel),
 	}
 }
 
