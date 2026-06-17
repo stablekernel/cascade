@@ -323,6 +323,9 @@ ci:
         deploys:
           - name: k8s
             workflow: org/k8s-manifests/.github/workflows/deploy.yaml@v1
+            on_update:
+              deploy:
+                workflow: org/k8s-manifests/.github/workflows/deploy.yaml@v1
 ```
 
 | Field | Type | Required | Description |
@@ -333,12 +336,52 @@ ci:
 | `deploys[].name` | string | Yes | Unique deploy identifier |
 | `deploys[].workflow` | string | Yes | Workflow path (local or external) |
 | `deploys[].triggers` | list | No | File patterns for change detection |
+| `deploys[].on_update.deploy.workflow` | string | No | Reusable workflow to run as a scoped deploy when this slot is recorded |
 
 **Workflow paths:**
 - Local (`.github/workflows/deploy.yaml`) calls a workflow in the primary repo
 - External (`org/repo/.github/workflows/deploy.yaml@ref`) calls a workflow in the external repo
 
 When external deploys are configured, the generated promote workflow includes deploy jobs for each external deploy and the finalize job tracks their state.
+
+#### Deploy on update (opt-in)
+
+By default the receiver is record-only: when a satellite reports a new version,
+the primary records the new external state and stops. Setting
+`on_update.deploy.workflow` on an external deploy opts that component in to a
+scoped deploy that runs synchronously in the same receiver run, right after the
+slot is recorded.
+
+```yaml
+ci:
+  config:
+    external:
+      - repo: org/cdk-infra
+        ref: main
+        deploys:
+          - name: cdk
+            workflow: org/cdk-infra/.github/workflows/deploy.yaml
+            on_update:
+              deploy:
+                workflow: org/cdk-infra/.github/workflows/deploy.yaml
+```
+
+Behavior:
+
+- **Opt-in and additive.** Omit `on_update` and the receiver stays record-only,
+  byte-for-byte identical to before. No deploy job is generated.
+- **Scoped to the updated component.** The generated receiver emits one
+  `deploy_<name>` job per opted-in component, each gated on
+  `inputs.deploy_name` so a single receiver run deploys only the component that
+  was just recorded. Other components are untouched.
+- **Synchronous and gated on the record.** The deploy job runs in the same
+  receiver run and only after the record step succeeds. A failed record never
+  triggers a deploy.
+- **Reusable-workflow only.** Like `deploys[].workflow`, `on_update.deploy`
+  accepts a workflow path (local `.github/workflows/x.yaml` or
+  `org/repo/.github/...@ref`); inline `run:` and `shell:` are not supported. The
+  scoped deploy receives the recorded `environment`, `sha`, `version`, and
+  `deploy_name` as inputs and inherits secrets.
 
 ### notify Section (Satellite Repos)
 

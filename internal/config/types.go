@@ -559,6 +559,27 @@ type ExternalDeployConfig struct {
 	DeployTarget      *DeployTarget      `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
 	OptionalDependsOn []string           `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
 	AutoCommits       bool               `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
+
+	// OnUpdate declares what the receiver does when this external slot is
+	// recorded with a new version. When unset the receiver is record-only, the
+	// historical default, and no deploy is run.
+	OnUpdate *OnUpdateConfig `yaml:"on_update,omitempty" json:"on_update,omitempty"`
+}
+
+// OnUpdateConfig declares what the receiver does when this external slot is
+// recorded with a new version. Absent => record-only (the historical default).
+type OnUpdateConfig struct {
+	// Deploy, when set, runs a scoped deploy in the same receiver run after the
+	// slot is recorded. When nil the receiver remains record-only.
+	Deploy *OnUpdateDeploy `yaml:"deploy,omitempty" json:"deploy,omitempty"`
+}
+
+// OnUpdateDeploy declares a scoped deploy run in the same receiver run after the
+// slot is recorded, scoped to the updated component only.
+type OnUpdateDeploy struct {
+	// Workflow is the reusable-workflow path to run as the scoped deploy, mirroring
+	// deploys[].workflow (local ".github/workflows/x.yaml" or "org/repo/.github/...@ref").
+	Workflow string `yaml:"workflow" json:"workflow"`
 }
 
 // NotifyConfig defines how a satellite repo notifies its primary after dev deploys

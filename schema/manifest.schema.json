@@ -497,7 +497,24 @@
         "rollout": { "$ref": "#/definitions/rolloutConfig" },
         "deploy_target": { "$ref": "#/definitions/deployTarget" },
         "optional_depends_on": { "type": "array", "items": { "type": "string" } },
-        "auto_commits": { "type": "boolean" }
+        "auto_commits": { "type": "boolean" },
+        "on_update": { "$ref": "#/definitions/onUpdateConfig" }
+      }
+    },
+    "onUpdateConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the receiver does when this external slot is recorded with a new version. Absent means record-only.",
+      "properties": {
+        "deploy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workflow"],
+          "description": "Run a scoped deploy in the same receiver run after the slot is recorded, scoped to the updated component.",
+          "properties": {
+            "workflow": { "type": "string", "description": "Reusable workflow path, local or cross-repo (org/repo/.github/...@ref)." }
+          }
+        }
       }
     },
     "dispatchInput": {

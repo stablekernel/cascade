@@ -106,6 +106,22 @@ func validateExternalDeployWorkflowOnly(prefix, workflow, run, shell string) []s
 	return errs
 }
 
+// validateOnUpdate enforces the shape of an external deploy's on_update block.
+// The block is opt-in: a nil OnUpdate (or a nil Deploy within it) keeps the
+// receiver record-only and passes validation. When on_update.deploy is set its
+// workflow path is required, consistent with the reusable-workflow-only policy
+// enforced on the external deploy itself.
+func validateOnUpdate(prefix string, onUpdate *OnUpdateConfig) []string {
+	if onUpdate == nil || onUpdate.Deploy == nil {
+		return nil
+	}
+	var errs []string
+	if onUpdate.Deploy.Workflow == "" {
+		errs = append(errs, fmt.Sprintf("%s: on_update.deploy.workflow is required when on_update.deploy is set", prefix))
+	}
+	return errs
+}
+
 // validateJobControlFields rejects job-control fields that GHA does not accept on
 // a reusable-workflow (jobs.<id>.uses) callback. runs_on and concurrency must be
 // set inside the callback workflow itself, not on the calling job.
