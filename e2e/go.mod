@@ -5,7 +5,7 @@ go 1.25.0
 replace github.com/stablekernel/cascade => ../
 
 require (
-	github.com/moby/moby/api v1.54.1
+	github.com/moby/moby/api v1.54.2
 	github.com/stablekernel/cascade v0.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0
