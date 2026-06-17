@@ -589,6 +589,88 @@ func TestFinalize_TrunkIsSourceOfPriorState(t *testing.T) {
 	}
 }
 
+// TestFinalize_DoesNotClobberOtherEnvsTrunkState proves the WRITE basis is the
+// trunk manifest, not the lagging env-branch one. Trunk records populated state
+// for dev, staging (the target), and prod with distinct SHAs. The checked-out
+// env-branch manifest carries empty/stale state for those envs (promote writes
+// state only to trunk, so the env branch lags; post-reset it can be empty).
+//
+// After finalize, the written manifest must (a) update staging to the hotfix
+// result and (b) RETAIN dev and prod exactly as trunk recorded them. Writing the
+// env-branch manifest to trunk would wipe dev and prod; this guards against that.
+func TestFinalize_DoesNotClobberOtherEnvsTrunkState(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix on trunk")
+	runGit(t, "branch", "env/staging", base)
+	runGit(t, "checkout", "env/staging")
+	merge := commitFile(t, "c.txt", "fixed", "cherry-pick fix")
+	runGit(t, "checkout", "main")
+
+	devTrunkSHA := commitFile(t, "dev.txt", "dev", "dev trunk state")
+	prodTrunkSHA := commitFile(t, "prod.txt", "prod", "prod trunk state")
+
+	// On-disk (env-branch) manifest: dev and prod carry stale/empty state, and
+	// staging is empty. This is the lagging tree that must NOT become the write
+	// basis.
+	onDisk := writeFinalizeManifest(t, []string{"dev", "staging", "prod"}, map[string]envFixture{
+		"dev":     {sha: "stale-dev", version: "v0.0.1"},
+		"staging": {}, // empty on the lagging env branch
+		"prod":    {}, // empty on the lagging env branch
+	})
+
+	// Trunk manifest: every env has real, distinct recorded state.
+	trunkBytes := []byte("ci:\n  config:\n    environments:\n" +
+		"      - dev\n      - staging\n      - prod\n" +
+		"  state:\n" +
+		"    dev:\n      sha: " + devTrunkSHA + "\n      version: v1.4.0-rc.3\n" +
+		"    staging:\n      sha: " + base + "\n      version: v1.4.0-rc.2\n" +
+		"    prod:\n      sha: " + prodTrunkSHA + "\n      version: v1.4.0-rc.1\n")
+
+	f := newFinalizer(t, onDisk,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(&recordingPusher{}),
+		WithTrunkStateReader(&stubTrunkReader{bytes: trunkBytes}),
+	)
+	if err := f.Finalize("staging", merge, fix, base); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	// (a) staging updated to the hotfix result.
+	staging := loadState(t, onDisk, "staging")
+	if staging.SHA != merge {
+		t.Errorf("staging.sha = %q, want merge SHA %q", staging.SHA, merge)
+	}
+	if staging.Version != "v1.4.0-rc.2.hotfix.1" {
+		t.Errorf("staging.version = %q, want v1.4.0-rc.2.hotfix.1", staging.Version)
+	}
+
+	// (b) dev and prod retain their TRUNK state, not the stale env-branch view.
+	dev := loadState(t, onDisk, "dev")
+	if dev == nil || dev.SHA != devTrunkSHA {
+		t.Errorf("dev.sha = %q, want trunk SHA %q (env-branch state must not clobber trunk)", devSHA(dev), devTrunkSHA)
+	}
+	if dev != nil && dev.Version != "v1.4.0-rc.3" {
+		t.Errorf("dev.version = %q, want trunk version v1.4.0-rc.3", dev.Version)
+	}
+	prod := loadState(t, onDisk, "prod")
+	if prod == nil || prod.SHA != prodTrunkSHA {
+		t.Errorf("prod.sha = %q, want trunk SHA %q (env-branch state must not clobber trunk)", devSHA(prod), prodTrunkSHA)
+	}
+	if prod != nil && prod.Version != "v1.4.0-rc.1" {
+		t.Errorf("prod.version = %q, want trunk version v1.4.0-rc.1", prod.Version)
+	}
+}
+
+// devSHA returns the SHA of a possibly-nil EnvState for tidy error messages.
+func devSHA(s *config.EnvState) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return s.SHA
+}
+
 // TestFinalize_TrunkStateAbsent_Errors confirms that when the target env has no
 // recorded state on trunk either, finalize still reports the missing-state error
 // rather than silently proceeding.

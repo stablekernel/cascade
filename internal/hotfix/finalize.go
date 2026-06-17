@@ -368,27 +368,30 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		trunk = "main"
 	}
 
-	// Read prior env state from trunk, not from the checked-out env branch.
-	// Promote finalize writes env state only to trunk, so the env branch the
-	// hotfix merged into lags trunk and can record a stale or absent state SHA;
-	// trunk is the source of truth. The in-memory f.cicd remains the target of
-	// the WRITE below, preserving any env-branch-only edits to other fields.
-	trunkState, err := f.readTrunkState(trunk)
+	// Read the manifest as it exists on trunk, not from the checked-out env
+	// branch. Promote finalize writes env state only to trunk, so the env branch
+	// the hotfix merged into lags trunk and can record stale or absent state for
+	// every env; trunk is the source of truth. The trunk manifest becomes the
+	// WRITE basis below so mutating only the target env preserves every other
+	// env's recorded trunk state. Writing the lagging env-branch manifest to
+	// trunk would clobber the non-target envs.
+	trunkCICD, err := f.readTrunkManifest(trunk)
 	if err != nil {
 		return err
 	}
-
-	prior := trunkState[targetEnv]
-	if prior == nil || prior.SHA == "" {
-		return fmt.Errorf("environment %q has no recorded state SHA", targetEnv)
+	f.cicd = trunkCICD
+	cfg = f.cicd.Config
+	if cfg == nil {
+		return fmt.Errorf("trunk manifest has no config block")
 	}
-	// Carry the trunk-resolved prior state into the in-memory manifest so the
-	// snapshot, divergence fields, and substates are applied over trunk's view
-	// and persisted by the write below.
+
 	if f.cicd.State == nil {
 		f.cicd.State = make(map[string]*config.EnvState)
 	}
-	f.cicd.State[targetEnv] = prior
+	prior := f.cicd.State[targetEnv]
+	if prior == nil || prior.SHA == "" {
+		return fmt.Errorf("environment %q has no recorded state SHA", targetEnv)
+	}
 
 	branch := envBranch(targetEnv)
 
@@ -461,11 +464,13 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 	return nil
 }
 
-// readTrunkState fetches the manifest as it exists on the trunk branch and
-// returns its env state map. Prior env state must be read from trunk because
-// promote finalize writes env state only to trunk; the env branch the hotfix
-// merged into lags trunk and can record a stale or absent state SHA.
-func (f *Finalizer) readTrunkState(trunk string) (map[string]*config.EnvState, error) {
+// readTrunkManifest fetches the manifest as it exists on the trunk branch and
+// returns the parsed manifest. It is read from trunk because promote finalize
+// writes env state only to trunk; the env branch the hotfix merged into lags
+// trunk and can record stale or absent state. The returned manifest is both the
+// source of the prior env state and the WRITE basis, so mutating only the target
+// env preserves every other env's recorded trunk state.
+func (f *Finalizer) readTrunkManifest(trunk string) (*config.CICDFile, error) {
 	data, err := f.trunkReader.ReadManifest(f.configPath, trunk)
 	if err != nil {
 		return nil, fmt.Errorf("reading trunk state: %w", err)
@@ -474,7 +479,7 @@ func (f *Finalizer) readTrunkState(trunk string) (map[string]*config.EnvState, e
 	if err != nil {
 		return nil, fmt.Errorf("parsing trunk manifest: %w", err)
 	}
-	return cicd.State, nil
+	return cicd, nil
 }
 
 // allocateVersion returns the next free hotfix version over priorVersion.
