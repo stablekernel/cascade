@@ -316,7 +316,15 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "              --label %s \\\n", hotfixLabel)
 	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA}\" \\\n")
 	sb.WriteString("              --body \"$BODY\"\n")
-	sb.WriteString("            gh pr merge --auto --squash \"$BRANCH\"\n")
+	// Prefer auto-merge so required checks gate the merge on protected
+	// branches. GitHub rejects enablePullRequestAutoMerge when the target
+	// branch has no protection rule, so fall back to an immediate squash
+	// merge. The `if !` guard keeps the failing attempt from tripping
+	// `set -e` and aborting the step.
+	sb.WriteString("            if ! gh pr merge --auto --squash \"$BRANCH\"; then\n")
+	sb.WriteString("              echo \"::notice::auto-merge unavailable (branch likely unprotected); merging directly\"\n")
+	sb.WriteString("              gh pr merge --squash --delete-branch \"$BRANCH\"\n")
+	sb.WriteString("            fi\n")
 	sb.WriteString("          else\n")
 	sb.WriteString("            echo \"::warning::Cherry-pick conflicted; opening resolution PR for manual resolve\"\n")
 	sb.WriteString("            CONFLICTS=$(git diff --name-only --diff-filter=U)\n")
