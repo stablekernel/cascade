@@ -673,10 +673,16 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Finalize hotfix\n")
 	sb.WriteString("        env:\n")
 	// GH_TOKEN authenticates the Contents REST API write that finalize performs
-	// on real GitHub (signed commit, branch-protection bypass). GITHUB_TOKEN
-	// authenticates the release/tag API calls. GITHUB_REPOSITORY names the target
-	// repo for both.
-	sb.WriteString("          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
+	// against the protected trunk manifest. It must carry the configured state
+	// token so the write bypasses trunk's require-pull-request rule
+	// (enforce_admins=false), mirroring the promote and orchestrate finalize state
+	// writes; the default GITHUB_TOKEN is github-actions[bot], which trunk
+	// protection rejects with a 409. It defaults to GITHUB_TOKEN when no state
+	// token is configured, so a repo with a protected trunk must supply a
+	// bypass-capable state_token for finalize to record state there. GITHUB_TOKEN
+	// authenticates the release/tag API calls, which are not gated by branch
+	// protection. GITHUB_REPOSITORY names the target repo for both.
+	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	sb.WriteString("          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")
 	sb.WriteString("          GITHUB_REPOSITORY: ${{ github.repository }}\n")
 	sb.WriteString("        run: |\n")
