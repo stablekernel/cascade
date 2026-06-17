@@ -158,6 +158,13 @@ func (g *PRPreviewGenerator) writeDetectStep(sb *strings.Builder) {
 // hard-coded, so no release is cut, no state is written, and no deploy is
 // triggered. orchestrate setup only reports the head SHA, the version that would
 // be cut, and which builds/deploys this merge would run.
+//
+// When the manifest declares environments the step targets the first (lowest)
+// environment with --environment, mirroring how the orchestrate workflow
+// defaults its setup environment. orchestrate setup resolves the version against
+// that environment, so an empty value would fail with `environment "" not
+// found`. A manifest with no environments omits the flag and runs the
+// no-environment version calculation.
 func (g *PRPreviewGenerator) writeDeployDryRunStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Compute plan (dry-run)\n")
 	// pull_request.head.sha is attacker-influenceable on a fork PR; route it
@@ -169,6 +176,11 @@ func (g *PRPreviewGenerator) writeDeployDryRunStep(sb *strings.Builder) {
 	sb.WriteString("          # so no release is cut, no state is written, and no deploy is triggered.\n")
 	sb.WriteString("          cascade --dry-run orchestrate setup \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.config.GetManifestFile())
+	if len(g.config.Environments) > 0 {
+		// Target the first environment so version calculation resolves; the
+		// preview is read-only regardless of which environment it reports on.
+		fmt.Fprintf(sb, "            --environment %s \\\n", g.config.Environments[0])
+	}
 	sb.WriteString("            --sha \"$HEAD_SHA\" \\\n")
 	sb.WriteString("            > cascade-plan.json\n")
 	sb.WriteString("\n")

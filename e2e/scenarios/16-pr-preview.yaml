@@ -4,11 +4,16 @@ description: |
   workflow that plans a preview on pull requests, with a per-PR
   concurrency group (#93).
 
+  The manifest declares multiple environments so the generated dry-run
+  step must target the first environment; orchestrate setup resolves the
+  version against that environment, and a bare environment would fail the
+  preview with `environment "" not found`.
+
   Generator-output verification only.
 
 config:
   trunk_branch: main
-  environments: [dev]
+  environments: [staging, prod]
   builds:
     - name: app
       workflow: build.yaml
@@ -35,3 +40,4 @@ steps:
             - "cascade-pr-preview-${{ github.event.pull_request.number }}"
             - "preview:"
             - "Plan Preview"
+            - "--environment staging"
