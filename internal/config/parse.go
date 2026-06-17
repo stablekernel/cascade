@@ -384,6 +384,10 @@ func Validate(cfg *TrunkConfig) []string {
 			errors = append(errors, validateJobIDSafeName(fmt.Sprintf("external[%d].deploys[%d].name", i, j), d.Name)...)
 			prefix := fmt.Sprintf("external[%d].deploys[%d]", i, j)
 			errors = append(errors, validateExternalDeployWorkflowOnly(prefix, d.Workflow, d.Run, d.Shell)...)
+			// on_update.deploy is opt-in and reusable-workflow only, mirroring the
+			// workflow-only policy enforced above. When the block is present its
+			// workflow path is required.
+			errors = append(errors, validateOnUpdate(prefix, d.OnUpdate)...)
 			// External deploys are always reusable-workflow callbacks.
 			errors = append(errors, validateJobControlFields(prefix, true, d.RunsOn, d.Concurrency)...)
 			errors = append(errors, validatePermissions(prefix, d.Permissions)...)

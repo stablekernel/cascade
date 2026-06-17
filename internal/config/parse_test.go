@@ -961,3 +961,106 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 		})
 	}
 }
+
+// TestExternalDeployOnUpdate_Parse verifies that the on_update.deploy block
+// parses into the new types from YAML and that a present block with no workflow
+// is rejected while an absent block keeps the receiver record-only.
+func TestExternalDeployOnUpdate_Parse(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	writeManifest := func(t *testing.T, body string) string {
+		t.Helper()
+		p := filepath.Join(tmpDir, "manifest.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+		return p
+	}
+
+	const withDeploy = `ci:
+  config:
+    trunk_branch: main
+    environments: [dev, prod]
+    external:
+      - repo: example/cdk-infra
+        ref: main
+        deploys:
+          - name: cdk
+            workflow: example/cdk-infra/.github/workflows/deploy.yaml
+            on_update:
+              deploy:
+                workflow: example/cdk-infra/.github/workflows/deploy.yaml
+`
+
+	cfg, err := Parse(writeManifest(t, withDeploy))
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if len(cfg.External) != 1 || len(cfg.External[0].Deploys) != 1 {
+		t.Fatalf("unexpected external shape: %+v", cfg.External)
+	}
+	d := cfg.External[0].Deploys[0]
+	if d.OnUpdate == nil || d.OnUpdate.Deploy == nil {
+		t.Fatalf("on_update.deploy did not parse: %+v", d.OnUpdate)
+	}
+	if got, want := d.OnUpdate.Deploy.Workflow, "example/cdk-infra/.github/workflows/deploy.yaml"; got != want {
+		t.Errorf("on_update.deploy.workflow = %q, want %q", got, want)
+	}
+	if errs := Validate(cfg); len(errs) != 0 {
+		t.Errorf("Validate() rejected a valid on_update config: %v", errs)
+	}
+}
+
+// TestExternalDeployOnUpdate_Validation covers the additive validation: absent
+// block stays record-only and valid, while on_update.deploy with an empty
+// workflow is rejected with the documented message.
+func TestExternalDeployOnUpdate_Validation(t *testing.T) {
+	base := func() *TrunkConfig {
+		return &TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev", "prod"},
+			External: []ExternalRepoConfig{
+				{
+					Repo: "example/cdk-infra",
+					Ref:  "main",
+					Deploys: []ExternalDeployConfig{
+						{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("absent on_update is record-only and valid", func(t *testing.T) {
+		cfg := base()
+		if errs := Validate(cfg); len(errs) != 0 {
+			t.Errorf("Validate() returned errors for record-only config: %v", errs)
+		}
+	})
+
+	t.Run("on_update.deploy without workflow is rejected", func(t *testing.T) {
+		cfg := base()
+		cfg.External[0].Deploys[0].OnUpdate = &OnUpdateConfig{Deploy: &OnUpdateDeploy{}}
+		errs := Validate(cfg)
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e, "on_update.deploy.workflow is required when on_update.deploy is set") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Validate() missing on_update.deploy.workflow required error, got: %v", errs)
+		}
+	})
+
+	t.Run("on_update.deploy with workflow is valid", func(t *testing.T) {
+		cfg := base()
+		cfg.External[0].Deploys[0].OnUpdate = &OnUpdateConfig{
+			Deploy: &OnUpdateDeploy{Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+		}
+		if errs := Validate(cfg); len(errs) != 0 {
+			t.Errorf("Validate() rejected a valid on_update config: %v", errs)
+		}
+	})
+}
