@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/stablekernel/cascade/internal/rollback"
 	"github.com/stablekernel/cascade/internal/schema"
 	"github.com/stablekernel/cascade/internal/status"
+	"github.com/stablekernel/cascade/internal/verify"
 	versionpkg "github.com/stablekernel/cascade/internal/version"
 )
 
@@ -72,6 +74,7 @@ change detection, and changelog generation.`,
 	rootCmd.AddCommand(changelog.NewCommand())
 	rootCmd.AddCommand(external.NewCommand())
 	rootCmd.AddCommand(generate.NewCommand())
+	rootCmd.AddCommand(verify.NewCommand())
 	rootCmd.AddCommand(hotfix.NewCommand())
 	rootCmd.AddCommand(initcmd.NewCommand())
 	rootCmd.AddCommand(orchestrate.NewCommand())
@@ -86,8 +89,20 @@ change detection, and changelog generation.`,
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(exitCodeFor(err))
 	}
+}
+
+// exitCodeFor maps a command error to a process exit code. A command may opt
+// into a specific code by returning an error that implements ExitCode() int
+// (verify uses this to distinguish drift from an operational failure); every
+// other error keeps the default exit code 1.
+func exitCodeFor(err error) int {
+	var ec interface{ ExitCode() int }
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return 1
 }
 
 func newVersionCmd() *cobra.Command {

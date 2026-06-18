@@ -1,0 +1,49 @@
+name: "Verify Drift Detection"
+description: |
+  Exercises the read-only `cascade verify` command end to end. After generating
+  workflows from a two-environment manifest, verify against pristine generated
+  output reports no drift (exit 0). Mutating a committed workflow makes verify
+  report drift (exit non-zero). Regenerating restores the workflows and verify
+  is clean again (exit 0).
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Verify clean against pristine generated output"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Mutate a generated workflow; verify reports drift"
+    action: verify
+    verify:
+      mutate_path: ".github/workflows/orchestrate.yaml"
+      mutate_append: "\n# drift\n"
+      expect_exit: 1
+
+  - name: "Regenerate restores workflows; verify is clean again"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

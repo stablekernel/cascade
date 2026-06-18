@@ -86,6 +86,10 @@ type Step struct {
 	// environment's divergence fields in the live manifest mid-scenario without
 	// running any workflow.
 	StageDivergence *StageDivergenceStep `yaml:"stage_divergence,omitempty"`
+	// Verify configures a "verify" action: a read-only `cascade verify` run that
+	// asserts the committed workflows match the manifest, exercising verify's
+	// exit-code contract.
+	Verify *VerifyStep `yaml:"verify,omitempty"`
 	// ExpectFailure marks a step whose workflow is expected to conclude in
 	// failure (for example an orchestrate run whose build exits non-zero). When
 	// set, a failure conclusion is the success path and a success conclusion is
@@ -191,6 +195,21 @@ type RollbackStep struct {
 	Deployable    string `yaml:"deployable,omitempty"`
 	DryRun        bool   `yaml:"dry_run,omitempty"`
 	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
+}
+
+// VerifyStep defines a verify action: a read-only `cascade verify` run in the
+// repo that compares the committed workflow and action files against what the
+// manifest would generate. Regenerate, when set, runs `cascade generate-workflow
+// -f` first so verify checks pristine generated output rather than the harness's
+// localized copies. Mutate optionally overwrites one generated file with the
+// given content before verifying, so a scenario can drive the drift path.
+// ExpectExit is the exit code `cascade verify` must return (0 = no drift,
+// non-zero = drift).
+type VerifyStep struct {
+	Regenerate   bool   `yaml:"regenerate,omitempty"`
+	MutatePath   string `yaml:"mutate_path,omitempty"`
+	MutateAppend string `yaml:"mutate_append,omitempty"`
+	ExpectExit   int    `yaml:"expect_exit"`
 }
 
 // StepExpect defines expected outcomes for a step
