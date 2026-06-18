@@ -99,17 +99,15 @@ jobs:
       - name: Build cascade CLI
         run: go build -o /tmp/cascade ./cmd/cascade
 
-      - name: Regenerate dogfood workflows
-        run: /tmp/cascade generate-workflow --config .github/manifest.yaml --force
+      - name: Check for workflow drift
+        run: /tmp/cascade verify --config .github/manifest.yaml
 
-      - name: Verify generated workflows match committed files
+      - name: Drift detected
+        if: failure()
         run: |
-          if ! git diff --exit-code -- .github/workflows/ .github/actions/; then
-            echo "::error::Committed dogfood workflows have drifted from generator output."
-            echo "Run 'cascade generate-workflow --config .github/manifest.yaml --force' and commit the result."
-            exit 1
-          fi
-          echo "No drift: committed workflows match generator output."
+          echo "Workflows are out of sync with the manifest."
+          echo "Run: cascade generate-workflow --config .github/manifest.yaml --force"
+          echo "Then commit the regenerated workflows."
 
   pr-gate:
     name: PR Gate
