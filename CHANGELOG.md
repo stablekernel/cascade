@@ -10,6 +10,14 @@ release that bumps `schema_version`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-18
+
+This release restructures the orchestrate gate chain so build, deploy, and
+promote callbacks run in a deterministic dependency order, adds deploy-on-update
+so external-update events can drive a deploy directly, and hardens workflow
+generation (deterministic output, cross-repo reusable-workflow resolution, and
+stricter callback validation).
+
 ### Added
 
 - `cascade rollback` command: re-promotes a prior recorded version for a given
@@ -81,5 +89,6 @@ Initial release of cascade: a trunk-based CI/CD orchestrator for GitHub Actions.
 - Self-hosted CI: cascade manages its own build, release, e2e, and promote
   workflows using the same manifest.
 
-[Unreleased]: https://github.com/stablekernel/cascade/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/stablekernel/cascade/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/stablekernel/cascade/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/stablekernel/cascade/releases/tag/v0.1.0
