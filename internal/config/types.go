@@ -20,6 +20,8 @@ type LatestReleaseState struct {
 	SHA        string `yaml:"sha,omitempty" json:"sha,omitempty"`                 // Commit SHA
 	ReleasedOn string `yaml:"released_on,omitempty" json:"released_on,omitempty"` // ISO 8601 timestamp
 	ReleasedBy string `yaml:"released_by,omitempty" json:"released_by,omitempty"` // GitHub actor who triggered release
+	// Components is the reserved per-component latest-release record (#176).
+	Components map[string]*ComponentReleaseState `yaml:"components,omitempty" json:"components,omitempty"`
 }
 
 // EnvState tracks the state of a single environment
@@ -42,6 +44,9 @@ type EnvState struct {
 	// prior env states, newest first, bounded to MaxPreviousSnapshots. Populated
 	// on every state transition via PushPreviousSnapshot.
 	Previous []EnvStateSnapshot `yaml:"previous,omitempty" json:"previous,omitempty"`
+	// Components is the reserved per-component state slot (#176): per-component
+	// version/sha records keyed by component name. Reserved-shape only.
+	Components map[string]*ComponentState `yaml:"components,omitempty" json:"components,omitempty"`
 }
 
 // IsDiverged reports whether the environment is on an integration branch rather
@@ -142,6 +147,10 @@ type TrunkConfig struct {
 	ActionPins        map[string]string            `yaml:"action_pins,omitempty" json:"action_pins,omitempty"`
 	Telemetry         *TelemetryConfig             `yaml:"telemetry,omitempty" json:"telemetry,omitempty"`
 	EnvironmentConfig map[string]EnvironmentConfig `yaml:"environment_config,omitempty" json:"environment_config,omitempty"`
+	// Components reserves the shape for independently versioned components sharing
+	// one manifest (#176). v1 contract: parse + structural validation only; no
+	// generator, state, or runtime behavior is attached. Absent by default.
+	Components map[string]ComponentConfig `yaml:"components,omitempty" json:"components,omitempty"`
 }
 
 // ConcurrencyConfig overrides the default concurrency: block emitted on the
@@ -1001,6 +1010,31 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 		return JobID(CallbackTypeDeploy, depRef), nil
 	}
 	return JobID(CallbackTypeExternal, depRef), nil
+}
+
+// ComponentConfig is the reserved per-component descriptor. Only the addressing
+// shape is frozen in v1; richer per-component config lands post-1.0 additively.
+type ComponentConfig struct {
+	// Path is the subtree this component owns within the repo (reserved).
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
+	// TagPrefix is the per-component version tag prefix (reserved). Empty means
+	// inherit the manifest-level tag_prefix.
+	TagPrefix string `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`
+}
+
+// ComponentState is the reserved per-component recorded-state entry.
+type ComponentState struct {
+	Version     string `yaml:"version,omitempty" json:"version,omitempty"`
+	SHA         string `yaml:"sha,omitempty" json:"sha,omitempty"`
+	CommittedAt string `yaml:"committed_at,omitempty" json:"committed_at,omitempty"`
+	CommittedBy string `yaml:"committed_by,omitempty" json:"committed_by,omitempty"`
+}
+
+// ComponentReleaseState is the reserved per-component published-release entry.
+type ComponentReleaseState struct {
+	Version    string `yaml:"version,omitempty" json:"version,omitempty"`
+	SHA        string `yaml:"sha,omitempty" json:"sha,omitempty"`
+	ReleasedOn string `yaml:"released_on,omitempty" json:"released_on,omitempty"`
 }
 
 // indexByte returns the index of the first instance of c in s, or -1 if c is not present
