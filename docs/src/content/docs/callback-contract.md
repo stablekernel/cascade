@@ -315,7 +315,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.25"
 
       - name: Lint
         if: ${{ inputs.check_lint }}
