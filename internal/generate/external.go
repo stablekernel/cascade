@@ -178,6 +178,7 @@ func (g *ExternalUpdateGenerator) writeHeader(sb *strings.Builder) {
 
 func (g *ExternalUpdateGenerator) writeWorkflowTrigger(sb *strings.Builder) {
 	sb.WriteString("name: External Update\n\n")
+	sb.WriteString("run-name: External Update ${{ inputs.deploy_name }} ${{ inputs.sha }}\n\n")
 	sb.WriteString("on:\n")
 	sb.WriteString("  workflow_dispatch:\n")
 	sb.WriteString("    inputs:\n")

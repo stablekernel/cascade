@@ -1038,3 +1038,29 @@ func TestExternalUpdateGenerator_OnUpdateDeploy_LocalWorkflowPath(t *testing.T) 
 	require.NoError(t, err)
 	assert.Contains(t, content, "uses: ./.github/workflows/deploy-cdk.yaml")
 }
+
+// TestExternalUpdateGenerator_EmitsRunName verifies that the generated
+// external-update workflow includes a run-name line that embeds the
+// deploy_name and sha inputs so individual runs are correlatable in the
+// GitHub Actions UI.
+func TestExternalUpdateGenerator_EmitsRunName(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "master",
+		Environments: []string{"dev", "test", "prod"},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "example/cdk-infra",
+				Ref:  "main",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: "example/cdk-infra/.github/workflows/deploy.yaml"},
+				},
+			},
+		},
+	}
+
+	gen := NewExternalUpdateGenerator(cfg, "/tmp")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "run-name: External Update ${{ inputs.deploy_name }} ${{ inputs.sha }}")
+}
