@@ -121,6 +121,13 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.Rollback.Environment == "" {
 				return fmt.Errorf("step %d (%s): rollback requires environment", i, step.Name)
 			}
+		case "verify":
+			if step.Verify == nil {
+				return fmt.Errorf("step %d (%s): verify action requires verify config", i, step.Name)
+			}
+			if step.Verify.MutatePath != "" && step.Verify.MutateAppend == "" {
+				return fmt.Errorf("step %d (%s): verify mutate_path requires mutate_append", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -355,9 +362,83 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeStageDivergence(ctx, step.StageDivergence)
 	case "rollback":
 		return r.executeRollback(ctx, step.Rollback, config)
+	case "verify":
+		return r.executeVerify(ctx, step.Verify)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
+}
+
+// executeVerify runs `cascade verify` in the synced repo and asserts the exit
+// code matches the step's ExpectExit. When Regenerate is set it first runs
+// `cascade generate-workflow -f` so verify checks pristine generated output
+// rather than the harness's localized copies. When MutatePath is set it appends
+// MutateAppend to that file before verifying, driving the drift path. The whole
+// step is read-through-the-CLI and never asserts on workflow execution.
+func (r *Runner) executeVerify(ctx context.Context, step *VerifyStep) error {
+	if r.harness == nil || r.harness.act == nil {
+		r.t.Logf("  Would run cascade verify (expect exit %d, no harness)", step.ExpectExit)
+		return nil
+	}
+
+	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
+		return fmt.Errorf("verify: failed to sync repo: %w", err)
+	}
+
+	if step.Regenerate {
+		regenCmd := []string{"bash", "-c", "cd /tmp/repo && /usr/local/bin/cascade generate-workflow -f"}
+		exitCode, reader, err := r.harness.act.Container().Exec(ctx, regenCmd)
+		if err != nil {
+			return fmt.Errorf("verify: regenerate exec failed: %w", err)
+		}
+		var out bytes.Buffer
+		if reader != nil {
+			_, _ = io.Copy(&out, reader)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("verify: regenerate failed (exit %d): %s", exitCode, out.String())
+		}
+	}
+
+	if step.MutatePath != "" {
+		mutateCmd := []string{"bash", "-c", fmt.Sprintf(
+			"cd /tmp/repo && printf '%%s' %s >> %s",
+			shellQuote(step.MutateAppend), shellQuote(step.MutatePath),
+		)}
+		exitCode, reader, err := r.harness.act.Container().Exec(ctx, mutateCmd)
+		if err != nil {
+			return fmt.Errorf("verify: mutate exec failed: %w", err)
+		}
+		var out bytes.Buffer
+		if reader != nil {
+			_, _ = io.Copy(&out, reader)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("verify: mutate failed (exit %d): %s", exitCode, out.String())
+		}
+	}
+
+	verifyCmd := []string{"bash", "-c", "cd /tmp/repo && /usr/local/bin/cascade verify"}
+	exitCode, reader, err := r.harness.act.Container().Exec(ctx, verifyCmd)
+	if err != nil {
+		return fmt.Errorf("verify: exec failed: %w", err)
+	}
+	var out bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&out, reader)
+	}
+	r.t.Logf("  Verify: exit=%d (expected %d): %s", exitCode, step.ExpectExit, out.String())
+
+	if exitCode != step.ExpectExit {
+		return fmt.Errorf("verify: expected exit %d, got %d: %s", step.ExpectExit, exitCode, out.String())
+	}
+	return nil
+}
+
+// shellQuote wraps a string in single quotes for safe interpolation into a
+// bash -c command, escaping embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // executeCommit creates a commit

@@ -9,19 +9,29 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
-// GenerateLocalActions creates the local action files in the user's repo
-// Uses cfg.GetActionFolder() for the folder name (default: "manage-release")
-func GenerateLocalActions(baseDir string, cfg *config.TrunkConfig) error {
+// RenderLocalActions returns the composite action file the manifest would
+// generate, paired with its rendered content, without writing anything to disk.
+// The path is baseDir/.github/actions/<folder>/action.yaml where <folder> is
+// cfg.GetActionFolder() (default: "manage-release").
+func RenderLocalActions(baseDir string, cfg *config.TrunkConfig) (PlannedFile, error) {
 	actionFolder := cfg.GetActionFolder()
-	actionsDir := filepath.Join(baseDir, ".github", "actions", actionFolder)
-	if err := os.MkdirAll(actionsDir, 0755); err != nil {
+	actionPath := filepath.Join(baseDir, ".github", "actions", actionFolder, "action.yaml")
+	return PlannedFile{Path: actionPath, Content: generateManageReleaseAction()}, nil
+}
+
+// GenerateLocalActions creates the local action files in the user's repo.
+// Uses cfg.GetActionFolder() for the folder name (default: "manage-release").
+func GenerateLocalActions(baseDir string, cfg *config.TrunkConfig) error {
+	action, err := RenderLocalActions(baseDir, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(action.Path), 0755); err != nil {
 		return fmt.Errorf("creating actions directory: %w", err)
 	}
 
-	actionPath := filepath.Join(actionsDir, "action.yaml")
-	content := generateManageReleaseAction()
-
-	if err := os.WriteFile(actionPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(action.Path, []byte(action.Content), 0644); err != nil {
 		return fmt.Errorf("writing action file: %w", err)
 	}
 
