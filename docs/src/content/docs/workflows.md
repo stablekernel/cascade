@@ -355,10 +355,7 @@ permissions:
   packages: write    # Optional: only if your callbacks publish to GHCR
 ```
 
-Every deploy is a reusable workflow, so set the `environment:` key on the job
-inside your callback. cascade passes the target environment name as the
-`environment` input and cannot set `environment:` on the caller job it generates,
-because GitHub Actions disallows that key on a `uses:` job:
+Every deploy is a reusable workflow, so set the `environment:` key on the job inside your callback. cascade passes the target environment name as the `environment` input and cannot set `environment:` on the caller job it generates, because GitHub Actions disallows that key on a `uses:` job:
 
 ```yaml
 jobs:
@@ -367,8 +364,7 @@ jobs:
     environment: ${{ inputs.environment }}   # GitHub enforces approvals
 ```
 
-cascade prints a generate-time note when `gha_environment` is configured,
-reminding you to declare `environment:` inside the reusable workflow.
+cascade prints a generate-time note when `gha_environment` is configured, reminding you to declare `environment:` inside the reusable workflow.
 
 ## Concurrency Control
 

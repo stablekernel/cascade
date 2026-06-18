@@ -91,21 +91,9 @@ ci:
 | `action_folder` | string | No | `manage-release` | Folder name for the manage-release action |
 
 :::note[Environment names are yours; roles are positional]
-The `environments` list is fully configurable. cascade attaches no meaning to specific
-labels: `dev`, `test`, `uat`, `staging`, and `prod` are illustrative examples used
-throughout these docs, not reserved names. Roles are decided by position in the list, not
-by name. The last environment is the release stage (prod), the second-to-last is the
-prerelease environment, and the publish boundary is the final crossing into the last
-environment. The count is structural too: zero environments is release-only, one
-environment generates a single-environment Release workflow, and two or more enable the
-full promote cascade.
+The `environments` list is fully configurable. cascade attaches no meaning to specific labels: `dev`, `test`, `uat`, `staging`, and `prod` are illustrative examples used throughout these docs, not reserved names. Roles are decided by position in the list, not by name. The last environment is the release stage (prod), the second-to-last is the prerelease environment, and the publish boundary is the final crossing into the last environment. The count is structural too: zero environments is release-only, one environment generates a single-environment Release workflow, and two or more enable the full promote cascade.
 
-**Naming.** Environment, build, and deploy names become GitHub Actions job IDs and
-output-variable keys, so keep them identifier-safe: use letters, digits, and underscores
-(hyphens are read as subtraction in GitHub Actions expressions). The reserved
-generator-owned names `environment` and `dry_run` cannot be used as `dispatch_inputs`. Any
-`gha_environment` value maps to a real GitHub Environment, so GitHub's own naming rules
-apply there.
+**Naming.** Environment, build, and deploy names become GitHub Actions job IDs and output-variable keys, so keep them identifier-safe: use letters, digits, and underscores (hyphens are read as subtraction in GitHub Actions expressions). The reserved generator-owned names `environment` and `dry_run` cannot be used as `dispatch_inputs`. Any `gha_environment` value maps to a real GitHub Environment, so GitHub's own naming rules apply there.
 :::
 
 ### cli_version
@@ -346,11 +334,7 @@ When external deploys are configured, the generated promote workflow includes de
 
 #### Deploy on update (opt-in)
 
-By default the receiver is record-only: when a satellite reports a new version,
-the primary records the new external state and stops. Setting
-`on_update.deploy.workflow` on an external deploy opts that component in to a
-scoped deploy that runs synchronously in the same receiver run, right after the
-slot is recorded.
+By default the receiver is record-only: when a satellite reports a new version, the primary records the new external state and stops. Setting `on_update.deploy.workflow` on an external deploy opts that component in to a scoped deploy that runs synchronously in the same receiver run, right after the slot is recorded.
 
 ```yaml
 ci:
@@ -368,20 +352,10 @@ ci:
 
 Behavior:
 
-- **Opt-in and additive.** Omit `on_update` and the receiver stays record-only,
-  byte-for-byte identical to before. No deploy job is generated.
-- **Scoped to the updated component.** The generated receiver emits one
-  `deploy_<name>` job per opted-in component, each gated on
-  `inputs.deploy_name` so a single receiver run deploys only the component that
-  was just recorded. Other components are untouched.
-- **Synchronous and gated on the record.** The deploy job runs in the same
-  receiver run and only after the record step succeeds. A failed record never
-  triggers a deploy.
-- **Reusable-workflow only.** Like `deploys[].workflow`, `on_update.deploy`
-  accepts a workflow path (local `.github/workflows/x.yaml` or
-  `org/repo/.github/...@ref`); inline `run:` and `shell:` are not supported. The
-  scoped deploy receives the recorded `environment`, `sha`, `version`, and
-  `deploy_name` as inputs and inherits secrets.
+- **Opt-in and additive.** Omit `on_update` and the receiver stays record-only, byte-for-byte identical to before. No deploy job is generated.
+- **Scoped to the updated component.** The generated receiver emits one `deploy_<name>` job per opted-in component, each gated on `inputs.deploy_name` so a single receiver run deploys only the component that was just recorded. Other components are untouched.
+- **Synchronous and gated on the record.** The deploy job runs in the same receiver run and only after the record step succeeds. A failed record never triggers a deploy.
+- **Reusable-workflow only.** Like `deploys[].workflow`, `on_update.deploy` accepts a workflow path (local `.github/workflows/x.yaml` or `org/repo/.github/...@ref`); inline `run:` and `shell:` are not supported. The scoped deploy receives the recorded `environment`, `sha`, `version`, and `deploy_name` as inputs and inherits secrets.
 
 ### notify Section (Satellite Repos)
 
