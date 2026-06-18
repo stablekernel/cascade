@@ -1,0 +1,314 @@
+# Auto-promote - publishes the final vX.Y.Z release when the rc fleet gate is green.
+#
+# This is maintainer CI: hand-written tooling that lives in cascade's repo, not
+# a product feature and not part of cascade's generated output. (The generator
+# owns promote.yaml; this companion is a separate, maintainer-only workflow and
+# must never collide with it.)
+#
+# Flow: an rc tag vX.Y.Z-rc.N is pushed -> Release runs GoReleaser and publishes
+# the rc -> Fleet E2E fans the rc out across all 8 example repos. When that fleet
+# gate concludes SUCCESS, this workflow cuts the final vX.Y.Z tag on the SAME
+# commit the rc validated and drives Release/GoReleaser to publish vX.Y.Z as the
+# latest, non-prerelease release. A red fleet never promotes, and an already
+# released vX.Y.Z is a no-op.
+#
+# Trigger: workflow_run of "Fleet E2E (live GitHub)" on completion. Keep that
+# name in sync with fleet-e2e.yaml's `name:`.
+name: Auto-promote on green fleet
+
+on:
+  workflow_run:
+    workflows: ["Fleet E2E (live GitHub)"]
+    types: [completed]
+
+# Least privilege: the resolve/verify jobs only read. The promote job needs
+# contents:write to create the release tag and actions:write to dispatch Release.
+permissions:
+  contents: read
+
+# One promotion in flight per fleet run. A newer fleet run for the same rc
+# supersedes rather than racing a second tag-create against the same base.
+concurrency:
+  group: auto-promote-${{ github.event.workflow_run.head_branch || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # Re-assert the green-fleet + rc-tag gate and compute the base vX.Y.Z. We
+  # resolve the rc version the SAME way fleet-e2e's resolve job does: primarily
+  # from workflow_run.head_branch (the rc tag short-name of the Release push the
+  # fleet validated), with a head_sha -> tag fallback for the rare empty-branch
+  # case. Only a success conclusion for a vX.Y.Z-rc.N tag proceeds.
+  resolve:
+    name: Resolve promotion target
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      promote: ${{ steps.compute.outputs.promote }}
+      rc_version: ${{ steps.compute.outputs.rc_version }}
+      base_version: ${{ steps.compute.outputs.base_version }}
+    steps:
+      - name: Compute base version to promote
+        id: compute
+        env:
+          # PAT for the head_sha -> tag fallback (a same-repo tags read). We
+          # standardise on the fleet PAT, matching fleet-e2e's resolve step.
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the rc tag the fleet validated, mirroring fleet-e2e/resolve.
+          if [ -n "$WR_HEAD_BRANCH" ]; then
+            RC="$WR_HEAD_BRANCH"
+          elif [ -n "$WR_HEAD_SHA" ]; then
+            # head_branch was empty; pick the highest rc tag on the head_sha so
+            # selection is deterministic regardless of API ordering.
+            RC=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+              --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
+              | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
+          else
+            RC=""
+          fi
+
+          # Gate: only an rc tag of shape vX.Y.Z-rc.N promotes. Anything else
+          # (a non-rc fleet dispatch, an empty resolve) is a clean no-op.
+          if ! printf '%s' "$RC" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'; then
+            echo "::notice::Fleet run was not for a vX.Y.Z-rc.N tag (got '${RC:-<empty>}'); nothing to promote."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Strip the -rc.N suffix to get the final release version.
+          BASE="${RC%-rc.*}"
+
+          {
+            echo "promote=true"
+            echo "rc_version=$RC"
+            echo "base_version=$BASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Green fleet for $RC -> promoting final $BASE"
+
+  # Cut the final tag on the rc's commit and drive GoReleaser to publish it.
+  promote:
+    name: Promote ${{ needs.resolve.outputs.base_version }}
+    needs: resolve
+    if: needs.resolve.outputs.promote == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      # Idempotency: if vX.Y.Z is already released or tagged, do not re-promote.
+      # An existing release means a prior promotion already published it; an
+      # existing tag (without release) means a promotion is mid-flight or a
+      # manual tag exists - either way we must not race a second tag-create.
+      - name: Idempotency check
+        id: idem
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_VERSION: ${{ needs.resolve.outputs.base_version }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$BASE_VERSION" \
+              --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::notice::Release $BASE_VERSION already exists; nothing to promote."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$BASE_VERSION" >/dev/null; then
+            echo "::notice::Tag $BASE_VERSION already exists; a promotion is in flight or was done manually. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      # Pin the final tag to the EXACT commit the rc validated, so the published
+      # binary is the one the fleet exercised. We resolve the rc tag's commit
+      # rather than trusting HEAD (which could have advanced since the rc).
+      - name: Resolve rc commit
+        id: rc
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          RC_VERSION: ${{ needs.resolve.outputs.rc_version }}
+        run: |
+          set -euo pipefail
+          # The rc tag must exist locally (fetched by checkout fetch-depth: 0).
+          if ! git rev-parse -q --verify "refs/tags/$RC_VERSION" >/dev/null; then
+            echo "::error::rc tag $RC_VERSION not found in the checkout; cannot anchor the release commit."
+            exit 1
+          fi
+          SHA=$(git rev-list -n 1 "$RC_VERSION")
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "::notice::Promoting $RC_VERSION commit $SHA"
+
+      # Signing is opt-in. CI has no GPG key by default, so an automated release
+      # tag is annotated-but-unsigned unless the maintainer configures the
+      # CASCADE_RELEASE_GPG_KEY secret (an ASCII-armored private key). When set,
+      # we import it and create a signed tag; otherwise we log clearly that the
+      # automated tag is unsigned and proceed. Signing never blocks promotion.
+      - name: Import signing key
+        id: gpg
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          GPG_KEY: ${{ secrets.CASCADE_RELEASE_GPG_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_KEY:-}" ]; then
+            echo "::notice::CASCADE_RELEASE_GPG_KEY not configured; the automated release tag will be annotated but UNSIGNED."
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$GPG_KEY" | gpg --batch --import
+          KEY_ID=$(gpg --list-secret-keys --with-colons \
+            | awk -F: '/^sec:/ {print $5; exit}')
+          if [ -z "$KEY_ID" ]; then
+            echo "::error::CASCADE_RELEASE_GPG_KEY was provided but no secret key could be imported."
+            exit 1
+          fi
+          echo "key_id=$KEY_ID" >> "$GITHUB_OUTPUT"
+          echo "sign=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Imported signing key $KEY_ID; the automated release tag will be GPG-signed."
+
+      # Create the final tag on the rc commit and push it. We push with the
+      # default GITHUB_TOKEN, whose pushes deliberately do NOT trigger workflows.
+      # That keeps Release from firing twice: this job explicitly dispatches
+      # Release below (the deterministic path the promote flow already trusts),
+      # so a push-tags re-trigger would only duplicate the run.
+      - name: Create and push final tag
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          BASE_VERSION: ${{ needs.resolve.outputs.base_version }}
+          RC_VERSION: ${{ needs.resolve.outputs.rc_version }}
+          TARGET_SHA: ${{ steps.rc.outputs.sha }}
+          SIGN: ${{ steps.gpg.outputs.sign }}
+          KEY_ID: ${{ steps.gpg.outputs.key_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          MSG="Release $BASE_VERSION (promoted from $RC_VERSION after green fleet)"
+          if [ "${SIGN:-false}" = "true" ]; then
+            git config user.signingkey "$KEY_ID"
+            git tag -s "$BASE_VERSION" "$TARGET_SHA" -m "$MSG"
+          else
+            git tag -a "$BASE_VERSION" "$TARGET_SHA" -m "$MSG"
+          fi
+          git push origin "refs/tags/$BASE_VERSION"
+          echo "::notice::Pushed tag $BASE_VERSION at $TARGET_SHA"
+
+      # Drive GoReleaser deterministically. Release's `release` job checks out
+      # github.ref and runs GoReleaser with GORELEASER_CURRENT_TAG=github.ref_name,
+      # so dispatching it --ref vX.Y.Z builds exactly that tag. We dispatch
+      # explicitly (rather than relying on push-tags) because the API/event path
+      # for Release has been unreliable (release.yaml #86); an explicit dispatch
+      # against the tag ref is the dependable trigger. actions:write + the fleet
+      # PAT are required to create the dispatch.
+      - name: Dispatch Release for final tag
+        id: dispatch
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          BASE_VERSION: ${{ needs.resolve.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          DISPATCH_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "ts=$DISPATCH_TS" >> "$GITHUB_OUTPUT"
+
+          gh workflow run release.yaml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "$BASE_VERSION"
+          echo "::notice::Dispatched Release against $BASE_VERSION"
+
+      # Recover the Release run we just created (dispatch returns no id) by
+      # listing workflow_dispatch runs of Release on the tag ref since dispatch,
+      # then block on its conclusion.
+      - name: Watch Release run
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          BASE_VERSION: ${{ needs.resolve.outputs.base_version }}
+          DISPATCH_TS: ${{ steps.dispatch.outputs.ts }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for attempt in $(seq 1 30); do
+            RUN_ID=$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow release.yaml \
+              --event workflow_dispatch \
+              --created ">=$DISPATCH_TS" \
+              --branch "$BASE_VERSION" \
+              --limit 20 \
+              --json databaseId,createdAt \
+              --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')
+            if [ -n "$RUN_ID" ]; then
+              echo "Recovered Release run $RUN_ID on attempt $attempt"
+              break
+            fi
+            echo "Release run not visible yet (attempt $attempt/30); sleeping 10s"
+            sleep 10
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Could not recover the dispatched Release run for $BASE_VERSION."
+            exit 1
+          fi
+
+          echo "Watching https://github.com/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID"
+          gh run watch "$RUN_ID" --repo "${GITHUB_REPOSITORY}" --exit-status --interval 30
+
+      # Verify the published release matches expectations: not a draft, not a
+      # prerelease (GoReleaser's prerelease:auto must classify a non-rc tag as a
+      # final release), exactly 5 assets (4 archives + checksums.txt), and that
+      # vX.Y.Z is the repo's latest release.
+      - name: Verify published release
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_VERSION: ${{ needs.resolve.outputs.base_version }}
+        run: |
+          set -euo pipefail
+
+          DATA=$(gh release view "$BASE_VERSION" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft,isPrerelease,assets)
+          IS_DRAFT=$(printf '%s' "$DATA" | jq -r '.isDraft')
+          IS_PRERELEASE=$(printf '%s' "$DATA" | jq -r '.isPrerelease')
+          ASSET_COUNT=$(printf '%s' "$DATA" | jq -r '.assets | length')
+
+          LATEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+            --jq '.tag_name')
+
+          {
+            echo "## Auto-promote: $BASE_VERSION"
+            echo ""
+            echo "| Check | Value | Expected |"
+            echo "|---|---|---|"
+            echo "| draft | $IS_DRAFT | false |"
+            echo "| prerelease | $IS_PRERELEASE | false |"
+            echo "| assets | $ASSET_COUNT | 5 |"
+            echo "| latest release | $LATEST | $BASE_VERSION |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          [ "$IS_DRAFT" = "false" ] || { echo "::error::$BASE_VERSION is a draft."; fail=1; }
+          [ "$IS_PRERELEASE" = "false" ] || { echo "::error::$BASE_VERSION is marked prerelease; GoReleaser misclassified a non-rc tag."; fail=1; }
+          [ "$ASSET_COUNT" = "5" ] || { echo "::error::$BASE_VERSION has $ASSET_COUNT assets, expected 5."; fail=1; }
+          [ "$LATEST" = "$BASE_VERSION" ] || { echo "::error::latest release is $LATEST, expected $BASE_VERSION."; fail=1; }
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "::notice::$BASE_VERSION published as latest, non-prerelease, with 5 assets."
