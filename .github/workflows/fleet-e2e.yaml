@@ -190,55 +190,123 @@ jobs:
           # the generated workflows, and we touch nothing else.
           REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only"
 
-          failed=""
-          for name in $REPOS; do
-            slug="${FLEET_OWNER}/cascade-example-${name}"
-            echo "::group::repin ${slug} -> ${RC_VERSION}"
-            (
-              set -euo pipefail
-              workdir=$(mktemp -d)
-              git clone --depth 1 \
-                "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
-                "$workdir"
-              cd "$workdir"
+          # Apply the repin mutation to the checkout in the current directory:
+          # point cli_version at the rc, rewrite any other in-repo rc refs, then
+          # regenerate the generated workflows. Re-runnable, because the retry
+          # loop resets the tree to the fetched remote tip and re-applies this on
+          # top of it (mirroring cascade's commitWithApplicationRetry).
+          apply_repin() {
+            local manifest="$1"
+            # 1. Point the manifest cli_version at the rc.
+            sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$manifest"
 
-              manifest=".github/manifest.yaml"
-              if [ ! -f "$manifest" ]; then
-                echo "::error::${slug} has no ${manifest}"
-                exit 1
-              fi
+            # 2. Replace any other in-repo rc-version refs (e.g. an explicit
+            #    setup-cli@v..-rc.. pin a suite hand-wrote) with the rc. Scope
+            #    to tracked text files; the regen below rewrites generated
+            #    workflows, this catches anything outside them.
+            while IFS= read -r f; do
+              [ -f "$f" ] || continue
+              sed -i -E "s|v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+|${RC_VERSION}|g" "$f"
+            done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
 
-              # 1. Point the manifest cli_version at the rc.
-              sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$manifest"
+            # 3. Regenerate the workflows with the rc binary. This rewrites the
+            #    generated setup-cli refs to the rc and nothing hand-written.
+            cascade generate-workflow --force -c "$manifest"
+          }
 
-              # 2. Replace any other in-repo rc-version refs (e.g. an explicit
-              #    setup-cli@v..-rc.. pin a suite hand-wrote) with the rc. Scope
-              #    to tracked text files; the regen below rewrites generated
-              #    workflows, this catches anything outside them.
-              while IFS= read -r f; do
-                [ -f "$f" ] || continue
-                sed -i -E "s|v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+|${RC_VERSION}|g" "$f"
-              done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
+          # Repin one repo. Returns non-zero on any regen or push failure so the
+          # caller can record it and red the job. The example repos' main is
+          # protected, but the fleet token has write access (the suites' own
+          # state-writes to the same main succeed). A force push is rejected by
+          # the ruleset; a NORMAL fast-forward push is not. We clone fresh main,
+          # so the first push is a fast-forward. On a non-fast-forward rejection
+          # (a concurrent write landed) we fetch/reset/re-apply/retry, up to
+          # MAX_ATTEMPTS, exactly as cascade's state-writer does.
+          MAX_ATTEMPTS=5
+          repin_repo() {
+            local slug="$1"
+            local workdir manifest attempt status push_out
+            workdir=$(mktemp -d)
+            git clone --depth 1 \
+              "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
+              "$workdir" || return 1
+            cd "$workdir" || return 1
 
-              # 3. Regenerate the workflows with the rc binary. This rewrites the
-              #    generated setup-cli refs to the rc and nothing hand-written.
-              cascade generate-workflow --force -c "$manifest"
+            manifest=".github/manifest.yaml"
+            if [ ! -f "$manifest" ]; then
+              echo "::error::${slug} has no ${manifest}"
+              return 1
+            fi
 
-              # 4. Commit + push only if the repin actually changed something.
+            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+              apply_repin "$manifest" || return 1
+
+              # No diff means the remote already matches the rc: nothing to push.
               if [ -z "$(git status --porcelain)" ]; then
                 echo "${slug} already at ${RC_VERSION}; nothing to repin"
-                exit 0
+                return 0
               fi
+
               git add -A
               # CI has no GPG key, so DCO sign-off only (-s) with signing
               # explicitly disabled. The example repos are not GPG-gated.
               # [skip ci] keeps this push from triggering the repo's own
               # orchestrate workflow.
               git -c commit.gpgsign=false commit --no-gpg-sign -s \
-                -m "chore: repin to ${RC_VERSION} [skip ci]"
-              git push --force-with-lease origin HEAD:main
-              echo "${slug} repinned to ${RC_VERSION}"
-            ) || failed="${failed} ${slug}"
+                -m "chore: repin to ${RC_VERSION} [skip ci]" || return 1
+
+              # NORMAL push (no --force). Capture the exit status explicitly so a
+              # ruleset rejection fails the repo rather than being swallowed.
+              set +e
+              push_out=$(git push origin HEAD:main 2>&1)
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ]; then
+                echo "${slug} repinned to ${RC_VERSION} (attempt ${attempt})"
+                return 0
+              fi
+              echo "push attempt ${attempt}/${MAX_ATTEMPTS} for ${slug} failed:"
+              echo "$push_out"
+
+              # Recover from a non-fast-forward rejection: reset onto the freshly
+              # fetched remote tip and re-apply on the next iteration. A genuine
+              # write-access (ruleset) rejection cannot fast-forward away, so it
+              # surfaces here and on the final attempt reds the repo.
+              git fetch origin main || return 1
+              git reset --hard origin/main || return 1
+              sleep "$attempt"
+            done
+
+            echo "::error::${slug} push rejected after ${MAX_ATTEMPTS} attempts (last output above)"
+            return 1
+          }
+
+          # Confirm the repo's main actually carries the rc cli_version after the
+          # push. Belt-and-suspenders: a silent no-op (push that landed nothing)
+          # can never report green because this reads the published main back.
+          verify_pinned() {
+            local slug="$1" actual
+            actual=$(gh api "repos/${slug}/contents/.github/manifest.yaml" \
+              --jq '.content' | base64 -d \
+              | grep -E "^[[:space:]]*cli_version:" | head -n 1 \
+              | sed -E 's|^[[:space:]]*cli_version:[[:space:]]*||' | tr -d '"' | tr -d "'") || return 1
+            if [ "$actual" != "$RC_VERSION" ]; then
+              echo "::error::${slug} main cli_version is '${actual}', expected '${RC_VERSION}'"
+              return 1
+            fi
+            echo "${slug} main verified at ${RC_VERSION}"
+          }
+
+          failed=""
+          for name in $REPOS; do
+            slug="${FLEET_OWNER}/cascade-example-${name}"
+            echo "::group::repin ${slug} -> ${RC_VERSION}"
+            ok=1
+            ( repin_repo "$slug" ) || ok=0
+            if [ "$ok" -eq 1 ]; then
+              verify_pinned "$slug" || ok=0
+            fi
+            [ "$ok" -eq 1 ] || failed="${failed} ${slug}"
             echo "::endgroup::"
           done
 
