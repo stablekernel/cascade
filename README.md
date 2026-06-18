@@ -30,9 +30,7 @@
 <p align="center"><strong>Declarative trunk-based CI/CD for GitHub Actions.</strong></p>
 
 <p align="center">
-  Define what to build and where to deploy in one manifest.<br>
-  cascade generates the GitHub Actions wiring, tracks deployment state, manages releases,<br>
-  and cascades promotions through your environments.
+  Define what to build and where to deploy in one manifest.<br> cascade generates the GitHub Actions wiring, tracks deployment state, manages releases,<br> and cascades promotions through your environments.
 </p>
 
 ---

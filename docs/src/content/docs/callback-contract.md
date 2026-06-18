@@ -479,14 +479,9 @@ ci:
 
 ## Environment Protection
 
-Use GitHub Environment protection for approval gates. Because every deploy is a
-reusable workflow, declare the `environment:` key on the job **inside your
-reusable workflow**. GitHub Actions only allows a job-level `environment:` key on
-a steps job, never on a job that calls a reusable workflow with `uses:`, so the
-caller job cascade generates cannot carry it.
+Use GitHub Environment protection for approval gates. Because every deploy is a reusable workflow, declare the `environment:` key on the job **inside your reusable workflow**. GitHub Actions only allows a job-level `environment:` key on a steps job, never on a job that calls a reusable workflow with `uses:`, so the caller job cascade generates cannot carry it.
 
-cascade passes the target environment name to your workflow as the `environment`
-input, so wire it through:
+cascade passes the target environment name to your workflow as the `environment` input, so wire it through:
 
 ```yaml
 # your reusable deploy workflow
@@ -498,12 +493,7 @@ jobs:
       - run: ./deploy.sh
 ```
 
-cascade cannot set `environment:` on the caller job it generates: GitHub Actions
-rejects a workflow that puts `environment:` on a `uses:` job. cascade therefore
-emits only the `with: environment:` input on the caller and relies on your
-reusable workflow to apply the protection rules. cascade prints a generate-time
-note when `gha_environment` is configured for an environment, reminding you to
-declare `environment:` inside the reusable workflow.
+cascade cannot set `environment:` on the caller job it generates: GitHub Actions rejects a workflow that puts `environment:` on a `uses:` job. cascade therefore emits only the `with: environment:` input on the caller and relies on your reusable workflow to apply the protection rules. cascade prints a generate-time note when `gha_environment` is configured for an environment, reminding you to declare `environment:` inside the reusable workflow.
 
 Configure protection in GitHub: **Settings -> Environments -> Add required reviewers**.
 
