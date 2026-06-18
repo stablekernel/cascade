@@ -1,0 +1,145 @@
+# Posts the workflow-drift result as a sticky PR comment.
+#
+# Fork-safe by design. The PR Validation workflow runs on pull_request, so for
+# fork PRs it gets a read-only token and no secrets and cannot comment. It
+# uploads the drift result as an artifact instead. This workflow runs on
+# workflow_run in the BASE repo context, where it has a write token, and only
+# downloads that artifact (data only) and posts a comment. It NEVER checks out
+# or executes PR head code, so the write token is never handed to fork code.
+#
+# The target PR number is derived ONLY from trusted workflow_run metadata
+# (the source run's pull_requests array, or a head-SHA lookup for fork PRs),
+# never from the artifact, so a fork cannot redirect the comment at another PR.
+# The artifact supplies only the advisory comment body and exit flag.
+name: Drift Comment
+
+on:
+  workflow_run:
+    workflows: ["PR Validation"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    name: Comment on drift
+    runs-on: ubuntu-latest
+    # Only act on PR-triggered source runs.
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Download drift result
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: drift-result
+          path: drift-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Post or update sticky comment
+        if: steps.download.outcome == 'success'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- cascade-drift-check -->';
+
+            // Read artifact files (data only; never executed).
+            const read = (name) => {
+              try {
+                return fs.readFileSync(`drift-result/${name}`, 'utf8');
+              } catch (e) {
+                return '';
+              }
+            };
+
+            // Resolve the target PR ONLY from trusted workflow_run metadata.
+            // The artifact is produced by the (possibly fork) source run and is
+            // attacker-controlled, so it must never decide which PR we touch.
+            const run = context.payload.workflow_run;
+            let prNumber;
+            if (run.pull_requests && run.pull_requests.length > 0) {
+              // Same-repo PRs populate this array directly.
+              prNumber = run.pull_requests[0].number;
+            } else {
+              // Fork PRs leave it empty; resolve via the head SHA instead.
+              const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: run.head_sha,
+              });
+              const match = associated.data.find((pr) => pr.head.sha === run.head_sha);
+              if (match) {
+                prNumber = match.number;
+              }
+            }
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.info('No PR resolved from workflow_run metadata; nothing to do.');
+              return;
+            }
+
+            const exitRaw = read('drift-exit.txt').trim();
+            const drift = exitRaw !== '0';
+            const report = read('drift-report.txt');
+
+            // Find an existing sticky comment by the hidden marker.
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber }
+            );
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            // Build the body in JS from the file contents. The report is plain
+            // text from cascade verify; it is fenced, never evaluated.
+            let body;
+            if (drift) {
+              const trimmed = report.length > 60000
+                ? report.slice(0, 60000) + '\n... (truncated)'
+                : report;
+              body = [
+                marker,
+                '## Workflow drift detected',
+                '',
+                'The generated workflows are out of sync with the manifest.',
+                '',
+                'To fix, run and commit the result:',
+                '',
+                '```',
+                'cascade generate-workflow --config .github/manifest.yaml --force',
+                '```',
+                '',
+                '<details><summary>cascade verify output</summary>',
+                '',
+                '```',
+                trimmed,
+                '```',
+                '',
+                '</details>',
+              ].join('\n');
+            } else {
+              if (!existing) {
+                core.info('No drift and no existing comment; nothing to do.');
+                return;
+              }
+              body = [marker, 'No workflow drift detected.'].join('\n');
+            }
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }

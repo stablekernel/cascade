@@ -88,6 +88,12 @@ jobs:
   workflow-drift:
     name: Workflow Drift Check
     runs-on: ubuntu-latest
+    # contents:read only. This job runs on pull_request, so a fork PR gets a
+    # read-only token and no secrets. It cannot post a PR comment itself; it
+    # captures the drift result as an artifact that the drift-comment workflow
+    # (workflow_run, base-repo context) consumes with a write token.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -100,14 +106,32 @@ jobs:
         run: go build -o /tmp/cascade ./cmd/cascade
 
       - name: Check for workflow drift
-        run: /tmp/cascade verify --config .github/manifest.yaml
-
-      - name: Drift detected
-        if: failure()
         run: |
-          echo "Workflows are out of sync with the manifest."
-          echo "Run: cascade generate-workflow --config .github/manifest.yaml --force"
-          echo "Then commit the regenerated workflows."
+          set +e
+          /tmp/cascade verify --config .github/manifest.yaml > drift-report.txt 2>&1
+          echo $? > drift-exit.txt
+          set -e
+          cat drift-report.txt
+
+      - name: Upload drift result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: drift-result
+          path: |
+            drift-report.txt
+            drift-exit.txt
+          retention-days: 1
+
+      - name: Fail on drift
+        run: |
+          CODE=$(cat drift-exit.txt)
+          if [ "$CODE" != "0" ]; then
+            echo "Workflows are out of sync with the manifest."
+            echo "Run: cascade generate-workflow --config .github/manifest.yaml --force"
+            echo "Then commit the regenerated workflows."
+          fi
+          exit "$CODE"
 
   pr-gate:
     name: PR Gate
