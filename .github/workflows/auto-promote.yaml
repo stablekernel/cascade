@@ -33,23 +33,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Re-assert the green-fleet + rc-tag gate and compute the base vX.Y.Z. We
-  # resolve the rc version the SAME way fleet-e2e's resolve job does: primarily
-  # from workflow_run.head_branch (the rc tag short-name of the Release push the
-  # fleet validated), with a head_sha -> tag fallback for the rare empty-branch
-  # case. Only a success conclusion for a vX.Y.Z-rc.N tag proceeds.
+  # Re-assert the green-fleet + rc-tag gate and compute the base vX.Y.Z. The
+  # authoritative version under test is the one the fleet pinned every suite to,
+  # which it hands across the workflow_run boundary as the `version-under-test`
+  # artifact. A workflow_run does NOT inherit the fleet's dispatch inputs, and on
+  # the workflow_dispatch path head_branch is `main` (not the rc tag), so reading
+  # the artifact is the only way to recover the validated version without
+  # guessing. We fall back to the head_branch / head_sha -> tag lookup only when
+  # the artifact is absent (a tag-push-triggered fleet from before this handoff
+  # existed). Only a success conclusion for a vX.Y.Z-rc.N tag proceeds.
   resolve:
     name: Resolve promotion target
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
+      # actions:read lets download-artifact pull the artifact from the
+      # triggering fleet run via its run-id.
       actions: read
     outputs:
       promote: ${{ steps.compute.outputs.promote }}
       rc_version: ${{ steps.compute.outputs.rc_version }}
       base_version: ${{ steps.compute.outputs.base_version }}
     steps:
+      # Primary source of truth: the resolved version the fleet validated. Soft
+      # failure (continue-on-error) so a missing artifact falls through to the
+      # head_branch / head_sha fallback below rather than failing the resolve.
+      - name: Download version-under-test artifact
+        id: artifact
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: version-under-test
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Compute base version to promote
         id: compute
         env:
@@ -61,17 +79,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Resolve the rc tag the fleet validated, mirroring fleet-e2e/resolve.
-          if [ -n "$WR_HEAD_BRANCH" ]; then
-            RC="$WR_HEAD_BRANCH"
-          elif [ -n "$WR_HEAD_SHA" ]; then
-            # head_branch was empty; pick the highest rc tag on the head_sha so
-            # selection is deterministic regardless of API ordering.
-            RC=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
-              --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
-              | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
-          else
-            RC=""
+          # Primary: the version-under-test artifact carries the exact resolved
+          # version the fleet pinned every suite to. Authoritative when present.
+          RC=""
+          if [ -f version-under-test.txt ]; then
+            RC=$(tr -d '[:space:]' < version-under-test.txt)
+            echo "::notice::Read version-under-test artifact: '${RC:-<empty>}'"
+          fi
+
+          # Fallback: no artifact (a tag-push-triggered fleet predating this
+          # handoff). Resolve the rc tag the fleet validated the prior way.
+          if [ -z "$RC" ]; then
+            echo "::notice::No version-under-test artifact; falling back to head_branch / head_sha."
+            if printf '%s' "$WR_HEAD_BRANCH" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'; then
+              RC="$WR_HEAD_BRANCH"
+            elif [ -n "$WR_HEAD_SHA" ]; then
+              # Pick the highest rc tag on the head_sha so selection is
+              # deterministic regardless of API ordering.
+              RC=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+                --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
+                | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
+            else
+              RC=""
+            fi
           fi
 
           # Gate: only an rc tag of shape vX.Y.Z-rc.N promotes. Anything else

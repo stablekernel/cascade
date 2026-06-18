@@ -110,6 +110,10 @@ jobs:
           fi
 
           echo "cascade_version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Persist the resolved version so it can cross the workflow_run
+          # boundary into auto-promote. This is the exact value every suite is
+          # pinned to, so a green fleet and the promoted base never disagree.
+          printf '%s' "$VERSION" > version-under-test.txt
           {
             echo "## Fleet E2E"
             echo ""
@@ -120,6 +124,19 @@ jobs:
             echo "> before any suite fans out, so the suites run the binary"
             echo "> named here rather than a stale pinned one."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Hand the resolved version-under-test to auto-promote. A workflow_run
+      # does not inherit the triggering run's dispatch inputs, so auto-promote
+      # reads this artifact as the authoritative version the fleet validated
+      # rather than guessing from head_branch (which is `main` on the
+      # workflow_dispatch path).
+      - name: Upload resolved version-under-test
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: version-under-test
+          path: version-under-test.txt
+          if-no-files-found: error
+          retention-days: 7
 
   # Repin: pin every example repo to the rc UNDER TEST before any suite fans
   # out. Without this the suites would install whatever version each repo's
