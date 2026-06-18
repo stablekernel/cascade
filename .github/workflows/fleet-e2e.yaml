@@ -116,15 +116,143 @@ jobs:
             echo "Trigger: \`$EVENT_NAME\`"
             echo "cascade version under test: \`${VERSION:-<empty>}\`"
             echo ""
-            echo "> Version passing to suites is computed and logged here but"
-            echo "> currently INERT: the suites do not yet accept a"
-            echo "> \`cascade_version\` input."
+            echo "> The repin job pins all 8 example repos to this version"
+            echo "> before any suite fans out, so the suites run the binary"
+            echo "> named here rather than a stale pinned one."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Stage 1: primary must run and pass before its dependents.
+  # Repin: pin every example repo to the rc UNDER TEST before any suite fans
+  # out. Without this the suites would install whatever version each repo's
+  # manifest is statically pinned to, so a fresh rc would never actually run -
+  # the "version under test" label would outrun reality. This job downloads the
+  # rc binary, regenerates each repo's workflows against it, and pushes the
+  # repin to each repo's main (idempotent: no change -> no commit). Every suite
+  # job gates on this job so none can start against a stale pin.
+  repin:
+    name: Repin fleet to rc
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RC_VERSION: ${{ needs.resolve.outputs.cascade_version }}
+      STATE_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+    steps:
+      - name: Download the rc cascade binary
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RC_VERSION:-}" ]; then
+            echo "::error::No cascade version resolved; cannot repin the fleet"
+            exit 1
+          fi
+          # GoReleaser strips the leading v from the embedded version, so
+          # `cascade version` prints the tag WITHOUT it. Keep both forms: the
+          # v-prefixed tag for release/manifest refs, the bare form for the
+          # binary self-report comparison.
+          RC_BARE="${RC_VERSION#v}"
+          echo "RC_BARE=$RC_BARE" >> "$GITHUB_ENV"
+
+          TMPDIR=$(mktemp -d)
+          echo "Downloading $RC_VERSION linux/amd64 archive from $REPO"
+          gh release download "$RC_VERSION" \
+            --repo "$REPO" \
+            --pattern '*linux_amd64*' \
+            --dir "$TMPDIR"
+          tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
+          install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
+          rm -rf "$TMPDIR"
+
+          INSTALLED=$(cascade version 2>/dev/null | head -n 1 | awk '{print $2}')
+          # Tolerate a leading v in the self-report so the check tracks the
+          # release tag rather than a future ldflags formatting choice.
+          echo "Installed cascade version: $INSTALLED (expected $RC_BARE)"
+          if [ "${INSTALLED#v}" != "$RC_BARE" ]; then
+            echo "::error::Downloaded binary reports '$INSTALLED' but expected '$RC_BARE'"
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config --global user.name "cascade-fleet-bot"
+          git config --global user.email "cascade-fleet-bot@users.noreply.github.com"
+
+      - name: Repin each example repo to the rc
+        run: |
+          set -euo pipefail
+          # The 8 example repos. Repinning means: set manifest cli_version to the
+          # rc, replace any other in-repo rc-version refs, regenerate the workflows
+          # with the rc binary, then commit + push only if something changed. This
+          # preserves every hand-written suite feature: regeneration only rewrites
+          # the generated workflows, and we touch nothing else.
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only"
+
+          failed=""
+          for name in $REPOS; do
+            slug="${FLEET_OWNER}/cascade-example-${name}"
+            echo "::group::repin ${slug} -> ${RC_VERSION}"
+            (
+              set -euo pipefail
+              workdir=$(mktemp -d)
+              git clone --depth 1 \
+                "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
+                "$workdir"
+              cd "$workdir"
+
+              manifest=".github/manifest.yaml"
+              if [ ! -f "$manifest" ]; then
+                echo "::error::${slug} has no ${manifest}"
+                exit 1
+              fi
+
+              # 1. Point the manifest cli_version at the rc.
+              sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$manifest"
+
+              # 2. Replace any other in-repo rc-version refs (e.g. an explicit
+              #    setup-cli@v..-rc.. pin a suite hand-wrote) with the rc. Scope
+              #    to tracked text files; the regen below rewrites generated
+              #    workflows, this catches anything outside them.
+              while IFS= read -r f; do
+                [ -f "$f" ] || continue
+                sed -i -E "s|v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+|${RC_VERSION}|g" "$f"
+              done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
+
+              # 3. Regenerate the workflows with the rc binary. This rewrites the
+              #    generated setup-cli refs to the rc and nothing hand-written.
+              cascade generate-workflow --force -c "$manifest"
+
+              # 4. Commit + push only if the repin actually changed something.
+              if [ -z "$(git status --porcelain)" ]; then
+                echo "${slug} already at ${RC_VERSION}; nothing to repin"
+                exit 0
+              fi
+              git add -A
+              # CI has no GPG key, so DCO sign-off only (-s) with signing
+              # explicitly disabled. The example repos are not GPG-gated.
+              # [skip ci] keeps this push from triggering the repo's own
+              # orchestrate workflow.
+              git -c commit.gpgsign=false commit --no-gpg-sign -s \
+                -m "chore: repin to ${RC_VERSION} [skip ci]"
+              git push --force-with-lease origin HEAD:main
+              echo "${slug} repinned to ${RC_VERSION}"
+            ) || failed="${failed} ${slug}"
+            echo "::endgroup::"
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::Repin failed for:${failed}"
+            exit 1
+          fi
+          echo "All example repos pinned to ${RC_VERSION}"
+
+  # Stage 1: primary must run and pass before its dependents. Gated on repin so
+  # it never runs against a stale pin.
   primary:
     name: primary
-    needs: resolve
+    needs: [resolve, repin]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -158,10 +286,11 @@ jobs:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
 
-  # Stage 3: independent suites, run in parallel with no ordering constraint.
+  # Stage 3: independent suites, run in parallel with no ordering constraint
+  # beyond repin (so they never run against a stale pin).
   independents:
     name: independents (${{ matrix.repo }})
-    needs: resolve
+    needs: [resolve, repin]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -182,7 +311,7 @@ jobs:
   # fan-out job failed and emits a per-repo pass/fail table to the summary.
   aggregate:
     name: Fleet gate
-    needs: [resolve, primary, dependents, independents]
+    needs: [resolve, repin, primary, dependents, independents]
     # Only render a verdict when the fleet actually fanned out. On filtered-out
     # completions (merge_group, non-rc tags, dispatch with no rc) resolve is
     # skipped, so this job is skipped too and the run is a clean no-op rather
@@ -195,6 +324,7 @@ jobs:
     steps:
       - name: Aggregate fleet result
         env:
+          R_REPIN: ${{ needs.repin.result }}
           R_PRIMARY: ${{ needs.primary.result }}
           R_DEPENDENTS: ${{ needs.dependents.result }}
           R_INDEPENDENTS: ${{ needs.independents.result }}
@@ -204,21 +334,24 @@ jobs:
           {
             echo "## Fleet E2E result"
             echo ""
-            echo "cascade version under test: \`${VERSION:-<empty>}\`"
+            echo "cascade version under test (pinned into every suite): \`${VERSION:-<empty>}\`"
             echo ""
             echo "| Stage | Result |"
             echo "|---|---|"
+            echo "| repin (all 8 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
             echo "| independents (4env, 3env, 2env, single-env, release-only) | $R_INDEPENDENTS |"
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
-            echo "> the rc tag. rc -> release promotion should consume the latest"
-            echo "> fleet-e2e conclusion for that tag before promoting."
+            echo "> the rc tag. The repin step pinned each suite to this rc before"
+            echo "> fan-out, so a green gate validates the binary named above."
+            echo "> rc -> release promotion should consume the latest fleet-e2e"
+            echo "> conclusion for that tag before promoting."
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail=0
-          for r in "$R_PRIMARY" "$R_DEPENDENTS" "$R_INDEPENDENTS"; do
+          for r in "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_INDEPENDENTS"; do
             if [ "$r" != "success" ]; then
               fail=1
             fi
