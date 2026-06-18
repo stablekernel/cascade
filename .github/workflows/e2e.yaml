@@ -5,10 +5,12 @@
 #   merge_group          runs as a merge-queue gate before merging to main.
 #   workflow_dispatch    manual run against any ref (existing).
 #
-# This is a ~27min testcontainers run. The paths filter keeps it off docs-only
-# changes (mirrors orchestrate.yaml), and the concurrency group cancels a
-# superseded run on the same ref so a fast follow-up push does not stack two
-# 27min runs. Run locally (`go test -v ./e2e/...`) before pushing too.
+# This is a ~27min testcontainers run. Path filtering now happens at the job
+# level (via the `changes` job using dorny/paths-filter) so the required gate
+# context always reports, preventing the required-but-skipped deadlock. The
+# concurrency group cancels a superseded run on the same ref so a fast
+# follow-up push does not stack two 27min runs. Run locally
+# (`go test -v ./e2e/...`) before pushing too.
 #
 # NOTE: the `name:` below is referenced by fleet-e2e.yaml's workflow_run trigger
 # ("Integration (act + gitea)"). Keep the two in sync if this is ever renamed.
@@ -17,19 +19,7 @@ name: Integration (act + gitea)
 on:
   push:
     branches: [main]
-    paths:
-      - 'cmd/**'
-      - 'e2e/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/**'
   pull_request:
-    paths:
-      - 'cmd/**'
-      - 'e2e/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/**'
   merge_group:
   workflow_dispatch:
     inputs:
@@ -57,8 +47,40 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect Code Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.compute.outputs.code }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            code:
+              - 'cmd/**'
+              - 'e2e/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/**'
+
+      - id: compute
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=${{ steps.filter.outputs.code }}" >> "$GITHUB_OUTPUT"
+          fi
+
   e2e:
     name: E2E Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -123,3 +145,35 @@ jobs:
           path: e2e/_artifacts/
           if-no-files-found: ignore
           retention-days: 14
+
+  gate:
+    # This always-run context is the branch-protection required check. It mirrors
+    # the heavy E2E result when E2E runs and passes cleanly when E2E is correctly
+    # skipped on non-code changes, avoiding the required-but-skipped deadlock.
+    name: Integration Gate
+    needs: [changes, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check Integration Status
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          # The detection job must succeed for its `code` output to be trusted.
+          # If it failed or was cancelled, fail the gate rather than wave the
+          # change through on a stale/empty signal.
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "Integration gate: change-detection result=$CHANGES_RESULT, failing the gate."
+            exit 1
+          fi
+          # E2E success means a code change passed the heavy suite. E2E skipped
+          # means no code path changed, which is a legitimate pass.
+          if [ "$E2E_RESULT" = "success" ] || [ "$E2E_RESULT" = "skipped" ]; then
+            echo "Integration gate: E2E result=$E2E_RESULT, gate passes."
+            exit 0
+          fi
+          echo "Integration gate: E2E result=$E2E_RESULT, failing the gate."
+          exit 1

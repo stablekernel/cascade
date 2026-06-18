@@ -26,6 +26,11 @@ permissions:
   contents: write
 
 jobs:
+  # Integration protection: because Integration now gates merge to main via branch
+  # protection, any commit on main already passed Integration. A tag cut from main
+  # is therefore implicitly Integration-validated. We do not re-run Integration
+  # here (it would double the ~27min cost); the merge gate is the protection.
+
   test:
     name: Test
     runs-on: ubuntu-latest
