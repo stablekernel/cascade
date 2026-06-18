@@ -278,6 +278,39 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	return errs
 }
 
+// validateComponents validates the reserved top-level components map (#176).
+// Rules frozen at v1: component names must be job-ID-safe (so a future
+// generator can key job IDs on the name without breakage), and any configured
+// Path must be a clean relative path (no leading slash, no ".." segments).
+func validateComponents(cfg *TrunkConfig) []string {
+	if len(cfg.Components) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, name := range sortedComponentKeys(cfg.Components) {
+		errs = append(errs, validateJobIDSafeName("components."+name, name)...)
+		comp := cfg.Components[name]
+		if comp.Path != "" {
+			if strings.HasPrefix(comp.Path, "/") {
+				errs = append(errs, fmt.Sprintf("components.%s.path must be a relative path, not absolute", name))
+			} else if strings.Contains(comp.Path, "..") {
+				errs = append(errs, fmt.Sprintf("components.%s.path must not contain '..' segments", name))
+			}
+		}
+	}
+	return errs
+}
+
+// sortedComponentKeys returns the keys of a ComponentConfig map in deterministic order.
+func sortedComponentKeys(m map[string]ComponentConfig) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // sortedKeys returns the keys of a string-valued map in deterministic order.
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))

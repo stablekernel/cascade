@@ -50,6 +50,10 @@ const fullSurfaceManifest = `ci:
     environment_config:
       prod:
         gha_environment: production
+    components:
+      api:
+        path: services/api
+        tag_prefix: api-v
     validate:
       workflow: .github/workflows/validate.yaml
       supports_dry_run: true
@@ -121,6 +125,21 @@ const fullSurfaceManifest = `ci:
         - sha: old123
           version: v1.1.0
           committed_at: "2026-01-01T00:00:00Z"
+      components:
+        api:
+          version: api-v1.0.0
+          sha: abc123
+          committed_at: "2026-01-01T00:00:00Z"
+          committed_by: github-actions[bot]
+  latest_release:
+    version: v1.2.0
+    sha: abc123
+    released_on: "2026-01-01T00:00:00Z"
+    components:
+      api:
+        version: api-v1.0.0
+        sha: abc123
+        released_on: "2026-01-01T00:00:00Z"
 `
 
 func TestFullSurfaceManifestE2E(t *testing.T) {
@@ -155,6 +174,9 @@ func TestFullSurfaceManifestE2E(t *testing.T) {
 	if cfg.ExtraTriggers == nil || cfg.ExtraTriggers.MergeGroup == nil {
 		t.Fatalf("extra_triggers not parsed: %#v", cfg.ExtraTriggers)
 	}
+	if cfg.Components == nil || cfg.Components["api"].Path != "services/api" {
+		t.Fatalf("components reserved shape not parsed: %#v", cfg.Components)
+	}
 
 	// Per-deployable version + previous ring survive the load path.
 	st := cfg2State(t, path)
@@ -163,6 +185,11 @@ func TestFullSurfaceManifestE2E(t *testing.T) {
 	}
 	if len(st["prod"].Previous) != 1 {
 		t.Fatalf("previous ring not parsed: %#v", st["prod"].Previous)
+	}
+
+	st2 := cfg2State(t, path)
+	if st2["prod"].Components == nil || st2["prod"].Components["api"].Version != "api-v1.0.0" {
+		t.Fatalf("state.prod.components not parsed: %#v", st2["prod"].Components)
 	}
 }
 

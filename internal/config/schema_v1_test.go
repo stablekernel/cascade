@@ -848,3 +848,90 @@ external:
 		}
 	})
 }
+
+// --- Reserved components shape (#176) ---------------------------------------
+
+func TestComponentsShapeParseAndValidate(t *testing.T) {
+	t.Run("valid components block passes", func(t *testing.T) {
+		cfg := parseInline(t, `
+trunk_branch: main
+environments: [dev, prod]
+components:
+  api:
+    path: services/api
+    tag_prefix: api-v
+  worker:
+    path: services/worker
+`)
+		if cfg.Components == nil {
+			t.Fatal("Components map should be parsed")
+		}
+		if cfg.Components["api"].Path != "services/api" {
+			t.Fatalf("unexpected path: %q", cfg.Components["api"].Path)
+		}
+		if cfg.Components["api"].TagPrefix != "api-v" {
+			t.Fatalf("unexpected tag_prefix: %q", cfg.Components["api"].TagPrefix)
+		}
+		errs := Validate(cfg)
+		if len(errs) != 0 {
+			t.Fatalf("expected no errors, got: %v", errs)
+		}
+	})
+
+	t.Run("non-job-id-safe component name rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+trunk_branch: main
+components:
+  "bad name!":
+    path: services/bad
+`)
+		errs := Validate(cfg)
+		if !hasErrContaining(errs, "bad name!") {
+			t.Fatalf("expected error for invalid component name, got: %v", errs)
+		}
+	})
+
+	t.Run("path with dotdot rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+trunk_branch: main
+components:
+  mycomp:
+    path: ../outside
+`)
+		errs := Validate(cfg)
+		if !hasErrContaining(errs, "path") {
+			t.Fatalf("expected error for path with .., got: %v", errs)
+		}
+	})
+
+	t.Run("absolute path rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+trunk_branch: main
+components:
+  mycomp:
+    path: /absolute/path
+`)
+		errs := Validate(cfg)
+		if !hasErrContaining(errs, "path") {
+			t.Fatalf("expected error for absolute path, got: %v", errs)
+		}
+	})
+
+	t.Run("omitting components is nil and zero errors", func(t *testing.T) {
+		cfg := parseInline(t, `
+trunk_branch: main
+environments: [dev, prod]
+builds:
+  - name: app
+    workflow: .github/workflows/build.yaml
+    triggers: ["src/**"]
+`)
+		if cfg.Components != nil {
+			t.Fatalf("expected nil Components, got: %v", cfg.Components)
+		}
+		errs := Validate(cfg)
+		if len(errs) != 0 {
+			t.Fatalf("expected no errors, got: %v", errs)
+		}
+	})
+}

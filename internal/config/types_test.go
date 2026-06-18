@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 )
 
 func TestGetPromotionModes(t *testing.T) {
@@ -960,4 +961,91 @@ func TestResolveDependency_External(t *testing.T) {
 	result, err := cfg.ResolveDependency("cdk", CallbackTypeDeploy)
 	assert.NoError(t, err)
 	assert.Equal(t, "external-cdk", result)
+}
+
+func TestComponentsRoundTrip(t *testing.T) {
+	// Marshal a CICDFile with all three component map slots populated,
+	// unmarshal, marshal again, and assert the two encodings are equal.
+	original := &CICDFile{
+		Config: &TrunkConfig{
+			SchemaVersion: 1,
+			TrunkBranch:   "main",
+			Environments:  []string{"dev", "prod"},
+			Components: map[string]ComponentConfig{
+				"api": {Path: "services/api", TagPrefix: "api-v"},
+			},
+		},
+		State: map[string]*EnvState{
+			"dev": {
+				SHA:     "abc123",
+				Version: "v1.0.0",
+				Components: map[string]*ComponentState{
+					"api": {Version: "api-v1.0.0", SHA: "abc123", CommittedAt: "2026-01-01T00:00:00Z"},
+				},
+			},
+		},
+		LatestRelease: &LatestReleaseState{
+			Version:    "v1.0.0",
+			SHA:        "abc123",
+			ReleasedOn: "2026-01-01T00:00:00Z",
+			Components: map[string]*ComponentReleaseState{
+				"api": {Version: "api-v1.0.0", SHA: "abc123", ReleasedOn: "2026-01-01T00:00:00Z"},
+			},
+		},
+	}
+
+	first, err := yaml.Marshal(original)
+	if err != nil {
+		t.Fatalf("first marshal: %v", err)
+	}
+
+	var decoded CICDFile
+	if err := yaml.Unmarshal(first, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	second, err := yaml.Marshal(&decoded)
+	if err != nil {
+		t.Fatalf("second marshal: %v", err)
+	}
+
+	if string(first) != string(second) {
+		t.Fatalf("round-trip mismatch:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+
+	// Verify decoded fields match original.
+	if decoded.Config.Components["api"].Path != "services/api" {
+		t.Fatalf("components.api.path not preserved: %q", decoded.Config.Components["api"].Path)
+	}
+	if decoded.State["dev"].Components["api"].Version != "api-v1.0.0" {
+		t.Fatalf("state.dev.components.api.version not preserved")
+	}
+	if decoded.LatestRelease.Components["api"].ReleasedOn != "2026-01-01T00:00:00Z" {
+		t.Fatalf("latest_release.components.api.released_on not preserved")
+	}
+}
+
+func TestComponentsOmittedChangesNothing(t *testing.T) {
+	// A manifest without any components: key should produce identical output
+	// before and after the reserved-shape fields exist. nil map + omitempty
+	// guarantees the key never appears.
+	const src = `trunk_branch: main
+environments:
+    - dev
+    - prod
+`
+	var cfg TrunkConfig
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.Components != nil {
+		t.Fatalf("expected nil Components on manifest without components:, got %v", cfg.Components)
+	}
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(out) != src {
+		t.Fatalf("re-marshal changed output:\nwant:\n%s\ngot:\n%s", src, out)
+	}
 }
