@@ -105,6 +105,15 @@ A matching per-env deploy state slot, `target_sha`, reserves room to record the 
 
 `branch` and `track_sha` are meaningful only when `mode` is `gitops`. These fields parse and pass structural validation today, but carry no generator behavior. A manifest declaring them produces byte-identical generated workflows, so the reserved shape is safe to adopt now. Attaching behavior to these fields later is additive and does not bump `schema_version`.
 
+## Reserved shape: telemetry sink
+
+The manifest reserves a vendor-neutral telemetry seam under `config.telemetry`. The seam carries `enabled` and an `adapter` value (for example `none` or `datadog`); the vendor stays a value behind the adapter, so no vendor client is baked into cascade. The reserved shape adds two enriched fields:
+
+- `webhook`, a generic JSON-POST sink with a `url` (the destination the run posts telemetry to) and a `secret_name` (the name of a GitHub Actions secret holding the auth token). `secret_name` is a reference to a secret, never an inline token value.
+- `job_summary`, a boolean that toggles the run-UI summary table. It is omitted when unset, so an unset value stays distinct from an explicit `false`; default-on behavior arrives in a later release.
+
+These fields parse and pass structural validation today, but carry no generator or emit behavior. A manifest declaring them produces byte-identical generated workflows, so the reserved shape is safe to adopt now. Attaching behavior to these fields later is additive and does not bump `schema_version`.
+
 ## Migrations
 
 Each `schema_version` bump is recorded with a `Migration` section in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md) describing exactly what changed and the steps to update a manifest from the previous version. There are no migrations yet: the current schema version is the first.

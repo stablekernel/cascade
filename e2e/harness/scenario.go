@@ -66,6 +66,12 @@ type Config struct {
 	PRPreview     map[string]any   `yaml:"pr_preview,omitempty"`
 	Notify        map[string]any   `yaml:"notify,omitempty"`
 	External      []map[string]any `yaml:"external,omitempty"`
+	// Telemetry carries the reserved vendor-neutral telemetry block (enabled,
+	// adapter, webhook, job_summary) through to the generated manifest untouched.
+	// A generic map keeps the harness decoupled from the generator's
+	// TelemetryConfig shape, so a scenario can declare any reserved telemetry
+	// field without the harness needing to know its structure.
+	Telemetry map[string]any `yaml:"telemetry,omitempty"`
 }
 
 // EnvEnvironmentConfig mirrors internal/config.EnvironmentConfig's gha_environment
