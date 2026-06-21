@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/generate"
@@ -66,6 +67,10 @@ type Options struct {
 	OutputPath        string
 	PromoteOutputPath string
 	Quiet             bool
+	// AllowOrphans disables orphan detection. When false (the default), verify
+	// reports cascade-owned workflow files that the manifest no longer plans as
+	// drift; when true, those files are ignored and never affect the exit code.
+	AllowOrphans bool
 }
 
 // Run compares every file the manifest would generate against the bytes
@@ -112,11 +117,17 @@ func Run(o Options, stdout, stderr io.Writer) error {
 	}
 	var drifts []drift
 
+	// planned holds the absolute on-disk read path of every planned file, used
+	// both for the missing/changed comparison and to exclude planned files from
+	// orphan detection below.
+	plannedPaths := make(map[string]struct{}, len(planned))
+
 	for _, p := range planned {
 		readPath := p.Path
 		if !filepath.IsAbs(readPath) {
 			readPath = filepath.Join(baseDir, readPath)
 		}
+		plannedPaths[filepath.Clean(readPath)] = struct{}{}
 		committed, rerr := os.ReadFile(readPath)
 		if rerr != nil {
 			if errors.Is(rerr, os.ErrNotExist) {
@@ -130,7 +141,15 @@ func Run(o Options, stdout, stderr io.Writer) error {
 		}
 	}
 
-	if len(drifts) == 0 {
+	var orphans []string
+	if !o.AllowOrphans {
+		orphans, err = findOrphans(planned, plannedPaths, baseDir)
+		if err != nil {
+			return operational(err)
+		}
+	}
+
+	if len(drifts) == 0 && len(orphans) == 0 {
 		if !o.Quiet {
 			_, _ = fmt.Fprintf(stdout, "verify: %d files, no drift\n", len(planned))
 		}
@@ -145,10 +164,78 @@ func Run(o Options, stdout, stderr io.Writer) error {
 				_, _ = fmt.Fprintf(stderr, "~ %s\n", displayPath(d.path))
 			}
 		}
-		_, _ = fmt.Fprintf(stderr, "\n%d file(s) drifted. Run `cascade generate-workflow` and commit the result.\n", len(drifts))
+		for _, o := range orphans {
+			_, _ = fmt.Fprintf(stderr, "? %s (orphaned)\n", displayPath(o))
+		}
+		_, _ = fmt.Fprintf(stderr, "\n%d file(s) drifted. Run `cascade generate-workflow` and commit the result.\n", len(drifts)+len(orphans))
 	}
 
 	return ErrDrift
+}
+
+// findOrphans scans the directories that hold the planned workflow files for
+// cascade-owned files the manifest no longer plans. A file is an orphan only
+// when it carries generate.GeneratedFileMarker (so hand-written workflows are
+// never flagged) and is not itself a planned file. The scan is confined to the
+// distinct directories of the planned workflow files (normally
+// .github/workflows); the composite action directory and the wider repo are
+// never scanned. It returns the orphans sorted by absolute path for stable
+// output. A missing scan directory yields no orphans, not an error.
+func findOrphans(planned []generate.PlannedFile, plannedPaths map[string]struct{}, baseDir string) ([]string, error) {
+	scanDirs := workflowScanDirs(planned, baseDir)
+
+	var orphans []string
+	for dir := range scanDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("scanning %s for orphans: %w", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			full := filepath.Clean(filepath.Join(dir, entry.Name()))
+			if _, ok := plannedPaths[full]; ok {
+				continue
+			}
+			body, rerr := os.ReadFile(full)
+			if rerr != nil {
+				if errors.Is(rerr, os.ErrNotExist) {
+					continue
+				}
+				return nil, fmt.Errorf("reading %s for orphan check: %w", full, rerr)
+			}
+			if bytes.Contains(body, []byte(generate.GeneratedFileMarker)) {
+				orphans = append(orphans, full)
+			}
+		}
+	}
+	sort.Strings(orphans)
+	return orphans, nil
+}
+
+// workflowScanDirs returns the distinct directories that hold planned workflow
+// files. A planned file counts as a workflow when its (anchored) path lives
+// under a ".github/workflows" path segment; the composite action's path does
+// not, so its directory is excluded from the orphan scan.
+func workflowScanDirs(planned []generate.PlannedFile, baseDir string) map[string]struct{} {
+	dirs := make(map[string]struct{})
+	for _, p := range planned {
+		readPath := p.Path
+		if !filepath.IsAbs(readPath) {
+			readPath = filepath.Join(baseDir, readPath)
+		}
+		readPath = filepath.Clean(readPath)
+		dir := filepath.Dir(readPath)
+		if filepath.Base(dir) != "workflows" || filepath.Base(filepath.Dir(dir)) != ".github" {
+			continue
+		}
+		dirs[dir] = struct{}{}
+	}
+	return dirs
 }
 
 // displayPath renders an absolute planned path relative to the current working

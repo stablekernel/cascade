@@ -1,0 +1,54 @@
+name: "Verify Orphan Detection"
+description: |
+  Exercises orphan detection in the read-only `cascade verify` command. After
+  generating workflows from a two-environment manifest, verify against pristine
+  output reports no drift (exit 0). Copying a generated, cascade-owned workflow
+  to a path the manifest does not plan leaves an orphan: verify reports drift
+  (exit 1). Re-running verify with --allow-orphans suppresses the orphan and
+  exits clean (exit 0), proving the opt-out.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Verify clean against pristine generated output"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Orphaned generated workflow is the sole drift; verify reports it"
+    action: verify
+    verify:
+      regenerate: true
+      create_path: ".github/workflows/orchestrate-old.yaml"
+      create_from: ".github/workflows/orchestrate.yaml"
+      expect_exit: 1
+
+  - name: "Same orphan with --allow-orphans; verify is clean"
+    action: verify
+    verify:
+      regenerate: true
+      create_path: ".github/workflows/orchestrate-old.yaml"
+      create_from: ".github/workflows/orchestrate.yaml"
+      allow_orphans: true
+      expect_exit: 0
