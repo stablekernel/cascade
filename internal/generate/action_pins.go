@@ -18,6 +18,7 @@ const (
 	actionGithubScript     = "actions/github-script"
 	actionDownloadArtifact = "actions/download-artifact"
 	actionUploadArtifact   = "actions/upload-artifact"
+	actionCreateAppToken   = "actions/create-github-app-token"
 )
 
 // actionPin records the default mutable tag cascade emits in tag mode and the
@@ -39,6 +40,7 @@ var defaultActionPins = map[string]actionPin{
 	actionGithubScript:     {tag: "v7", sha: "f28e40c7f34bde8b3046d885e986cb6290c5673b", shaVersion: "v7.1.0"},
 	actionDownloadArtifact: {tag: "v4", sha: "d3f86a106a0bac45b974a628896c90dbdf5c8093", shaVersion: "v4.3.0"},
 	actionUploadArtifact:   {tag: "v4", sha: "ea165f8d65b6e75b540449e92b4886f43607fa02", shaVersion: "v4.6.2"},
+	actionCreateAppToken:   {tag: "v3", sha: "bcd2ba49218906704ab6c1aa796996da409d3eb1", shaVersion: "v3.2.0"},
 }
 
 // actionRef returns the fully-rendered uses: value for a third-party action

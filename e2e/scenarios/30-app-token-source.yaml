@@ -1,0 +1,46 @@
+name: "App Token Source"
+description: |
+  Exercises the optional GitHub App token sources (config.release_token_app and
+  config.state_token_app). When set, the generator emits an
+  actions/create-github-app-token minting step guarded to real GitHub and rewires
+  the release and state token refs to prefer the minted token, falling back to the
+  static token on act/gitea. app_id and private_key are secret references, never
+  raw key material. On act/gitea the minting step is skipped by its
+  github.server_url guard, so the workflow stays runnable on the static token.
+  This scenario declares both app sources, generates the workflows, then
+  regenerates and proves the output is byte-identical with no drift.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  release_token_app:
+    app_id: CASCADE_APP_ID
+    private_key: CASCADE_APP_PRIVATE_KEY
+  state_token_app:
+    app_id: ${{ vars.CASCADE_APP_ID }}
+    private_key: ${{ secrets.CASCADE_APP_PRIVATE_KEY }}
+
+steps:
+  - name: "Seed a minimal source tree"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

@@ -60,7 +60,7 @@ func NewHotfixGenerator(cfg *config.TrunkConfig, baseDir string) *HotfixGenerato
 // so a hotfix into a repo with no configured state token records no state until
 // the operator supplies a trigger-capable token here.
 func (g *HotfixGenerator) getStateTokenRef() string {
-	return g.config.GetStateToken()
+	return resolveStateTokenRef(g.config)
 }
 
 // Enabled reports whether the hotfix workflow should be emitted. The workflow is
@@ -283,11 +283,16 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	// no state token is configured this degrades to GITHUB_TOKEN, in which case
 	// post-hotfix automation (early check + finalize) requires the operator to
 	// supply a trigger-capable state_token, matching the merge step's caveat.
-	fmt.Fprintf(sb, "      GH_TOKEN: %s\n", g.getStateTokenRef())
+	// This is a job-level env, where the steps.* context is not available, so it
+	// always binds the static state token. When a state-token App is configured
+	// the per-step consumers (the merge step below) carry the minted-token
+	// fallback themselves; this job-level default stays on the static token.
+	fmt.Fprintf(sb, "      GH_TOKEN: %s\n", g.config.GetStateToken())
 	sb.WriteString("      COMMIT: ${{ github.event.inputs.commit }}\n")
 	sb.WriteString("      TARGET_ENV: ${{ github.event.inputs.target_env }}\n")
 	sb.WriteString("      BASE_SHA: ${{ needs.plan.outputs.base_sha }}\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
@@ -663,6 +668,7 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("      FIX_SHA: ${{ needs.context.outputs.fix_sha }}\n")
 	sb.WriteString("      BASE_SHA: ${{ needs.context.outputs.base_sha }}\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
