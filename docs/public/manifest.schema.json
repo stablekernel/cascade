@@ -127,6 +127,7 @@
         "pr_preview": { "$ref": "#/definitions/prPreviewConfig" },
         "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
         "merge_queue": { "$ref": "#/definitions/mergeQueueConfig" },
+        "drift_check": { "$ref": "#/definitions/driftCheckConfig" },
         "pin_mode": {
           "type": "string",
           "enum": ["tag", "sha"],
@@ -632,6 +633,15 @@
       "description": "Merge-queue validation lane.",
       "properties": {
         "enabled": { "type": "boolean" }
+      }
+    },
+    "driftCheckConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Workflow drift-check PR lane. When enabled, cascade emits a pull_request workflow that runs cascade verify and fails on drift. When comment is also set, cascade emits the fork-safe workflow_run companion that posts the result as a sticky PR comment.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "comment": { "type": "boolean" }
       }
     },
     "telemetryConfig": {

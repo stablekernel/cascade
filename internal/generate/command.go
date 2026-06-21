@@ -347,6 +347,46 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
+	// Generate the opt-in workflow drift-check lane (#229). Absent or disabled
+	// drift_check emits nothing, so existing manifests are unaffected. The
+	// comment companion is emitted only when drift_check.comment is also set.
+	driftGen := NewDriftCheckGenerator(cfg, baseDir)
+	if driftGen.Enabled() {
+		content, err := driftGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating drift-check workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-drift-check.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-drift-check.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+
+		if driftGen.commentEnabled() {
+			commentContent, err := driftGen.GenerateComment()
+			if err != nil {
+				return fmt.Errorf("generating drift-comment workflow: %w", err)
+			}
+			commentOutPath := ".github/workflows/cascade-drift-comment.yaml"
+			if opts.dryRun {
+				fmt.Println("\n=== cascade-drift-comment.yaml ===")
+				fmt.Print(commentContent)
+			} else {
+				if err := writeWorkflow(commentOutPath, commentContent, opts.force); err != nil {
+					return err
+				}
+				generatedFiles = append(generatedFiles, commentOutPath)
+				fmt.Printf("Generated workflow: %s\n", commentOutPath)
+			}
+		}
+	}
+
 	if opts.dryRun {
 		return nil
 	}

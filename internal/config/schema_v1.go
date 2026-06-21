@@ -263,6 +263,19 @@ type MergeQueueConfig struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
+// DriftCheckConfig is the opt-in workflow drift-check lane (#229). When Enabled,
+// cascade emits a pull_request workflow that runs cascade verify and fails the
+// check on drift. When Comment is also set, cascade emits the fork-safe
+// workflow_run companion that posts the verify result as a sticky PR comment.
+//
+// The companion derives the target PR number ONLY from trusted workflow_run run
+// metadata, never from the artifact the pull_request job uploads, so a fork PR
+// cannot redirect the comment at another PR.
+type DriftCheckConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Comment bool `yaml:"comment,omitempty" json:"comment,omitempty"`
+}
+
 // Pin mode constants.
 const (
 	PinModeTag = "tag"

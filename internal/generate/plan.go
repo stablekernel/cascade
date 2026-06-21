@@ -161,7 +161,25 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-pr-preview.yaml", Content: content})
 	}
 
-	// 9. composite action -> baseDir/.github/actions/<folder>/action.yaml.
+	// 9. drift-check -> .github/workflows/cascade-drift-check.yaml when enabled,
+	//    plus the fork-safe comment companion when drift_check.comment is set.
+	if gen := NewDriftCheckGenerator(cfg, baseDir); gen.Enabled() {
+		content, err = gen.Generate()
+		if err != nil {
+			return nil, fmt.Errorf("generating drift-check workflow: %w", err)
+		}
+		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-drift-check.yaml", Content: content})
+
+		if gen.commentEnabled() {
+			commentContent, cerr := gen.GenerateComment()
+			if cerr != nil {
+				return nil, fmt.Errorf("generating drift-comment workflow: %w", cerr)
+			}
+			planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-drift-comment.yaml", Content: commentContent})
+		}
+	}
+
+	// 10. composite action -> baseDir/.github/actions/<folder>/action.yaml.
 	action, err := RenderLocalActions(baseDir, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("rendering local actions: %w", err)
