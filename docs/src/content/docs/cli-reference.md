@@ -175,7 +175,7 @@ cascade init --envs staging,production --name my-service
 cascade init --topology three-env --dry-run
 ```
 
-`init` renders `.github/manifest.yaml` plus build (and, when environments are set, deploy) stubs under `.github/workflows`, runs the manifest through parse, validation, and generation, and only then writes the files. The manifest carries a `$schema` directive for editor autocomplete and validation. After running it, fill in the stub callbacks, commit, and run `cascade generate-workflow`.
+`init` renders `.github/manifest.yaml` plus build (and, when environments are set, deploy) stubs under `.github/workflows`, runs the manifest through parse, validation, and generation, and only then writes the files. It also drops a starter `.github/CODEOWNERS` and an `.github/aws-oidc-role.example.json` IAM trust-policy example for GitHub Actions OIDC; both carry placeholder owners and account IDs to replace. The manifest carries a `$schema` directive for editor autocomplete and validation. After running it, fill in the stub callbacks, commit, and run `cascade generate-workflow`. The scaffold is a verifying starter: `cascade init` then `cascade generate-workflow` leaves `cascade verify` clean, so you can wire a drift gate from the first commit.
 
 #### Flags
 

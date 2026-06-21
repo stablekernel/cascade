@@ -27,9 +27,11 @@ import (
 const schemaDirective = "# yaml-language-server: $schema=https://stablekernel.github.io/cascade/manifest.schema.json"
 
 const (
-	manifestPath = config.DefaultManifestFile
-	buildPath    = ".github/workflows/build.yaml"
-	deployPath   = ".github/workflows/deploy.yaml"
+	manifestPath   = config.DefaultManifestFile
+	buildPath      = ".github/workflows/build.yaml"
+	deployPath     = ".github/workflows/deploy.yaml"
+	codeownersPath = ".github/CODEOWNERS"
+	awsOIDCPath    = ".github/aws-oidc-role.example.json"
 )
 
 // scaffoldConfig holds the resolved, optional inputs for a scaffold render.
@@ -81,8 +83,10 @@ func Scaffold(project, trunkBranch string, envs []string, opts ...Option) (map[s
 	}
 
 	files := map[string]string{
-		manifestPath: manifest,
-		buildPath:    strings.ReplaceAll(buildStub, "<name>", project),
+		manifestPath:   manifest,
+		buildPath:      strings.ReplaceAll(buildStub, "<name>", project),
+		codeownersPath: codeowners,
+		awsOIDCPath:    awsOIDCRoleExample,
 	}
 	if len(envs) > 0 {
 		files[deployPath] = strings.ReplaceAll(deployStub, "<name>", project)
@@ -231,6 +235,42 @@ jobs:
           echo "Building <name> for ${{ inputs.environment }} at ${{ inputs.sha }}"
           # TODO: replace with your real build; emit a real artifact id
           echo "artifact_id=placeholder-${{ inputs.sha }}" >> "$GITHUB_OUTPUT"
+`
+
+// codeowners is the starter CODEOWNERS file included in every scaffold. It
+// requires review on every change by default. Replace @my-org/my-team with
+// the real owning team or users before merging.
+const codeowners = `# Require review on every change by default. Replace @my-org/my-team with
+# your real owning team or users. See
+# https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+*       @my-org/my-team
+`
+
+// awsOIDCRoleExample is a documented example IAM role trust policy for GitHub
+// Actions OIDC. The account ID, org, and repo are placeholders; replace them
+// before using this policy. Copy this file to your IAM role trust policy in
+// the AWS console or via Terraform.
+const awsOIDCRoleExample = `{
+  "_comment": "EXAMPLE ONLY - not a real policy. Replace 123456789012 with your AWS account ID, my-org with your GitHub org, and my-app with your repo name. The sub condition must match your repo. Action: sts:AssumeRoleWithWebIdentity via GitHub's OIDC provider.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:my-org/my-app:*"
+        }
+      }
+    }
+  ]
+}
 `
 
 // deployStub is the reusable deploy workflow rendered when at least one
