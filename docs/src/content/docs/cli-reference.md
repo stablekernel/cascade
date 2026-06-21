@@ -306,6 +306,70 @@ This command complements the hotfix branch-protection advisory (see [Hotfix work
 | `--branch` | string | `main` | Branch the protection targets (labels the guidance note only; does not change the required contexts) |
 | `--output`, `-o` | string | stdout | Write to this path instead of stdout (`-` also means stdout) |
 
+### environments
+
+Emit a per-environment configuration file an operator applies to GitHub's Environments REST API. cascade emits the file; the operator applies it. cascade never calls the GitHub API.
+
+```bash
+cascade environments
+```
+
+The output is a wrapper. The top-level `environments` is an array with one entry per manifest environment, in the manifest's `environments` order. Each entry has:
+
+- `name` is the cascade environment name.
+- `gha_environment` is the GitHub Environment to configure; it defaults to `name`.
+- `environment` is the exact body to PUT to the environments API.
+- `operator_todo` is companion guidance and is NOT part of the PUT body.
+
+Apply it by sending only the `.environment` object per entry:
+
+```bash
+cascade environments | jq -c '.environments[] | {gha_environment, environment}' | while read -r row; do
+  env=$(jq -r .gha_environment <<<"$row")
+  jq .environment <<<"$row" | gh api -X PUT "repos/my-org/my-app/environments/$env" --input -
+done
+```
+
+The per-environment settings come from the manifest under `config.environment_config.<env>`:
+
+```yaml
+config:
+  environments: [dev, test, prod]
+  environment_config:
+    prod:
+      gha_environment: production
+      required_reviewers: [team/ops]
+      wait_timer: 10
+      branch_policy: protected
+      secrets: [MY_SECRET]
+      variables: [REGION]
+```
+
+#### What the body carries, and what is operator guidance
+
+The `.environment` body holds only the fields cascade can fully form from the manifest:
+
+- `wait_timer` in minutes (0..43200).
+- `deployment_branch_policy`, mapped from the manifest `branch_policy`: `protected` becomes `{protected_branches: true, custom_branch_policies: false}`; `custom` becomes `{protected_branches: false, custom_branch_policies: true}`; `all` or unset becomes `null`, meaning all branches.
+
+Everything else cascade cannot fully form from the manifest is surfaced under `operator_todo` so the operator can finish it:
+
+- `operator_todo.required_reviewers` lists user and team slugs, NOT the body. The REST API requires a numeric reviewer id that the manifest does not carry, so the operator resolves each slug to an id and adds it to the body's `reviewers` array.
+- `operator_todo.secrets` and `operator_todo.variables` list the expected env-scoped secret and variable names. cascade emits names only, never values; the operator creates them with values through the environment-secrets and environment-variables APIs.
+- `branch_patterns` and `tag_patterns` (custom policy only) are created through the deployment-branch-policies API and are surfaced under `operator_todo`.
+
+The output is deterministic: the same manifest yields byte-identical output, and environments follow the manifest order.
+
+This is the sibling of the [branch-protection](#branch-protection) command, using the same emit-a-config-file pattern (operator applies; cascade never calls the API).
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file |
+| `--manifest-key` | string | `ci` | Top-level key inside the manifest |
+| `--output`, `-o` | string | stdout | Write to this path instead of stdout (`-` also means stdout) |
+
 ### manage-release
 
 Manage GitHub releases.

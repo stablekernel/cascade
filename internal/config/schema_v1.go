@@ -318,15 +318,71 @@ type TelemetryWebhook struct {
 	SecretName string `yaml:"secret_name,omitempty" json:"secret_name,omitempty"`
 }
 
-// EnvironmentConfig is the reserved per-environment settings block, keyed by env
-// name under config.environment_config. environments stays the ordered source
-// of truth for env names; this block carries per-env settings without fanning
+// EnvironmentConfig is the per-environment settings block, keyed by env name
+// under config.environment_config. environments stays the ordered source of
+// truth for env names; this block carries per-env settings without fanning
 // names into multiple list fields.
+//
+// All fields are optional and additive: a manifest that omits them, or omits
+// environment_config entirely, is valid and unchanged. The protection fields
+// (required reviewers, wait timer, branch policy) and the expected secret and
+// variable names map onto GitHub's Environments REST API so that the
+// "cascade environments" command can emit an operator-appliable config file.
+// cascade emits that file; the operator applies it (gh api / Terraform).
+// cascade never calls the GitHub API.
 type EnvironmentConfig struct {
 	// GHAEnvironment maps this env to a GitHub Environment (deployment records,
 	// required reviewers, wait timers, env-scoped secrets).
 	GHAEnvironment string `yaml:"gha_environment,omitempty" json:"gha_environment,omitempty"`
+	// RequiredReviewers lists the user or team slugs that may approve a
+	// deployment to this environment. These are slugs (for example "octocat" or
+	// "team/ops"), not GitHub numeric IDs: the Environments REST API requires a
+	// numeric reviewer id, so the emit command surfaces these slugs as operator
+	// guidance to resolve rather than as a directly-appliable reviewers array.
+	RequiredReviewers []string `yaml:"required_reviewers,omitempty" json:"required_reviewers,omitempty"`
+	// WaitTimer is the delay, in minutes, before a job targeting this
+	// environment runs. GitHub allows an integer between 0 and 43200 (30 days).
+	WaitTimer int `yaml:"wait_timer,omitempty" json:"wait_timer,omitempty"`
+	// BranchPolicy selects which branches may deploy to this environment. It
+	// maps to GitHub's deployment_branch_policy model: "protected" (only
+	// protected branches), "custom" (only branches matching BranchPatterns or
+	// tags matching TagPatterns), or "all" (no restriction). Empty means
+	// unspecified, which the emit command treats as "all".
+	BranchPolicy string `yaml:"branch_policy,omitempty" json:"branch_policy,omitempty"`
+	// BranchPatterns lists branch name patterns allowed to deploy when
+	// BranchPolicy is "custom". Each pattern is created via the Environments
+	// deployment-branch-policies API. Meaningful only when BranchPolicy is
+	// "custom".
+	BranchPatterns []string `yaml:"branch_patterns,omitempty" json:"branch_patterns,omitempty"`
+	// TagPatterns lists tag name patterns allowed to deploy when BranchPolicy is
+	// "custom". Meaningful only when BranchPolicy is "custom".
+	TagPatterns []string `yaml:"tag_patterns,omitempty" json:"tag_patterns,omitempty"`
+	// Secrets lists the EXPECTED env-scoped secret NAMES for this environment.
+	// These are names only: cascade never stores or emits secret values. The
+	// operator creates the named secrets out of band.
+	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	// Variables lists the EXPECTED env-scoped variable NAMES for this
+	// environment. Names only, never values; the operator creates them out of
+	// band.
+	Variables []string `yaml:"variables,omitempty" json:"variables,omitempty"`
 }
+
+// Environment branch-policy mode constants. They map onto GitHub's
+// deployment_branch_policy model: protected_branches, custom_branch_policies,
+// or null (all branches).
+const (
+	// EnvBranchPolicyProtected restricts deployments to protected branches.
+	EnvBranchPolicyProtected = "protected"
+	// EnvBranchPolicyCustom restricts deployments to branches and tags matching
+	// the configured patterns.
+	EnvBranchPolicyCustom = "custom"
+	// EnvBranchPolicyAll places no branch restriction on deployments.
+	EnvBranchPolicyAll = "all"
+)
+
+// MaxWaitTimerMinutes is the largest wait_timer GitHub accepts: 43200 minutes
+// (30 days).
+const MaxWaitTimerMinutes = 43200
 
 // DeployTarget is the reserved GitOps-mirror deploy variant. It complements,
 // not replaces, the External/Notify cross-repo dispatch model.

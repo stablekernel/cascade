@@ -311,8 +311,89 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	}
 
 	errs = append(errs, validateTelemetry(cfg.Telemetry)...)
+	errs = append(errs, validateEnvironmentConfig(cfg)...)
 
 	return errs
+}
+
+// validateEnvironmentConfig checks the additive per-environment fields under
+// environment_config (required_reviewers, wait_timer, branch_policy and its
+// patterns, secrets, variables). Every check is lenient and applies only when a
+// field is present, so a manifest that omits these fields, or omits
+// environment_config entirely, is never rejected. Secret and variable entries
+// are NAMES only: they are checked for a safe name shape, never treated as
+// credential values. The env-key-references-a-declared-environment check lives
+// in validateConfigLevel and is not duplicated here.
+func validateEnvironmentConfig(cfg *TrunkConfig) []string {
+	if len(cfg.EnvironmentConfig) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, name := range sortedKeys(toEnvKeyed(cfg.EnvironmentConfig)) {
+		ec := cfg.EnvironmentConfig[name]
+		prefix := "environment_config." + name
+
+		if ec.WaitTimer < 0 || ec.WaitTimer > MaxWaitTimerMinutes {
+			errs = append(errs, fmt.Sprintf("%s.wait_timer must be between 0 and %d minutes", prefix, MaxWaitTimerMinutes))
+		}
+
+		switch ec.BranchPolicy {
+		case "", EnvBranchPolicyProtected, EnvBranchPolicyCustom, EnvBranchPolicyAll:
+			// ok
+		default:
+			errs = append(errs, fmt.Sprintf("%s.branch_policy must be one of: protected, custom, all", prefix))
+		}
+		if ec.BranchPolicy != EnvBranchPolicyCustom {
+			if len(ec.BranchPatterns) > 0 {
+				errs = append(errs, fmt.Sprintf("%s.branch_patterns is only valid when branch_policy is custom", prefix))
+			}
+			if len(ec.TagPatterns) > 0 {
+				errs = append(errs, fmt.Sprintf("%s.tag_patterns is only valid when branch_policy is custom", prefix))
+			}
+		}
+
+		for i, r := range ec.RequiredReviewers {
+			if !safeReviewerSlug(r) {
+				errs = append(errs, fmt.Sprintf("%s.required_reviewers[%d] %q must be a non-empty user or team slug (optionally org/team) with no whitespace", prefix, i, r))
+			}
+		}
+
+		for i, s := range ec.Secrets {
+			if !safeSecretName(s) {
+				errs = append(errs, fmt.Sprintf("%s.secrets[%d] %q must be a valid GitHub Actions secret name (letters, digits, underscores; not starting with a digit)", prefix, i, s))
+			}
+		}
+		for i, v := range ec.Variables {
+			if !safeSecretName(v) {
+				errs = append(errs, fmt.Sprintf("%s.variables[%d] %q must be a valid GitHub Actions variable name (letters, digits, underscores; not starting with a digit)", prefix, i, v))
+			}
+		}
+	}
+	return errs
+}
+
+// safeReviewerSlug reports whether s is a plausible GitHub reviewer slug: a
+// non-empty, whitespace-free string of at most two slash-separated segments
+// (a "user" slug or an "org/team" slug). It guards a name reference, not a
+// credential, so it is deliberately permissive about the slug character set
+// while rejecting empty, whitespace-only, and value-carrying shapes.
+func safeReviewerSlug(s string) bool {
+	if s == "" {
+		return false
+	}
+	if strings.ContainsAny(s, " \t\n\r\f\v") {
+		return false
+	}
+	segments := strings.Split(s, "/")
+	if len(segments) > 2 {
+		return false
+	}
+	for _, seg := range segments {
+		if seg == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // validateTelemetry checks only the newly reserved telemetry.webhook fields.

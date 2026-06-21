@@ -667,11 +667,47 @@
     "environmentConfig": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Per-environment settings block.",
+      "description": "Per-environment settings block. All fields are optional and additive; the cascade environments command emits these as an operator-appliable GitHub Environments REST config.",
       "properties": {
         "gha_environment": {
           "type": "string",
           "description": "Maps this environment to a GitHub Environment (deployment records, required reviewers, wait timers, env-scoped secrets)."
+        },
+        "required_reviewers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "User or team slugs that may approve a deployment to this environment (slugs, not numeric ids)."
+        },
+        "wait_timer": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 43200,
+          "description": "Delay in minutes before a job targeting this environment runs (0 to 43200)."
+        },
+        "branch_policy": {
+          "type": "string",
+          "enum": ["protected", "custom", "all"],
+          "description": "Which branches may deploy: protected (protected branches only), custom (BranchPatterns/TagPatterns), or all (no restriction)."
+        },
+        "branch_patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Branch name patterns allowed to deploy when branch_policy is custom."
+        },
+        "tag_patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tag name patterns allowed to deploy when branch_policy is custom."
+        },
+        "secrets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Expected env-scoped secret NAMES (names only, never values)."
+        },
+        "variables": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Expected env-scoped variable NAMES (names only, never values)."
         }
       }
     },

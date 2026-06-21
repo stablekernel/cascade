@@ -558,7 +558,7 @@ For satellite repos with notify config:
 2. **Custom Release** - Override with `release.tag` for external tools
 3. **Custom Inputs** - Pass arbitrary inputs via `inputs`/`env_inputs`
 4. **Output Chaining** - Outputs auto-discovered and passed to dependents
-5. **GitHub Environments** - `environment_config` reserved shape; see [GitHub Deployments API and Environments REST](#github-deployments-api-and-environments-rest) below
+5. **GitHub Environments** - `environment_config` per-env settings emitted by `cascade environments`; see [GitHub Deployments API and Environments REST](#github-deployments-api-and-environments-rest) below
 
 ## GitHub Deployments API and Environments REST
 
@@ -572,7 +572,7 @@ Two capabilities are intentionally out of scope for v1:
 
 - Programmatic Deployments API status. cascade does not call `POST /repos/{owner}/{repo}/deployments` or `POST /repos/{owner}/{repo}/deployments/{id}/statuses`. GitHub Actions creates these records automatically when a job carries `environment:`, so adopters get deployment records without cascade owning that call.
 
-- Environments REST configuration sync. cascade does not read or write environment protection rules (required reviewers, wait timers, branch policies) via the REST API. That configuration lives in GitHub today.
+- Environments REST configuration sync. cascade does not CALL the Environments REST API: it never reads or writes environment protection rules (required reviewers, wait timers, branch policies) over the wire. The manifest can now EXPRESS that configuration, and `cascade environments` emits it as an operator-appliable file (apply with `gh api` or Terraform), but applying it stays an operator step. cascade emits; the operator applies.
 
 ### Why deferred
 
@@ -582,19 +582,24 @@ Keeping cascade out of these APIs in v1 bounds the surface area and avoids coupl
 
 The schema already carries the hooks needed to add both capabilities later without a breaking change:
 
-**`environment_config` reserved shape.** The manifest schema reserves an `environment_config` block at the `config:` level, keyed by environment name:
+**`environment_config` shape.** The manifest schema carries an `environment_config` block at the `config:` level, keyed by environment name:
 
 ```yaml
 config:
   environments: [dev, test, prod]      # ordered list (source of truth), unchanged
-  environment_config:                  # reserved; omitting it is valid today
+  environment_config:                  # optional; omitting it is valid
     prod:
       gha_environment: production      # maps to the GHA environment name
-      # future additive fields:
-      # required_reviewers: [team/ops]
-      # wait_timer: 10
-      # branch_policy: protected
+      required_reviewers: [team/ops]   # user/team slugs
+      wait_timer: 10                   # minutes (0..43200)
+      branch_policy: protected         # protected | custom | all
+      branch_patterns: [release/*]     # custom policy only
+      tag_patterns: [v*]               # custom policy only
+      secrets: [MY_SECRET]             # expected env-scoped secret names
+      variables: [REGION]              # expected env-scoped variable names
 ```
+
+The protection fields (`required_reviewers`, `wait_timer`, `branch_policy`, `branch_patterns`, `tag_patterns`) and the expected `secrets` and `variables` names are real, additive fields, not reserved placeholders. `cascade environments` reads them and emits an operator-appliable file (see [environments](/cascade/cli-reference/#environments)). cascade still never calls the REST API: it forms the PUT body it can fully express from the manifest and surfaces the rest, including the reviewer slugs and the secret and variable names, under `operator_todo` for the operator to apply.
 
 The `environments` list stays a plain ordered `[]string`; the separate `environment_config` map carries per-env settings. Adding fields under `environment_config.<name>` is additive and never touches the ordering semantics of `environments`. A manifest that omits `environment_config` entirely is valid and equivalent to today's behaviour.
 
