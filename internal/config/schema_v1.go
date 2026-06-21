@@ -276,6 +276,18 @@ type DriftCheckConfig struct {
 	Comment bool `yaml:"comment,omitempty" json:"comment,omitempty"`
 }
 
+// DeploymentsConfig configures opt-in GitHub Deployments API integration.
+// When enabled, the finalize job creates a Deployment per target environment
+// and reports in_progress then success/failure status after each deploy.
+type DeploymentsConfig struct {
+	// Enabled activates GitHub Deployments API reporting in the finalize job.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// KeepPriorActive prevents GitHub from auto-inactivating prior deployments
+	// for the same environment. Maps to auto_inactive:false in the Deployments API.
+	// Default false relies on GitHub native auto-inactivation.
+	KeepPriorActive bool `yaml:"keep_prior_active,omitempty" json:"keep_prior_active,omitempty"`
+}
+
 // Pin mode constants.
 const (
 	PinModeTag = "tag"
@@ -365,6 +377,8 @@ type EnvironmentConfig struct {
 	// environment. Names only, never values; the operator creates them out of
 	// band.
 	Variables []string `yaml:"variables,omitempty" json:"variables,omitempty"`
+	// EnvironmentURL is the URL of the deployed environment, reported to GitHub Deployments API status updates.
+	EnvironmentURL string `yaml:"environment_url,omitempty" json:"environment_url,omitempty"`
 }
 
 // Environment branch-policy mode constants. They map onto GitHub's

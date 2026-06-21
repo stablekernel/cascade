@@ -732,6 +732,11 @@ func (g *Generator) writePermissions(sb *strings.Builder) {
 		{"contents", "write"},
 		{"actions", "read"},
 	}
+	// Opt-in GitHub Deployments API reporting needs deployments: write so the
+	// finalize job can create Deployments and post status updates.
+	if nativeDeploymentsEnabled(g.config) {
+		base = append(base, [2]string{"deployments", "write"})
+	}
 	writeTopLevelPermissions(sb, base)
 }
 
@@ -1394,8 +1399,46 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 		g.writeNotifyPrimaryStep(sb)
 	}
 
+	// Opt-in GitHub Deployments API reporting for the runtime-selected environment.
+	g.writeNativeDeploymentSteps(sb, sorted)
+
 	// Generate failure check step - only fail on callbacks with on_failure: abort
 	g.writeFailureCheckStep(sb, sorted)
+}
+
+// writeNativeDeploymentSteps wires the GitHub Deployments API lifecycle into the
+// orchestrate finalize job. The orchestrate run deploys to a single environment
+// selected at run time (github.event.inputs.environment, defaulting to the first
+// configured environment), so the Deployment targets that resolved name. The
+// terminal status reflects whether every deploy callback succeeded.
+func (g *Generator) writeNativeDeploymentSteps(sb *strings.Builder, sorted []string) {
+	if !nativeDeploymentsEnabled(g.config) {
+		return
+	}
+
+	envExpr := "${{ github.event.inputs.environment }}"
+	if len(g.config.Environments) > 0 {
+		envExpr = fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0])
+	}
+
+	// Collect deploy job IDs so the terminal status reflects the real deploy
+	// outcome. The deployment succeeds only when every deploy callback succeeded.
+	var deployJobs []string
+	for _, jobID := range sorted {
+		if g.graph.Nodes[jobID].Type == config.CallbackTypeDeploy {
+			deployJobs = append(deployJobs, jobID)
+		}
+	}
+	resultExpr := "success"
+	if len(deployJobs) > 0 {
+		var conds []string
+		for _, jobID := range deployJobs {
+			conds = append(conds, fmt.Sprintf("needs.%s.result == 'success'", jobID))
+		}
+		resultExpr = fmt.Sprintf("${{ (%s) && 'success' || 'failure' }}", strings.Join(conds, " && "))
+	}
+
+	writeNativeDeploymentSteps(sb, g.config, envExpr, resultExpr, "      ")
 }
 
 func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
