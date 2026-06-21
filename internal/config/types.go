@@ -144,6 +144,7 @@ type TrunkConfig struct {
 	PRPreview         *PRPreviewConfig             `yaml:"pr_preview,omitempty" json:"pr_preview,omitempty"`
 	ValidateCheck     *ValidateCheckConfig         `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
 	MergeQueue        *MergeQueueConfig            `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
+	DriftCheck        *DriftCheckConfig            `yaml:"drift_check,omitempty" json:"drift_check,omitempty"` // Opt-in workflow drift-check PR lane (#229)
 	PinMode           string                       `yaml:"pin_mode,omitempty" json:"pin_mode,omitempty"` // tag | sha (default tag)
 	ActionPins        map[string]string            `yaml:"action_pins,omitempty" json:"action_pins,omitempty"`
 	Telemetry         *TelemetryConfig             `yaml:"telemetry,omitempty" json:"telemetry,omitempty"`

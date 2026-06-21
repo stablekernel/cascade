@@ -1,0 +1,61 @@
+name: "Generate Drift-Check Workflow"
+description: |
+  Exercises the opt-in drift_check lane (#229) end to end. A manifest that
+  enables drift_check (with the comment companion) generates two cascade-owned
+  workflows: the pull_request drift-check and the fork-safe workflow_run comment
+  companion. After regenerating, verify against pristine output is clean
+  (exit 0), proving the generated files round-trip through verify with no drift
+  or orphan. Copying the generated cascade-owned drift-check workflow to a path
+  the manifest does not plan makes verify report exactly one orphan (exit 1),
+  which proves the file was produced AND carries the cascade marker (verify only
+  flags marker-bearing files as orphans). Re-running with --allow-orphans
+  suppresses it and exits clean (exit 0).
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+  drift_check:
+    enabled: true
+    comment: true
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Verify clean against pristine generated output"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Copied cascade-owned drift-check workflow is the sole orphan"
+    action: verify
+    verify:
+      regenerate: true
+      create_path: ".github/workflows/cascade-drift-check-old.yaml"
+      create_from: ".github/workflows/cascade-drift-check.yaml"
+      expect_exit: 1
+
+  - name: "Same orphan with --allow-orphans; verify is clean"
+    action: verify
+    verify:
+      regenerate: true
+      create_path: ".github/workflows/cascade-drift-check-old.yaml"
+      create_from: ".github/workflows/cascade-drift-check.yaml"
+      allow_orphans: true
+      expect_exit: 0

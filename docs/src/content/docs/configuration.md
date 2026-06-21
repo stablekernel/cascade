@@ -419,6 +419,31 @@ ci:
 
 Omit this section to use the built-in conventional commit parser.
 
+### Drift-check workflow (opt-in)
+
+Set `drift_check.enabled: true` and `generate-workflow` emits a pull-request workflow that runs [`cascade verify`](/cli-reference/#verify) and fails the check whenever the committed workflows fall out of sync with the manifest. This wires the same protection cascade uses on its own repository into yours, without hand-rolling the job.
+
+```yaml
+ci:
+  config:
+    drift_check:
+      enabled: true
+      comment: true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | false | Emit the pull-request drift-check workflow (`.github/workflows/cascade-drift-check.yaml`) |
+| `comment` | bool | false | Also emit the fork-safe comment companion (`.github/workflows/cascade-drift-comment.yaml`) |
+
+Behavior:
+
+- **Opt-in and additive.** Omit `drift_check` and nothing is emitted; existing output is byte-for-byte identical to before.
+- **Read-only on the pull request.** The `cascade-drift-check.yaml` job triggers on `pull_request` with `contents: read` only. A pull request from a fork gets a read-only token and no secrets, so the job cannot comment or write. It captures the verify result as a `cascade-drift-result` artifact instead, and re-exits non-zero on drift to keep the check red.
+- **Fork-safe comment companion.** When `comment: true`, `cascade-drift-comment.yaml` triggers on `workflow_run` in the base-repo context, where it has a scoped `pull-requests: write` token. It downloads the artifact (data only), then posts or updates a sticky comment with the verify output. It never checks out or executes pull-request head code.
+- **Trusted PR resolution.** The companion derives the target pull-request number only from trusted `workflow_run` run metadata (the source run's `pull_requests` array, or a head-SHA lookup for fork pull requests), never from the artifact the pull-request job uploads. A fork therefore cannot redirect the comment at another pull request.
+- **cascade-owned.** Both files carry the cascade-generated marker, so `cascade verify` itself tracks them: edit them by hand and they are reported as drift; remove the toggle and they are reported as orphans.
+
 ## State Section
 
 The `state` section tracks deployment state per environment plus a synthetic `release` slot. The framework manages it automatically. Do not hand-edit.
