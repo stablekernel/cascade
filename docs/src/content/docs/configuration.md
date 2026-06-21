@@ -297,7 +297,7 @@ The framework only carries metadata. The publish workflow performs the registry 
 
 For repositories that coordinate deployments owned by satellite repos.
 
-`external:` is designed for the **satellite/sibling-repo artifact coordination** pattern: a separate repo (the satellite) owns its own build and deploys to its first environment, then notifies the primary via `workflow_dispatch`. The primary records the satellite's SHA and version in the shared manifest and includes the satellite's deploys in every subsequent promotion. `external:` is **not** a GitOps mirror mechanism - it does not push rendered manifests to a target repo or track a pushed commit in a foreign repo. For GitOps-style deploys where the primary generates and pushes manifests to a dedicated config repo, use a callback workflow instead (see [Deploy Workflow Contract](./callback-contract#deploy-workflow-contract)).
+`external:` is designed for the **satellite/sibling-repo artifact coordination** pattern: a separate repo (the satellite) owns its own build and deploys to its first environment, then notifies the primary via `workflow_dispatch`. The primary records the satellite's SHA and version in the shared manifest and includes the satellite's deploys in every subsequent promotion. `external:` is **not** a GitOps mirror mechanism - it does not push rendered manifests to a target repo or track a pushed commit in a foreign repo. The first-class (reserved) home for the GitOps mirror pattern is a deploy's `deploy_target:` block with `mode: gitops`, which reserves the shape for pushing a rendered field into a dedicated config repo and recording the pushed commit (see [Reserved shape: GitOps deploy target](./versioning#reserved-shape-gitops-deploy-target)).
 
 ```yaml
 ci:

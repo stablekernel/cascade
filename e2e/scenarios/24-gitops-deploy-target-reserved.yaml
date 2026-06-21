@@ -1,0 +1,45 @@
+name: "GitOps Deploy Target Reserved Shape"
+description: |
+  Exercises the reserved GitOps deploy_target variant (mode gitops) with the
+  enriched reserved fields branch and track_sha. This block is reserved and
+  shape-only today: it parses and passes structural validation, but carries no
+  generator behavior. The scenario declares the gitops shape on a deploy,
+  generates the workflows, then regenerates and proves the output is
+  byte-identical with no drift.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+      deploy_target:
+        mode: gitops
+        repo: org/gitops-config
+        path: envs/prod/values.yaml
+        field: image.tag
+        value: "v1.2.3"
+        branch: release/prod
+        track_sha: true
+
+steps:
+  - name: "Seed a minimal source tree"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

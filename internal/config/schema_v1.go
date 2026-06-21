@@ -298,6 +298,14 @@ type DeployTarget struct {
 	Field string `yaml:"field,omitempty" json:"field,omitempty"`
 	// Value is the value to write (may be a GHA expression).
 	Value string `yaml:"value,omitempty" json:"value,omitempty"`
+	// Branch is the target branch for the GitOps write (env-to-branch
+	// mapping); default is the target repo's default branch.
+	// RESERVED - not yet wired to generation; meaningful only when mode is gitops.
+	Branch string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	// TrackSHA, when true, records the post-push HEAD SHA of the target repo
+	// into state. RESERVED - not yet wired to generation; meaningful only when
+	// mode is gitops.
+	TrackSHA bool `yaml:"track_sha,omitempty" json:"track_sha,omitempty"`
 }
 
 // Deploy target mode constants.

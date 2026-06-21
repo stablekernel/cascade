@@ -92,6 +92,19 @@ These fields parse and pass structural validation today, but carry no generator 
 
 `matrix:` and `rollout:` are separate canonical concerns: `matrix:` describes the fan-out a callback runs across, and `rollout:` describes how a release advances through a callback. There is no shared `strategy:` block that combines them.
 
+## Reserved shape: GitOps deploy target
+
+The manifest reserves the shape for a GitOps-mirror deploy variant on a deploy. A deploy may declare a `deploy_target:` block with a `mode` of `dispatch` (the default, the existing external/notify cross-repo model) or `gitops` (push a rendered field into a dedicated config repo).
+
+The `gitops` variant reserves these enriched fields:
+
+- `branch`, the target branch for the GitOps write (an env-to-branch mapping); the default is the target repo's default branch.
+- `track_sha`, a boolean that, when true, records the post-push HEAD SHA of the target repo into state.
+
+A matching per-env deploy state slot, `target_sha`, reserves room to record the reconciled GitOps-repo HEAD SHA so a future implementation can key promotion off it.
+
+`branch` and `track_sha` are meaningful only when `mode` is `gitops`. These fields parse and pass structural validation today, but carry no generator behavior. A manifest declaring them produces byte-identical generated workflows, so the reserved shape is safe to adopt now. Attaching behavior to these fields later is additive and does not bump `schema_version`.
+
 ## Migrations
 
 Each `schema_version` bump is recorded with a `Migration` section in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md) describing exactly what changed and the steps to update a manifest from the previous version. There are no migrations yet: the current schema version is the first.

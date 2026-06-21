@@ -82,7 +82,8 @@ type DeployState struct {
 	Version    string            `yaml:"version,omitempty" json:"version,omitempty"` // Version this deployable deployed (reserved-shape; independent of env-level Version)
 	DeployedAt string            `yaml:"deployed_at,omitempty" json:"deployed_at,omitempty"`
 	DeployedBy string            `yaml:"deployed_by,omitempty" json:"deployed_by,omitempty"`
-	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"` // state_tags values
+	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"`               // state_tags values
+	TargetSHA  string            `yaml:"target_sha,omitempty" json:"target_sha,omitempty"` // RESERVED - reconciled GitOps-repo HEAD SHA, so a future implementation can key promotion off it. Not yet wired.
 }
 
 // ExternalDeployState tracks the state of an external deployable within an environment

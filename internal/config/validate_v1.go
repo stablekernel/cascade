@@ -242,16 +242,31 @@ func validateCanaryConfig(prefix string, c *CanaryConfig) []string {
 	return errs
 }
 
-// validateDeployTarget checks deploy_target.mode.
+// validateDeployTarget checks deploy_target.mode and the reserved GitOps fields
+// (branch, track_sha), which are meaningful only when mode is gitops.
 func validateDeployTarget(prefix string, d *DeployTarget) []string {
 	if d == nil {
 		return nil
 	}
+	var errs []string
 	mode := d.GetMode()
 	if mode != DeployTargetModeDispatch && mode != DeployTargetModeGitOps {
-		return []string{fmt.Sprintf("%s.deploy_target.mode must be one of: dispatch, gitops", prefix)}
+		errs = append(errs, fmt.Sprintf("%s.deploy_target.mode must be one of: dispatch, gitops", prefix))
 	}
-	return nil
+	if mode == DeployTargetModeDispatch {
+		if d.TrackSHA {
+			errs = append(errs, fmt.Sprintf("%s.deploy_target.track_sha is only valid when mode is gitops", prefix))
+		}
+		if d.Branch != "" {
+			errs = append(errs, fmt.Sprintf("%s.deploy_target.branch is only valid when mode is gitops", prefix))
+		}
+	}
+	if d.Branch != "" {
+		if strings.HasPrefix(d.Branch, "/") || strings.HasSuffix(d.Branch, "/") || strings.ContainsAny(d.Branch, " \t\n\r\f\v") {
+			errs = append(errs, fmt.Sprintf("%s.deploy_target.branch must not have leading/trailing slashes or whitespace", prefix))
+		}
+	}
+	return errs
 }
 
 // validateConfigLevel validates the config-level reserved fields.
