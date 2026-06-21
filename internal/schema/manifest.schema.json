@@ -151,6 +151,7 @@
         "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
         "merge_queue": { "$ref": "#/definitions/mergeQueueConfig" },
         "drift_check": { "$ref": "#/definitions/driftCheckConfig" },
+        "rollback": { "$ref": "#/definitions/rollbackConfig" },
         "deployments": { "$ref": "#/definitions/deploymentsConfig" },
         "pin_mode": {
           "type": "string",
@@ -666,6 +667,21 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "comment": { "type": "boolean" }
+      }
+    },
+    "rollbackConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opt-in configuration for the generated rollback workflow. Absent by default. When repository_dispatch is set, an external system can fire the same N-1 rollback the manual path performs by calling the dispatches API, carrying the parameters (environment, target, deployable, dry_run) in client_payload.",
+      "properties": {
+        "repository_dispatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Adds a repository_dispatch trigger to the rollback workflow so an external signal can drive the rollback.",
+          "properties": {
+            "types": { "type": "array", "items": { "type": "string" } }
+          }
+        }
       }
     },
     "deploymentsConfig": {

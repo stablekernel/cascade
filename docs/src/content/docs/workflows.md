@@ -346,6 +346,50 @@ For the trunk branch, `cascade branch-protection` emits the full JSON body to PU
 
 > The `rollback_sha` output in the generated workflow is a disclosed placeholder today: the deploy and rollback jobs mirror the promote workflow's shape, and the rollback path activates once a CLI output supplies the prior SHA.
 
+## Rollback
+
+cascade generates a standalone `cascade-rollback.yaml` workflow whenever the manifest declares at least one environment. It re-deploys a prior version or SHA to a target environment, defaulting to the previous version (N-1). A read-only preflight resolves the target, the deploy stage re-runs the configured deploy callbacks keyed on the resolved SHA, and finalize writes the rolled-back state back to trunk.
+
+By default the workflow is triggered by manual dispatch only (`workflow_dispatch`).
+
+### External-signal trigger
+
+To let an external system (an alerting or incident pipeline) drive the same rollback automatically, opt into a `repository_dispatch` trigger:
+
+```yaml
+rollback:
+  repository_dispatch:
+    types: [rollback-requested]
+```
+
+When set, the generated rollback workflow gains a `repository_dispatch` trigger alongside the unchanged `workflow_dispatch`, and every rollback parameter read coalesces the manual input with the dispatch payload:
+
+```yaml
+ENVIRONMENT: ${{ github.event.inputs.environment || github.event.client_payload.environment }}
+```
+
+so both trigger paths resolve the same target. When the block is absent, the rollback workflow is byte-for-byte unchanged (manual dispatch only). At least one event type is required, and each type may contain only letters, digits, dots, hyphens, and underscores.
+
+`repository_dispatch` carries no `inputs`, so an external caller supplies the rollback parameters in `client_payload`. The keys map name-for-name onto the manual `workflow_dispatch` inputs:
+
+| `client_payload` key | Rollback parameter | Meaning |
+| --- | --- | --- |
+| `environment` | environment | Environment to roll back (required) |
+| `target` | target | Prior version or SHA; omit for the previous version (N-1) |
+| `deployable` | deployable | Limit the rollback to one deployable; omit for the whole environment |
+| `dry_run` | dry_run | When `"true"`, resolve and print without deploying |
+
+An external system fires the rollback with a single dispatches API call (substitute your own org and repo):
+
+```bash
+gh api repos/my-org/my-repo/dispatches \
+  -f event_type=rollback-requested \
+  -F 'client_payload[environment]=prod' \
+  -F 'client_payload[target]=v1.4.2'
+```
+
+The event type must match one of the configured `types`. Because the trigger fires the same N-1 rollback the manual path performs, the dispatching system needs no rollback logic of its own.
+
 ## Workflow Permissions
 
 Generated workflows include the necessary permissions:

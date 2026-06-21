@@ -1,11 +1,15 @@
 package generate
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // rollbackTestConfig builds a multi-env config with a single deploy that has a
@@ -136,6 +140,113 @@ func TestRollbackGenerator_PreflightBeforeDeployBeforeFinalize(t *testing.T) {
 	assert.Greater(t, preflightIdx, -1)
 	assert.Greater(t, deployIdx, preflightIdx)
 	assert.Greater(t, finalizeIdx, deployIdx)
+}
+
+// rollbackDispatchConfig returns rollbackTestConfig with the opt-in
+// repository_dispatch trigger enabled, carrying a neutral event type.
+func rollbackDispatchConfig() *config.TrunkConfig {
+	cfg := rollbackTestConfig()
+	cfg.Rollback = &config.RollbackConfig{
+		RepositoryDispatch: &config.RepositoryDispatchTrigger{
+			Types: []string{"rollback-requested"},
+		},
+	}
+	return cfg
+}
+
+// TestRollbackGenerator_OffStateByteIdentical proves that absent the opt-in
+// (Rollback nil), the generated workflow is byte-identical to the baseline and
+// carries no repository_dispatch trigger or client_payload coalescing.
+func TestRollbackGenerator_OffStateByteIdentical(t *testing.T) {
+	baseline, err := NewRollbackGenerator(rollbackTestConfig(), "").Generate()
+	assert.NoError(t, err)
+
+	// A Rollback block with a nil RepositoryDispatch is still "off".
+	cfg := rollbackTestConfig()
+	cfg.Rollback = &config.RollbackConfig{}
+	withEmpty, err := NewRollbackGenerator(cfg, "").Generate()
+	assert.NoError(t, err)
+
+	assert.Equal(t, baseline, withEmpty, "an empty rollback block must not change the output")
+	assert.NotContains(t, baseline, "repository_dispatch")
+	assert.NotContains(t, baseline, "client_payload")
+}
+
+// TestRollbackGenerator_DispatchTriggerEmitted proves the opt-in adds a
+// repository_dispatch trigger (with the configured event types) under on: while
+// keeping workflow_dispatch intact.
+func TestRollbackGenerator_DispatchTriggerEmitted(t *testing.T) {
+	content, err := NewRollbackGenerator(rollbackDispatchConfig(), "").Generate()
+	assert.NoError(t, err)
+
+	assert.Contains(t, content, "workflow_dispatch:")
+	assert.Contains(t, content, "  repository_dispatch:\n")
+	assert.Contains(t, content, "    types:\n")
+	assert.Contains(t, content, "      - rollback-requested\n")
+
+	// repository_dispatch must sit under on:, before the jobs block.
+	onIdx := strings.Index(content, "\non:\n")
+	dispatchIdx := strings.Index(content, "  repository_dispatch:")
+	jobsIdx := strings.Index(content, "\njobs:\n")
+	assert.Greater(t, dispatchIdx, onIdx)
+	assert.Greater(t, jobsIdx, dispatchIdx)
+}
+
+// TestRollbackGenerator_PreflightCoalescesReads proves the preflight env block
+// coalesces github.event.inputs.* with github.event.client_payload.* when the
+// dispatch trigger is enabled, so both trigger paths resolve the same target.
+func TestRollbackGenerator_PreflightCoalescesReads(t *testing.T) {
+	content, err := NewRollbackGenerator(rollbackDispatchConfig(), "").Generate()
+	assert.NoError(t, err)
+
+	assert.Contains(t, content, "ENVIRONMENT: ${{ github.event.inputs.environment || github.event.client_payload.environment }}")
+	assert.Contains(t, content, "TARGET: ${{ github.event.inputs.target || github.event.client_payload.target }}")
+	assert.Contains(t, content, "DEPLOYABLE: ${{ github.event.inputs.deployable || github.event.client_payload.deployable }}")
+}
+
+// TestRollbackGenerator_GuardsCoalesceReads proves the deploy-guard, finalize
+// gate, and finalize DEPLOYABLE read all coalesce client_payload when the
+// dispatch trigger is enabled, so an external signal drives the dry_run and
+// deployable scoping the manual path does.
+func TestRollbackGenerator_GuardsCoalesceReads(t *testing.T) {
+	content, err := NewRollbackGenerator(rollbackDispatchConfig(), "").Generate()
+	assert.NoError(t, err)
+
+	// dry_run guard and deployable filter on the deploy job.
+	assert.Contains(t, content, "github.event.inputs.dry_run || github.event.client_payload.dry_run")
+	assert.Contains(t, content, "github.event.inputs.deployable || github.event.client_payload.deployable")
+	// finalize DEPLOYABLE env read.
+	assert.Contains(t, content, "DEPLOYABLE: ${{ github.event.inputs.deployable || github.event.client_payload.deployable }}")
+}
+
+// TestRollbackGenerator_DispatchActionlint runs actionlint over the rollback
+// workflow generated with the repository_dispatch trigger enabled, proving the
+// emitted trigger and the coalesced client_payload expressions are valid. Skipped
+// when actionlint is not installed so the suite stays hermetic.
+func TestRollbackGenerator_DispatchActionlint(t *testing.T) {
+	bin, err := exec.LookPath("actionlint")
+	if err != nil {
+		t.Skip("actionlint not installed")
+	}
+
+	content, err := NewRollbackGenerator(rollbackDispatchConfig(), t.TempDir()).Generate()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	require.NoError(t, os.MkdirAll(wfDir, 0755))
+	path := filepath.Join(wfDir, "cascade-rollback.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+
+	gitInit := exec.Command("git", "init", "-q")
+	gitInit.Dir = dir
+	require.NoError(t, gitInit.Run(), "git init for actionlint project root")
+	writeDeployReusableStub(t, dir, content)
+
+	cmd := exec.Command(bin, "-shellcheck=", path)
+	cmd.Dir = dir
+	out, runErr := cmd.CombinedOutput()
+	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
 }
 
 // finalizeNeedsLine returns the needs: line of the finalize job.

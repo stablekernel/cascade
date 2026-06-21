@@ -84,6 +84,11 @@ type Config struct {
 	// scenario can enable the finalize-seam Deployments API steps. A generic map
 	// keeps the harness decoupled from the generator's DeploymentsConfig shape.
 	Deployments map[string]any `yaml:"deployments,omitempty"`
+	// Rollback carries the opt-in rollback block (repository_dispatch) through to
+	// the generated manifest untouched, so a scenario can enable the external
+	// repository_dispatch trigger on the rollback workflow (#181). A generic map
+	// keeps the harness decoupled from the generator's RollbackConfig shape.
+	Rollback map[string]any `yaml:"rollback,omitempty"`
 	Notify        map[string]any   `yaml:"notify,omitempty"`
 	External      []map[string]any `yaml:"external,omitempty"`
 	// Telemetry carries the reserved vendor-neutral telemetry block (enabled,

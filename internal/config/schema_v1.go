@@ -288,6 +288,23 @@ type DeploymentsConfig struct {
 	KeepPriorActive bool `yaml:"keep_prior_active,omitempty" json:"keep_prior_active,omitempty"`
 }
 
+// RollbackConfig is the opt-in configuration block for the generated rollback
+// workflow (#181). It is absent by default: when nil, the rollback workflow is
+// byte-identical to the workflow_dispatch-only baseline.
+//
+// RepositoryDispatch, when set, adds a repository_dispatch trigger so an external
+// system (an alerting or incident pipeline) can fire the same N-1 rollback the
+// manual path performs by calling the GitHub dispatches API. The dispatch carries
+// the rollback parameters in client_payload, and the preflight job coalesces the
+// reads so both the manual (github.event.inputs.*) and external
+// (github.event.client_payload.*) trigger paths resolve the same target.
+type RollbackConfig struct {
+	// RepositoryDispatch opts the rollback workflow into a repository_dispatch
+	// trigger. Reuses the shared RepositoryDispatchTrigger shape so the event
+	// types are configured the same way as extra_triggers.repository_dispatch.
+	RepositoryDispatch *RepositoryDispatchTrigger `yaml:"repository_dispatch,omitempty" json:"repository_dispatch,omitempty"`
+}
+
 // Pin mode constants.
 const (
 	PinModeTag = "tag"
