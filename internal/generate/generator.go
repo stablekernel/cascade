@@ -18,6 +18,20 @@ import (
 // hold a runner for six hours. Override per manifest via config.job_timeout_minutes.
 const DefaultJobTimeoutMinutes = 30
 
+// SetupJobName and FinalizeJobName are the GitHub Actions check-run names of the
+// orchestrate workflow's two cascade-controlled steps jobs. GitHub records a
+// job's check-run context under its name:, so these constants are the exact
+// contexts a branch-protection rule can require with certainty. Both jobs are
+// unconditional (the setup job has no if:, and finalize uses always()), so they
+// always report on every run, which is what makes them safe to require. The
+// branch-protection emitter references these same constants, so a rename here
+// updates both the generated workflow and the emitted protection contexts in
+// lockstep and never lets them drift apart.
+const (
+	SetupJobName    = "Setup"
+	FinalizeJobName = "Finalize"
+)
+
 // normalizeWorkflowPath returns a GitHub-valid workflow path for a local callback.
 // Cross-repo external refs (containing "@") are returned unchanged.
 // Paths already under ./.github/workflows/ are returned unchanged.
@@ -769,7 +783,7 @@ func (g *Generator) changelogJobEnabled() bool {
 
 func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("  setup:\n")
-	sb.WriteString("    name: Setup\n")
+	fmt.Fprintf(sb, "    name: %s\n", SetupJobName)
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	g.writeOwnedTimeout(sb, "    ")
 	sb.WriteString("    outputs:\n")
@@ -1310,7 +1324,7 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	}
 
 	sb.WriteString("  finalize:\n")
-	sb.WriteString("    name: Finalize\n")
+	fmt.Fprintf(sb, "    name: %s\n", FinalizeJobName)
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(allJobs, ", "))
 	// Run finalize whenever setup succeeded, regardless of how the callbacks
 	// ended. always() makes finalize fire even when a callback failed OR was
