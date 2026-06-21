@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/stablekernel/cascade/internal/branchprotection"
 	"github.com/stablekernel/cascade/internal/changelog"
 	"github.com/stablekernel/cascade/internal/changes"
 	"github.com/stablekernel/cascade/internal/config"
@@ -69,6 +70,7 @@ change detection, and changelog generation.`,
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "Output structured JSON for workflow consumption")
 
 	// Add subcommands
+	rootCmd.AddCommand(branchprotection.NewCommand())
 	rootCmd.AddCommand(config.NewCommand())
 	rootCmd.AddCommand(changes.NewCommand())
 	rootCmd.AddCommand(changelog.NewCommand())

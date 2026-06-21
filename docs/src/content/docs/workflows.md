@@ -342,6 +342,8 @@ Prod is a valid hotfix target. The deploy job binds to the GitHub `environment:`
 
 Branch protection on `env/*` is the operator's responsibility: cascade never creates protection rules itself, because it does not assume an admin token. When no required status checks are configured on the target `env/*` branch, the workflow **warns** rather than blocks, and the `plan` verb prints ready-to-run `gh` and `gh api` command suggestions an operator can paste to put the protections in place.
 
+For the trunk branch, `cascade branch-protection` emits the full JSON body to PUT to the branches protection API in one step, with only the safe-to-require `Setup` and `Finalize` contexts pre-filled. See [branch-protection](/cli-reference/#branch-protection).
+
 > The `rollback_sha` output in the generated workflow is a disclosed placeholder today: the deploy and rollback jobs mirror the promote workflow's shape, and the rollback path activates once a CLI output supplies the prior SHA.
 
 ## Workflow Permissions

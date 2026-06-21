@@ -267,6 +267,45 @@ cascade verify
 
 Rather than wire this job by hand, set `drift_check.enabled: true` in the manifest and `generate-workflow` emits the drift-check workflow for you. See [Drift-check workflow](/configuration/#drift-check-workflow-opt-in).
 
+### branch-protection
+
+Emit the JSON body an operator applies to GitHub's branch-protection API for a cascade-managed trunk. cascade emits the file; the operator applies it. cascade never calls the GitHub API.
+
+```bash
+cascade branch-protection
+```
+
+The output is a wrapper with two top-level keys:
+
+- `protection` is the exact body to PUT to the branches protection API.
+- `operator_todo` is companion guidance and is NOT part of the PUT body.
+
+Apply it by sending only the `.protection` object:
+
+```bash
+cascade branch-protection | jq .protection | \
+  gh api -X PUT repos/my-org/my-app/branches/main/protection --input -
+```
+
+#### What ends up required, and why it is safe
+
+The required status checks contain only the cascade-controlled `Setup` and `Finalize` jobs. These are the orchestrate workflow's two steps jobs; cascade knows their exact check-run names and both run on every pipeline run. Because of that, `.protection` applied as-is never creates a required check that can never report, so it never blocks a pull request on its own.
+
+The reusable-workflow caller jobs (validate, build, deploy) are deliberately left out of the required contexts. cascade knows each caller's display-name prefix (for example `Build (my-app)`) but not the inner job name that GitHub appends to form the real check-run context, which is `<DisplayName> / <inner-job>`. That inner job lives in your reusable workflow, which cascade does not author. Requiring a bare prefix would never match and would block every pull request, so cascade lists those prefixes under `operator_todo.complete_these_contexts` as `<DisplayName> / <inner-job>` placeholders instead. Replace `<inner-job>` with the job name inside each reusable workflow, then add the completed strings to `required_status_checks.contexts` when you want them required.
+
+The `--branch` flag only labels the guidance note. The required contexts are the same across branches and environments because they are the orchestrate-workflow steps jobs, so `--env` would not change them and is not offered.
+
+This command complements the hotfix branch-protection advisory (see [Hotfix workflow](/workflows/#hotfix-workflow)): the advisory prints ready-to-run `gh` commands for env branches, while `branch-protection` emits the full PUT body for the trunk.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file |
+| `--manifest-key` | string | `ci` | Top-level key inside the manifest |
+| `--branch` | string | `main` | Branch the protection targets (labels the guidance note only; does not change the required contexts) |
+| `--output`, `-o` | string | stdout | Write to this path instead of stdout (`-` also means stdout) |
+
 ### manage-release
 
 Manage GitHub releases.
