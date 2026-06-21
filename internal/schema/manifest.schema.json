@@ -151,6 +151,7 @@
         "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
         "merge_queue": { "$ref": "#/definitions/mergeQueueConfig" },
         "drift_check": { "$ref": "#/definitions/driftCheckConfig" },
+        "deployments": { "$ref": "#/definitions/deploymentsConfig" },
         "pin_mode": {
           "type": "string",
           "enum": ["tag", "sha"],
@@ -667,6 +668,15 @@
         "comment": { "type": "boolean" }
       }
     },
+    "deploymentsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opt-in GitHub Deployments API integration. When enabled, the finalize job creates a Deployment per target environment and reports in_progress then success/failure status after each deploy.",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Activates GitHub Deployments API reporting in the finalize job." },
+        "keep_prior_active": { "type": "boolean", "description": "Prevents GitHub from auto-inactivating prior deployments for the same environment (auto_inactive:false). Default false relies on native auto-inactivation." }
+      }
+    },
     "telemetryConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -731,6 +741,10 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Expected env-scoped variable NAMES (names only, never values)."
+        },
+        "environment_url": {
+          "type": "string",
+          "description": "URL of the deployed environment, reported to GitHub Deployments API status updates."
         }
       }
     },

@@ -82,7 +82,7 @@ type DeployState struct {
 	Version    string            `yaml:"version,omitempty" json:"version,omitempty"` // Version this deployable deployed (reserved-shape; independent of env-level Version)
 	DeployedAt string            `yaml:"deployed_at,omitempty" json:"deployed_at,omitempty"`
 	DeployedBy string            `yaml:"deployed_by,omitempty" json:"deployed_by,omitempty"`
-	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"`               // state_tags values
+	Tags       map[string]string `yaml:"tags,omitempty" json:"tags,omitempty"`             // state_tags values
 	TargetSHA  string            `yaml:"target_sha,omitempty" json:"target_sha,omitempty"` // RESERVED - reconciled GitOps-repo HEAD SHA, so a future implementation can key promotion off it. Not yet wired.
 }
 
@@ -114,14 +114,14 @@ const (
 
 // TrunkConfig represents the pipeline configuration (within config: section)
 type TrunkConfig struct {
-	SchemaVersion int                  `yaml:"schema_version,omitempty" json:"schema_version,omitempty"` // Manifest schema generation (default: CurrentSchemaVersion when omitted)
-	TrunkBranch   string               `yaml:"trunk_branch" json:"trunk_branch"`
-	Triggers      []string             `yaml:"triggers,omitempty" json:"triggers,omitempty"`           // Global triggers for orchestration workflow paths filter
-	Environments  []string             `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
-	CLIVersion    string               `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
-	TagPrefix     string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
-	ReleaseToken  string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
-	StateToken    string               `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
+	SchemaVersion int      `yaml:"schema_version,omitempty" json:"schema_version,omitempty"` // Manifest schema generation (default: CurrentSchemaVersion when omitted)
+	TrunkBranch   string   `yaml:"trunk_branch" json:"trunk_branch"`
+	Triggers      []string `yaml:"triggers,omitempty" json:"triggers,omitempty"`           // Global triggers for orchestration workflow paths filter
+	Environments  []string `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
+	CLIVersion    string   `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
+	TagPrefix     string   `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
+	ReleaseToken  string   `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
+	StateToken    string   `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
 	// ReleaseTokenApp optionally backs the release-token seam with a GitHub App
 	// identity instead of a static secret. When set, the generator mints a
 	// short-lived installation token at run time and the release steps consume it.
@@ -129,7 +129,7 @@ type TrunkConfig struct {
 	// StateTokenApp optionally backs the state-token seam with a GitHub App
 	// identity instead of a static secret. When set, the generator mints a
 	// short-lived installation token at run time and the state-write steps consume it.
-	StateTokenApp *AppTokenSource `yaml:"state_token_app,omitempty" json:"state_token_app,omitempty"`
+	StateTokenApp *AppTokenSource      `yaml:"state_token_app,omitempty" json:"state_token_app,omitempty"`
 	ManifestFile  string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
 	ManifestKey   string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
 	ActionFolder  string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
@@ -145,14 +145,16 @@ type TrunkConfig struct {
 	Concurrency   *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"` // Optional: top-level concurrency: block on the orchestrate workflow
 
 	// v1 reserved-shape config-level fields (parse + structural validation only).
-	RunsOn            *RunsOn                      `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`                         // Default runner for cascade-owned jobs
-	JobTimeoutMinutes int                          `yaml:"job_timeout_minutes,omitempty" json:"job_timeout_minutes,omitempty"` // Default timeout-minutes for cascade-owned jobs
-	DispatchInputs    map[string]DispatchInput     `yaml:"dispatch_inputs,omitempty" json:"dispatch_inputs,omitempty"`         // Operator-facing manual-run inputs
-	ExtraTriggers     *ExtraTriggers               `yaml:"extra_triggers,omitempty" json:"extra_triggers,omitempty"`           // Non-push trigger types
-	PRPreview         *PRPreviewConfig             `yaml:"pr_preview,omitempty" json:"pr_preview,omitempty"`
-	ValidateCheck     *ValidateCheckConfig         `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
-	MergeQueue        *MergeQueueConfig            `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
-	DriftCheck        *DriftCheckConfig            `yaml:"drift_check,omitempty" json:"drift_check,omitempty"` // Opt-in workflow drift-check PR lane (#229)
+	RunsOn            *RunsOn                  `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`                         // Default runner for cascade-owned jobs
+	JobTimeoutMinutes int                      `yaml:"job_timeout_minutes,omitempty" json:"job_timeout_minutes,omitempty"` // Default timeout-minutes for cascade-owned jobs
+	DispatchInputs    map[string]DispatchInput `yaml:"dispatch_inputs,omitempty" json:"dispatch_inputs,omitempty"`         // Operator-facing manual-run inputs
+	ExtraTriggers     *ExtraTriggers           `yaml:"extra_triggers,omitempty" json:"extra_triggers,omitempty"`           // Non-push trigger types
+	PRPreview         *PRPreviewConfig         `yaml:"pr_preview,omitempty" json:"pr_preview,omitempty"`
+	ValidateCheck     *ValidateCheckConfig     `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
+	MergeQueue        *MergeQueueConfig        `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
+	DriftCheck        *DriftCheckConfig        `yaml:"drift_check,omitempty" json:"drift_check,omitempty"` // Opt-in workflow drift-check PR lane (#229)
+	// Deployments configures opt-in GitHub Deployments API integration.
+	Deployments       *DeploymentsConfig           `yaml:"deployments,omitempty" json:"deployments,omitempty"`
 	PinMode           string                       `yaml:"pin_mode,omitempty" json:"pin_mode,omitempty"` // tag | sha (default tag)
 	ActionPins        map[string]string            `yaml:"action_pins,omitempty" json:"action_pins,omitempty"`
 	Telemetry         *TelemetryConfig             `yaml:"telemetry,omitempty" json:"telemetry,omitempty"`

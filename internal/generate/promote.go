@@ -606,6 +606,11 @@ func (g *PromoteGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 		{"contents", "write"},
 		{"actions", "write"},
 	}
+	// Opt-in GitHub Deployments API reporting needs deployments: write so the
+	// finalize job can create Deployments and post status updates.
+	if nativeDeploymentsEnabled(g.config) {
+		base = append(base, [2]string{"deployments", "write"})
+	}
 	writeTopLevelPermissions(sb, base)
 }
 
@@ -1303,6 +1308,9 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("            --run-id \"${{ github.run_id }}\" \\\n")
 	sb.WriteString("            --commit-push\n")
 
+	// Opt-in GitHub Deployments API reporting for the promotion target environment.
+	g.writeNativeDeploymentSteps(sb)
+
 	// Summary
 	sb.WriteString("      - name: Summary\n")
 	sb.WriteString("        env:\n")
@@ -1327,6 +1335,29 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("              echo \"| **DRY RUN** | Yes |\"\n")
 	sb.WriteString("            fi\n")
 	sb.WriteString("          } >> \"$GITHUB_STEP_SUMMARY\"\n")
+}
+
+// writeNativeDeploymentSteps wires the GitHub Deployments API lifecycle into the
+// promote finalize job. A promotion targets a single environment resolved at run
+// time (needs.preflight.outputs.target_env), so the Deployment targets that
+// name. The terminal status reflects whether every deploy job succeeded.
+func (g *PromoteGenerator) writeNativeDeploymentSteps(sb *strings.Builder) {
+	if !nativeDeploymentsEnabled(g.config) {
+		return
+	}
+
+	envExpr := "${{ needs.preflight.outputs.target_env }}"
+
+	resultExpr := "success"
+	if len(g.config.Environments) > 0 && len(g.config.Deploys) > 0 {
+		var conds []string
+		for _, d := range g.config.Deploys {
+			conds = append(conds, fmt.Sprintf("needs.deploy-%s.result == 'success'", d.Name))
+		}
+		resultExpr = fmt.Sprintf("${{ (%s) && 'success' || 'failure' }}", strings.Join(conds, " && "))
+	}
+
+	writeNativeDeploymentSteps(sb, g.config, envExpr, resultExpr, "      ")
 }
 
 // writeConcurrency emits a top-level concurrency: block on the promote workflow.

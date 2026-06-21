@@ -499,6 +499,36 @@ Behavior:
 - **Trusted PR resolution.** The companion derives the target pull-request number only from trusted `workflow_run` run metadata (the source run's `pull_requests` array, or a head-SHA lookup for fork pull requests), never from the artifact the pull-request job uploads. A fork therefore cannot redirect the comment at another pull request.
 - **cascade-owned.** Both files carry the cascade-generated marker, so `cascade verify` itself tracks them: edit them by hand and they are reported as drift; remove the toggle and they are reported as orphans.
 
+### Native deployments (opt-in)
+
+Set `deployments.enabled: true` and the finalize job reports deployment status through the [GitHub Deployments API](https://docs.github.com/en/rest/deployments/deployments). It creates a Deployment for the environment selected at run time, marks it `in_progress`, then reports a terminal `success` or `failure` status once the deploy callbacks finish. Pair it with a per-environment `environment_url` so the Deployment status links straight to the running environment.
+
+```yaml
+ci:
+  config:
+    environments: [production]
+    deployments:
+      enabled: true
+      keep_prior_active: false
+    environment_config:
+      production:
+        environment_url: "https://app.example.com"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `deployments.enabled` | bool | false | Create a Deployment and report status from the finalize job |
+| `deployments.keep_prior_active` | bool | false | Set `auto_inactive: false` so GitHub leaves prior deployments for the same environment Active. Default relies on GitHub's native auto-inactivation |
+| `environment_config.<env>.environment_url` | string | "" | URL reported on the Deployment status for that environment |
+
+Behavior:
+
+- **Status transition model.** The finalize job runs after every deploy callback, so it owns the full lifecycle: create the Deployment, set `in_progress`, then set `success` or `failure` based on whether every deploy callback succeeded. The terminal status step runs under `always()` so a failed deploy still reports `failure` instead of leaving the Deployment stuck at `in_progress`.
+- **Per-environment URL.** `environment_url` is resolved at run time from `environment_config.<env>.environment_url` for the environment being deployed. Environments without a configured URL report an empty URL.
+- **Guarded to real GitHub.** Every Deployments API step carries an `if: ${{ github.server_url == 'https://github.com' }}` guard, so on act or gitea (which have no Deployments API) the steps are skipped and the workflow stays runnable.
+- **Least-privilege scope.** The toggle adds `deployments: write` to the workflow's top-level permissions only when enabled; the OFF-state output is unchanged.
+- **Opt-in and additive.** Omit `deployments` and nothing is emitted. The field did not bump `schema_version`.
+
 ## State Section
 
 The `state` section tracks deployment state per environment plus a synthetic `release` slot. The framework manages it automatically. Do not hand-edit.

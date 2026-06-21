@@ -1,0 +1,66 @@
+name: "Native Deployments"
+description: |
+  Exercises the opt-in GitHub Deployments API integration
+  (config.deployments.enabled) and the per-environment environment_url. When
+  enabled, the finalize job creates a GitHub Deployment for the runtime-selected
+  environment, marks it in_progress, then reports a terminal success or failure
+  status. The finalize job also requests deployments: write so it can create the
+  Deployment and post status updates.
+
+  Each Deployments API step is guarded by github.server_url == 'https://github.com',
+  so on act/gitea (which has no Deployments API) the steps are skipped and the
+  workflow stays runnable. Live Deployments API assertions are therefore out of
+  scope for this scenario; it proves the emitted steps, the deployments: write
+  permission, the environment_url wiring, and the server_url guard are present,
+  schema-valid, and byte-stable. The commit step generates the workflows and
+  asserts the deployment steps are emitted and guarded; the verify step then
+  regenerates and proves the output is byte-identical with no drift.
+
+config:
+  trunk_branch: main
+  environments: [production]
+  deployments:
+    enabled: true
+    keep_prior_active: true
+  environment_config:
+    production:
+      environment_url: "https://app.example.com"
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Seed a minimal source tree; assert deployment steps are emitted and guarded"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "  deployments: write"
+            - "      - name: Create deployment"
+            - "        if: ${{ github.server_url == 'https://github.com' }}"
+            - "          deployment_id=$(gh api repos/${{ github.repository }}/deployments \\"
+            - "            --field auto_inactive=false \\"
+            - "      - name: Set deployment in_progress"
+            - "            --field state=in_progress"
+            - "      - name: Set deployment status"
+            - "        if: ${{ github.server_url == 'https://github.com' && always() }}"
+            - "            production) environment_url=\"https://app.example.com\" ;;"
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

@@ -564,19 +564,19 @@ For satellite repos with notify config:
 
 ### What cascade does today
 
-The generator emits an `environment: <name>` key on each deploy job whenever the manifest includes an `environments` list. That single key is enough for GitHub Actions to attach deployment records, honour required-reviewer gates, apply wait timers, and scope environment secrets. You configure all of that inside GitHub, not in the manifest. No cascade code calls the Deployments REST API or the Environments REST API directly.
+The generator emits an `environment: <name>` key on each deploy job whenever the manifest includes an `environments` list. That single key is enough for GitHub Actions to attach deployment records, honour required-reviewer gates, apply wait timers, and scope environment secrets. You configure all of that inside GitHub, not in the manifest.
+
+When you opt in with `deployments.enabled: true`, the finalize job also reports deployment status through the Deployments API: it calls `POST /repos/{owner}/{repo}/deployments` to create a Deployment for the runtime-selected environment, `POST /repos/{owner}/{repo}/deployments/{id}/statuses` to mark it `in_progress`, then a terminal `success` or `failure` status once the deploy callbacks finish. See [Native deployments](/cascade/configuration/#native-deployments-opt-in) for the toggle and the per-environment `environment_url`.
 
 ### What is deferred
 
-Two capabilities are intentionally out of scope for v1:
-
-- Programmatic Deployments API status. cascade does not call `POST /repos/{owner}/{repo}/deployments` or `POST /repos/{owner}/{repo}/deployments/{id}/statuses`. GitHub Actions creates these records automatically when a job carries `environment:`, so adopters get deployment records without cascade owning that call.
+One capability remains out of scope for v1:
 
 - Environments REST configuration sync. cascade does not CALL the Environments REST API: it never reads or writes environment protection rules (required reviewers, wait timers, branch policies) over the wire. The manifest can now EXPRESS that configuration, and `cascade environments` emits it as an operator-appliable file (apply with `gh api` or Terraform), but applying it stays an operator step. cascade emits; the operator applies.
 
 ### Why deferred
 
-Keeping cascade out of these APIs in v1 bounds the surface area and avoids coupling the tool to GitHub API semantics that are still evolving. The auto-created deployment records from `environment:` already cover the common case. Adding programmatic control before an adopter needs it would buy complexity and nothing else. If those APIs change shape, cascade would have to track the change even though nothing in v1 depends on them.
+Keeping cascade out of the Environments REST API in v1 bounds the surface area and avoids coupling the tool to GitHub API semantics that are still evolving. Adding programmatic control before an adopter needs it would buy complexity and nothing else. If that API changes shape, cascade would have to track the change even though nothing in v1 depends on it.
 
 ### How the design reserves the extension points
 
@@ -597,19 +597,20 @@ config:
       tag_patterns: [v*]               # custom policy only
       secrets: [MY_SECRET]             # expected env-scoped secret names
       variables: [REGION]              # expected env-scoped variable names
+      environment_url: https://...     # reported on the Deployment status (native deployments)
 ```
 
 The protection fields (`required_reviewers`, `wait_timer`, `branch_policy`, `branch_patterns`, `tag_patterns`) and the expected `secrets` and `variables` names are real, additive fields, not reserved placeholders. `cascade environments` reads them and emits an operator-appliable file (see [environments](/cascade/cli-reference/#environments)). cascade still never calls the REST API: it forms the PUT body it can fully express from the manifest and surfaces the rest, including the reviewer slugs and the secret and variable names, under `operator_todo` for the operator to apply.
 
 The `environments` list stays a plain ordered `[]string`; the separate `environment_config` map carries per-env settings. Adding fields under `environment_config.<name>` is additive and never touches the ordering semantics of `environments`. A manifest that omits `environment_config` entirely is valid and equivalent to today's behaviour.
 
-**Single finalize seam.** The `orchestrate.Finalize` and `promote.Finalize` functions are the only places that write state after a deployment completes. A future Deployments API call attaches at one of those two points, not scattered across the generator. That code constraint is already in place.
+**Single finalize seam.** The `orchestrate.Finalize` and `promote.Finalize` functions are the only places that write state after a deployment completes. The Deployments API status reporting attaches at exactly those two points, not scattered across the generator.
 
 **Generator delegates environment semantics to GitHub.** Because the generator emits `environment:` and nothing more, it does not embed logic about what that environment means. Programmatic status reporting slots in at finalize time; Environments REST configuration sync is a separate operational concern that never needs to touch the generator.
 
 ### Forward-compatibility guarantee
 
-Both capabilities, when they arrive, will follow the same additive-only policy described in [Versioning & Schema](/cascade/versioning/): new optional fields under `environment_config.<name>`, new optional top-level blocks if needed, and no removal or re-typing of existing fields. Neither will require a `schema_version` bump. Manifests that do not opt in to the new fields continue to work exactly as they do today.
+Environments REST configuration sync, when it arrives, will follow the same additive-only policy described in [Versioning & Schema](/cascade/versioning/): new optional fields under `environment_config.<name>`, new optional top-level blocks if needed, and no removal or re-typing of existing fields. It will not require a `schema_version` bump. The Deployments API status reporting already shipped under that same policy: `deployments` and `environment_url` are additive opt-in fields that did not bump the schema version. Manifests that do not opt in to the new fields continue to work exactly as they do today.
 
 ## Testing Strategy
 
