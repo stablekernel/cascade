@@ -56,14 +56,14 @@ func (g *PromoteGenerator) getCLIRef() string {
 // getReleaseTokenRef returns the token expression for release operations.
 // Users configure the full expression via release_token config option.
 func (g *PromoteGenerator) getReleaseTokenRef() string {
-	return g.config.GetReleaseToken()
+	return resolveReleaseTokenRef(g.config)
 }
 
 // getStateTokenRef returns the token expression used to write manifest state to
 // the trunk branch. Users configure the full expression via the state_token
 // config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
 func (g *PromoteGenerator) getStateTokenRef() string {
-	return g.config.GetStateToken()
+	return resolveStateTokenRef(g.config)
 }
 
 // getManifestFilePath returns the manifest file path for use in generated scripts.
@@ -657,6 +657,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	}
 
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
@@ -711,6 +712,7 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("      - name: Setup CLI\n")
 	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
@@ -1069,6 +1071,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    if: always() && needs.preflight.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")

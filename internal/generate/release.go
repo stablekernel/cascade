@@ -39,7 +39,7 @@ func (g *ReleaseGenerator) getCLIRef() string {
 // getReleaseTokenRef returns the token expression for release operations.
 // Users configure the full expression via release_token config option.
 func (g *ReleaseGenerator) getReleaseTokenRef() string {
-	return g.config.GetReleaseToken()
+	return resolveReleaseTokenRef(g.config)
 }
 
 // getStateTokenRef returns the token expression used to write manifest state to
@@ -47,7 +47,7 @@ func (g *ReleaseGenerator) getReleaseTokenRef() string {
 // config option; it defaults to the release token expression so existing
 // manifests keep using a single token.
 func (g *ReleaseGenerator) getStateTokenRef() string {
-	return g.config.GetStateToken()
+	return resolveStateTokenRef(g.config)
 }
 
 // getManifestFilePath returns the manifest file path for use in generated scripts.
@@ -177,6 +177,7 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      source_version: ${{ steps.validate.outputs.source_version }}\n")
 	sb.WriteString("      semver_tag: ${{ steps.semver.outputs.semver_tag }}\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
@@ -298,6 +299,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
@@ -377,6 +379,7 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    if: always() && needs.preflight.result == 'success' && github.event.inputs.release_action == 'release'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 
 	// Update latest_release state

@@ -36,6 +36,21 @@
         }
       }
     },
+    "appTokenSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A GitHub App identity that backs a token seam. The generator mints a short-lived installation token at run time via actions/create-github-app-token. app_id and private_key are secret references (a secrets/vars expression or bare secret name), never raw key material.",
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "description": "Secret reference for the GitHub App ID (a secrets/vars expression or bare secret name, for example CASCADE_APP_ID)."
+        },
+        "private_key": {
+          "type": "string",
+          "description": "Secret reference for the GitHub App private key (a secrets/vars expression or bare secret name, for example CASCADE_APP_PRIVATE_KEY). Never the raw key material."
+        }
+      }
+    },
     "trunkConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -75,6 +90,14 @@
         "state_token": {
           "type": "string",
           "description": "GitHub Actions secret expression for writing manifest state back to the trunk branch (default: ${{ secrets.GITHUB_TOKEN }})."
+        },
+        "release_token_app": {
+          "$ref": "#/definitions/appTokenSource",
+          "description": "Optional GitHub App identity that mints a short-lived installation token for release operations at run time instead of using a static secret. app_id and private_key are secret references, never raw key material."
+        },
+        "state_token_app": {
+          "$ref": "#/definitions/appTokenSource",
+          "description": "Optional GitHub App identity that mints a short-lived installation token for writing manifest state at run time instead of using a static secret. app_id and private_key are secret references, never raw key material."
         },
         "manifest_file": {
           "type": "string",

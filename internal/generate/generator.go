@@ -139,7 +139,7 @@ func NewGenerator(cfg *config.TrunkConfig, baseDir string) *Generator {
 // the trunk branch. Users configure the full expression via the state_token
 // config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
 func (g *Generator) getStateTokenRef() string {
-	return g.config.GetStateToken()
+	return resolveStateTokenRef(g.config)
 }
 
 // ownedJobTimeoutMinutes returns the timeout-minutes to emit on cascade-owned
@@ -208,7 +208,7 @@ func (g *Generator) getCLIRef() string {
 // getReleaseTokenRef returns the token expression for release operations.
 // Users configure the full expression via release_token config option.
 func (g *Generator) getReleaseTokenRef() string {
-	return g.config.GetReleaseToken()
+	return resolveReleaseTokenRef(g.config)
 }
 
 // getManifestFilePath returns the manifest file path for use in generated scripts.
@@ -816,6 +816,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	}
 
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
@@ -1358,6 +1359,7 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	}
 
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	// Need full git history for changelog generation
 	if g.config.ChangelogEnabled() {

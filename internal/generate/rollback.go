@@ -52,13 +52,13 @@ func (g *RollbackGenerator) getCLIRef() string {
 
 // getReleaseTokenRef returns the token expression for deploy/release operations.
 func (g *RollbackGenerator) getReleaseTokenRef() string {
-	return g.config.GetReleaseToken()
+	return resolveReleaseTokenRef(g.config)
 }
 
 // getStateTokenRef returns the token expression used to write manifest state to
 // the trunk branch.
 func (g *RollbackGenerator) getStateTokenRef() string {
-	return g.config.GetStateToken()
+	return resolveStateTokenRef(g.config)
 }
 
 // getManifestFilePath returns the repo-relative manifest path for use in the
@@ -201,6 +201,7 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      target_version: ${{ steps.preflight.outputs.target_version }}\n")
 	sb.WriteString("      can_proceed: ${{ steps.preflight.outputs.can_proceed }}\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease)
 	g.writeSetupCLI(sb)
 
 	sb.WriteString("      - name: Resolve Target\n")
@@ -287,6 +288,7 @@ func (g *RollbackGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    if: always() && needs.preflight.result == 'success' && github.event.inputs.dry_run != 'true'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
 	g.writeSetupCLI(sb)
 
 	sb.WriteString("      - name: Finalize Rollback\n")

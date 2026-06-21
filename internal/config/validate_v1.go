@@ -312,8 +312,63 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 
 	errs = append(errs, validateTelemetry(cfg.Telemetry)...)
 	errs = append(errs, validateEnvironmentConfig(cfg)...)
+	errs = append(errs, validateTokenSources(cfg)...)
 
 	return errs
+}
+
+// validateTokenSources checks the optional release_token_app / state_token_app
+// GitHub App identities. Each is lenient when absent. When present, BOTH app_id
+// and private_key must be set (a half-configured App is rejected), and each must
+// be a secret reference: a bare GitHub Actions secret name or a
+// "${{ secrets.* }}" / "${{ vars.* }}" expression. Raw key material is rejected
+// outright (a value containing a newline or the substring "PRIVATE KEY"), since
+// these fields are references, never inline credentials.
+func validateTokenSources(cfg *TrunkConfig) []string {
+	var errs []string
+	errs = append(errs, validateAppTokenSource("release_token_app", cfg.ReleaseTokenApp)...)
+	errs = append(errs, validateAppTokenSource("state_token_app", cfg.StateTokenApp)...)
+	return errs
+}
+
+// validateAppTokenSource checks a single App token source under the given prefix.
+func validateAppTokenSource(prefix string, src *AppTokenSource) []string {
+	if src == nil {
+		return nil
+	}
+	var errs []string
+	if strings.TrimSpace(src.AppID) == "" {
+		errs = append(errs, fmt.Sprintf("%s.app_id is required when %s is set", prefix, prefix))
+	} else {
+		errs = append(errs, validateSecretReference(prefix+".app_id", src.AppID)...)
+	}
+	if strings.TrimSpace(src.PrivateKey) == "" {
+		errs = append(errs, fmt.Sprintf("%s.private_key is required when %s is set", prefix, prefix))
+	} else {
+		errs = append(errs, validateSecretReference(prefix+".private_key", src.PrivateKey)...)
+	}
+	return errs
+}
+
+// validateSecretReference reports whether value is a secret reference rather than
+// raw credential material. A reference is either a wrapped GitHub Actions
+// expression ("${{ secrets.NAME }}" or "${{ vars.NAME }}") or a bare safe secret
+// name. Any value carrying a newline or the substring "PRIVATE KEY" is rejected
+// as raw key material.
+func validateSecretReference(field, value string) []string {
+	if strings.ContainsAny(value, "\r\n") || strings.Contains(value, "PRIVATE KEY") {
+		return []string{fmt.Sprintf(
+			"%s must be a secret reference (a secret name or a ${{ secrets.* }} expression), not raw key material", field)}
+	}
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "${{") && strings.HasSuffix(trimmed, "}}") {
+		return nil
+	}
+	if safeSecretName(trimmed) {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"%s must be a valid GitHub Actions secret name or a ${{ secrets.* }} expression", field)}
 }
 
 // validateEnvironmentConfig checks the additive per-environment fields under

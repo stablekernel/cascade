@@ -35,6 +35,13 @@ type Config struct {
 	// manifest. It accepts a full ${{ secrets.* }} expression or a bare secret
 	// name; the generator normalizes a bare name to a resolvable expression.
 	ReleaseToken string `yaml:"release_token,omitempty"`
+	// ReleaseTokenApp and StateTokenApp carry the optional GitHub App identities
+	// (app_id, private_key secret references) through to the generated manifest
+	// untouched. A generic map keeps the harness decoupled from the generator's
+	// AppTokenSource shape while preserving every key across the marshal
+	// round-trip.
+	ReleaseTokenApp map[string]any `yaml:"release_token_app,omitempty"`
+	StateTokenApp   map[string]any `yaml:"state_token_app,omitempty"`
 	Builds            []BuildConfig  `yaml:"builds"`
 	Deploys           []DeployConfig `yaml:"deploys"`
 	Publish           *PublishConfig `yaml:"publish,omitempty"`

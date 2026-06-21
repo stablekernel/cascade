@@ -34,14 +34,14 @@ func (g *ExternalUpdateGenerator) getCLIRef() string {
 
 // getReleaseTokenRef returns the token expression for release operations.
 func (g *ExternalUpdateGenerator) getReleaseTokenRef() string {
-	return g.config.GetReleaseToken()
+	return resolveReleaseTokenRef(g.config)
 }
 
 // getStateTokenRef returns the token expression used to write manifest state to
 // the trunk branch. Users configure the full expression via the state_token
 // config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
 func (g *ExternalUpdateGenerator) getStateTokenRef() string {
-	return g.config.GetStateToken()
+	return resolveStateTokenRef(g.config)
 }
 
 // getManifestFilePath returns the manifest file path for use in generated scripts.
@@ -219,6 +219,7 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("    name: Update External State\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
+	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
 	// The receiver checks out with the state token (the push identity) so that
 	// the manifest push is not blocked by branch protection rules on the primary
 	// repo. fetch-depth: 0 is required for parity with orchestrate/promote/hotfix

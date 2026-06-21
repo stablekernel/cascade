@@ -122,6 +122,14 @@ type TrunkConfig struct {
 	TagPrefix     string               `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
 	ReleaseToken  string               `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
 	StateToken    string               `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
+	// ReleaseTokenApp optionally backs the release-token seam with a GitHub App
+	// identity instead of a static secret. When set, the generator mints a
+	// short-lived installation token at run time and the release steps consume it.
+	ReleaseTokenApp *AppTokenSource `yaml:"release_token_app,omitempty" json:"release_token_app,omitempty"`
+	// StateTokenApp optionally backs the state-token seam with a GitHub App
+	// identity instead of a static secret. When set, the generator mints a
+	// short-lived installation token at run time and the state-write steps consume it.
+	StateTokenApp *AppTokenSource `yaml:"state_token_app,omitempty" json:"state_token_app,omitempty"`
 	ManifestFile  string               `yaml:"manifest_file,omitempty" json:"manifest_file,omitempty"` // Config file path (default: ".github/manifest.yaml")
 	ManifestKey   string               `yaml:"manifest_key,omitempty" json:"manifest_key,omitempty"`   // Nested key in manifest file (default: "ci")
 	ActionFolder  string               `yaml:"action_folder,omitempty" json:"action_folder,omitempty"` // Folder name for manage-release action (default: "manage-release")
@@ -333,6 +341,62 @@ func (c *TrunkConfig) GetStateToken() string {
 		return "${{ secrets.GITHUB_TOKEN }}"
 	}
 	return normalizeTokenExpression(c.StateToken)
+}
+
+// AppTokenSource backs a token seam with a GitHub App identity. At run time the
+// generator emits an actions/create-github-app-token step that exchanges these
+// for a short-lived installation token; the consuming steps reference that
+// minted token instead of a static secret. AppID and PrivateKey are SECRET
+// REFERENCES (a secrets/vars expression or bare secret name), never raw key
+// material: the App private key is stored only as a GitHub secret.
+type AppTokenSource struct {
+	AppID      string `yaml:"app_id,omitempty" json:"app_id,omitempty"`
+	PrivateKey string `yaml:"private_key,omitempty" json:"private_key,omitempty"`
+}
+
+// HasReleaseTokenApp reports whether a GitHub App identity backs the release-token seam.
+func (c *TrunkConfig) HasReleaseTokenApp() bool { return c.ReleaseTokenApp != nil }
+
+// HasStateTokenApp reports whether a GitHub App identity backs the state-token seam.
+func (c *TrunkConfig) HasStateTokenApp() bool { return c.StateTokenApp != nil }
+
+// GetReleaseTokenAppID returns the release App's app_id as a resolvable GitHub
+// Actions expression (a bare name becomes "${{ secrets.NAME }}"), or "" when no
+// release App identity is configured.
+func (c *TrunkConfig) GetReleaseTokenAppID() string {
+	if c.ReleaseTokenApp == nil {
+		return ""
+	}
+	return normalizeTokenExpression(c.ReleaseTokenApp.AppID)
+}
+
+// GetReleaseTokenAppPrivateKey returns the release App's private_key as a
+// resolvable GitHub Actions expression, or "" when no release App identity is
+// configured. The value is a secret reference, never raw key material.
+func (c *TrunkConfig) GetReleaseTokenAppPrivateKey() string {
+	if c.ReleaseTokenApp == nil {
+		return ""
+	}
+	return normalizeTokenExpression(c.ReleaseTokenApp.PrivateKey)
+}
+
+// GetStateTokenAppID returns the state App's app_id as a resolvable GitHub
+// Actions expression, or "" when no state App identity is configured.
+func (c *TrunkConfig) GetStateTokenAppID() string {
+	if c.StateTokenApp == nil {
+		return ""
+	}
+	return normalizeTokenExpression(c.StateTokenApp.AppID)
+}
+
+// GetStateTokenAppPrivateKey returns the state App's private_key as a resolvable
+// GitHub Actions expression, or "" when no state App identity is configured. The
+// value is a secret reference, never raw key material.
+func (c *TrunkConfig) GetStateTokenAppPrivateKey() string {
+	if c.StateTokenApp == nil {
+		return ""
+	}
+	return normalizeTokenExpression(c.StateTokenApp.PrivateKey)
 }
 
 // GetManifestFile returns the configured manifest file path or ".github/manifest.yaml" if not specified

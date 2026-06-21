@@ -86,6 +86,9 @@ ci:
 | `triggers` | list | No | - | Global path patterns that activate orchestration |
 | `tag_prefix` | string | No | `v` | Version tag prefix |
 | `release_token` | string | No | `${{ secrets.GITHUB_TOKEN }}` | Token expression for release API calls |
+| `state_token` | string | No | `${{ secrets.GITHUB_TOKEN }}` | Token expression for writing manifest state to the trunk branch |
+| `release_token_app` | object | No | - | GitHub App identity that mints a release token at run time; see [Token authentication](#token-authentication) |
+| `state_token_app` | object | No | - | GitHub App identity that mints a state-write token at run time; see [Token authentication](#token-authentication) |
 | `manifest_file` | string | No | `.github/manifest.yaml` | Path to manifest file |
 | `manifest_key` | string | No | `ci` | Top-level key inside the manifest file |
 | `action_folder` | string | No | `manage-release` | Folder name for the manage-release action |
@@ -107,6 +110,58 @@ Controls which CLI version the generated workflows install via setup-cli:
 | `vX.Y.Z` | Specific version (e.g., `v2.0.4`) |
 
 Pin to a specific version for reproducibility. Use `beta` for early access.
+
+### Token authentication
+
+Two seams call GitHub on cascade's behalf: `release_token` for release API calls and `state_token` for writing manifest state back to the trunk branch. Both default to `${{ secrets.GITHUB_TOKEN }}`, which is enough for a single-repo project whose trunk is unprotected. When the default token cannot do the job, supply your own token through one of two paths: a static secret (PAT) or a GitHub App.
+
+#### Static secret (PAT)
+
+Set `release_token` or `state_token` to a custom secret expression when the default `GITHUB_TOKEN` falls short:
+
+- **Pulling a private-source CLI.** Installing the cascade CLI from a private repository or registry needs a token with read access to that source.
+- **Cross-repo dispatch.** Coordinating builds or deploys in other repositories requires a token scoped beyond the current repository.
+- **Writing to a protected trunk.** `GITHUB_TOKEN` cannot bypass branch protection, so it cannot push manifest state to a protected trunk branch. A PAT (or a GitHub App token) can bypass protection and produces a verified, signed commit.
+
+Reference your secrets by bare name. cascade wraps a bare name in a `${{ secrets.* }}` expression for you:
+
+```yaml
+ci:
+  config:
+    release_token: RELEASE_PAT
+    state_token: STATE_PAT
+```
+
+#### GitHub App
+
+A GitHub App avoids storing a long-lived PAT. cascade mints a fresh installation token per run, scoped to the App's least-privilege permissions and short-lived by construction. Only the App private key is ever stored as a secret; no PAT lives in your secret store.
+
+One-time operator setup:
+
+1. Create a GitHub App in your organization (for example, under `my-org`).
+2. Generate a private key for the App and download the key file.
+3. Install the App on the repository (or repositories) cascade runs in.
+4. Add the App to the repository ruleset bypass list so it can write the protected trunk branch.
+5. Store the App ID and the private key as GitHub secrets, for example `CASCADE_APP_ID` and `CASCADE_APP_PRIVATE_KEY`. Store only the private key as a secret, never the raw key material in the manifest.
+
+Then point the manifest at those secrets with `release_token_app` and `state_token_app`. Each takes an `app_id` and a `private_key`, both secret references (a bare secret name or a `secrets`/`vars` expression):
+
+```yaml
+ci:
+  config:
+    release_token_app:
+      app_id: CASCADE_APP_ID
+      private_key: CASCADE_APP_PRIVATE_KEY
+    state_token_app:
+      app_id: CASCADE_APP_ID
+      private_key: CASCADE_APP_PRIVATE_KEY
+```
+
+When an App source is set, the generated workflow mints a short-lived installation token at run time via the `actions/create-github-app-token` action, guarded to real GitHub with `if: ${{ github.server_url == 'https://github.com' }}`. The token consumers prefer the minted token.
+
+:::note[Local act/gitea is unaffected]
+On act or gitea the minting step is skipped (the `github.server_url` guard does not match), and the consumers fall back to the static `release_token` / `state_token`. Set both the App source and a static token if you run the same manifest locally and against real GitHub.
+:::
 
 ### git Section
 
