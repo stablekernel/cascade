@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Structural validation for the v1 reserved-shape fields. These rules are the
@@ -219,6 +220,25 @@ func validateRollout(prefix string, r *RolloutConfig, environments []string) []s
 	if (t == RolloutTypeCanary || t == RolloutTypeBlueGreen) && len(environments) == 0 {
 		errs = append(errs, fmt.Sprintf("%s.rollout.type %q requires environments to be configured", prefix, t))
 	}
+	if r.Canary != nil {
+		errs = append(errs, validateCanaryConfig(prefix, r.Canary)...)
+	}
+	return errs
+}
+
+// validateCanaryConfig checks the optional reserved fields on a CanaryConfig.
+func validateCanaryConfig(prefix string, c *CanaryConfig) []string {
+	var errs []string
+	if c.Percent != 0 && (c.Percent < 1 || c.Percent > 100) {
+		errs = append(errs, fmt.Sprintf("%s.rollout.canary.percent must be between 1 and 100", prefix))
+	}
+	if c.BakeTime != "" {
+		if _, err := time.ParseDuration(c.BakeTime); err != nil {
+			errs = append(errs, fmt.Sprintf("%s.rollout.canary.bake_time must be a valid Go duration: %v", prefix, err))
+		}
+	}
+	errs = append(errs, validateLocalCallbackWorkflowPath(prefix+".rollout.canary.promote_callback", c.PromoteCallback)...)
+	errs = append(errs, validateLocalCallbackWorkflowPath(prefix+".rollout.canary.rollback_callback", c.RollbackCallback)...)
 	return errs
 }
 

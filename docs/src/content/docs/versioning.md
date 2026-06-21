@@ -73,6 +73,25 @@ These slots parse and pass structural validation today, but carry no generator, 
 
 That later release attaches behavior additively, so it does not bump `schema_version`: a manifest written against the reserved shape stays valid, and the schema-version-to-CLI matrix above is unchanged.
 
+## Reserved shape: progressive rollout
+
+The manifest reserves the shape for progressive rollout on a deploy callback. A deploy may declare a `rollout:` block with a `type` of `default`, `rolling`, `canary`, or `blue_green`, and an optional sub-block matching that type.
+
+The `canary:` sub-block reserves four fields:
+
+- `percent`, the initial canary weight, an integer from 1 to 100.
+- `bake_time`, the soak duration before promotion, written as a Go duration string (for example `30m`).
+- `promote_callback`, a local workflow path that performs the promotion.
+- `rollback_callback`, a local workflow path that performs the rollback.
+
+The `blue_green:` sub-block reserves one field:
+
+- `switch`, the workflow path that performs the cutover.
+
+These fields parse and pass structural validation today, but carry no generator behavior. A manifest declaring them produces byte-identical generated workflows, so the reserved shape is safe to adopt now. Attaching behavior to these fields later is additive and does not bump `schema_version`.
+
+`matrix:` and `rollout:` are separate canonical concerns: `matrix:` describes the fan-out a callback runs across, and `rollout:` describes how a release advances through a callback. There is no shared `strategy:` block that combines them.
+
 ## Migrations
 
 Each `schema_version` bump is recorded with a `Migration` section in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md) describing exactly what changed and the steps to update a manifest from the previous version. There are no migrations yet: the current schema version is the first.
