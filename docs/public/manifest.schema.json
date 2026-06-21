@@ -438,7 +438,9 @@
         "repo": { "type": "string", "description": "GitOps config repo (for example org/gitops-config)." },
         "path": { "type": "string", "description": "File to mutate in the target repo." },
         "field": { "type": "string", "description": "Field to bump (for example image.tag)." },
-        "value": { "type": "string", "description": "Value to write (may be a GitHub Actions expression)." }
+        "value": { "type": "string", "description": "Value to write (may be a GitHub Actions expression)." },
+        "branch": { "type": "string", "description": "Target branch for the GitOps write (env-to-branch mapping); default is the target repo's default branch. Reserved." },
+        "track_sha": { "type": "boolean", "description": "When true, record the post-push HEAD SHA of the target repo into state. Reserved." }
       }
     },
     "publishConfig": {
