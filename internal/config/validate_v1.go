@@ -380,6 +380,28 @@ func validateComponents(cfg *TrunkConfig) []string {
 	return errs
 }
 
+// validateVersionOverrides validates the reserved release.version_overrides
+// pointer. Rules frozen at v1 mirror components.path: any configured dir must be
+// a clean relative path (no leading slash, no ".." segments). Validation applies
+// only when the block is present, so it never rejects a manifest that is valid
+// without it.
+func validateVersionOverrides(release *ReleaseConfig) []string {
+	if release == nil || release.VersionOverrides == nil {
+		return nil
+	}
+	dir := release.VersionOverrides.Dir
+	if dir == "" {
+		return nil
+	}
+	var errs []string
+	if strings.HasPrefix(dir, "/") {
+		errs = append(errs, "release.version_overrides.dir must be a relative path, not absolute")
+	} else if strings.Contains(dir, "..") {
+		errs = append(errs, "release.version_overrides.dir must not contain '..' segments")
+	}
+	return errs
+}
+
 // sortedComponentKeys returns the keys of a ComponentConfig map in deterministic order.
 func sortedComponentKeys(m map[string]ComponentConfig) []string {
 	keys := make([]string, 0, len(m))

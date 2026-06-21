@@ -72,6 +72,12 @@ type Config struct {
 	// TelemetryConfig shape, so a scenario can declare any reserved telemetry
 	// field without the harness needing to know its structure.
 	Telemetry map[string]any `yaml:"telemetry,omitempty"`
+	// Release carries the release block (disabled, tag, version_overrides)
+	// through to the generated manifest untouched. A generic map keeps the
+	// harness decoupled from the generator's ReleaseConfig shape, so a scenario
+	// can declare any reserved release field without the harness needing to know
+	// its structure.
+	Release map[string]any `yaml:"release,omitempty"`
 }
 
 // EnvEnvironmentConfig mirrors internal/config.EnvironmentConfig's gha_environment

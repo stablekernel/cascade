@@ -1,0 +1,42 @@
+name: "Version Overrides Reserved Shape"
+description: |
+  Exercises the reserved version-intent override pointer
+  (config.release.version_overrides) with its reserved dir field. This block is
+  reserved and shape-only today: it parses and passes structural validation, but
+  carries no generator, state, or runtime behavior. dir is a relative pointer to
+  maintainer-committed override files; no override files are present in this
+  scenario. The scenario declares the version_overrides shape, generates the
+  workflows, then regenerates and proves the output is byte-identical with no
+  drift.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  release:
+    version_overrides:
+      dir: .cascade/version-overrides
+
+steps:
+  - name: "Seed a minimal source tree"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

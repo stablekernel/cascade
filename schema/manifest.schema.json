@@ -458,7 +458,16 @@
       "description": "Release management settings.",
       "properties": {
         "disabled": { "type": "boolean", "description": "Disable cascade-managed releases." },
-        "tag": { "type": "string", "description": "callback.output reference for releases created by an external tool." }
+        "tag": { "type": "string", "description": "callback.output reference for releases created by an external tool." },
+        "version_overrides": { "$ref": "#/definitions/versionOverridesConfig" }
+      }
+    },
+    "versionOverridesConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reserved pointer to the version-intent override-file location. Reserved shape only: parse and structural validation, no generator behavior.",
+      "properties": {
+        "dir": { "type": "string", "description": "Directory holding override files. Relative, no '..' segments. Empty means the implementation default (reserved)." }
       }
     },
     "changelogConfig": {
