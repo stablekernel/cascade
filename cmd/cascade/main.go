@@ -19,6 +19,7 @@ import (
 	initcmd "github.com/stablekernel/cascade/internal/initcmd"
 	"github.com/stablekernel/cascade/internal/log"
 	"github.com/stablekernel/cascade/internal/orchestrate"
+	"github.com/stablekernel/cascade/internal/plan"
 	"github.com/stablekernel/cascade/internal/promote"
 	"github.com/stablekernel/cascade/internal/release"
 	"github.com/stablekernel/cascade/internal/reset"
@@ -79,6 +80,7 @@ change detection, and changelog generation.`,
 	rootCmd.AddCommand(external.NewCommand())
 	rootCmd.AddCommand(generate.NewCommand())
 	rootCmd.AddCommand(verify.NewCommand())
+	rootCmd.AddCommand(plan.NewCommand())
 	rootCmd.AddCommand(hotfix.NewCommand())
 	rootCmd.AddCommand(initcmd.NewCommand())
 	rootCmd.AddCommand(orchestrate.NewCommand())

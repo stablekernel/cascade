@@ -1,0 +1,50 @@
+name: "Plan Diff Preview"
+description: |
+  Exercises the read-only `cascade plan` command end to end. After generating
+  workflows from a two-environment manifest, plan against pristine generated
+  output reports no pending changes and exits 0. Appending to a committed
+  workflow makes plan render a per-file unified diff with the new line and a
+  trailing summary, and it still exits 0 because plan is informational rather
+  than a gate.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Plan clean against pristine generated output"
+    action: plan
+    plan:
+      regenerate: true
+      expect_exit: 0
+      expect_contains:
+        - "no pending changes"
+
+  - name: "Append to a generated workflow; plan shows a unified diff"
+    action: plan
+    plan:
+      mutate_path: ".github/workflows/orchestrate.yaml"
+      mutate_append: "\n# pending change\n"
+      expect_exit: 0
+      expect_contains:
+        - "a/.github/workflows/orchestrate.yaml"
+        - "# pending change"
+        - "would change"
