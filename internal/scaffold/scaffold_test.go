@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,12 +65,16 @@ func TestScaffold_ExpectedFileSet(t *testing.T) {
 			assert.True(t, hasBuild, "build stub always present")
 
 			_, hasDeploy := files[".github/workflows/deploy.yaml"]
+			_, hasCodeowners := files[".github/CODEOWNERS"]
+			_, hasAWSOIDC := files[".github/aws-oidc-role.example.json"]
+			assert.True(t, hasCodeowners, "CODEOWNERS always present")
+			assert.True(t, hasAWSOIDC, "aws-oidc-role.example.json always present")
 			if len(tc.envs) > 0 {
 				assert.True(t, hasDeploy, "deploy stub present when envs non-empty")
-				assert.Len(t, files, 3)
+				assert.Len(t, files, 5)
 			} else {
 				assert.False(t, hasDeploy, "no deploy stub for release-only")
-				assert.Len(t, files, 2)
+				assert.Len(t, files, 4)
 			}
 		})
 	}
@@ -257,4 +262,69 @@ func TestSelfCheck_FailsOnBuildWithoutWorkflow(t *testing.T) {
 	err := SelfCheck(files)
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "validat")
+}
+
+func TestScaffold_IncludesCodeowners(t *testing.T) {
+	for _, tc := range topologyCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Scaffold("acme", "main", tc.envs)
+			require.NoError(t, err)
+
+			content, ok := files[".github/CODEOWNERS"]
+			assert.True(t, ok, "CODEOWNERS must be present for topology %s", tc.name)
+			assert.NotEmpty(t, content, "CODEOWNERS must be non-empty")
+		})
+	}
+}
+
+func TestScaffold_IncludesAWSOIDCExample(t *testing.T) {
+	for _, tc := range topologyCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Scaffold("acme", "main", tc.envs)
+			require.NoError(t, err)
+
+			content, ok := files[".github/aws-oidc-role.example.json"]
+			assert.True(t, ok, "aws-oidc-role.example.json must be present for topology %s", tc.name)
+			assert.NotEmpty(t, content, "aws-oidc-role.example.json must be non-empty")
+
+			var v interface{}
+			require.NoError(t, json.Unmarshal([]byte(content), &v), "aws-oidc-role.example.json must be valid JSON")
+			assert.Contains(t, content, "sts:AssumeRoleWithWebIdentity")
+			assert.Contains(t, content, "token.actions.githubusercontent.com")
+		})
+	}
+}
+
+func TestScaffold_DeterministicOutput(t *testing.T) {
+	first, err := Scaffold("acme", "main", []string{"dev", "prod"})
+	require.NoError(t, err)
+	second, err := Scaffold("acme", "main", []string{"dev", "prod"})
+	require.NoError(t, err)
+
+	require.Equal(t, len(first), len(second), "map lengths must match")
+	for k, v1 := range first {
+		v2, ok := second[k]
+		require.True(t, ok, "key %s missing from second call", k)
+		assert.Equal(t, v1, v2, "file %s must be byte-identical across calls", k)
+	}
+}
+
+func TestScaffold_NoBannedStrings(t *testing.T) {
+	banned := []string{"cfa", "dxe", "delivery"}
+	const emDash = "—"
+
+	for _, tc := range topologyCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Scaffold("acme", "main", tc.envs)
+			require.NoError(t, err)
+
+			for path, content := range files {
+				lower := strings.ToLower(content)
+				for _, word := range banned {
+					assert.NotContains(t, lower, word, "file %s contains banned string %q", path, word)
+				}
+				assert.NotContains(t, content, emDash, "file %s contains an em dash", path)
+			}
+		})
+	}
 }

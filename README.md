@@ -171,6 +171,8 @@ go install github.com/stablekernel/cascade/cmd/cascade@latest
 go install github.com/stablekernel/cascade/cmd/cascade@v0.1.0
 ```
 
+> **Fastest path:** run `cascade init` to scaffold a working starter (manifest with a pinned `cli_version`, build and deploy callback stubs, a `CODEOWNERS`, and an AWS OIDC trust-policy example), then edit two values and push. Pick a shape with `--topology` (`no-env` for a CLI/library, or `two-env`/`three-env`/`four-env` for a promotion pipeline). The scaffold is a verifying starter: `cascade init` then `cascade generate-workflow` leaves `cascade verify` clean. The steps below build the same manifest by hand if you prefer.
+
 ### 2. Create the manifest
 
 ```yaml
