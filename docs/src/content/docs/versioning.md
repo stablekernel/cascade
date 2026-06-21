@@ -114,6 +114,14 @@ The manifest reserves a vendor-neutral telemetry seam under `config.telemetry`. 
 
 These fields parse and pass structural validation today, but carry no generator or emit behavior. A manifest declaring them produces byte-identical generated workflows, so the reserved shape is safe to adopt now. Attaching behavior to these fields later is additive and does not bump `schema_version`.
 
+## Reserved shape: version-intent overrides
+
+cascade derives the next version from conventional commits. Some version intent cannot be expressed that way, for example forcing a pre-release line or a specific exact version for a release. The manifest reserves, under `release:`, a `version_overrides:` block that addresses maintainer-committed override files carrying that intent:
+
+- `dir`, a relative directory pointer to the override files. It must be a relative path with no `..` segments. Empty means the implementation default (reserved).
+
+Only the addressing pointer is frozen in v1. The override-file format and the fold-into-version-calculation behavior are additive and arrive post-1.0; any future override values map onto the existing version primitives (the bump level and the pre-release line) rather than introducing a parallel scheme. This block parses and passes structural validation today, but carries no generator, state, or runtime behavior. A manifest declaring it produces byte-identical generated workflows, so the reserved shape is safe to adopt now, and attaching behavior later does not bump `schema_version`.
+
 ## Migrations
 
 Each `schema_version` bump is recorded with a `Migration` section in [CHANGELOG.md](https://github.com/stablekernel/cascade/blob/main/CHANGELOG.md) describing exactly what changed and the steps to update a manifest from the previous version. There are no migrations yet: the current schema version is the first.

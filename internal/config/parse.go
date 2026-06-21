@@ -326,6 +326,7 @@ func Validate(cfg *TrunkConfig) []string {
 	// Config-level structural validation for v1 reserved fields.
 	errors = append(errors, validateConfigLevel(cfg)...)
 	errors = append(errors, validateComponents(cfg)...)
+	errors = append(errors, validateVersionOverrides(cfg.Release)...)
 
 	// Validate release.tag reference
 	if cfg.Release != nil && cfg.Release.Tag != "" {

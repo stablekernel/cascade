@@ -542,6 +542,23 @@ type ReleaseConfig struct {
 	// unset, no release-build dispatch is emitted and publishing a release does
 	// not trigger any follow-on workflow.
 	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+
+	// VersionOverrides reserves the addressing pointer for maintainer-committed
+	// version-intent override files. RESERVED - parse + structural validation
+	// only; no generator/state/runtime behavior. Absent by default.
+	VersionOverrides *VersionOverridesConfig `yaml:"version_overrides,omitempty" json:"version_overrides,omitempty"`
+}
+
+// VersionOverridesConfig is the reserved pointer to the override-file location.
+// Only the addressing shape is frozen in v1; file format and the
+// fold-into-version-calculation behavior land post-1.0 additively. Any future
+// override values map onto the canonical version primitives in
+// internal/version (BumpType: BumpNone/BumpPatch/BumpMinor/BumpMajor and the
+// PreRelease line); this reservation introduces no parallel enum.
+type VersionOverridesConfig struct {
+	// Dir is the directory holding override files. Relative, no ".." segments.
+	// Empty => the implementation default (reserved).
+	Dir string `yaml:"dir,omitempty" json:"dir,omitempty"`
 }
 
 // ExternalRepoConfig defines an external repository that this primary coordinates

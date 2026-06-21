@@ -396,6 +396,7 @@ ci:
 |-------|------|---------|-------------|
 | `disabled` | bool | false | Disable framework release management |
 | `tag` | string | - | callback.output reference for an external release tool |
+| `version_overrides` | object | - | Reserved pointer (`dir:`) to maintainer-committed version-intent override files. Reserved shape only; see [Versioning](/versioning/#reserved-shape-version-intent-overrides). |
 
 Omit this section to use framework defaults (creates releases with conventional commit changelogs).
 
