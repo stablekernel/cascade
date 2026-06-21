@@ -1,0 +1,52 @@
+name: "Environment Config Emit"
+description: |
+  Exercises the additive per-environment fields under environment_config
+  (required_reviewers, wait_timer, branch_policy with branch_patterns and
+  tag_patterns, secrets, and variables). These fields are emit-on-demand: the
+  cascade environments command serializes them into an operator-appliable
+  environments.json, but the workflow generator does not consume them. The
+  scenario declares the enriched environment_config block, generates the
+  workflows, then regenerates and proves the output is byte-identical with no
+  drift, confirming the new fields parse and validate without changing
+  generation. secrets and variables are expected NAMES only, never values.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  environment_config:
+    prod:
+      gha_environment: production
+      required_reviewers: [octocat, team/ops]
+      wait_timer: 10
+      branch_policy: protected
+      secrets: [MY_SECRET, DB_PASSWORD]
+      variables: [REGION]
+    dev:
+      branch_policy: custom
+      branch_patterns: [main, "release/*"]
+      tag_patterns: ["v*"]
+
+steps:
+  - name: "Seed a minimal source tree"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

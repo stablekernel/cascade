@@ -49,11 +49,15 @@ type Config struct {
 	// DispatchInput shape while preserving every key (type, options, default,
 	// description, required) across the marshal round-trip.
 	DispatchInputs map[string]map[string]any `yaml:"dispatch_inputs,omitempty"`
-	// EnvironmentConfig carries per-environment passthrough settings (currently
-	// gha_environment) into the generated manifest so the generator emits the
-	// job-level environment: key. Mirrors internal/config EnvironmentConfig.
-	// Keyed by env name so future per-env keys extend additively.
-	EnvironmentConfig map[string]EnvEnvironmentConfig `yaml:"environment_config,omitempty"`
+	// EnvironmentConfig carries per-environment settings (gha_environment plus the
+	// additive required_reviewers, wait_timer, branch_policy, branch_patterns,
+	// tag_patterns, secrets, and variables fields) into the generated manifest so
+	// the generator emits the job-level environment: key and the cascade
+	// environments command can emit the per-env config. A generic map per env keeps
+	// the harness decoupled from the generator's EnvironmentConfig struct while
+	// preserving every key across the marshal round-trip, so a scenario can declare
+	// any per-env field without a harness change. Keyed by env name.
+	EnvironmentConfig map[string]map[string]any `yaml:"environment_config,omitempty"`
 	// Validate, ValidateCheck, MergeQueue, PRPreview, Notify, and External carry
 	// the optional generator features through to the generated manifest untouched.
 	// Each uses a generic map (rather than a typed struct) so the harness stays
@@ -82,13 +86,6 @@ type Config struct {
 	// can declare any reserved release field without the harness needing to know
 	// its structure.
 	Release map[string]any `yaml:"release,omitempty"`
-}
-
-// EnvEnvironmentConfig mirrors internal/config.EnvironmentConfig's gha_environment
-// passthrough. Its own struct (not an inline map) so more per-env keys can be
-// added later without touching call sites.
-type EnvEnvironmentConfig struct {
-	GHAEnvironment string `yaml:"gha_environment,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published
