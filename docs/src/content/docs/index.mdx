@@ -25,6 +25,12 @@ Define what to build and where to deploy in one manifest. Cascade generates the 
 The manifest (`.github/manifest.yaml`) is the single source of truth. It holds the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once. After that, the generated workflows own their execution.
 
 <CardGrid stagger>
+  <Card title="Stage Graph" icon="seti:plan">
+    The mental model: trunk, the environment chain, the release boundary, and
+    the rollback and hotfix off-ramps.
+
+    [See the stage graph →](/cascade/stage-graph/)
+  </Card>
   <Card title="Getting Started" icon="rocket">
     Walk through a first manifest and the generated workflows.
 

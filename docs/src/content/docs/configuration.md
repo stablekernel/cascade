@@ -499,6 +499,8 @@ Behavior:
 - **Trusted PR resolution.** The companion derives the target pull-request number only from trusted `workflow_run` run metadata (the source run's `pull_requests` array, or a head-SHA lookup for fork pull requests), never from the artifact the pull-request job uploads. A fork therefore cannot redirect the comment at another pull request.
 - **cascade-owned.** Both files carry the cascade-generated marker, so `cascade verify` itself tracks them: edit them by hand and they are reported as drift; remove the toggle and they are reported as orphans.
 
+> **Pin recommendation.** When you enable `comment: true`, consider setting `pin_mode: sha`. The comment companion runs `actions/github-script` in a write-scoped `workflow_run` job, and the product default `pin_mode: tag` references that action by a floating major tag. Pinning to a full commit SHA removes the floating-tag exposure on the one job that holds a `pull-requests: write` token.
+
 ### Native deployments (opt-in)
 
 Set `deployments.enabled: true` and the finalize job reports deployment status through the [GitHub Deployments API](https://docs.github.com/en/rest/deployments/deployments). It creates a Deployment for the environment selected at run time, marks it `in_progress`, then reports a terminal `success` or `failure` status once the deploy callbacks finish. Pair it with a per-environment `environment_url` so the Deployment status links straight to the running environment.
