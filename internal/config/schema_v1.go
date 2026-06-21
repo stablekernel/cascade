@@ -273,6 +273,36 @@ const (
 type TelemetryConfig struct {
 	Enabled bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Adapter string `yaml:"adapter,omitempty" json:"adapter,omitempty"` // none | datadog | <future>
+	// Webhook is the reserved generic vendor-neutral JSON-POST sink. RESERVED -
+	// not yet wired to generation/emit. Carries the destination shape behind the
+	// adapter seam so no vendor client is baked into core.
+	Webhook *TelemetryWebhook `yaml:"webhook,omitempty" json:"webhook,omitempty"`
+	// JobSummary toggles the run-UI summary table. A pointer so unset differs
+	// from an explicit false (mirroring the FailFast "unset != false" precedent).
+	// RESERVED - not yet wired to generation/emit; default-on behavior lands in a
+	// later minor.
+	JobSummary *bool `yaml:"job_summary,omitempty" json:"job_summary,omitempty"`
+}
+
+// Telemetry adapter constants. The vendor stays an Adapter value behind the
+// seam; no vendor client is wired into core. These name the known adapter
+// values for documentation and future use and are not enforced as an enum (an
+// arbitrary adapter string parses today and must keep parsing).
+const (
+	TelemetryAdapterNone    = "none"
+	TelemetryAdapterDatadog = "datadog"
+)
+
+// TelemetryWebhook is the reserved generic JSON-POST telemetry sink. RESERVED -
+// not yet wired to generation/emit.
+type TelemetryWebhook struct {
+	// URL is the destination the run posts telemetry to.
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+	// SecretName is the name of a GitHub Actions secret holding the auth token.
+	// This is a secret REFERENCE, never an inline token value: the resolver
+	// reads the named secret at run time rather than carrying a raw credential
+	// in the manifest. RESERVED - not yet wired to generation/emit.
+	SecretName string `yaml:"secret_name,omitempty" json:"secret_name,omitempty"`
 }
 
 // EnvironmentConfig is the reserved per-environment settings block, keyed by env

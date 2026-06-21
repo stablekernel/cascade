@@ -310,7 +310,51 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 		}
 	}
 
+	errs = append(errs, validateTelemetry(cfg.Telemetry)...)
+
 	return errs
+}
+
+// validateTelemetry checks only the newly reserved telemetry.webhook fields.
+// adapter is left unchecked on purpose: an arbitrary adapter string parses and
+// validates today, and the seam must stay additive, so no enum is enforced. The
+// checks here are lenient and apply only when webhook is present, so they never
+// reject a manifest that is valid without these new fields. secret_name is a
+// reference to a GitHub Actions secret, never an inline token, so it is checked
+// for a safe secret-name shape rather than treated as a credential.
+func validateTelemetry(t *TelemetryConfig) []string {
+	if t == nil || t.Webhook == nil {
+		return nil
+	}
+	var errs []string
+	w := t.Webhook
+	if w.URL != "" {
+		if !strings.HasPrefix(w.URL, "https://") && !strings.HasPrefix(w.URL, "http://") {
+			errs = append(errs, "telemetry.webhook.url must be an http(s) URL")
+		}
+	}
+	if w.SecretName != "" && !safeSecretName(w.SecretName) {
+		errs = append(errs, "telemetry.webhook.secret_name must be a valid GitHub Actions secret name (letters, digits, underscores; not starting with a digit)")
+	}
+	return errs
+}
+
+// safeSecretName reports whether name is a syntactically valid GitHub Actions
+// secret name: ASCII letters, digits, and underscores only, and not starting
+// with a digit. This guards a reference, not a credential value.
+func safeSecretName(name string) bool {
+	for i, r := range name {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isDigit := r >= '0' && r <= '9'
+		isUnderscore := r == '_'
+		if i == 0 && isDigit {
+			return false
+		}
+		if !isLetter && !isDigit && !isUnderscore {
+			return false
+		}
+	}
+	return true
 }
 
 // validateComponents validates the reserved top-level components map (#176).

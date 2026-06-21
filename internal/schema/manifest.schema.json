@@ -631,7 +631,18 @@
       "description": "Vendor-neutral metrics seam.",
       "properties": {
         "enabled": { "type": "boolean" },
-        "adapter": { "type": "string", "description": "Metrics adapter (for example none, datadog)." }
+        "adapter": { "type": "string", "description": "Metrics adapter (for example none, datadog)." },
+        "webhook": { "$ref": "#/definitions/telemetryWebhook" },
+        "job_summary": { "type": "boolean", "description": "Toggle the run-UI summary table. Reserved." }
+      }
+    },
+    "telemetryWebhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Generic vendor-neutral JSON-POST telemetry sink. Reserved.",
+      "properties": {
+        "url": { "type": "string", "description": "Destination the run posts telemetry to. Reserved." },
+        "secret_name": { "type": "string", "description": "Name of a GitHub Actions secret holding the auth token (a reference, never an inline token). Reserved." }
       }
     },
     "environmentConfig": {
