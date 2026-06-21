@@ -153,6 +153,9 @@ type TrunkConfig struct {
 	ValidateCheck     *ValidateCheckConfig     `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
 	MergeQueue        *MergeQueueConfig        `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
 	DriftCheck        *DriftCheckConfig        `yaml:"drift_check,omitempty" json:"drift_check,omitempty"` // Opt-in workflow drift-check PR lane (#229)
+	// Rollback configures the opt-in rollback workflow. Absent by default; when
+	// set with repository_dispatch, an external signal can fire the rollback (#181).
+	Rollback *RollbackConfig `yaml:"rollback,omitempty" json:"rollback,omitempty"`
 	// Deployments configures opt-in GitHub Deployments API integration.
 	Deployments       *DeploymentsConfig           `yaml:"deployments,omitempty" json:"deployments,omitempty"`
 	PinMode           string                       `yaml:"pin_mode,omitempty" json:"pin_mode,omitempty"` // tag | sha (default tag)

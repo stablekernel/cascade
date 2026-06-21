@@ -1,0 +1,71 @@
+name: "Rollback Repository Dispatch"
+description: |
+  Exercises the opt-in rollback.repository_dispatch trigger (#181). With the
+  toggle enabled, the generated cascade-rollback workflow gains a
+  repository_dispatch trigger (alongside the unchanged workflow_dispatch), and
+  every rollback parameter read coalesces the manual input with the dispatch
+  client_payload, so an external alerting or incident pipeline can fire the same
+  N-1 rollback the manual path performs by calling the GitHub dispatches API.
+
+  The client_payload key mapping is name-for-name with the workflow_dispatch
+  inputs: environment, target, deployable, dry_run.
+
+  This is generator-output verification. The harness fires workflow_dispatch via
+  act and cannot synthesize a repository_dispatch event with a client_payload, so
+  the dispatch path is asserted structurally (the emitted trigger and the
+  coalesced reads) rather than executed. The workflow_dispatch path remains
+  fully exercised by the rollback runtime scenarios. After asserting the emitted
+  shape, regenerate and prove the output round-trips through verify with no drift.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  rollback:
+    repository_dispatch:
+      types: [rollback-requested]
+
+steps:
+  - name: "Seed source; assert repository_dispatch trigger and coalesced reads"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-rollback.yaml"
+          contains:
+            # workflow_dispatch path is preserved.
+            - "  workflow_dispatch:"
+            # opt-in repository_dispatch trigger with the configured event type.
+            - "  repository_dispatch:"
+            - "    types:"
+            - "      - rollback-requested"
+            # preflight reads coalesce manual inputs with the dispatch payload.
+            - "ENVIRONMENT: ${{ github.event.inputs.environment || github.event.client_payload.environment }}"
+            - "TARGET: ${{ github.event.inputs.target || github.event.client_payload.target }}"
+            - "DEPLOYABLE: ${{ github.event.inputs.deployable || github.event.client_payload.deployable }}"
+            # deploy guard and finalize gate coalesce dry_run and deployable.
+            - "github.event.inputs.dry_run || github.event.client_payload.dry_run"
+            - "github.event.inputs.deployable || github.event.client_payload.deployable"
+          not_contains:
+            # the bare, un-coalesced reads must be gone once the toggle is on.
+            - "ENVIRONMENT: ${{ github.event.inputs.environment }}"
+            - "TARGET: ${{ github.event.inputs.target }}"
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

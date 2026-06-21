@@ -39,6 +39,29 @@ func (g *RollbackGenerator) Enabled() bool {
 	return g.config != nil && len(g.config.Environments) >= 1
 }
 
+// dispatchTrigger returns the configured opt-in repository_dispatch trigger, or
+// nil when the rollback workflow is in its workflow_dispatch-only baseline.
+func (g *RollbackGenerator) dispatchTrigger() *config.RepositoryDispatchTrigger {
+	if g.config == nil || g.config.Rollback == nil {
+		return nil
+	}
+	return g.config.Rollback.RepositoryDispatch
+}
+
+// paramRead returns the GitHub Actions expression body that reads a single
+// rollback parameter. In the baseline it reads github.event.inputs.<name>; when
+// the repository_dispatch trigger is enabled it coalesces to
+// github.event.client_payload.<name> so the same workflow resolves the parameter
+// whether it was fired by the manual (workflow_dispatch) or external
+// (repository_dispatch) path. The two paths share one parameter name: the
+// client_payload key matches the workflow_dispatch input name exactly.
+func (g *RollbackGenerator) paramRead(name string) string {
+	if g.dispatchTrigger() != nil {
+		return fmt.Sprintf("github.event.inputs.%s || github.event.client_payload.%s", name, name)
+	}
+	return fmt.Sprintf("github.event.inputs.%s", name)
+}
+
 // getCLIRef mirrors the ref-resolution used by the other generators so the
 // emitted setup-cli ref tracks config.cli_version. "beta" is the explicit opt-in
 // escape hatch to the "master" branch; everything else resolves through
@@ -136,6 +159,14 @@ func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("        required: false\n")
 	sb.WriteString("        type: boolean\n")
 	sb.WriteString("        default: false\n")
+
+	// Opt-in repository_dispatch (#181): an external system (an alerting or
+	// incident pipeline) fires the same N-1 rollback the manual path performs by
+	// calling the dispatches API. repository_dispatch carries no inputs; the
+	// rollback parameters travel in client_payload (keys: environment, target,
+	// deployable, dry_run), which the jobs below coalesce with the manual inputs.
+	g.writeRepositoryDispatchTrigger(sb)
+
 	sb.WriteString("\n")
 
 	// Base: contents:write to commit the rolled-back state; actions:write for
@@ -148,6 +179,25 @@ func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
 		{"actions", "write"},
 	}
 	writeTopLevelPermissions(sb, base)
+}
+
+// writeRepositoryDispatchTrigger emits the opt-in repository_dispatch entry
+// under on: when the rollback config enables it. The emission mirrors the main
+// orchestrate workflow's repository_dispatch block (Generator.writeExtraTriggers)
+// so the two are byte-consistent. When the trigger is absent, nothing is written
+// and the workflow stays workflow_dispatch-only.
+func (g *RollbackGenerator) writeRepositoryDispatchTrigger(sb *strings.Builder) {
+	rd := g.dispatchTrigger()
+	if rd == nil {
+		return
+	}
+	sb.WriteString("  repository_dispatch:\n")
+	if len(rd.Types) > 0 {
+		sb.WriteString("    types:\n")
+		for _, t := range rd.Types {
+			fmt.Fprintf(sb, "      - %s\n", t)
+		}
+	}
 }
 
 // writeConcurrency serializes rollback runs so concurrent state writes cannot
@@ -207,9 +257,9 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Resolve Target\n")
 	sb.WriteString("        id: preflight\n")
 	sb.WriteString("        env:\n")
-	sb.WriteString("          ENVIRONMENT: ${{ github.event.inputs.environment }}\n")
-	sb.WriteString("          TARGET: ${{ github.event.inputs.target }}\n")
-	sb.WriteString("          DEPLOYABLE: ${{ github.event.inputs.deployable }}\n")
+	fmt.Fprintf(sb, "          ENVIRONMENT: ${{ %s }}\n", g.paramRead("environment"))
+	fmt.Fprintf(sb, "          TARGET: ${{ %s }}\n", g.paramRead("target"))
+	fmt.Fprintf(sb, "          DEPLOYABLE: ${{ %s }}\n", g.paramRead("deployable"))
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade rollback preflight \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
@@ -224,10 +274,28 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
+// paramReadExpr returns the parameter read for use inside a larger GitHub
+// Actions expression (a comparison or boolean operand). In the baseline it is
+// the bare github.event.inputs.<name>; when the repository_dispatch trigger is
+// enabled the coalescing "inputs || client_payload" is wrapped in parentheses so
+// the surrounding operator (e.g. != 'true', == '') binds to the whole coalesced
+// value rather than only the client_payload half.
+func (g *RollbackGenerator) paramReadExpr(name string) string {
+	if g.dispatchTrigger() != nil {
+		return "(" + g.paramRead(name) + ")"
+	}
+	return g.paramRead(name)
+}
+
 // rollbackDeployGuard is the if-condition gating a rollback deploy job: not a
 // dry run, and either no deployable filter or a filter naming this deployable.
-func rollbackDeployGuard(deployName string) string {
-	return fmt.Sprintf("${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.deployable == '' || github.event.inputs.deployable == '%s') }}", deployName)
+// The dry_run and deployable reads coalesce client_payload when the
+// repository_dispatch trigger is enabled, so an external signal honors the same
+// dry-run and deployable scoping the manual path does.
+func (g *RollbackGenerator) rollbackDeployGuard(deployName string) string {
+	dryRun := g.paramReadExpr("dry_run")
+	deployable := g.paramReadExpr("deployable")
+	return fmt.Sprintf("${{ %s != 'true' && (%s == '' || %s == '%s') }}", dryRun, deployable, deployable, deployName)
 }
 
 // writeDeployJobs emits one deploy job per configured deploy, re-running the same
@@ -244,7 +312,7 @@ func (g *RollbackGenerator) writeDeployJobs(sb *strings.Builder) {
 		fmt.Fprintf(sb, "  deploy-%s:\n", d.Name)
 		fmt.Fprintf(sb, "    name: Deploy %s\n", d.Name)
 		sb.WriteString("    needs: [preflight]\n")
-		fmt.Fprintf(sb, "    if: %s\n", rollbackDeployGuard(d.Name))
+		fmt.Fprintf(sb, "    if: %s\n", g.rollbackDeployGuard(d.Name))
 
 		// Reusable (uses:) deploy: thread the resolved env and SHA via with:. The
 		// environment name is carried as an input; GitHub Environment protection
@@ -285,7 +353,7 @@ func (g *RollbackGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("  finalize:\n")
 	sb.WriteString("    name: Finalize\n")
 	fmt.Fprintf(sb, "    needs: %s\n", needsStr)
-	sb.WriteString("    if: always() && needs.preflight.result == 'success' && github.event.inputs.dry_run != 'true'\n")
+	fmt.Fprintf(sb, "    if: always() && needs.preflight.result == 'success' && %s != 'true'\n", g.paramReadExpr("dry_run"))
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
@@ -302,7 +370,7 @@ func (g *RollbackGenerator) writeFinalizeJob(sb *strings.Builder) {
 	// marks the env diverged while a deployable-scoped rollback touches only that
 	// deployable. Without this, a deployable-scoped dispatch would resolve and
 	// deploy one deployable but finalize the whole environment.
-	sb.WriteString("          DEPLOYABLE: ${{ github.event.inputs.deployable }}\n")
+	fmt.Fprintf(sb, "          DEPLOYABLE: ${{ %s }}\n", g.paramRead("deployable"))
 	// Thread each deploy job's conclusion in as DEPLOY_RESULT_<NAME> so the CLI
 	// can gate the state write on actual deploy success. Deploy jobs only exist
 	// when at least one environment is configured.

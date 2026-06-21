@@ -313,8 +313,52 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateTelemetry(cfg.Telemetry)...)
 	errs = append(errs, validateEnvironmentConfig(cfg)...)
 	errs = append(errs, validateTokenSources(cfg)...)
+	errs = append(errs, validateRollback(cfg.Rollback)...)
 
 	return errs
+}
+
+// repositoryDispatchTypeRe matches a repository_dispatch event type that is safe
+// to emit verbatim under the on.repository_dispatch.types list. GitHub accepts
+// arbitrary client-chosen event-type strings, but cascade renders them into YAML
+// without quoting, so the accepted set is constrained to characters that need no
+// escaping and cannot break the surrounding document.
+var repositoryDispatchTypeRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// validateRepositoryDispatchTypes checks a repository_dispatch trigger's event
+// types under the given prefix. At least one type is required (an empty list
+// would make the trigger fire on every event type, which is never the intent for
+// an opt-in rollback signal), and each type must be non-blank and safe to emit.
+func validateRepositoryDispatchTypes(prefix string, rd *RepositoryDispatchTrigger) []string {
+	if rd == nil {
+		return nil
+	}
+	var errs []string
+	if len(rd.Types) == 0 {
+		errs = append(errs, fmt.Sprintf("%s.types must list at least one event type", prefix))
+		return errs
+	}
+	for _, t := range rd.Types {
+		if strings.TrimSpace(t) == "" {
+			errs = append(errs, fmt.Sprintf("%s.types must not contain a blank event type", prefix))
+			continue
+		}
+		if !repositoryDispatchTypeRe.MatchString(t) {
+			errs = append(errs, fmt.Sprintf(
+				"%s.types entry %q must contain only letters, digits, dots, hyphens, and underscores", prefix, t))
+		}
+	}
+	return errs
+}
+
+// validateRollback checks the opt-in rollback configuration. A nil block is the
+// default and passes. When repository_dispatch is set, its event types are
+// validated the same way the shared repository_dispatch trigger is.
+func validateRollback(rb *RollbackConfig) []string {
+	if rb == nil {
+		return nil
+	}
+	return validateRepositoryDispatchTypes("rollback.repository_dispatch", rb.RepositoryDispatch)
 }
 
 // validateTokenSources checks the optional release_token_app / state_token_app
