@@ -79,6 +79,11 @@ type Config struct {
 	// the generated manifest untouched, so a scenario can enable the generated PR
 	// drift-check workflow and its fork-safe comment companion (#229).
 	DriftCheck map[string]any `yaml:"drift_check,omitempty"`
+	// Deployments carries the opt-in native GitHub Deployments block (enabled,
+	// keep_prior_active) through to the generated manifest untouched, so a
+	// scenario can enable the finalize-seam Deployments API steps. A generic map
+	// keeps the harness decoupled from the generator's DeploymentsConfig shape.
+	Deployments map[string]any `yaml:"deployments,omitempty"`
 	Notify        map[string]any   `yaml:"notify,omitempty"`
 	External      []map[string]any `yaml:"external,omitempty"`
 	// Telemetry carries the reserved vendor-neutral telemetry block (enabled,
