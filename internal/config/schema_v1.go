@@ -170,10 +170,18 @@ const (
 
 // CanaryConfig is the reserved canary rollout sub-block.
 type CanaryConfig struct {
-	// Steps are the percent waves (e.g. [10, 50, 100]).
+	// Steps are the percent waves (for example [10, 50, 100]).
 	Steps []int `yaml:"steps,omitempty" json:"steps,omitempty"`
 	// Analysis is a workflow path that gates each wave.
 	Analysis string `yaml:"analysis,omitempty" json:"analysis,omitempty"`
+	// Percent is the single initial canary weight (1..100). RESERVED - not yet wired to generation.
+	Percent int `yaml:"percent,omitempty" json:"percent,omitempty"`
+	// BakeTime is the soak duration after traffic shift before promotion (Go duration string, e.g. "30m"). RESERVED - not yet wired to generation.
+	BakeTime string `yaml:"bake_time,omitempty" json:"bake_time,omitempty"`
+	// PromoteCallback is the local callback workflow path invoked on promotion. RESERVED - not yet wired to generation.
+	PromoteCallback string `yaml:"promote_callback,omitempty" json:"promote_callback,omitempty"`
+	// RollbackCallback is the local callback workflow path invoked on rollback. RESERVED - not yet wired to generation.
+	RollbackCallback string `yaml:"rollback_callback,omitempty" json:"rollback_callback,omitempty"`
 }
 
 // BlueGreenConfig is the reserved blue/green rollout sub-block.

@@ -396,7 +396,25 @@
           "items": { "type": "integer" },
           "description": "Percent waves (for example [10, 50, 100])."
         },
-        "analysis": { "type": "string", "description": "Workflow path that gates each wave." }
+        "analysis": { "type": "string", "description": "Workflow path that gates each wave." },
+        "percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Single initial canary weight (1..100). RESERVED - not yet wired to generation."
+        },
+        "bake_time": {
+          "type": "string",
+          "description": "Soak duration after traffic shift before promotion (Go duration string, for example \"30m\"). RESERVED - not yet wired to generation."
+        },
+        "promote_callback": {
+          "type": "string",
+          "description": "Local callback workflow path invoked on promotion. RESERVED - not yet wired to generation."
+        },
+        "rollback_callback": {
+          "type": "string",
+          "description": "Local callback workflow path invoked on rollback. RESERVED - not yet wired to generation."
+        }
       }
     },
     "blueGreenConfig": {

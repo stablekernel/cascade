@@ -120,6 +120,11 @@ type DeployConfig struct {
 	// manifest untouched. See BuildConfig.Secrets for the accepted forms and the
 	// rationale for the generic value type.
 	Secrets any `yaml:"secrets,omitempty"`
+	// Rollout carries the rollout sub-block (type, canary, blue_green) through to
+	// the generated manifest untouched. A generic map keeps the harness decoupled
+	// from the generator's RolloutConfig shape, so a scenario can declare any
+	// reserved rollout field without the harness needing to know its structure.
+	Rollout map[string]any `yaml:"rollout,omitempty"`
 }
 
 // ConcurrencySpec defines the per-callback concurrency block written to trunk-config.yaml.
