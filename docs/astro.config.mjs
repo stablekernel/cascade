@@ -72,6 +72,7 @@ export default defineConfig({
       // "Why Cascade" page first so readers can self-qualify before onboarding.
       sidebar: [
         { label: 'Why Cascade', link: '/comparison/' },
+        { label: 'Stage Graph', link: '/stage-graph/' },
         { label: 'Getting Started', link: '/getting-started/' },
         { label: 'Adoption Guide', link: '/adoption/' },
         { label: 'Manifest Reference', link: '/configuration/' },

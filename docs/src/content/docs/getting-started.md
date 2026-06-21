@@ -3,7 +3,7 @@ title: Getting Started
 description: A step-by-step guide to installing the cascade CLI, creating a manifest, wiring callback workflows, and generating orchestration workflows in your repository.
 ---
 
-This guide walks through setting up `cascade` in your repository.
+This guide walks through setting up `cascade` in your repository. For the big picture first - how trunk, your environments, and the release boundary fit together - read the [Stage Graph](/cascade/stage-graph/).
 
 ## Prerequisites
 

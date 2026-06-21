@@ -334,6 +334,7 @@ Full flag reference: [CLI reference](https://stablekernel.github.io/cascade/cli-
 
 | Document | Description |
 |---|---|
+| [Stage Graph](https://stablekernel.github.io/cascade/stage-graph/) | The mental model - start here to see how the stages fit together |
 | [Getting Started](https://stablekernel.github.io/cascade/getting-started/) | Step-by-step setup guide |
 | [Configuration](https://stablekernel.github.io/cascade/configuration/) | Full manifest reference |
 | [Workflows](https://stablekernel.github.io/cascade/workflows/) | Orchestrate and Promote explained |
