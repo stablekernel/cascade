@@ -131,6 +131,13 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if (step.Verify.CreatePath == "") != (step.Verify.CreateFrom == "") {
 				return fmt.Errorf("step %d (%s): verify create_path and create_from must be set together", i, step.Name)
 			}
+		case "plan":
+			if step.Plan == nil {
+				return fmt.Errorf("step %d (%s): plan action requires plan config", i, step.Name)
+			}
+			if step.Plan.MutatePath != "" && step.Plan.MutateAppend == "" {
+				return fmt.Errorf("step %d (%s): plan mutate_path requires mutate_append", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -367,6 +374,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeRollback(ctx, step.Rollback, config)
 	case "verify":
 		return r.executeVerify(ctx, step.Verify)
+	case "plan":
+		return r.executePlan(ctx, step.Plan)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -459,6 +468,85 @@ func (r *Runner) executeVerify(ctx context.Context, step *VerifyStep) error {
 
 	if exitCode != step.ExpectExit {
 		return fmt.Errorf("verify: expected exit %d, got %d: %s", step.ExpectExit, exitCode, out.String())
+	}
+	return nil
+}
+
+// executePlan runs `cascade plan` in the synced repo and asserts the exit code
+// matches the step's ExpectExit (0 on success, since plan is informational and
+// never a gate). When Regenerate is set it first runs `cascade generate-workflow
+// -f` so plan previews against pristine generated output rather than the
+// harness's localized copies. When MutatePath is set it appends MutateAppend to
+// that file before planning, driving a specific diff. The captured stdout is
+// checked against ExpectContains/ExpectNotContains. The whole step is
+// read-through-the-CLI and never asserts on workflow execution.
+func (r *Runner) executePlan(ctx context.Context, step *PlanStep) error {
+	if r.harness == nil || r.harness.act == nil {
+		r.t.Logf("  Would run cascade plan (expect exit %d, no harness)", step.ExpectExit)
+		return nil
+	}
+
+	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
+		return fmt.Errorf("plan: failed to sync repo: %w", err)
+	}
+
+	if step.Regenerate {
+		regenCmd := []string{"bash", "-c", "cd /tmp/repo && /usr/local/bin/cascade generate-workflow -f"}
+		exitCode, reader, err := r.harness.act.Container().Exec(ctx, regenCmd)
+		if err != nil {
+			return fmt.Errorf("plan: regenerate exec failed: %w", err)
+		}
+		var out bytes.Buffer
+		if reader != nil {
+			_, _ = io.Copy(&out, reader)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("plan: regenerate failed (exit %d): %s", exitCode, out.String())
+		}
+	}
+
+	if step.MutatePath != "" {
+		mutateCmd := []string{"bash", "-c", fmt.Sprintf(
+			"cd /tmp/repo && printf '%%s' %s >> %s",
+			shellQuote(step.MutateAppend), shellQuote(step.MutatePath),
+		)}
+		exitCode, reader, err := r.harness.act.Container().Exec(ctx, mutateCmd)
+		if err != nil {
+			return fmt.Errorf("plan: mutate exec failed: %w", err)
+		}
+		var out bytes.Buffer
+		if reader != nil {
+			_, _ = io.Copy(&out, reader)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("plan: mutate failed (exit %d): %s", exitCode, out.String())
+		}
+	}
+
+	planCmd := []string{"bash", "-c", "cd /tmp/repo && /usr/local/bin/cascade plan"}
+	exitCode, reader, err := r.harness.act.Container().Exec(ctx, planCmd)
+	if err != nil {
+		return fmt.Errorf("plan: exec failed: %w", err)
+	}
+	var out bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&out, reader)
+	}
+	output := out.String()
+	r.t.Logf("  Plan: exit=%d (expected %d): %s", exitCode, step.ExpectExit, output)
+
+	if exitCode != step.ExpectExit {
+		return fmt.Errorf("plan: expected exit %d, got %d: %s", step.ExpectExit, exitCode, output)
+	}
+	for _, want := range step.ExpectContains {
+		if !strings.Contains(output, want) {
+			return fmt.Errorf("plan: stdout missing expected substring %q: %s", want, output)
+		}
+	}
+	for _, unwant := range step.ExpectNotContains {
+		if strings.Contains(output, unwant) {
+			return fmt.Errorf("plan: stdout contains unexpected substring %q: %s", unwant, output)
+		}
 	}
 	return nil
 }

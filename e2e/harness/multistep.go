@@ -90,6 +90,10 @@ type Step struct {
 	// asserts the committed workflows match the manifest, exercising verify's
 	// exit-code contract.
 	Verify *VerifyStep `yaml:"verify,omitempty"`
+	// Plan configures a "plan" action: a read-only `cascade plan` run that prints
+	// a per-file unified diff of committed-vs-planned workflows and always exits 0
+	// on success, exercising plan's informational (non-gate) contract.
+	Plan *PlanStep `yaml:"plan,omitempty"`
 	// ExpectFailure marks a step whose workflow is expected to conclude in
 	// failure (for example an orchestrate run whose build exits non-zero). When
 	// set, a failure conclusion is the success path and a success conclusion is
@@ -219,6 +223,23 @@ type VerifyStep struct {
 	// opt-out suppresses orphan drift.
 	AllowOrphans bool `yaml:"allow_orphans,omitempty"`
 	ExpectExit   int  `yaml:"expect_exit"`
+}
+
+// PlanStep defines a plan action: a read-only `cascade plan` run that prints a
+// per-file unified diff of committed-vs-planned workflows and always exits 0 on
+// success. Regenerate runs `cascade generate-workflow -f` first so plan previews
+// against pristine generated output. MutatePath/MutateAppend optionally append to
+// a generated file before planning so a scenario can drive a specific diff.
+// ExpectExit is the exit code `cascade plan` must return (0 on success).
+// ExpectContains, when set, are substrings the plan stdout must contain.
+// ExpectNotContains, when set, are substrings the stdout must NOT contain.
+type PlanStep struct {
+	Regenerate        bool     `yaml:"regenerate,omitempty"`
+	MutatePath        string   `yaml:"mutate_path,omitempty"`
+	MutateAppend      string   `yaml:"mutate_append,omitempty"`
+	ExpectExit        int      `yaml:"expect_exit"`
+	ExpectContains    []string `yaml:"expect_contains,omitempty"`
+	ExpectNotContains []string `yaml:"expect_not_contains,omitempty"`
 }
 
 // StepExpect defines expected outcomes for a step
