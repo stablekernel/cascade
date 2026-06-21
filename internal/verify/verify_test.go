@@ -150,6 +150,81 @@ func TestRun_UnrelatedFile_Ignored(t *testing.T) {
 	require.NotContains(t, errOut.String(), "ci.yaml")
 }
 
+func TestRun_OrphanedGeneratedFile_ReportsDrift(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	// A cascade-owned file (carrying the generated marker) that the manifest no
+	// longer plans is an orphan and must drift.
+	orphan := filepath.Join(dir, ".github", "workflows", "stale.yaml")
+	require.NoError(t, os.WriteFile(orphan,
+		[]byte(generate.GeneratedFileMarker+"\nname: Stale\non: push\n"), 0o644))
+
+	var out, errOut bytes.Buffer
+	err := Run(opts(dir), &out, &errOut)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrDrift), "orphaned generated file must be drift, got %v", err)
+
+	report := errOut.String()
+	require.Contains(t, report, "stale.yaml")
+	require.Contains(t, report, "orphaned")
+
+	var ec exitCoder
+	require.ErrorAs(t, err, &ec)
+	require.Equal(t, 1, ec.ExitCode(), "orphan drift maps to exit code 1")
+}
+
+func TestRun_Orphan_AllowOrphans_NoDrift(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	orphan := filepath.Join(dir, ".github", "workflows", "stale.yaml")
+	require.NoError(t, os.WriteFile(orphan,
+		[]byte(generate.GeneratedFileMarker+"\nname: Stale\non: push\n"), 0o644))
+
+	o := opts(dir)
+	o.AllowOrphans = true
+	var out, errOut bytes.Buffer
+	err := Run(o, &out, &errOut)
+	require.NoError(t, err, "--allow-orphans must suppress orphan drift")
+	require.NotContains(t, errOut.String(), "stale.yaml")
+}
+
+func TestRun_HandWrittenFile_NeverOrphan(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	// A file WITHOUT the generated marker is hand-written and must never be
+	// flagged as an orphan, even when the manifest does not plan it.
+	handwritten := filepath.Join(dir, ".github", "workflows", "ci.yaml")
+	require.NoError(t, os.WriteFile(handwritten,
+		[]byte("name: CI\non: push\n"), 0o644))
+
+	var out, errOut bytes.Buffer
+	err := Run(opts(dir), &out, &errOut)
+	require.NoError(t, err, "hand-written file must not be drift")
+	require.NotContains(t, errOut.String(), "ci.yaml")
+}
+
+func TestRun_MultipleOrphans_SortedDeterministic(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	for _, name := range []string{"zeta.yaml", "alpha.yaml", "mid.yaml"} {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, ".github", "workflows", name),
+			[]byte(generate.GeneratedFileMarker+"\nname: X\non: push\n"), 0o644))
+	}
+
+	var out, errOut bytes.Buffer
+	err := Run(opts(dir), &out, &errOut)
+	require.True(t, errors.Is(err, ErrDrift))
+
+	report := errOut.String()
+	ai := strings.Index(report, "alpha.yaml")
+	mi := strings.Index(report, "mid.yaml")
+	zi := strings.Index(report, "zeta.yaml")
+	require.Greater(t, ai, -1)
+	require.Greater(t, mi, ai, "orphans must be reported in sorted order")
+	require.Greater(t, zi, mi, "orphans must be reported in sorted order")
+}
+
 func TestRun_ManifestAbsent_OperationalNotDrift(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

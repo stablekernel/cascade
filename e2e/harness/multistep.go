@@ -209,7 +209,16 @@ type VerifyStep struct {
 	Regenerate   bool   `yaml:"regenerate,omitempty"`
 	MutatePath   string `yaml:"mutate_path,omitempty"`
 	MutateAppend string `yaml:"mutate_append,omitempty"`
-	ExpectExit   int    `yaml:"expect_exit"`
+	// CreatePath and CreateFrom together drop a cascade-owned orphan into the
+	// repo before verifying: the file at CreateFrom (an existing generated file
+	// that already carries the generated marker) is copied to CreatePath, which
+	// the manifest does not plan. This drives verify's orphan-detection path.
+	CreatePath string `yaml:"create_path,omitempty"`
+	CreateFrom string `yaml:"create_from,omitempty"`
+	// AllowOrphans passes --allow-orphans to verify so a scenario can assert the
+	// opt-out suppresses orphan drift.
+	AllowOrphans bool `yaml:"allow_orphans,omitempty"`
+	ExpectExit   int  `yaml:"expect_exit"`
 }
 
 // StepExpect defines expected outcomes for a step

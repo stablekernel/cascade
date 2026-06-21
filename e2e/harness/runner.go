@@ -128,6 +128,9 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.Verify.MutatePath != "" && step.Verify.MutateAppend == "" {
 				return fmt.Errorf("step %d (%s): verify mutate_path requires mutate_append", i, step.Name)
 			}
+			if (step.Verify.CreatePath == "") != (step.Verify.CreateFrom == "") {
+				return fmt.Errorf("step %d (%s): verify create_path and create_from must be set together", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -373,8 +376,11 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 // code matches the step's ExpectExit. When Regenerate is set it first runs
 // `cascade generate-workflow -f` so verify checks pristine generated output
 // rather than the harness's localized copies. When MutatePath is set it appends
-// MutateAppend to that file before verifying, driving the drift path. The whole
-// step is read-through-the-CLI and never asserts on workflow execution.
+// MutateAppend to that file before verifying, driving the drift path. When
+// CreatePath/CreateFrom are set it copies an existing generated (marker-carrying)
+// file to an unplanned path before verifying, driving the orphan path; AllowOrphans
+// adds --allow-orphans so the opt-out can be exercised. The whole step is
+// read-through-the-CLI and never asserts on workflow execution.
 func (r *Runner) executeVerify(ctx context.Context, step *VerifyStep) error {
 	if r.harness == nil || r.harness.act == nil {
 		r.t.Logf("  Would run cascade verify (expect exit %d, no harness)", step.ExpectExit)
@@ -418,7 +424,29 @@ func (r *Runner) executeVerify(ctx context.Context, step *VerifyStep) error {
 		}
 	}
 
-	verifyCmd := []string{"bash", "-c", "cd /tmp/repo && /usr/local/bin/cascade verify"}
+	if step.CreatePath != "" {
+		copyCmd := []string{"bash", "-c", fmt.Sprintf(
+			"cd /tmp/repo && cp %s %s",
+			shellQuote(step.CreateFrom), shellQuote(step.CreatePath),
+		)}
+		exitCode, reader, err := r.harness.act.Container().Exec(ctx, copyCmd)
+		if err != nil {
+			return fmt.Errorf("verify: create exec failed: %w", err)
+		}
+		var out bytes.Buffer
+		if reader != nil {
+			_, _ = io.Copy(&out, reader)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("verify: create failed (exit %d): %s", exitCode, out.String())
+		}
+	}
+
+	verifyArgs := "/usr/local/bin/cascade verify"
+	if step.AllowOrphans {
+		verifyArgs += " --allow-orphans"
+	}
+	verifyCmd := []string{"bash", "-c", "cd /tmp/repo && " + verifyArgs}
 	exitCode, reader, err := r.harness.act.Container().Exec(ctx, verifyCmd)
 	if err != nil {
 		return fmt.Errorf("verify: exec failed: %w", err)
