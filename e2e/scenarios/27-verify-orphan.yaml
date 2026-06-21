@@ -36,9 +36,10 @@ steps:
       regenerate: true
       expect_exit: 0
 
-  - name: "Orphaned generated workflow; verify reports drift"
+  - name: "Orphaned generated workflow is the sole drift; verify reports it"
     action: verify
     verify:
+      regenerate: true
       create_path: ".github/workflows/orchestrate-old.yaml"
       create_from: ".github/workflows/orchestrate.yaml"
       expect_exit: 1
@@ -46,5 +47,8 @@ steps:
   - name: "Same orphan with --allow-orphans; verify is clean"
     action: verify
     verify:
+      regenerate: true
+      create_path: ".github/workflows/orchestrate-old.yaml"
+      create_from: ".github/workflows/orchestrate.yaml"
       allow_orphans: true
       expect_exit: 0
