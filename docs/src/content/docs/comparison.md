@@ -29,7 +29,7 @@ cascade is likely overkill for a single environment with a plain build-and-relea
 A few deliberate non-goals are worth stating plainly, because they shape what cascade will and will not do for you:
 
 - **Trunk-based only.** cascade promotes *from trunk*: you merge to one trunk branch and cascade promotes that line through your environments. If you run release branches or a GitFlow model today, adopting cascade means moving promotion onto a trunk-based flow. That is a deliberate shift. cascade is a practical vehicle for it, but it does not model long-lived release branches.
-- **You own the deploy logic.** Build, deploy, validate, and publish are *your* logic, supplied as reusable (`workflow_call`) workflows that cascade calls with a fixed input contract. cascade never runs your scripts inline and never reaches into your callback logic.
+- **You own the deploy logic.** Build, deploy, validate, and publish are *your* logic, supplied as reusable (`workflow_call`) workflows that cascade calls with a fixed input contract. cascade calls build and deploy as separate stages, so a pipeline that fuses them into one workflow today gets split into a build callback and a deploy callback on adoption. cascade never runs your scripts inline and never reaches into your callback logic.
 - **It never rebuilds artifacts per stage.** cascade promotes the artifact that was built once, pinning each promotion to a specific SHA. It does not rebuild between environments.
 - **It is a metadata courier.** cascade passes artifact identifiers and versions between stages. It never touches your container registry, package registry, or deployment target directly. You construct those operations yourself in your callbacks.
 
