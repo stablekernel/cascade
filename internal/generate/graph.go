@@ -316,6 +316,22 @@ func writeCallbackPermissions(sb *strings.Builder, indent string, perms map[stri
 	}
 }
 
+// writeJobPermissions emits a job-level permissions: block at the given indent
+// for the supplied scopes in the order given (deterministic, no sorting), with
+// no trailing blank line. It mirrors writeTopLevelPermissions but is indented
+// for a single job, letting a generator push a write scope down to only the job
+// that needs it while the top-level block stays least privilege. It emits
+// nothing when scopes is empty.
+func writeJobPermissions(sb *strings.Builder, indent string, scopes [][2]string) {
+	if len(scopes) == 0 {
+		return
+	}
+	fmt.Fprintf(sb, "%spermissions:\n", indent)
+	for _, kv := range scopes {
+		fmt.Fprintf(sb, "%s  %s: %s\n", indent, kv[0], kv[1])
+	}
+}
+
 // ensureValidateDependency adds "validate" to deps if not already present
 func ensureValidateDependency(deps []string) []string {
 	for _, d := range deps {

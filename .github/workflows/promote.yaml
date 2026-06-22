@@ -54,8 +54,7 @@ on:
         default: false
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 concurrency:
   group: "${{ github.workflow }}"
@@ -148,6 +147,9 @@ jobs:
     needs: [preflight, promote]
     if: always() && needs.preflight.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v6
         with:

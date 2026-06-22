@@ -169,14 +169,13 @@ func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
 
 	sb.WriteString("\n")
 
-	// Base: contents:write to commit the rolled-back state; actions:write for
-	// parity with the promote workflow's release/dispatch surface. A deploy
+	// Default to a least-privilege top-level block: reads only. The finalize job
+	// carries contents: write to commit the rolled-back state. Rollback has no
+	// release dispatch, so no actions: write is granted anywhere. A deploy
 	// callback's own scopes (e.g. id-token: write for OIDC) are scoped to its
-	// caller job via writeCallbackPermissions, not granted here, so the top-level
-	// block stays least privilege.
+	// caller job via writeCallbackPermissions.
 	base := [][2]string{
-		{"contents", "write"},
-		{"actions", "write"},
+		{"contents", "read"},
 	}
 	writeTopLevelPermissions(sb, base)
 }
@@ -355,6 +354,8 @@ func (g *RollbackGenerator) writeFinalizeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "    needs: %s\n", needsStr)
 	fmt.Fprintf(sb, "    if: always() && needs.preflight.result == 'success' && %s != 'true'\n", g.paramReadExpr("dry_run"))
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// The finalize job commits the rolled-back state, so it needs contents: write.
+	writeJobPermissions(sb, "    ", [][2]string{{"contents", "write"}})
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
 	g.writeSetupCLI(sb)

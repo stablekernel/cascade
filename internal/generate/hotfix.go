@@ -171,14 +171,13 @@ func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
 // (required before gh pr create --label), pull-requests:write to open the
 // resolution PR, and actions:read for workflow introspection.
 func (g *HotfixGenerator) writePermissions(sb *strings.Builder) {
-	// Base scopes the hotfix workflow needs. A callback's own scopes (e.g.
-	// id-token: write for OIDC) are scoped to its caller job via
-	// writeCallbackPermissions, not granted here, so the top-level block stays
-	// least privilege.
+	// Default to a least-privilege top-level block: reads only. The apply job
+	// carries contents/issues/pull-requests: write to push the cherry-pick branch,
+	// seed labels, and open the resolution PR; the finalize job carries contents:
+	// write to commit state. A callback's own scopes (e.g. id-token: write for
+	// OIDC) are scoped to its caller job via writeCallbackPermissions.
 	base := [][2]string{
-		{"contents", "write"},
-		{"issues", "write"},
-		{"pull-requests", "write"},
+		{"contents", "read"},
 		{"actions", "read"},
 	}
 	writeTopLevelPermissions(sb, base)
@@ -284,6 +283,14 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	// present for a given env) is handled inside the loop where COMMITS is empty.
 	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true' && needs.plan.outputs.env_sequence != ''\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// The apply job pushes the cherry-pick branch (contents: write), seeds labels
+	// via gh label create (issues: write), and opens the resolution PR
+	// (pull-requests: write). These writes live here, not at the top level.
+	writeJobPermissions(sb, "    ", [][2]string{
+		{"contents", "write"},
+		{"issues", "write"},
+		{"pull-requests", "write"},
+	})
 	sb.WriteString("    env:\n")
 	// Author every resolution PR with the configured state token so gh pr create
 	// runs as a trigger-capable actor. A PR opened under the default GITHUB_TOKEN
@@ -680,6 +687,8 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "    needs: %s\n", needsStr)
 	fmt.Fprintf(sb, "    if: success() && %s\n", mergedHotfixGuard())
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// The finalize job commits the post-hotfix state, so it needs contents: write.
+	writeJobPermissions(sb, "    ", [][2]string{{"contents", "write"}})
 	sb.WriteString("    env:\n")
 	sb.WriteString("      TARGET_ENV: ${{ needs.context.outputs.target_env }}\n")
 	// merge-sha is the tip of env/<target> after the resolution PR merged.

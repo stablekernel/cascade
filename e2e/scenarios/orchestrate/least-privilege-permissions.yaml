@@ -1,0 +1,51 @@
+name: "Least-Privilege Permissions"
+description: |
+  Verifies that the generated orchestrate.yaml defaults its top-level
+  permissions: block to reads only and pushes the write scope down to the single
+  job that needs it. The finalize job commits state, so it carries a job-level
+  contents: write block; no job other than the writers carries a write scope, and
+  the top-level block never grants a write.
+
+  This is the OSSF Scorecard TokenPermissions posture: a workflow-wide default of
+  read-all with writes confined to individual jobs. A top-level write scope would
+  hand every job in the run a token broader than it needs; scoping the write to
+  the finalize job alone shrinks the blast radius of a compromised step.
+
+  Generator-output verification scenario; the assertion runs on the staged repo
+  after StageRepoFromConfig generates workflows but before any orchestrate runs.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: api
+      workflow: build-api.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert least-privilege permissions in orchestrate.yaml"
+    action: commit
+    commit:
+      message: "feat: add api build callback"
+      files:
+        src/main.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # The top-level block is read-only: matching the whole block
+            # (permissions: through its trailing blank line) proves no write scope
+            # is present at the top level.
+            - "permissions:\n  contents: read\n  actions: read\n\n"
+            # The finalize job carries its own job-level permissions: block with
+            # the contents: write it needs to commit state, rendered immediately
+            # after its runs-on/timeout lines.
+            - "    permissions:\n      contents: write\n"
+          not_contains:
+            # No top-level write scope may appear. The job-level write above is
+            # indented (four spaces), so this unindented form only matches a
+            # top-level grant.
+            - "\npermissions:\n  contents: write"

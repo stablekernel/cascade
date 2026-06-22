@@ -76,8 +76,10 @@ func TestOrchestrate_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	require.NoError(t, err)
 
 	perms := topLevelPermissions(t, result)
-	assert.Contains(t, perms, "contents: write")
+	assert.Contains(t, perms, "contents: read")
 	assert.Contains(t, perms, "actions: read")
+	assert.NotContains(t, perms, "contents: write",
+		"the top-level block must stay least privilege (reads only)")
 	assert.NotContains(t, perms, "id-token: write",
 		"callback-only scopes must not leak into the top-level block")
 }
@@ -160,7 +162,7 @@ func TestOrchestrate_TopLevelPermissions_NoCallbackPermsByteIdentical(t *testing
 	gen := NewGenerator(cfg, tmpDir)
 	result, err := gen.Generate()
 	require.NoError(t, err)
-	assert.Contains(t, result, "permissions:\n  contents: write\n  actions: read\n")
+	assert.Contains(t, result, "permissions:\n  contents: read\n  actions: read\n")
 }
 
 // TestPromote_TopLevelPermissions_ExcludesCallbackScopes asserts deploy callback
@@ -184,8 +186,11 @@ func TestPromote_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	require.NoError(t, err)
 
 	perms := topLevelPermissions(t, result)
-	assert.Contains(t, perms, "contents: write")
-	assert.Contains(t, perms, "actions: write")
+	assert.Contains(t, perms, "contents: read")
+	assert.NotContains(t, perms, "contents: write",
+		"the top-level block must stay least privilege (reads only)")
+	assert.NotContains(t, perms, "actions: write",
+		"actions: write is scoped to the finalize job, not the top level")
 	assert.NotContains(t, perms, "id-token: write",
 		"callback-only scopes must not leak into the top-level block")
 }
@@ -211,8 +216,11 @@ func TestRollback_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	require.NoError(t, err)
 
 	perms := topLevelPermissions(t, result)
-	assert.Contains(t, perms, "contents: write")
-	assert.Contains(t, perms, "actions: write")
+	assert.Contains(t, perms, "contents: read")
+	assert.NotContains(t, perms, "contents: write",
+		"the top-level block must stay least privilege (reads only)")
+	assert.NotContains(t, perms, "actions: write",
+		"rollback has no release dispatch, so actions: write is never granted")
 	assert.NotContains(t, perms, "id-token: write",
 		"callback-only scopes must not leak into the top-level block")
 }
