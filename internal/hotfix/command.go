@@ -298,6 +298,7 @@ func chainGHAOutputs(result *PlanChainResult) (simple map[string]string, multili
 		simple["commits_"+ep.Env] = strings.Join(ep.Commits, ",")
 		simple["no_op_"+ep.Env] = fmt.Sprintf("%v", ep.NoOp)
 		simple["conflict_expected_"+ep.Env] = fmt.Sprintf("%v", ep.ConflictExpected)
+		simple["base_"+ep.Env] = ep.BaseSHA
 	}
 	simple["env_sequence"] = strings.Join(envNames, ",")
 	simple["env_count"] = fmt.Sprintf("%d", len(envNames))

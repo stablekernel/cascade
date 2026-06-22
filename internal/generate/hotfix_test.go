@@ -89,6 +89,85 @@ func TestHotfixGenerator_Triggers(t *testing.T) {
 	assert.NotContains(t, content, "- dev")
 }
 
+// TestHotfixGenerator_CommitInputAcceptsMultiple guards that the dispatch
+// `commit` input documents comma-delimited multi-commit hotfixes, so an operator
+// can hand the workflow a stack of trunk fixes to cherry-pick as one chain.
+func TestHotfixGenerator_CommitInputAcceptsMultiple(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "comma",
+		"the commit input description must advertise comma-delimited multi-commit input")
+	assert.Contains(t, content,
+		"description: 'Trunk commit SHA(s) to hotfix, comma-delimited (must be on trunk)'",
+		"the commit input must carry the multi-commit description verbatim")
+}
+
+// TestHotfixGenerator_PlanJobChainOutputs guards that the plan job exposes the
+// per-env chain outputs the apply job consumes: the bottom-up env_sequence plus
+// each target env's commit list, no-op flag, and base SHA.
+func TestHotfixGenerator_PlanJobChainOutputs(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	planJob := extractJobSection(t, content, "plan:")
+	require.NotEmpty(t, planJob, "plan job section should be present")
+
+	assert.Contains(t, planJob, "env_sequence: ${{ steps.plan.outputs.env_sequence }}",
+		"plan job must expose the env_sequence chain order")
+	for _, key := range []string{
+		"commits_test: ${{ steps.plan.outputs.commits_test }}",
+		"no_op_test: ${{ steps.plan.outputs.no_op_test }}",
+		"base_test: ${{ steps.plan.outputs.base_test }}",
+		"commits_prod: ${{ steps.plan.outputs.commits_prod }}",
+		"no_op_prod: ${{ steps.plan.outputs.no_op_prod }}",
+		"base_prod: ${{ steps.plan.outputs.base_prod }}",
+	} {
+		assert.Contains(t, planJob, key, "plan job must expose per-env chain output %q", key)
+	}
+}
+
+// TestHotfixGenerator_ApplyLoopsEnvSequence guards that the apply job walks the
+// planner's env_sequence, cherry-picking each env's commits from the statically
+// baked per-env outputs.
+func TestHotfixGenerator_ApplyLoopsEnvSequence(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	applyJob := extractJobSection(t, content, "apply:")
+	require.NotEmpty(t, applyJob, "apply job section should be present")
+
+	assert.Contains(t, applyJob, "ENV_SEQUENCE: ${{ needs.plan.outputs.env_sequence }}",
+		"apply job must consume the planner's env_sequence")
+	assert.Contains(t, applyJob, `for env in $(echo "$ENV_SEQUENCE" | tr ',' '\n')`,
+		"apply job must loop over the env_sequence")
+	assert.Contains(t, applyJob, "git cherry-pick -x",
+		"apply job must cherry-pick each commit with -x")
+	assert.Contains(t, applyJob, "COMMITS_TEST: ${{ needs.plan.outputs.commits_test }}",
+		"apply job must wire the per-env commit list into the cherry-pick step env")
+	assert.Contains(t, applyJob, `test) COMMITS="$COMMITS_TEST"`,
+		"apply job must resolve the per-env commit list via a case statement")
+}
+
+// TestHotfixGenerator_ConflictHaltsChain guards that the conflict path's
+// resolution PR body tells the operator which env was resolved, which envs still
+// pending, and how to re-engage the chain after merge.
+func TestHotfixGenerator_ConflictHaltsChain(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "This resolves %s.",
+		"conflict PR body must state which env the PR resolves")
+	assert.Contains(t, content, "Environments still pending: %s.",
+		"conflict PR body must list the envs the halted chain has not reached")
+	assert.Contains(t, content, "After merge, re-engage the hotfix workflow targeting %s.",
+		"conflict PR body must tell the operator how to resume the chain")
+}
+
 func TestHotfixGenerator_Concurrency(t *testing.T) {
 	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
 	content, err := gen.Generate()
@@ -593,6 +672,10 @@ func TestHotfixGenerator_PlanJobOutputsMatchPlannerKeys(t *testing.T) {
 		"no_op": true, "branch_created": true, "hotfix_version_candidate": true,
 		"conflict_expected": true, "dry_run": true,
 		"protection_suggestions": true, "protection_suggestions_text": true,
+		// Chain keys emitted by chainGHAOutputs for the target envs (test, prod).
+		"env_sequence": true, "env_count": true,
+		"commits_test": true, "no_op_test": true, "conflict_expected_test": true, "base_test": true,
+		"commits_prod": true, "no_op_prod": true, "conflict_expected_prod": true, "base_prod": true,
 	}
 	for _, m := range refRe.FindAllStringSubmatch(content, -1) {
 		assert.Truef(t, plannerKeys[m[1]],
@@ -728,19 +811,19 @@ func TestHotfixGenerator_ApplyMaterializesAbsentEnvBranch(t *testing.T) {
 	applyJob := extractJobSection(t, content, "apply:")
 	require.NotEmpty(t, applyJob, "apply job section should be present")
 
-	// The hotfix branch must be cut from the plan's validated base SHA, not from
+	// The hotfix branch must be cut from the per-env validated base SHA, not from
 	// a remote-tracking ref that may not exist on a first hotfix.
-	assert.Contains(t, applyJob, `git switch -c "$BRANCH" "$BASE_SHA"`,
-		"apply job must branch the hotfix from the validated BASE_SHA")
-	assert.NotContains(t, applyJob, `git switch -c "$BRANCH" "origin/env/${TARGET_ENV}"`,
+	assert.Contains(t, applyJob, `git switch -c "$BRANCH" "$BASE"`,
+		"apply job must branch the hotfix from the per-env validated BASE")
+	assert.NotContains(t, applyJob, `git switch -c "$BRANCH" "origin/env/${env}"`,
 		"apply job must not branch from origin/env/<env>, which is absent on a first hotfix")
 
 	// When the remote env branch is absent the apply job must create and push it
-	// at BASE_SHA so the resolution PR has a base to target.
-	assert.Contains(t, applyJob, `refs/remotes/origin/env/${TARGET_ENV}`,
+	// at the per-env base so the resolution PR has a base to target.
+	assert.Contains(t, applyJob, `refs/remotes/origin/env/${env}`,
 		"apply job must probe for the remote env branch before relying on it")
-	assert.Contains(t, applyJob, `git push origin "${BASE_SHA}:refs/heads/env/${TARGET_ENV}"`,
-		"apply job must push env/<env> at BASE_SHA when it is absent")
+	assert.Contains(t, applyJob, `git push origin "${BASE}:refs/heads/env/${env}"`,
+		"apply job must push env/<env> at the per-env base when it is absent")
 }
 
 // TestHotfixGenerator_ApplySkippedOnNoOp guards that the apply job does not run
@@ -755,12 +838,14 @@ func TestHotfixGenerator_ApplySkippedOnNoOp(t *testing.T) {
 	planJob := extractJobSection(t, content, "plan:")
 	require.NotEmpty(t, planJob, "plan job section should be present")
 	assert.Contains(t, planJob, "no_op: ${{ steps.plan.outputs.no_op }}",
-		"plan job must expose no_op so the apply job can gate on it")
+		"plan job must expose no_op so the single-env plan path stays available")
 
+	// no_op is now per-env; the job-level gate checks env_sequence non-empty, and
+	// per-env no-ops are skipped inside the loop when that env's COMMITS is empty.
 	applyJob := extractJobSection(t, content, "apply:")
 	require.NotEmpty(t, applyJob, "apply job section should be present")
-	assert.Contains(t, applyJob, "needs.plan.outputs.no_op != 'true'",
-		"apply job must skip when the plan reports a no-op")
+	assert.Contains(t, applyJob, "needs.plan.outputs.env_sequence != ''",
+		"apply job must skip when the plan reports no envs to process")
 }
 
 // TestHotfixGenerator_FinalizeWritesStateWithStateToken guards the trunk

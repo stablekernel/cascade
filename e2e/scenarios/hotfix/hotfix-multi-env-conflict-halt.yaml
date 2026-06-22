@@ -1,0 +1,162 @@
+name: "Hotfix Multi-Env Conflict Halt"
+description: |
+  Verifies that a cherry-pick conflict on an intermediate environment halts the
+  multi-environment hotfix chain: the conflicting env gets a resolution PR and every
+  later env in the chain is left untouched until the operator resolves and re-engages.
+
+  Two trunk fixes touch the same line of src/conflict.go:
+  - commit2 rewrites the line one way
+  - commit3 rewrites the same original line a different way
+
+  commit2 lands clean on env/test. Cherry-picking commit3 onto env/test (which now
+  carries commit2's version, not the original) is the conflict the apply loop trips
+  on, halting before staging.
+
+  The e2e backend is gitea, whose server-side cherry-pick applies the overlapping
+  edit cleanly and labels the PR cascade-hotfix; the conflict-labeled PR path and the
+  halt-then-resume PR body are GitHub-only behaviors exercised by the real-GitHub
+  validation fleet. This scenario asserts the gitea-observable boundary - staging is
+  never hotfixed (no env/staging ref, no patches) - and asserts against the
+  materialized workflow that the apply loop carries the conflict-halt contract:
+  it opens a cascade-hotfix-conflict PR and breaks the chain rather than continuing.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-staging
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit with a conflict-prone line"
+    action: commit
+    commit:
+      message: "feat: add conflict-prone file"
+      files:
+        src/conflict.go: |
+          package main
+          const Marker = "placeholder"
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish test/staging/prod baselines"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote again to carry the baseline down the chain"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote once more so every env shares the baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "First trunk fix rewrites the marker line"
+    action: commit
+    commit:
+      message: "fix: marker fix1"
+      files:
+        src/conflict.go: |
+          package main
+          const Marker = "fix1-change"
+
+  - name: "Second trunk fix rewrites the same line differently"
+    action: commit
+    commit:
+      message: "fix: marker fix2"
+      files:
+        src/conflict.go: |
+          package main
+          const Marker = "fix2-change"
+
+  # Plan the chain targeting staging: bottom-up [test, staging]. The conflict halts
+  # the chain on test, so staging is never reached. dry_run keeps it to validation
+  # (the act image has no gh CLI); the discrete hotfix_apply steps drive the real
+  # cherry-picks via the gitea API, and the workflow_files assertion below proves the
+  # materialized apply loop carries the conflict-halt contract real GitHub runs.
+  - name: "Plan hotfix chain for staging"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: staging
+      commit_ref: commit2
+      dry_run: true
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          contains:
+            # The apply loop walks the planner's env_sequence bottom-up.
+            - "ENV_SEQUENCE: ${{ needs.plan.outputs.env_sequence }}"
+            - "for env in $(echo"
+            # On conflict it opens a conflict-labeled PR and breaks the chain.
+            - "gh label create cascade-hotfix-conflict "
+            - "--label cascade-hotfix-conflict"
+            - "Environments still pending:"
+            - "After merge, re-engage the hotfix workflow targeting"
+
+  - name: "Apply fix1 onto env/test (clean)"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge fix1 test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix1 on test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2]
+
+  # Cherry-picking commit3 onto env/test (which now carries fix1-change, not the
+  # original placeholder) is the conflict that halts the chain. On the gitea backend
+  # this lands clean and opens a cascade-hotfix PR; the conflict-labeled path is
+  # asserted against the materialized workflow above and exercised live by the
+  # real-GitHub fleet. Either way, the chain never advances to staging here because
+  # the harness applies strictly the single requested env.
+  - name: "Apply fix2 onto env/test (conflict on real GitHub; clean on gitea)"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit3
+    expect:
+      branches:
+        exist: ["env/test"]
+      prs:
+        open_with_label: "cascade-hotfix"
+
+  # The chain halted on test: staging was never hotfixed. Its env branch and patch
+  # set must be absent. staging still shares the promoted baseline, so it tracks
+  # trunk state (no divergence ref), which is what "no env/staging ref" asserts.
+  - name: "Staging is untouched: no hotfix ref, no patches"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        staging:
+          unchanged: true

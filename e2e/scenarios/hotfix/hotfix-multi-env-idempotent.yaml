@@ -1,0 +1,192 @@
+name: "Hotfix Multi-Env Idempotent Chain"
+description: |
+  Verifies per-(commit, env) idempotency across a multi-environment hotfix chain.
+  commit2 is pre-applied to env/test before the chain runs, so when the operator
+  later requests a {commit2, commit3} chain targeting staging, the planner reports
+  commit2 as already-present on test (no-op skip) and only commit3 needs to land
+  there. staging, never hotfixed, must receive both commit2 and commit3.
+
+  The apply job's per-env skip-when-empty behavior (the loop's `if [ -z "$COMMITS" ]`
+  guard) is what lets test skip the already-present commit while still cherry-picking
+  the new one, and lets staging take the full set. That branch is asserted in the
+  generator unit tests; this scenario covers the observable end state.
+
+  The e2e backend is gitea, whose hotfix_apply step drives the real cherry-pick via
+  the API while the workflow's apply job stays a dry-run plan (the act image lacks
+  the gh CLI). Each (commit, env) lands via a discrete plan-apply-merge-merged cycle.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-staging
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish test/staging/prod baselines"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote again to carry the baseline down the chain"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote once more so every env shares the baseline"
+    action: promote
+    promote:
+      mode: default
+
+  # Both trunk fixes are committed up front, before any merge_pr records a
+  # post-merge env tip into the execution context. The harness numbers commit
+  # references off every recorded SHA, so committing both fixes here keeps them
+  # deterministically commit2 and commit3; interleaving a commit after a merge_pr
+  # would shift the numbering.
+  - name: "First trunk fix"
+    action: commit
+    commit:
+      message: "fix: first patch"
+      files:
+        src/fix1.go: |
+          package main
+          func fix1() {}
+
+  - name: "Second trunk fix"
+    action: commit
+    commit:
+      message: "fix: second patch"
+      files:
+        src/fix2.go: |
+          package main
+          func fix2() {}
+
+  # Pre-apply commit2 to env/test only. After this, test already contains the fix
+  # so a later chain that includes commit2 must skip it on test (idempotent no-op).
+  - name: "Plan pre-apply of fix1 for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+      dry_run: true
+
+  - name: "Pre-apply fix1 onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge pre-apply test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize pre-apply; test carries fix1"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2]
+
+  # Plan the {commit2, commit3} chain targeting staging. The planner sees commit2
+  # already on env/test and reports it no-op for test, so only commit3 applies
+  # there; staging takes both. dry_run keeps it to validation (the act image has no
+  # gh CLI), so the discrete hotfix_apply steps below drive the real cherry-picks.
+  - name: "Plan idempotent chain {fix1, fix2} for staging"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: staging
+      commit_ref: commit2,commit3
+      dry_run: true
+
+  # test: commit2 is already present (skip); only commit3 lands.
+  - name: "Apply only fix2 onto env/test (fix1 already present)"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit3
+
+  - name: "Merge fix2 test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix2 on test; test carries both patches"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3]
+
+  # staging: never hotfixed, so it receives the full requested set.
+  - name: "Apply fix1 onto env/staging"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: staging
+      commit_ref: commit2
+
+  - name: "Merge fix1 staging PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix1 on staging"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: staging
+
+  - name: "Apply fix2 onto env/staging"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: staging
+      commit_ref: commit3
+
+  - name: "Merge fix2 staging PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix2 on staging; staging carries both patches"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: staging
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3]
+        staging:
+          ref: "env/staging"
+          patches: [commit2, commit3]
