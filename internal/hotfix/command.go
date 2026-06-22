@@ -128,6 +128,7 @@ func newPlanCommand() *cobra.Command {
 		configPath  string
 		manifestKey string
 		commitRef   string
+		commitsRef  string
 		targetEnv   string
 		actor       string
 		remote      string
@@ -172,6 +173,28 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 				return err
 			}
 
+			// --commits selects the multi-commit, multi-env chain path. It is
+			// additive: --commit remains the single-commit, single-env verb.
+			if commitsRef != "" {
+				refs, err := parseCommitRefs(commitsRef)
+				if err != nil {
+					return err
+				}
+				chain, err := planner.PlanChain(refs, targetEnv)
+				if err != nil {
+					return err
+				}
+				switch {
+				case ghaOutput:
+					return writePlanChainGHAOutput(chain)
+				case jsonOutput:
+					return outputJSON(chain)
+				default:
+					printPlanChain(chain)
+					return nil
+				}
+			}
+
 			result, err := planner.Plan(commitRef, targetEnv)
 			if err != nil {
 				return err
@@ -191,7 +214,8 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to manifest file (default: .github/manifest.yaml)")
 	cmd.Flags().StringVar(&manifestKey, "key", config.DefaultManifestKey, "Top-level manifest key")
-	cmd.Flags().StringVar(&commitRef, "commit", "", "Trunk commit (SHA or ref) carrying the fix (required)")
+	cmd.Flags().StringVar(&commitRef, "commit", "", "Trunk commit (SHA or ref) carrying the fix (single-env path)")
+	cmd.Flags().StringVar(&commitsRef, "commits", "", "Comma-delimited trunk commits to elevate across the env chain up to --target-env")
 	cmd.Flags().StringVar(&targetEnv, "target-env", "", "Environment to hotfix (required)")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the plan (default: $GITHUB_ACTOR)")
 	cmd.Flags().StringVar(&remote, "remote", defaultRemote, "Git remote env branches live on")
@@ -200,7 +224,8 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output the plan as JSON")
 	cmd.Flags().BoolVar(&ghaOutput, "gha-output", false, "Write outputs to $GITHUB_OUTPUT for workflow consumption")
 
-	_ = cmd.MarkFlagRequired("commit")
+	cmd.MarkFlagsMutuallyExclusive("commit", "commits")
+	cmd.MarkFlagsOneRequired("commit", "commits")
 	_ = cmd.MarkFlagRequired("target-env")
 
 	return cmd
@@ -251,6 +276,64 @@ func writePlanGHAOutput(result *PlanResult) error {
 	}
 	w.SetMultiline("protection_suggestions_text", strings.Join(result.ProtectionSuggestions, "\n"))
 	return w.Flush()
+}
+
+// chainGHAOutputs renders a PlanChainResult into a deterministic, additive set
+// of GHA output keys describing the bottom-up env sequence and the per-env
+// commit lists. Keys are independent of the single-env writePlanGHAOutput keys
+// so both can be emitted from one plan run without collision.
+//
+//   - env_sequence: comma-joined bottom-up env list
+//   - env_count: number of envs in the chain
+//   - commits_<env>: comma-joined fix SHAs still to apply for that env
+//   - no_op_<env>: whether that env's whole requested set is already present
+//   - conflict_expected_<env>: best-effort cherry-pick conflict hint
+func chainGHAOutputs(result *PlanChainResult) (simple map[string]string, multiline map[string]string) {
+	simple = make(map[string]string)
+	multiline = make(map[string]string)
+
+	envNames := make([]string, 0, len(result.Envs))
+	for _, ep := range result.Envs {
+		envNames = append(envNames, ep.Env)
+		simple["commits_"+ep.Env] = strings.Join(ep.Commits, ",")
+		simple["no_op_"+ep.Env] = fmt.Sprintf("%v", ep.NoOp)
+		simple["conflict_expected_"+ep.Env] = fmt.Sprintf("%v", ep.ConflictExpected)
+	}
+	simple["env_sequence"] = strings.Join(envNames, ",")
+	simple["env_count"] = fmt.Sprintf("%d", len(envNames))
+	return simple, multiline
+}
+
+// writePlanChainGHAOutput emits the chain plan as additive GHA outputs. It does
+// not remove or overwrite the single-env writePlanGHAOutput keys.
+func writePlanChainGHAOutput(result *PlanChainResult) error {
+	w := ghaoutput.New()
+	simple, multiline := chainGHAOutputs(result)
+	for k, v := range simple {
+		w.Set(k, v)
+	}
+	for k, v := range multiline {
+		w.SetMultiline(k, v)
+	}
+	return w.Flush()
+}
+
+// printPlanChain renders the human-readable chain plan: the bottom-up env
+// sequence and, per env, the commits still to apply (or a no-op marker).
+func printPlanChain(result *PlanChainResult) {
+	fmt.Printf("Env chain:   %d environment(s), bottom-up\n", len(result.Envs))
+	for _, ep := range result.Envs {
+		if ep.NoOp {
+			fmt.Printf("  %-10s no-op (all requested commits already present)\n", ep.Env)
+			continue
+		}
+		shorts := make([]string, 0, len(ep.Commits))
+		for _, c := range ep.Commits {
+			shorts = append(shorts, short(c))
+		}
+		fmt.Printf("  %-10s %s (base %s): apply %s\n",
+			ep.Env, ep.Branch, short(ep.BaseSHA), strings.Join(shorts, ", "))
+	}
 }
 
 func outputJSON(v any) error {
