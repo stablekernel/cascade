@@ -139,7 +139,7 @@ func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("  workflow_dispatch:\n")
 	sb.WriteString("    inputs:\n")
 	sb.WriteString("      commit:\n")
-	sb.WriteString("        description: 'Trunk commit SHA to hotfix (must be on trunk)'\n")
+	sb.WriteString("        description: 'Trunk commit SHA(s) to hotfix, comma-delimited (must be on trunk)'\n")
 	sb.WriteString("        required: true\n")
 	sb.WriteString("        type: string\n")
 	sb.WriteString("      target_env:\n")
@@ -219,6 +219,12 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("      hotfix_version_candidate: ${{ steps.plan.outputs.hotfix_version_candidate }}\n")
 	sb.WriteString("      conflict_expected: ${{ steps.plan.outputs.conflict_expected }}\n")
 	sb.WriteString("      no_op: ${{ steps.plan.outputs.no_op }}\n")
+	sb.WriteString("      env_sequence: ${{ steps.plan.outputs.env_sequence }}\n")
+	for _, env := range g.targetEnvs() {
+		fmt.Fprintf(sb, "      commits_%s: ${{ steps.plan.outputs.commits_%s }}\n", env, env)
+		fmt.Fprintf(sb, "      no_op_%s: ${{ steps.plan.outputs.no_op_%s }}\n", env, env)
+		fmt.Fprintf(sb, "      base_%s: ${{ steps.plan.outputs.base_%s }}\n", env, env)
+	}
 	sb.WriteString("    steps:\n")
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
@@ -236,12 +242,15 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix plan \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
-	sb.WriteString("            --commit \"$HOTFIX_COMMIT\" \\\n")
+	sb.WriteString("            --commits \"$HOTFIX_COMMIT\" \\\n")
 	sb.WriteString("            --target-env \"$HOTFIX_TARGET_ENV\" \\\n")
 	sb.WriteString("            --dry-run=\"$HOTFIX_DRY_RUN\" \\\n")
 	sb.WriteString("            --gha-output\n")
 
 	// Q6: surface the planner's ready-to-run branch-protection commands.
+	// On the --commits (chain) path, protection_suggestions is not emitted by
+	// chainGHAOutputs, so this step's if: guard skips it silently. That is the
+	// correct behavior: protection suggestions are single-env-plan output only.
 	sb.WriteString("      - name: Surface protection suggestions\n")
 	sb.WriteString("        if: steps.plan.outputs.protection_suggestions != ''\n")
 	sb.WriteString("        env:\n")
@@ -254,43 +263,45 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 }
 
 // writeApplyJob emits the apply job, run on dispatch when not a dry-run. It
-// cherry-picks the commit onto a hotfix branch and opens a resolution PR via gh
-// pr create. The job-level GH_TOKEN is the configured state token so the PR is
-// authored by a trigger-capable actor: this fires on: pull_request, which lets a
-// protected env branch's required check post on PR open rather than only after
-// this run finishes. A clean cherry-pick is then merged by the dedicated merge
-// step (also as the state token), which polls until the PR is mergeable so the
-// required check still gates the merge. A conflicting cherry-pick opens a labeled
-// PR for local resolution and is merged by a human via the UI.
+// walks the bottom-up env_sequence the planner produced, cherry-picking each
+// env's still-to-apply commits onto a hotfix/<env>/<sha> branch, opening a
+// resolution PR, and merging it before moving to the next env. Each env's commit
+// list and base SHA are resolved from statically baked per-env outputs the plan
+// job exposes. The job-level GH_TOKEN is the configured state token so every PR
+// is authored by a trigger-capable actor: this fires on: pull_request, which lets
+// a protected env branch's required check post on PR open rather than only after
+// this run finishes. A clean cherry-pick is merged inline (polling until the PR
+// is mergeable so the required check still gates the merge) and the loop proceeds
+// to the next env. A conflicting cherry-pick opens a labeled PR for local
+// resolution and halts the chain: later envs are left untouched until the
+// operator resolves the conflict and re-engages the workflow.
 func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("  apply:\n")
 	sb.WriteString("    name: Apply Hotfix Cherry-Pick\n")
 	sb.WriteString("    needs: plan\n")
-	// Skip the cherry-pick on a dry-run and on a no-op plan: when the fix is
-	// already contained in the target state SHA the planner reports no_op and
-	// there is nothing to cherry-pick, so attempting one would fail.
-	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true' && needs.plan.outputs.no_op != 'true'\n")
+	// Gate on env_sequence being non-empty: if the planner emitted no envs to
+	// process the apply job is a no-op. Per-env idempotency (all commits already
+	// present for a given env) is handled inside the loop where COMMITS is empty.
+	sb.WriteString("    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true' && needs.plan.outputs.env_sequence != ''\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	sb.WriteString("    env:\n")
-	// Author the resolution PR with the configured state token so gh pr create
+	// Author every resolution PR with the configured state token so gh pr create
 	// runs as a trigger-capable actor. A PR opened under the default GITHUB_TOKEN
 	// is authored by github-actions[bot], and a bot-authored PR does not fire
 	// on: pull_request workflows; the env-branch required check would then post
 	// only via on: workflow_run after this run finishes, deadlocking against the
-	// merge step that waits for that check. A PAT-authored PR fires on:
-	// pull_request so the check posts on PR open, independent of this job. The
-	// merge step (writeCleanMergeStep) inherits this same job-level token. When
-	// no state token is configured this degrades to GITHUB_TOKEN, in which case
+	// inline merge poll that waits for that check. A PAT-authored PR fires on:
+	// pull_request so the check posts on PR open, independent of this job. When no
+	// state token is configured this degrades to GITHUB_TOKEN, in which case
 	// post-hotfix automation (early check + finalize) requires the operator to
-	// supply a trigger-capable state_token, matching the merge step's caveat.
-	// This is a job-level env, where the steps.* context is not available, so it
-	// always binds the static state token. When a state-token App is configured
-	// the per-step consumers (the merge step below) carry the minted-token
-	// fallback themselves; this job-level default stays on the static token.
+	// supply a trigger-capable state_token.
 	fmt.Fprintf(sb, "      GH_TOKEN: %s\n", g.config.GetStateToken())
-	sb.WriteString("      COMMIT: ${{ github.event.inputs.commit }}\n")
-	sb.WriteString("      TARGET_ENV: ${{ github.event.inputs.target_env }}\n")
-	sb.WriteString("      BASE_SHA: ${{ needs.plan.outputs.base_sha }}\n")
+	// HOTFIX_COMMIT and HOTFIX_TARGET_ENV carry the operator's original dispatch
+	// inputs for human-facing messaging (the conflict PR body's re-engage hint).
+	// ENV_SEQUENCE is the planner's bottom-up env chain the loop walks.
+	sb.WriteString("      HOTFIX_COMMIT: ${{ github.event.inputs.commit }}\n")
+	sb.WriteString("      HOTFIX_TARGET_ENV: ${{ github.event.inputs.target_env }}\n")
+	sb.WriteString("      ENV_SEQUENCE: ${{ needs.plan.outputs.env_sequence }}\n")
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
@@ -304,18 +315,21 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	writeGitConfigSteps(sb, g.config, "          ")
 
-	// Q2: warn (do not fail) when the env branch lacks required-status-check
-	// protection, and print the exact command to configure it.
+	// Q2: warn (do not fail) when an env branch lacks required-status-check
+	// protection, and print the exact command to configure it. The check loops
+	// over the whole chain so every env the apply step may touch is reported.
 	sb.WriteString("      - name: Check branch protection on env branch\n")
 	sb.WriteString("        continue-on-error: true\n")
 	sb.WriteString("        run: |\n")
-	sb.WriteString("          PROT_PATH=\"repos/${{ github.repository }}/branches/env%2F${TARGET_ENV}/protection\"\n")
-	sb.WriteString("          PROT=$(gh api \"$PROT_PATH\" 2>/dev/null || echo '')\n")
-	sb.WriteString("          CHECKS=$(echo \"$PROT\" | jq -r '.required_status_checks.contexts[]? // empty' 2>/dev/null || echo '')\n")
-	sb.WriteString("          if [ -z \"$PROT\" ] || [ -z \"$CHECKS\" ]; then\n")
-	sb.WriteString("            echo \"::warning::Branch env/${TARGET_ENV} has no required status checks; hotfix auto-merge will NOT be gated by required checks.\"\n")
-	sb.WriteString("            echo \"::warning::Configure protection: gh api \\\"$PROT_PATH\\\" -X PUT -f required_status_checks.strict=true -F required_status_checks.contexts[]=hotfix-check\"\n")
-	sb.WriteString("          fi\n")
+	sb.WriteString("          for env in $(echo \"$ENV_SEQUENCE\" | tr ',' '\\n'); do\n")
+	sb.WriteString("            PROT_PATH=\"repos/${{ github.repository }}/branches/env%2F${env}/protection\"\n")
+	sb.WriteString("            PROT=$(gh api \"$PROT_PATH\" 2>/dev/null || echo '')\n")
+	sb.WriteString("            CHECKS=$(echo \"$PROT\" | jq -r '.required_status_checks.contexts[]? // empty' 2>/dev/null || echo '')\n")
+	sb.WriteString("            if [ -z \"$PROT\" ] || [ -z \"$CHECKS\" ]; then\n")
+	sb.WriteString("              echo \"::warning::Branch env/${env} has no required status checks; hotfix auto-merge will NOT be gated by required checks.\"\n")
+	sb.WriteString("              echo \"::warning::Configure protection: gh api \\\"$PROT_PATH\\\" -X PUT -f required_status_checks.strict=true -F required_status_checks.contexts[]=hotfix-check\"\n")
+	sb.WriteString("            fi\n")
+	sb.WriteString("          done\n")
 
 	// Seed both resolution-PR labels before any PR is opened. gh pr create
 	// --label fails hard on a missing label; seeding here guarantees both the
@@ -327,106 +341,113 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "          gh label create %s --color B60205 --description \"Cascade hotfix resolution PR\" || true\n", hotfixLabel)
 	fmt.Fprintf(sb, "          gh label create %s --color D93F0B --description \"Cascade hotfix resolution PR with cherry-pick conflicts\" || true\n", hotfixConflictLabel)
 
-	// Cherry-pick. Clean and conflict paths diverge after the cherry-pick result.
-	sb.WriteString("      - name: Cherry-pick and open resolution PR\n")
-	sb.WriteString("        run: |\n")
-	sb.WriteString("          SHORT_SHA=$(echo \"$COMMIT\" | cut -c1-8)\n")
-	sb.WriteString("          BRANCH=\"hotfix/${TARGET_ENV}/${SHORT_SHA}\"\n")
-	// The first hotfix into an environment runs before env/<env> has ever been
-	// pushed: the plan verb creates it locally at the recorded state SHA but does
-	// not push, so origin/env/<env> may not exist yet. Materialize it at BASE_SHA
-	// (the plan's validated base) and push so the resolution PR has a base branch,
-	// then branch the hotfix from BASE_SHA. When the env branch already exists its
-	// tip equals BASE_SHA (the plan enforces this), so this is a no-op create.
-	sb.WriteString("          if ! git rev-parse --verify --quiet \"refs/remotes/origin/env/${TARGET_ENV}\" >/dev/null; then\n")
-	sb.WriteString("            git push origin \"${BASE_SHA}:refs/heads/env/${TARGET_ENV}\"\n")
-	sb.WriteString("            git fetch origin \"+refs/heads/env/${TARGET_ENV}:refs/remotes/origin/env/${TARGET_ENV}\"\n")
-	sb.WriteString("          fi\n")
-	sb.WriteString("          git switch -c \"$BRANCH\" \"$BASE_SHA\"\n")
-	sb.WriteString("          BODY=$(printf 'Cascade-Hotfix-Target: %s\\nCascade-Hotfix-Source: %s\\nCascade-Hotfix-Base: %s\\n' \"$TARGET_ENV\" \"$COMMIT\" \"$BASE_SHA\")\n")
-	sb.WriteString("          if git cherry-pick -x \"$COMMIT\"; then\n")
-	sb.WriteString("            echo \"clean cherry-pick\"\n")
-	sb.WriteString("            git push origin \"$BRANCH\"\n")
-	sb.WriteString("            gh pr create \\\n")
-	sb.WriteString("              --base \"env/${TARGET_ENV}\" \\\n")
-	sb.WriteString("              --head \"$BRANCH\" \\\n")
-	fmt.Fprintf(sb, "              --label %s \\\n", hotfixLabel)
-	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA}\" \\\n")
-	sb.WriteString("              --body \"$BODY\"\n")
-	// Hand the resolution branch to the dedicated merge step. Both gh pr create
-	// above and the merge step run as the job-level GH_TOKEN (the configured
-	// state token), so the resolution PR is authored by a trigger-capable actor
-	// and the merge is too. The clean path is the only one that auto-merges; the
-	// conflict path leaves the merge to a human via the UI.
-	sb.WriteString("            {\n")
-	sb.WriteString("              echo \"HOTFIX_BRANCH=$BRANCH\"\n")
-	sb.WriteString("              echo \"HOTFIX_CLEAN_MERGE=true\"\n")
-	sb.WriteString("            } >> \"$GITHUB_ENV\"\n")
-	sb.WriteString("          else\n")
-	sb.WriteString("            echo \"::warning::Cherry-pick conflicted; opening resolution PR for manual resolve\"\n")
-	sb.WriteString("            CONFLICTS=$(git diff --name-only --diff-filter=U)\n")
-	sb.WriteString("            git add -A\n")
-	sb.WriteString("            git -c core.editor=true cherry-pick --continue || git commit -m \"hotfix: cherry-pick ${SHORT_SHA} with conflicts\"\n")
-	sb.WriteString("            git push origin \"$BRANCH\"\n")
-	sb.WriteString("            CONFLICT_BODY=$(printf '%s\\n\\nConflicting files:\\n%s\\n\\nResolve locally:\\n  git fetch && git switch %s\\n  # resolve conflicts, then\\n  git push --force-with-lease\\n' \"$BODY\" \"$CONFLICTS\" \"$BRANCH\")\n")
-	sb.WriteString("            gh pr create \\\n")
-	sb.WriteString("              --base \"env/${TARGET_ENV}\" \\\n")
-	sb.WriteString("              --head \"$BRANCH\" \\\n")
-	fmt.Fprintf(sb, "              --label %s \\\n", hotfixConflictLabel)
-	sb.WriteString("              --title \"hotfix(${TARGET_ENV}): cherry-pick ${SHORT_SHA} (conflicts)\" \\\n")
-	sb.WriteString("              --body \"$CONFLICT_BODY\"\n")
-	sb.WriteString("          fi\n")
-
-	g.writeCleanMergeStep(sb)
-}
-
-// writeCleanMergeStep emits the clean-path merge step. It runs only after a
-// clean cherry-pick (signalled by HOTFIX_CLEAN_MERGE) and merges the resolution
-// PR as the configured state token. The merge must be authored by a
-// trigger-capable actor: a merge authored by the default GITHUB_TOKEN does not
-// emit a pull_request(closed) event, so the build, deploy, and finalize chain
-// would never run and the target environment's state would never be recorded.
-//
-// The step polls PR mergeability before merging, so a protected env branch with
-// a required status check still gates the merge until that check is green. An
-// unprotected branch reports mergeable on the first poll, so the same loop
-// merges immediately. On timeout it fails loudly so the operator sees the stuck
-// resolution PR rather than a silently skipped finalize.
-func (g *HotfixGenerator) writeCleanMergeStep(sb *strings.Builder) {
-	sb.WriteString("      - name: Merge clean resolution PR\n")
-	sb.WriteString("        if: env.HOTFIX_CLEAN_MERGE == 'true'\n")
+	// Cherry-pick step: loop bottom-up over env_sequence, resolve per-env commit
+	// lists and base SHAs from statically baked env vars, cherry-pick all commits
+	// for each env, merge the clean PR, then proceed to the next env. On conflict,
+	// open a resolution PR and break out of the loop - later envs are NOT touched.
+	sb.WriteString("      - name: Cherry-pick and open resolution PRs\n")
 	sb.WriteString("        env:\n")
-	// Merge as the configured state token so the merge is trigger capable and
-	// reaches finalize. Defaults to GITHUB_TOKEN when unset; that default does
-	// not emit the pull_request event, so operators that need finalize after a
-	// hotfix must configure a trigger-capable state_token.
-	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
-	sb.WriteString("          BRANCH: ${{ env.HOTFIX_BRANCH }}\n")
+	for _, env := range g.targetEnvs() {
+		upper := strings.ToUpper(env)
+		fmt.Fprintf(sb, "          COMMITS_%s: ${{ needs.plan.outputs.commits_%s }}\n", upper, env)
+		fmt.Fprintf(sb, "          BASE_%s: ${{ needs.plan.outputs.base_%s }}\n", upper, env)
+	}
 	sb.WriteString("        run: |\n")
-	// Poll mergeability for up to ~5 minutes (20 attempts, 15s apart) so a
-	// required status check on a protected env branch has time to report. The
-	// `if` guard keeps an individual non-fatal gh call from aborting the loop;
-	// only the timeout path exits non-zero.
-	sb.WriteString("          ATTEMPTS=20\n")
-	sb.WriteString("          SLEEP=15\n")
-	sb.WriteString("          MERGED=false\n")
-	sb.WriteString("          for i in $(seq 1 \"$ATTEMPTS\"); do\n")
-	sb.WriteString("            STATE=$(gh pr view \"$BRANCH\" --json mergeable,mergeStateStatus -q '.mergeable + \" \" + .mergeStateStatus' 2>/dev/null || echo \"UNKNOWN UNKNOWN\")\n")
-	sb.WriteString("            MERGEABLE=$(echo \"$STATE\" | cut -d' ' -f1)\n")
-	sb.WriteString("            STATUS=$(echo \"$STATE\" | cut -d' ' -f2)\n")
-	sb.WriteString("            echo \"::notice::resolution PR mergeable=$MERGEABLE state=$STATUS (attempt $i/$ATTEMPTS)\"\n")
-	sb.WriteString("            if [ \"$MERGEABLE\" = \"MERGEABLE\" ] && [ \"$STATUS\" != \"BLOCKED\" ]; then\n")
-	sb.WriteString("              if gh pr merge --squash --delete-branch \"$BRANCH\"; then\n")
-	sb.WriteString("                MERGED=true\n")
+	// REMAINING tracks the envs still to process AFTER the current one. The loop
+	// strips the current env (always at the front of REMAINING) before the body
+	// runs, so on a conflict REMAINING names exactly the envs left untouched.
+	sb.WriteString("          REMAINING=\"$ENV_SEQUENCE\"\n")
+	sb.WriteString("          for env in $(echo \"$ENV_SEQUENCE\" | tr ',' '\\n'); do\n")
+	sb.WriteString("            REMAINING=\"${REMAINING#\"$env\"}\"\n")
+	sb.WriteString("            REMAINING=\"${REMAINING#,}\"\n")
+	sb.WriteString("            case \"$env\" in\n")
+	for _, env := range g.targetEnvs() {
+		upper := strings.ToUpper(env)
+		fmt.Fprintf(sb, "              %s) COMMITS=\"$COMMITS_%s\"; BASE=\"$BASE_%s\" ;;\n", env, upper, upper)
+	}
+	sb.WriteString("            esac\n")
+	// A no-op env (all requested commits already present) has an empty commit
+	// list; skip it and continue the chain to the next env.
+	sb.WriteString("            if [ -z \"$COMMITS\" ]; then\n")
+	sb.WriteString("              echo \"::notice::env/${env}: all commits already present, skipping\"\n")
+	sb.WriteString("              continue\n")
+	sb.WriteString("            fi\n")
+	sb.WriteString("            FIRST_COMMIT=$(echo \"$COMMITS\" | cut -d',' -f1)\n")
+	sb.WriteString("            SHORT_SHA=$(echo \"$FIRST_COMMIT\" | cut -c1-8)\n")
+	sb.WriteString("            BRANCH=\"hotfix/${env}/${SHORT_SHA}\"\n")
+	// Materialize env/<env> at the planner's validated base if origin lacks it,
+	// so the resolution PR has a base branch; the plan enforces tip == BASE when
+	// the branch already exists, so this is a no-op create in that case.
+	sb.WriteString("            if ! git rev-parse --verify --quiet \"refs/remotes/origin/env/${env}\" >/dev/null; then\n")
+	sb.WriteString("              git push origin \"${BASE}:refs/heads/env/${env}\"\n")
+	sb.WriteString("              git fetch origin \"+refs/heads/env/${env}:refs/remotes/origin/env/${env}\"\n")
+	sb.WriteString("            fi\n")
+	sb.WriteString("            git switch -c \"$BRANCH\" \"$BASE\"\n")
+	// The PR-body trailers carry the first applied commit and the base anchor so
+	// the post-merge context job can recover the fix and base SHAs.
+	sb.WriteString("            BODY=$(printf 'Cascade-Hotfix-Target: %s\\nCascade-Hotfix-Source: %s\\nCascade-Hotfix-Base: %s\\n' \"$env\" \"$FIRST_COMMIT\" \"$BASE\")\n")
+	sb.WriteString("            CLEAN=true\n")
+	sb.WriteString("            CONFLICT_COMMIT=\"\"\n")
+	sb.WriteString("            CONFLICTS=\"\"\n")
+	sb.WriteString("            for commit in $(echo \"$COMMITS\" | tr ',' '\\n'); do\n")
+	sb.WriteString("              if ! git cherry-pick -x \"$commit\"; then\n")
+	sb.WriteString("                CLEAN=false\n")
+	sb.WriteString("                CONFLICT_COMMIT=\"$commit\"\n")
+	sb.WriteString("                CONFLICTS=$(git diff --name-only --diff-filter=U)\n")
+	sb.WriteString("                git add -A\n")
+	sb.WriteString("                git -c core.editor=true cherry-pick --continue || git commit -m \"hotfix: cherry-pick $(echo \"$commit\" | cut -c1-8) with conflicts\"\n")
 	sb.WriteString("                break\n")
 	sb.WriteString("              fi\n")
+	sb.WriteString("            done\n")
+	sb.WriteString("            if $CLEAN; then\n")
+	sb.WriteString("              git push origin \"$BRANCH\"\n")
+	sb.WriteString("              gh pr create \\\n")
+	sb.WriteString("                --base \"env/${env}\" \\\n")
+	sb.WriteString("                --head \"$BRANCH\" \\\n")
+	fmt.Fprintf(sb, "                --label %s \\\n", hotfixLabel)
+	sb.WriteString("                --title \"hotfix(${env}): cherry-pick ${SHORT_SHA}\" \\\n")
+	sb.WriteString("                --body \"$BODY\"\n")
+	// Poll mergeability for up to ~5 minutes (20 attempts, 15s apart) so a
+	// required status check on a protected env branch has time to report, then
+	// merge as the state token so the merge is trigger capable and reaches
+	// finalize. The merge must complete before the loop advances so each env's
+	// state lands before the next env cherry-picks onto it.
+	sb.WriteString("              ATTEMPTS=20\n")
+	sb.WriteString("              SLEEP=15\n")
+	sb.WriteString("              MERGED=false\n")
+	sb.WriteString("              for i in $(seq 1 \"$ATTEMPTS\"); do\n")
+	sb.WriteString("                STATE=$(gh pr view \"$BRANCH\" --json mergeable,mergeStateStatus -q '.mergeable + \" \" + .mergeStateStatus' 2>/dev/null || echo \"UNKNOWN UNKNOWN\")\n")
+	sb.WriteString("                MERGEABLE=$(echo \"$STATE\" | cut -d' ' -f1)\n")
+	sb.WriteString("                STATUS=$(echo \"$STATE\" | cut -d' ' -f2)\n")
+	sb.WriteString("                echo \"::notice::resolution PR mergeable=$MERGEABLE state=$STATUS (attempt $i/$ATTEMPTS)\"\n")
+	sb.WriteString("                if [ \"$MERGEABLE\" = \"MERGEABLE\" ] && [ \"$STATUS\" != \"BLOCKED\" ]; then\n")
+	sb.WriteString("                  if gh pr merge --squash --delete-branch \"$BRANCH\"; then\n")
+	sb.WriteString("                    MERGED=true\n")
+	sb.WriteString("                    break\n")
+	sb.WriteString("                  fi\n")
+	sb.WriteString("                fi\n")
+	sb.WriteString("                sleep \"$SLEEP\"\n")
+	sb.WriteString("              done\n")
+	sb.WriteString("              if [ \"$MERGED\" != \"true\" ]; then\n")
+	sb.WriteString("                echo \"::error::Resolution PR for $BRANCH did not become mergeable within the timeout; merge it manually to run the hotfix finalize chain\"\n")
+	sb.WriteString("                exit 1\n")
+	sb.WriteString("              fi\n")
+	// Re-fetch the env branches so the next env in the chain cherry-picks onto the
+	// just-merged tip.
+	sb.WriteString("              git fetch origin '+refs/heads/env/*:refs/remotes/origin/env/*' --tags\n")
+	sb.WriteString("            else\n")
+	sb.WriteString("              echo \"::warning::Cherry-pick conflicted on env/${env}; opening resolution PR and halting chain\"\n")
+	sb.WriteString("              git push origin \"$BRANCH\"\n")
+	sb.WriteString("              CONFLICT_BODY=$(printf '%s\\n\\nConflicting files:\\n%s\\n\\nThis resolves %s.\\n\\nEnvironments still pending: %s.\\n\\nAfter merge, re-engage the hotfix workflow targeting %s.\\n\\nResolve locally:\\n  git fetch && git switch %s\\n  # resolve conflicts, then\\n  git push --force-with-lease\\n' \"$BODY\" \"$CONFLICTS\" \"$env\" \"$REMAINING\" \"$HOTFIX_TARGET_ENV\" \"$BRANCH\")\n")
+	sb.WriteString("              gh pr create \\\n")
+	sb.WriteString("                --base \"env/${env}\" \\\n")
+	sb.WriteString("                --head \"$BRANCH\" \\\n")
+	fmt.Fprintf(sb, "                --label %s \\\n", hotfixConflictLabel)
+	sb.WriteString("                --title \"hotfix(${env}): cherry-pick $(echo \"$CONFLICT_COMMIT\" | cut -c1-8) (conflicts)\" \\\n")
+	sb.WriteString("                --body \"$CONFLICT_BODY\"\n")
+	sb.WriteString("              break\n")
 	sb.WriteString("            fi\n")
-	sb.WriteString("            sleep \"$SLEEP\"\n")
 	sb.WriteString("          done\n")
-	sb.WriteString("          if [ \"$MERGED\" != \"true\" ]; then\n")
-	sb.WriteString("            echo \"::error::Resolution PR for $BRANCH did not become mergeable within the timeout; merge it manually to run the hotfix finalize chain\"\n")
-	sb.WriteString("            exit 1\n")
-	sb.WriteString("          fi\n")
 }
 
 // writeCheckJob emits the parse-config validity gate that runs while a hotfix PR

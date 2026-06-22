@@ -1,0 +1,223 @@
+name: "Hotfix Multi-Env Clean Chain"
+description: |
+  Verifies a clean multi-environment hotfix chain. The dispatch targets staging,
+  so the planner's bottom-up chain is [test, staging]: the fix must land on every
+  intermediate environment between the build target and the requested target, not
+  just the requested one.
+
+  Three trunk fixes (commit2, commit3, commit4) are cherry-picked onto both env/test
+  and env/staging. Each (commit, env) lands via a discrete plan-apply-merge-merged
+  cycle - the e2e backend is gitea, whose cherry-picks apply cleanly and whose
+  hotfix_apply step drives the real API while the workflow's apply job stays a
+  dry-run plan (the act image lacks the gh CLI). The final state shows both test and
+  staging carrying all three patches.
+
+  The generated apply job's env_sequence loop, per-env case lookup, and conflict
+  halt contract are asserted in the generator unit tests; this scenario covers the
+  observable outcome that the fix reaches every chain environment.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-staging
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish test/staging/prod baselines"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote again to carry the baseline down the chain"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote once more so every env shares the baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "First trunk fix"
+    action: commit
+    commit:
+      message: "fix: first patch"
+      files:
+        src/fix1.go: |
+          package main
+          func fix1() {}
+
+  - name: "Second trunk fix"
+    action: commit
+    commit:
+      message: "fix: second patch"
+      files:
+        src/fix2.go: |
+          package main
+          func fix2() {}
+
+  - name: "Third trunk fix"
+    action: commit
+    commit:
+      message: "fix: third patch"
+      files:
+        src/fix3.go: |
+          package main
+          func fix3() {}
+
+  # Plan the chain once. Targeting staging exercises the bottom-up [test, staging]
+  # sequence the apply loop walks. dry_run keeps it to validation: the act image
+  # has no gh CLI, so the discrete hotfix_apply steps below drive the real
+  # cherry-picks via the gitea API.
+  - name: "Plan hotfix chain for staging"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: staging
+      commit_ref: commit2
+      dry_run: true
+
+  # env/test receives all three fixes, one discrete cycle each.
+  - name: "Apply fix1 onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge fix1 test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix1 on test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+
+  - name: "Apply fix2 onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit3
+
+  - name: "Merge fix2 test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix2 on test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+
+  - name: "Apply fix3 onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit4
+
+  - name: "Merge fix3 test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix3 on test; test carries all three patches"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3, commit4]
+
+  # env/staging receives the same three fixes - the chain target.
+  - name: "Apply fix1 onto env/staging"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: staging
+      commit_ref: commit2
+
+  - name: "Merge fix1 staging PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix1 on staging"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: staging
+    expect:
+      state:
+        staging:
+          ref: "env/staging"
+
+  - name: "Apply fix2 onto env/staging"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: staging
+      commit_ref: commit3
+
+  - name: "Merge fix2 staging PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix2 on staging"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: staging
+
+  - name: "Apply fix3 onto env/staging"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: staging
+      commit_ref: commit4
+
+  - name: "Merge fix3 staging PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize fix3 on staging; staging carries all three patches"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: staging
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3, commit4]
+        staging:
+          ref: "env/staging"
+          patches: [commit2, commit3, commit4]

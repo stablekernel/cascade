@@ -22,6 +22,26 @@ func (r *Runner) resolveCommit(ref string) string {
 	return ref
 }
 
+// resolveCommits resolves a comma-delimited commit-ref list, resolving each
+// entry to its SHA via the execution context and rejoining with commas. It
+// mirrors how the plan job forwards a multi-commit dispatch input to
+// `cascade hotfix plan --commits`: each ref must be a real SHA the planner can
+// rev-parse, so a scenario reference like "commit2,commit3" must resolve to
+// "<sha2>,<sha3>" before reaching the workflow. A single ref with no comma
+// resolves identically to resolveCommit, keeping single-commit callers stable.
+func (r *Runner) resolveCommits(refList string) string {
+	parts := strings.Split(refList, ",")
+	resolved := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		resolved = append(resolved, r.resolveCommit(part))
+	}
+	return strings.Join(resolved, ",")
+}
+
 // shortSHA returns the first 8 characters of a commit SHA, mirroring the hotfix
 // workflow's SHORT_SHA computation (internal/generate/hotfix.go).
 func shortSHA(sha string) string {
@@ -65,7 +85,11 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 		return nil
 	}
 
-	sha := r.resolveCommit(step.CommitRef)
+	// CommitRef may be a comma-delimited list (the multi-commit chain dispatch
+	// input). Resolve each entry to a real SHA so the plan job's
+	// `cascade hotfix plan --commits` can rev-parse every commit; a single ref
+	// resolves identically to the single-commit path.
+	sha := r.resolveCommits(step.CommitRef)
 	dryRun := "false"
 	if step.DryRun {
 		dryRun = "true"
