@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
-	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/version"
 )
 
@@ -225,24 +224,14 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 		return nil, fmt.Errorf("manifest has no config block")
 	}
 
-	// Resolve the fix to a full SHA up front.
-	fixSHA, err := p.gitRunner.ResolveSHA(fixRef)
+	// 1. Resolve the fix and enforce the trunk-ancestry gate over the (single)
+	// requested ref. resolveTrunkAncestors handles resolution and the per-ref
+	// ancestry check so the single-env and chain paths share one gate.
+	shas, err := p.resolveTrunkAncestors([]string{fixRef})
 	if err != nil {
-		return nil, fmt.Errorf("resolving fix commit %q: %w", fixRef, err)
+		return nil, err
 	}
-
-	// 1. Trunk-ancestry gate: the fix must be an ancestor of trunk tip.
-	trunkSHA, err := p.gitRunner.ResolveSHA("HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("resolving trunk tip: %w", err)
-	}
-	onTrunk, err := git.IsAncestor(fixSHA, trunkSHA)
-	if err != nil {
-		return nil, fmt.Errorf("checking trunk ancestry: %w", err)
-	}
-	if !onTrunk {
-		return nil, fmt.Errorf("commit %s is not on trunk: a hotfix must apply a commit that is already an ancestor of trunk; merge it to trunk first", short(fixSHA))
-	}
+	fixSHA := shas[0]
 
 	// 2. Target-env eligibility.
 	if cfg.GetEnvironmentIndex(targetEnv) == -1 {
@@ -269,8 +258,12 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 		DryRun:                p.dryRun,
 	}
 
-	// 3. No-op check: fix already contained in the target state SHA.
-	already, err := git.IsAncestor(fixSHA, baseSHA)
+	// 3. No-op check: the fix is already present in the target when it is an
+	// ancestor of the recorded state SHA OR it is already recorded in the env's
+	// applied-patch list. Consulting state.Patches closes the gap where a prior
+	// hotfix applied the commit onto the diverged env branch without advancing
+	// state.SHA, which a pure ancestry check would miss and replan.
+	already, err := commitPresentInEnv(fixSHA, baseSHA, state.Patches)
 	if err != nil {
 		return nil, fmt.Errorf("checking whether fix is already in %q: %w", targetEnv, err)
 	}
