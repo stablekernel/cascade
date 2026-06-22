@@ -13,11 +13,13 @@ You own **the verbs**. Build, deploy, validate, and publish are *your* logic, su
 
 The flow in one line: you write a manifest plus callback workflows, run `cascade generate-workflow`, and commit the generated orchestration workflows into your repository. From then on, GitHub Actions runs them: cascade orchestrates on merge, promotes between environments, and releases at the terminal environment.
 
+cascade fits two shapes equally. A **deploy-through-environments** pipeline promotes a commit across one or more environments and releases at the end. A **release-only** repo deploys nowhere and just ships versioned releases; you omit `environments` and still get conventional-commit version derivation, changelog, and release management. Both are first-class. The rest of this guide covers the environment-promotion path in full and calls out where release-only repos diverge.
+
 ## Prerequisites
 
 - **GitHub Actions enabled** on the repository, with trunk-based development (a single primary branch).
 - **Conventional Commits - required.** cascade derives the semver bump, the changelog, and breaking-change detection entirely from Conventional Commit messages. This is not optional. Commits that do not follow the convention are not processed correctly and version derivation can fail. See [Versioning and schema compatibility](/cascade/versioning/).
-- **GitHub setup**: environments for each deploy stage, branch and tag protection, the secrets your callbacks consume, and scoped tokens. The [Security and Hardening](/cascade/security/hardening/) checklist is the authoritative list; wire it up before your first production promotion.
+- **GitHub setup**: branch and tag protection, the secrets your callbacks consume, and scoped tokens. If you deploy, also configure a GitHub environment for each deploy stage; a release-only repo has no environments to set up and skips that part. The [Security and Hardening](/cascade/security/hardening/) checklist is the authoritative list; wire it up before your first production release.
 - The `cascade` CLI for local generation (Go 1.25+ to `go install`; in Actions, the setup action installs it for you). See [Getting Started](/cascade/getting-started/).
 
 ## Build a pipeline from scratch
@@ -40,6 +42,8 @@ Environments are **positional**, not named by meaning. cascade attaches no seman
 - The crossing into the last environment is the publish boundary, where the breaking-change gate runs and the publish callback fires.
 
 So `environments: [dev, test, prod]` means dev is first, test is the prerelease stage, and prod is the release stage. The names are yours to choose; only the order carries meaning. See the [Manifest Reference](/cascade/configuration/) for the full structural rules, including zero-environment (release-only) mode.
+
+**Release-only repos:** if you ship releases without deploying anywhere, omit `environments` entirely and skip straight to releases. The breaking-change gate and publish boundary still apply at the release; you just have no environments to promote across. Scaffold this shape with `cascade init --topology no-env`, and see [No-env (release-only)](#topologies) below.
 
 ### 2. Write a minimal manifest
 
@@ -187,7 +191,7 @@ The full, ordered checklist is in [Security and Hardening](/cascade/security/har
 
 Environment count is structural. Pick the shape that matches your project:
 
-- **No-env (release-only)** - omit `environments`. For libraries and CLIs that publish releases without deploying anywhere.
+- **No-env (release-only)** - omit `environments`; scaffold with `cascade init --topology no-env`. The fit for any repo that ships versioned releases without deploying anywhere: libraries, CLIs, SDKs, published container images, and schemas or packages consumed by other repos. You still get conventional-commit version derivation, changelog, and release management. Hotfix and rollback need two or more environments, so they do not apply here.
 - **2-env** - `dev` + `prod`. Smallest promotion chain with a prerelease stage.
 - **3-env** - `dev` + `staging` + `prod` (or `pre` + `staging` + `prod`). The common default.
 - **4-env** - `dev` + `staging` + `pre` + `prod`. Adds a dedicated prerelease stage before production.
