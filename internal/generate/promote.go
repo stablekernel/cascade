@@ -596,20 +596,14 @@ func (g *PromoteGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 	}
 	sb.WriteString("\n")
 
-	// Base: permissions needed for release management, state commits, and job
-	// queries. actions:write is required to dispatch the Release workflow from
-	// the finalize job when a final release is published. A deploy callback's own
-	// scopes (e.g. id-token: write for OIDC) are scoped to its caller job via
-	// writeCallbackPermissions, not granted here, so the top-level block stays
-	// least privilege.
+	// Default to a least-privilege top-level block: reads only. The finalize job
+	// carries the write scopes it needs (contents: write for state commits,
+	// actions: write to dispatch the Release workflow, and deployments: write
+	// when the GitHub Deployments API is enabled). A deploy callback's own scopes
+	// (e.g. id-token: write for OIDC) are scoped to its caller job via
+	// writeCallbackPermissions.
 	base := [][2]string{
-		{"contents", "write"},
-		{"actions", "write"},
-	}
-	// Opt-in GitHub Deployments API reporting needs deployments: write so the
-	// finalize job can create Deployments and post status updates.
-	if nativeDeploymentsEnabled(g.config) {
-		base = append(base, [2]string{"deployments", "write"})
+		{"contents", "read"},
 	}
 	writeTopLevelPermissions(sb, base)
 }
@@ -1075,6 +1069,17 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "    needs: [%s]\n", strings.Join(needs, ", "))
 	sb.WriteString("    if: always() && needs.preflight.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+
+	// Push the write scopes down to the finalize job: contents: write to commit
+	// state, actions: write to dispatch the Release workflow, and deployments:
+	// write when the GitHub Deployments API is enabled. The top-level block stays
+	// read-only.
+	finalizeScopes := [][2]string{{"contents", "write"}, {"actions", "write"}}
+	if nativeDeploymentsEnabled(g.config) {
+		finalizeScopes = append(finalizeScopes, [2]string{"deployments", "write"})
+	}
+	writeJobPermissions(sb, "    ", finalizeScopes)
+
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamRelease, seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)

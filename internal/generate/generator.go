@@ -724,18 +724,14 @@ func (g *Generator) writeConcurrency(sb *strings.Builder) {
 }
 
 func (g *Generator) writePermissions(sb *strings.Builder) {
-	// Base: permissions needed for release management (tags, releases) and state
-	// commits. Callback scopes (e.g. id-token: write for OIDC) are scoped to
-	// their own caller job via writeCallbackPermissions, not granted here, so the
-	// top-level block stays least privilege for cascade's own orchestration jobs.
+	// Default to a least-privilege top-level block: reads only. Write scopes are
+	// pushed down to the single job that needs them (the finalize job carries
+	// contents: write, plus deployments: write when the GitHub Deployments API is
+	// enabled). Callback scopes (e.g. id-token: write for OIDC) are scoped to
+	// their own caller job via writeCallbackPermissions.
 	base := [][2]string{
-		{"contents", "write"},
+		{"contents", "read"},
 		{"actions", "read"},
-	}
-	// Opt-in GitHub Deployments API reporting needs deployments: write so the
-	// finalize job can create Deployments and post status updates.
-	if nativeDeploymentsEnabled(g.config) {
-		base = append(base, [2]string{"deployments", "write"})
 	}
 	writeTopLevelPermissions(sb, base)
 }
@@ -1341,6 +1337,15 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	sb.WriteString("    if: always() && needs.setup.result == 'success'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	g.writeOwnedTimeout(sb, "    ")
+
+	// Push the write scopes down to the finalize job: it commits state (and the
+	// release) and, when the GitHub Deployments API is enabled, creates
+	// Deployments and posts status updates. The top-level block stays read-only.
+	finalizeScopes := [][2]string{{"contents", "write"}}
+	if nativeDeploymentsEnabled(g.config) {
+		finalizeScopes = append(finalizeScopes, [2]string{"deployments", "write"})
+	}
+	writeJobPermissions(sb, "    ", finalizeScopes)
 
 	// Output all callback outputs (sorted for deterministic output)
 	// g.outputs is keyed by job ID (e.g., "build-app")

@@ -11,12 +11,12 @@ description: |
   radius instead of granting those scopes to every job in the workflow.
 
   The api build declares permissions: {id-token: write, packages: read}. The
-  generated orchestrate.yaml must keep its top-level block at the base scopes only
-  (contents: write, actions: read) and render a separate job-level permissions:
-  block on the build-api caller job with the callback's scopes in deterministic
-  alphabetical order (id-token before packages). The declared map is the complete
-  permission set for that job; cascade emits exactly what is declared and does not
-  inject any implicit scope.
+  generated orchestrate.yaml must keep its top-level block at the least-privilege
+  base (contents: read, actions: read) and render a separate job-level
+  permissions: block on the build-api caller job with the callback's scopes in
+  deterministic alphabetical order (id-token before packages). The declared map is
+  the complete permission set for that job; cascade emits exactly what is declared
+  and does not inject any implicit scope.
 
   Generator-output verification scenario; the assertion runs on the staged repo
   after StageRepoFromConfig generates workflows but before any orchestrate runs.
@@ -53,7 +53,7 @@ steps:
             # block (permissions: through its trailing blank line) proves the
             # callback scopes are absent from the top level. A plain not_contains
             # over the file cannot exclude the job-level occurrence below.
-            - "permissions:\n  contents: write\n  actions: read\n\n"
+            - "permissions:\n  contents: read\n  actions: read\n\n"
             # The build-api caller job renders its own job-level permissions:
             # block (GitHub allows permissions: on a uses: caller job), scoped to
             # the callback's declared scopes in sorted order, immediately before
