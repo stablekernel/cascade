@@ -145,8 +145,10 @@ Map your current pieces onto cascade's split of responsibility. The recurring qu
 
 | You have today | In cascade | What changes |
 |----------------|-----------|--------------|
-| A deploy script or job | A **deploy** reusable-workflow callback | Move the script into a `workflow_call` workflow; cascade calls it with `environment`, `sha`, `dry_run`, plus build outputs. If build and deploy are fused today, see [If your build and deploy are one workflow](#if-your-build-and-deploy-are-one-workflow). |
-| A build/package step | A **build** callback | Same move; declare `artifact_id` (and any tags) as outputs so they chain to deploys and to publish. |
+| A lint/test job | A **validate** callback | Move the checks into a `workflow_call` workflow; cascade calls it with `environment`, `sha`, `dry_run` before build. If validate runs in the same pass as build and deploy today, see [Splitting a monolithic pipeline](#splitting-a-monolithic-pipeline). |
+| A build/package step | A **build** callback | Move the step into a `workflow_call` workflow; declare `artifact_id` (and any tags) as outputs so they chain to deploys and to publish. |
+| A deploy script or job | A **deploy** reusable-workflow callback | Move the script into a `workflow_call` workflow; cascade calls it with `environment`, `sha`, `dry_run`, plus build outputs. If build and deploy are fused today, see [Splitting a monolithic pipeline](#splitting-a-monolithic-pipeline). |
+| A release-tagging or retag step (promoting an RC artifact to its final version) | A **publish** callback | Move it into a `workflow_call` workflow; cascade calls it once per build at the release boundary with `build_name`, `old_version`, `new_version`, `sha`, `artifact_id`. |
 | Hand-rolled env-promotion logic (scripts gating dev to staging to prod) | cascade's **promotion cascade** | cascade owns this. Delete your promotion glue; cascade orchestrates, pins SHAs, and gates the release boundary. |
 | Manual or tool-driven version bumping | **Conventional-commit-driven** version derivation | cascade owns it and it is **required**. Your bump logic goes away; commit messages drive the semver. |
 | A changelog tool (release-please, git-cliff) | A **changelog** callback, or keep the tool and disable cascade's changelog | Two valid paths (see below). |
@@ -154,19 +156,25 @@ Map your current pieces onto cascade's split of responsibility. The recurring qu
 
 The clean line: **cascade takes over orchestration, promotion, state, versioning, and the release boundary.** It does **not** take over how you build, deploy, validate, or (optionally) cut changelogs and release artifacts. Those stay yours, expressed as callbacks.
 
-### If your build and deploy are one workflow
+### Splitting a monolithic pipeline
 
-A common starting point is a single workflow or job that builds **and** deploys in one pass, often rebuilding the artifact at each environment. cascade cannot orchestrate that shape, so splitting it is the primary adaptation work of adopting cascade.
+A common starting point is a single workflow or job that does everything in one pass: lint and test, build the artifact, deploy it, and tag the release, often rebuilding the artifact at each environment. cascade cannot orchestrate that shape, so splitting it is the primary adaptation work of adopting cascade.
 
-cascade runs your pipeline as **discrete stages**, each its own `workflow_call` reusable workflow: validate, build, deploy, and optionally publish. It calls each stage separately with the fixed input contract. The split is required, not stylistic, because of how promotion works: cascade builds the artifact **once** (on the first environment, during orchestrate) and then promotes that same artifact, pinned to a SHA, across every later environment, running **only** deploy there. It never rebuilds per stage. A build that lives inside the deploy step would rebuild at every environment and break that guarantee.
+cascade runs your pipeline as **discrete stages**, each its own `workflow_call` reusable workflow: validate, build, deploy, and (at the release boundary) publish. It calls each stage separately with the fixed input contract. A monolith usually fuses several of these into one pass, so adoption means teasing them back apart along the seams cascade calls across:
 
-To make the split:
+- **Validate** (the lint/test portion) becomes its own callback that cascade runs before build.
+- **Build** and **deploy** become separate callbacks. This is the load-bearing split, and it is required rather than stylistic, because of how promotion works: cascade builds the artifact **once** (on the first environment, during orchestrate) and then promotes that same artifact, pinned to a SHA, across every later environment, running **only** deploy there. It never rebuilds per stage. A build that lives inside the deploy step would rebuild at every environment and break that guarantee.
+- **Publish** (the release-tagging or retag step) becomes its own callback that cascade fires once per build at the prerelease-to-release boundary.
+
+To make the build and deploy split, the consequential one:
 
 - **Extract the build** into its own `workflow_call` workflow that emits its artifact identifier as an output (for example `artifact_id` and any `image_tag`) under `on.workflow_call.outputs`. cascade captures `artifact_id` into state and forwards declared outputs to dependent deploys.
 - **Extract the deploy** into its own `workflow_call` workflow that receives that identifier as an input of the same name. With `depends_on: [<build>]`, cascade chains the build's outputs into the deploy automatically, so the deploy applies the prebuilt artifact instead of producing one.
 - **Stop rebuilding in deploy.** Remove the build steps from the deploy path entirely. The deploy consumes the identifier it is handed; the GitHub Environment gate lives on the job inside this deploy workflow (see [Provide the callback workflows](#3-provide-the-callback-workflows)).
 
-The result is the same logic you have today, separated along the seam cascade promotes across. See the [Callback Contract](/cascade/callback-contract/) for the full build and deploy skeletons.
+cascade itself owns the orchestration workflows (orchestrate, promote, release, rollback, hotfix) and derives versions and changelogs for you, so none of that moves into a callback. If you also cut a changelog as part of that monolithic pass, that step is optional and stays a separate concern: keep your tool behind a changelog callback or disable cascade's changelog (see [Keep release-please (or git-cliff)](#keep-release-please-or-git-cliff)).
+
+The result is the same logic you have today, separated along the seams cascade promotes and releases across. See the [Callback Contract](/cascade/callback-contract/) for the full validate, build, deploy, and publish skeletons.
 
 ## Wiring existing tooling
 
