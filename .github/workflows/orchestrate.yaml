@@ -46,7 +46,7 @@ jobs:
       - name: Setup CLI
         uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
       - name: Run Setup
         id: setup
@@ -119,12 +119,12 @@ jobs:
       - name: Setup CLI
         uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
       - name: Generate Changelog
         id: changelog
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
         run: |
           # Use changelog_base_sha which compares this env to next env
           # This shows commits in this env NOT yet promoted to next env
@@ -147,7 +147,7 @@ jobs:
           sha: ${{ needs.setup.outputs.head_sha }}
           changelog: ${{ steps.changelog.outputs.changelog }}
           previous_tag: ${{ needs.setup.outputs.previous_tag }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
       - name: Update Manifest
         env:
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}

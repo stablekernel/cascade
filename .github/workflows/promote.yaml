@@ -95,7 +95,7 @@ jobs:
       - name: Setup CLI
         uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
       - name: Run Preflight
         id: preflight
@@ -130,7 +130,7 @@ jobs:
       - name: Setup CLI
         uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
       - name: Validate Promotion
         env:
@@ -157,12 +157,12 @@ jobs:
       - name: Setup CLI
         uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
       - name: Generate Changelog
         id: changelog
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           CHANGELOG_BASE_SHA: ${{ needs.preflight.outputs.changelog_base_sha }}
           SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
         run: |
@@ -213,7 +213,7 @@ jobs:
           sha: ${{ needs.preflight.outputs.source_sha }}
           tag: ${{ needs.preflight.outputs.source_version }}
           changelog: ${{ steps.changelog.outputs.changelog }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
       - name: Ensure Release Exists
         if: ${{ github.event.inputs.dry_run != 'true' && (needs.preflight.outputs.is_prerelease_env == 'true' || needs.preflight.outputs.is_final_env == 'true') }}
         uses: ./.github/actions/manage-release
@@ -224,7 +224,7 @@ jobs:
           sha: ${{ needs.preflight.outputs.source_sha }}
           tag: ${{ needs.preflight.outputs.source_version }}
           changelog: ${{ steps.changelog.outputs.changelog }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
       - name: Create Prerelease
         if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.is_prerelease_env == 'true' }}
         uses: ./.github/actions/manage-release
@@ -235,13 +235,13 @@ jobs:
           sha: ${{ steps.release-data.outputs.sha }}
           tag: ${{ steps.release-data.outputs.rc_version }}
           changelog: ${{ steps.changelog.outputs.changelog }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
       - name: Cleanup Orphaned Releases
         if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.skipped_envs != '' }}
         env:
           SKIPPED_ENVS: ${{ needs.preflight.outputs.skipped_envs }}
           SOURCE_VERSION: ${{ needs.preflight.outputs.source_version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
         run: |
           IFS=',' read -ra ENVS <<< "$SKIPPED_ENVS"
           for ENV in "${ENVS[@]}"; do
@@ -264,12 +264,12 @@ jobs:
           tag: ${{ steps.release-data.outputs.sem_version }}
           delete_tag: ${{ steps.release-data.outputs.rc_version }}
           changelog: ${{ steps.changelog.outputs.changelog }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
       - name: Finalize Promotion
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}
         run: |
           cascade promote finalize \
