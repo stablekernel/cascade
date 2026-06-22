@@ -4,8 +4,11 @@ name: Hotfix
 # by trusted calling workflows, not by external users. All dynamic values are
 # passed through env variables where they are used in run commands.
 
+# Least-privilege default: read-only at the top level. Only the finalize job,
+# which commits the manifest, pushes the version tag, publishes the release, and
+# merges back to trunk, is granted contents: write.
 permissions:
-  contents: write
+  contents: read
 
 on:
   workflow_call:
@@ -58,6 +61,8 @@ jobs:
   validate:
     name: Validate Hotfix
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       sha: ${{ steps.validate.outputs.sha }}
       version: ${{ steps.version.outputs.final_version }}
@@ -171,6 +176,8 @@ jobs:
     needs: validate
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
     strategy:
@@ -219,6 +226,8 @@ jobs:
     needs: [validate, build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         deploy: ${{ fromJson(needs.validate.outputs.deploy_names) }}
@@ -258,6 +267,8 @@ jobs:
       always() &&
       (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       deployed_sha: ${{ needs.validate.outputs.sha }}
       changelog: ${{ steps.changelog.outputs.changelog }}
@@ -392,6 +403,8 @@ jobs:
     needs: validate
     if: inputs.dry_run
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Dry Run Summary
         env:

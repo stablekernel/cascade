@@ -22,8 +22,10 @@ on:
   # fire when releases are managed via API calls in a workflow run.
   workflow_dispatch:
 
+# Least-privilege default: read-only at the top level. Only the release job,
+# which cuts the GitHub Release and uploads built assets, is granted write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Integration protection: because Integration now gates merge to main via branch
@@ -34,6 +36,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -54,6 +58,8 @@ jobs:
     name: Release
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

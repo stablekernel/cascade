@@ -9,6 +9,7 @@ ci:
       - go.mod
       - go.sum
     cli_version: v0.1.0
+    pin_mode: sha
     manifest_file: .github/manifest.yaml
     manifest_key: ci
     validate:
