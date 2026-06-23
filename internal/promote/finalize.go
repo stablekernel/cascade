@@ -124,25 +124,33 @@ func (f *Finalizer) Run() error {
 // runLifecycleCleanup performs the divergence-end side effects for every env
 // that rejoined trunk during this finalization. It runs only after the manifest
 // is persisted, so the source of truth is updated before any branch, tag, or
-// draft is removed; a cleanup failure then leaves the manifest correct and the
-// operation re-runnable. When no env rejoined (the common, non-diverged case)
-// this is a no-op and the injected cleaner is never called.
+// release object is removed.
+//
+// Cleanup is best-effort and never aborts the finalize: the objects it removes
+// (integration branch, hotfix tags and release objects) are disposable
+// superseded artifacts, and every individual delete is idempotent, so a transient
+// failure on one env must not strand the others or wedge an already-persisted
+// state write. A failure on one env is logged loudly and cleanup continues with
+// the rest; hard-fail is reserved for the state write, which Run performs before
+// reaching here. When no env rejoined (the common, non-diverged case) this is a
+// no-op and the injected cleaner is never called.
 func (f *Finalizer) runLifecycleCleanup() error {
 	for _, ev := range f.pendingRejoins {
 		if ev.rollbackOrigin {
 			// A manual rollback creates no integration branch, hotfix tags, or
-			// release drafts. The divergence fields were already cleared above,
+			// release objects. The divergence fields were already cleared above,
 			// so the rejoin is complete with no side effects to undo.
 			continue
 		}
 		if err := f.cleaner.DeleteEnvBranch(ev.env); err != nil {
-			return fmt.Errorf("rejoin cleanup for %s: %w", ev.env, err)
+			fmt.Printf("Warning: rejoin cleanup for %s: deleting integration branch: %v\n", ev.env, err)
 		}
 		if err := f.cleaner.CleanHotfixReleases(CleanReleasesRequest{
 			Environment: ev.env,
 			BaseVersion: ev.baseVersion,
+			SHA:         ev.sha,
 		}); err != nil {
-			return fmt.Errorf("rejoin cleanup for %s: %w", ev.env, err)
+			fmt.Printf("Warning: rejoin cleanup for %s: cleaning hotfix releases: %v\n", ev.env, err)
 		}
 	}
 	return nil
@@ -174,6 +182,7 @@ func (f *Finalizer) updateState() {
 			// env held while diverged, captured here before it is overwritten.
 			wasDiverged := state.IsDiverged()
 			priorVersion := state.Version
+			priorSHA := state.SHA
 
 			// When an auto-committing callback ran, overrideSHA holds the
 			// post-callback HEAD; use it so the recorded state points at the
@@ -208,6 +217,7 @@ func (f *Finalizer) updateState() {
 				f.pendingRejoins = append(f.pendingRejoins, rejoinEvent{
 					env:            promo.Environment,
 					baseVersion:    priorVersion,
+					sha:            priorSHA,
 					rollbackOrigin: rollbackOrigin,
 				})
 			}

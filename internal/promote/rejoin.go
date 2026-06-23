@@ -16,6 +16,11 @@ import (
 type CleanReleasesRequest struct {
 	Environment string
 	BaseVersion string
+	// SHA is the commit the environment pointed at while diverged (the hotfix
+	// merge SHA). It is passed to the release lookup as a fallback so a hotfix
+	// release whose tag was already deleted by a prior partial run can still be
+	// resolved by its target_commitish and removed, rather than leaking.
+	SHA string
 }
 
 // LifecycleCleaner performs the side effects of ending a divergence: deleting
@@ -63,6 +68,10 @@ func WithLifecycleCleaner(c LifecycleCleaner) FinalizeOption {
 type rejoinEvent struct {
 	env         string
 	baseVersion string
+	// sha is the commit the env pointed at while diverged (its hotfix merge SHA),
+	// passed through to the release cleanup as a lookup fallback so a hotfix
+	// release can still be resolved if its tag was removed by a prior partial run.
+	sha string
 	// rollbackOrigin is true when the env diverged via a manual rollback rather
 	// than a hotfix integration branch. The rejoin cleanup skips integration
 	// branch and hotfix release deletion in that case, since a rollback creates
@@ -120,10 +129,16 @@ func (c *gitReleaseCleaner) DeleteEnvBranch(env string) error {
 	return nil
 }
 
-// CleanHotfixReleases deletes the hotfix tags for the prior base version and the
-// matching draft release objects. Tag and draft deletion is best-effort per
-// item so one stale object does not block the others; the first hard error is
-// returned.
+// CleanHotfixReleases deletes the hotfix release objects for the prior base
+// version and then the matching tags. The release object is removed FIRST and the
+// tag is deleted only when the release delete succeeded (or the release was
+// already gone): a failed release delete leaves the tag intact so a rerun can
+// still resolve the release object by tag rather than orphaning a now-tagless
+// release. The hotfix release may be a non-draft prerelease (the prerelease env
+// promotes its hotfix release to draft:false), so AllowPublishedDelete is set;
+// the recorded SHA is passed as a lookup fallback for a tag that a prior partial
+// run already removed. Cleanup is best-effort per item so one stale object does
+// not block the others; the first hard error is returned.
 func (c *gitReleaseCleaner) CleanHotfixReleases(req CleanReleasesRequest) error {
 	tags, err := c.listTags()
 	if err != nil {
@@ -133,14 +148,25 @@ func (c *gitReleaseCleaner) CleanHotfixReleases(req CleanReleasesRequest) error 
 
 	var firstErr error
 	for _, tag := range hotfixTags {
-		// Remove the draft release object for the hotfix tag, then the tag.
+		// Delete the release object first. Only delete the tag if that succeeded,
+		// so a failed release delete leaves the tag for a rerun to retry.
+		releaseDeleted := true
 		if c.releaseMgr != nil {
 			if _, err := c.releaseMgr.Manage(release.Options{
-				Action: release.ActionDelete,
-				Tag:    tag,
-			}); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("deleting hotfix release %s: %w", tag, err)
+				Action:               release.ActionDelete,
+				Tag:                  tag,
+				SHA:                  req.SHA,
+				AllowPublishedDelete: true,
+			}); err != nil {
+				releaseDeleted = false
+				if firstErr == nil {
+					firstErr = fmt.Errorf("deleting hotfix release %s: %w", tag, err)
+				}
 			}
+		}
+		if !releaseDeleted {
+			// Leave the tag so the next run can still resolve the release by tag.
+			continue
 		}
 		if err := c.deleteTag(c.remote, tag); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("deleting hotfix tag %s: %w", tag, err)

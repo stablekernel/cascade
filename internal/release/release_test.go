@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -334,7 +335,131 @@ func TestManager_Delete_PublishedRelease(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot delete published release")
+	assert.Contains(t, err.Error(), "cannot delete non-draft release")
+}
+
+// TestManager_Delete_PublishedRelease_AllowPublished verifies that the scoped
+// AllowPublishedDelete opt-in lets a non-draft (published or prerelease) release
+// be deleted. This path exists only for hotfix-rejoin cleanup, where the release
+// is a superseded intermediate artifact; the general guard (exercised by
+// TestManager_Delete_PublishedRelease) stays in force without the flag.
+func TestManager_Delete_PublishedRelease_AllowPublished(t *testing.T) {
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(GitHubRelease{
+				ID:      790,
+				TagName: "v1.0.0-rc.2.hotfix.1",
+				Draft:   false, // non-draft (prerelease promoted)
+			})
+			return
+		}
+		assert.Equal(t, http.MethodDelete, r.Method)
+		deleted = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL,
+		token:   "test-token",
+		repo:    "owner/repo",
+	}
+
+	result, err := manager.Manage(Options{
+		Action:               ActionDelete,
+		Tag:                  "v1.0.0-rc.2.hotfix.1",
+		AllowPublishedDelete: true,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(790), result.ReleaseID)
+	assert.True(t, deleted, "the non-draft release must be deleted when AllowPublishedDelete is set")
+}
+
+// TestFindReleaseByTagOrSHA_PrefersExactTagOverStaleSHADraft covers L4: when a
+// stale draft shares a target_commitish with the intended draft, the lookup must
+// prefer the draft whose tag matches exactly rather than returning the first
+// SHA-only match.
+func TestFindReleaseByTagOrSHA_PrefersExactTagOverStaleSHADraft(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Direct by-tag endpoint misses so the list-scan path is exercised.
+		if strings.Contains(r.URL.Path, "/releases/tags/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]GitHubRelease{
+			// Stale draft sharing the SHA but a different (older) tag, listed first.
+			{ID: 1, TagName: "v1.0.0-rc.0", TargetCommitish: "deadbeef", Draft: true},
+			// The intended draft: exact tag match on the same SHA.
+			{ID: 2, TagName: "v1.0.0-rc.1", TargetCommitish: "deadbeef", Draft: true},
+		})
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL,
+		token:   "test-token",
+		repo:    "owner/repo",
+		sleepFn: func(time.Duration) {},
+	}
+
+	got, err := manager.findRelease("v1.0.0-rc.1", "deadbeef")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, int64(2), got.ID, "the exact tag match must win over a stale SHA-only draft")
+}
+
+// TestManager_Publish_RerunFallsBackToSemverTag covers L3: a publish rerun after a
+// partial publish (the rc tag was already cleaned up) must resolve the
+// already-published release by its semver tag and converge instead of erroring.
+func TestManager_Publish_RerunFallsBackToSemverTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/tags/v1.0.0-rc.5"):
+			// rc tag already cleaned up by the first (partial) publish.
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases/tags/v1.0.0"):
+			// Already published under the semver tag.
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{ID: 99, TagName: "v1.0.0", Draft: false})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]GitHubRelease{})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/git/refs/tags"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]struct {
+				Ref string `json:"ref"`
+			}{})
+		case r.Method == http.MethodPatch:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{ID: 99, TagName: "v1.0.0"})
+		default:
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL,
+		token:   "test-token",
+		repo:    "owner/repo",
+		sleepFn: func(time.Duration) {},
+	}
+
+	result, err := manager.Manage(Options{
+		Action:    ActionPublish,
+		Tag:       "v1.0.0",
+		DeleteTag: "v1.0.0-rc.5",
+		SHA:       "abc123",
+	})
+	require.NoError(t, err, "publish rerun must converge by resolving the semver tag")
+	assert.Equal(t, int64(99), result.ReleaseID)
 }
 
 func TestManager_Delete_NotFound(t *testing.T) {

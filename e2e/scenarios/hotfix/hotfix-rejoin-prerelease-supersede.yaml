@@ -1,0 +1,153 @@
+name: "Hotfix Rejoin After Prerelease Supersede"
+description: |
+  Regression guard for the rejoin cleanup of a hotfix that landed on the
+  prerelease environment. The prerelease env is the second-from-top env
+  (staging in [dev, test, staging, prod]); a hotfix there promotes its release
+  object to a GitHub prerelease (draft:false). A later superseding promote that
+  carries the recorded patch on trunk must then rejoin the env to trunk and
+  clean up its integration branch, hotfix tag, and (on real GitHub) the now
+  non-draft hotfix release object. Before the fix, the cleanup aborted on the
+  non-draft release and wedged the rejoin.
+
+  The act/gitea backend skips GitHub release-object operations (no release API),
+  so the release-object delete is a no-op here; the observable rejoin contract
+  this scenario exercises is the state rejoin, the env/<env> branch deletion, and
+  the hotfix tag cleanup. The real-GitHub release-object delete is covered by the
+  validation fleet and the internal/promote + internal/release unit tests.
+
+  Because the recorded patch is the original trunk commit SHA, landing that same
+  trunk ancestor on dev and cascading it into staging satisfies containment and
+  triggers the rejoin.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-staging
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish a staging baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote again to carry the baseline toward staging"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote once more so staging shares the baseline"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        staging:
+          version: "v0.1.0-rc.1"
+
+  - name: "Commit a trunk fix to hotfix into staging"
+    action: commit
+    commit:
+      message: "fix: patch for staging env"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Plan hotfix for the prerelease env (staging)"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: staging
+      commit_ref: commit2
+      # Plan only: the harness's hotfix_apply step performs the real cherry-pick
+      # and PR via the gitea API. Running the workflow's apply job here would call
+      # the GitHub gh CLI, which is absent from the act runner image.
+      dry_run: true
+
+  - name: "Apply hotfix onto env/staging"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: staging
+      commit_ref: commit2
+
+  - name: "Merge the hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize hotfix; staging diverges and mints a hotfix tag"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: staging
+    expect:
+      state:
+        staging:
+          ref: "env/staging"
+      tags:
+        exist: ["v0.1.0-rc.1.hotfix.1"]
+
+  # Land a normal trunk commit. Trunk now contains commit2 (the recorded patch)
+  # as an ancestor, so a promotion of any later trunk SHA into staging will
+  # satisfy patch containment and end the divergence.
+  - name: "Advance trunk normally past the patch"
+    action: commit
+    commit:
+      message: "chore: trunk advance"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate so dev carries the patch's trunk ancestor"
+    action: orchestrate
+
+  # Rejoin: a targeted cascade of dev into the diverged staging env, where the
+  # incoming SHA contains every recorded patch, supersedes the hotfix and ends
+  # the divergence. The cleanup clears staging's divergence fields, deletes
+  # env/staging on the remote, and removes the hotfix tag (and, on real GitHub,
+  # the now non-draft hotfix release object). A targeted cascade is used so only
+  # the rejoin leg runs; default mode would also queue the staging-to-prod leg,
+  # which sources FROM the still-diverged staging env and trips the
+  # diverged-source guard before the rejoin can clear it. prod is untouched.
+  - name: "Promote a containing SHA into staging triggers rejoin"
+    action: promote
+    promote:
+      mode: cascade
+      target: staging
+    expect:
+      state:
+        staging:
+          cleared: [ref, base_sha, patches]
+        prod:
+          unchanged: true
+      branches:
+        deleted: ["env/staging"]
+      tags:
+        deleted: ["v0.1.0-rc.1.hotfix.1"]
