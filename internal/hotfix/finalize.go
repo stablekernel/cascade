@@ -576,23 +576,32 @@ func (f *Finalizer) createRelease(cfg *config.TrunkConfig, targetEnv, sha, hotfi
 
 	body := fmt.Sprintf("Hotfix based on %s, carries trunk commit %s.", baseVersion, short(fixSHA))
 
-	if _, err := mgr.Manage(release.Options{
+	created, err := mgr.Manage(release.Options{
 		Action:      release.ActionCreate,
 		Environment: targetEnv,
 		SHA:         sha,
 		Tag:         hotfixVersion,
 		Changelog:   body,
 		CreateTag:   true,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("creating hotfix release: %w", err)
 	}
 
 	if f.isPrereleaseEnv(cfg, targetEnv) {
+		// Thread the created release ID through to avoid a re-lookup: the
+		// by-tag endpoint returns 404 for drafts and the list endpoint has a
+		// consistency window, so the second env can fail if we re-discover.
+		var knownID int64
+		if created != nil {
+			knownID = created.ReleaseID
+		}
 		if _, err := mgr.Manage(release.Options{
-			Action:      release.ActionPrerelease,
-			Environment: targetEnv,
-			SHA:         sha,
-			Tag:         hotfixVersion,
+			Action:         release.ActionPrerelease,
+			Environment:    targetEnv,
+			SHA:            sha,
+			Tag:            hotfixVersion,
+			KnownReleaseID: knownID,
 		}); err != nil {
 			return fmt.Errorf("promoting hotfix release to prerelease: %w", err)
 		}
