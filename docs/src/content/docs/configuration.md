@@ -85,7 +85,7 @@ ci:
 | `cli_version` | string | No | latest | CLI version: `latest`, `beta`, or specific version (e.g., `v2.0.4`) |
 | `triggers` | list | No | - | Global path patterns that activate orchestration |
 | `tag_prefix` | string | No | `v` | Version tag prefix |
-| `release_token` | string | No | `${{ secrets.GITHUB_TOKEN }}` | Token expression for release API calls |
+| `release_token` | string | No | `state_token` if set, else `${{ secrets.GITHUB_TOKEN }}` | Token expression for release API calls and the rc tag; inherits `state_token` when unset so the rc-to-release chain has a trigger-capable token |
 | `state_token` | string | No | `${{ secrets.GITHUB_TOKEN }}` | Token expression for writing manifest state to the trunk branch |
 | `release_token_app` | object | No | - | GitHub App identity that mints a release token at run time; see [Token authentication](#token-authentication) |
 | `state_token_app` | object | No | - | GitHub App identity that mints a state-write token at run time; see [Token authentication](#token-authentication) |
@@ -131,6 +131,10 @@ ci:
     release_token: RELEASE_PAT
     state_token: STATE_PAT
 ```
+
+:::caution[`release_token` defaults to `state_token`, and must be trigger-capable]
+The release token creates the rc tag, and that tag is what triggers the Release run, fleet validation, and promotion. GitHub deliberately suppresses workflow triggers for ref creations made with the default `GITHUB_TOKEN`, so an rc tag created with `GITHUB_TOKEN` fires nothing and the rc-to-release chain dies silently. To avoid that, an unset `release_token` inherits your `state_token` when one is set, reusing the trigger-capable token you already configured for protected-trunk writes. Whatever resolves as the release token must be trigger-capable (a PAT or a GitHub App token) for the automatic chain to run. If your state token is supplied solely through `state_token_app` (no static `state_token`), set a static `release_token` explicitly, since a minted App token is a run-time step output that this default cannot reach.
+:::
 
 #### GitHub App
 

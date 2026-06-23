@@ -105,6 +105,38 @@ func TestResolveTokenRef_OffStateIdentity(t *testing.T) {
 	assert.Equal(t, cfg.GetStateToken(), resolveStateTokenRef(cfg))
 }
 
+// TestReleaseGenerator_ReleaseTokenDefaultsToStateToken asserts that when an
+// adopter configures a trigger-capable state_token but leaves release_token
+// unset, the rc-creating release steps reference the state token, not the bare
+// GITHUB_TOKEN. This is the rc-to-release dead-chain fix: a tag created with
+// GITHUB_TOKEN fires no downstream workflows, so the release token must inherit
+// the trigger-capable state token the adopter already supplied.
+func TestReleaseGenerator_ReleaseTokenDefaultsToStateToken(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+		StateToken:   "${{ secrets.CASCADE_BOT_TOKEN }}",
+	}
+	content, err := NewReleaseGenerator(cfg, "").Generate()
+	require.NoError(t, err)
+
+	// Release operations reference the state token, not GITHUB_TOKEN.
+	assert.Contains(t, content, "token: ${{ secrets.CASCADE_BOT_TOKEN }}")
+	assert.NotContains(t, content, "token: ${{ secrets.GITHUB_TOKEN }}")
+}
+
+// TestReleaseGenerator_BothTokensUnsetKeepsGithubToken asserts the OFF/back-
+// compat state: with neither release_token nor state_token set, release steps
+// keep emitting the historical GITHUB_TOKEN default byte-for-byte.
+func TestReleaseGenerator_BothTokensUnsetKeepsGithubToken(t *testing.T) {
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}}
+	content, err := NewReleaseGenerator(cfg, "").Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "token: ${{ secrets.GITHUB_TOKEN }}")
+	assert.NotContains(t, content, "CASCADE_BOT_TOKEN")
+}
+
 // TestMintStepIndentation asserts the minting step is emitted at the standard
 // 6-space step indent so it nests correctly under the job's steps: block.
 func TestMintStepIndentation(t *testing.T) {

@@ -1,0 +1,48 @@
+name: "Release Token Defaults To State Token"
+description: |
+  Reproduces the rc-to-release dead-chain footgun: an adopter sets a trigger-
+  capable state_token (used for protected-trunk state writes) but leaves
+  release_token unset. The release token creates the rc tag, and a tag created
+  with the default GITHUB_TOKEN fires no downstream workflows, so the
+  Release/promote chain would die silently.
+
+  With this fix, an unset release_token inherits the state_token expression, so
+  the rc-creating release steps reference the trigger-capable token. This
+  scenario asserts the generated orchestrate workflow references the state token
+  for release operations and never falls back to GITHUB_TOKEN there.
+
+  Generator-output verification scenario; assertion runs on the staged repo after
+  StageRepoFromConfig generates workflows but before any orchestrate runs.
+
+config:
+  trunk_branch: main
+  environments: ["dev", "test", "staging", "prod"]
+  state_token: CASCADE_BOT_TOKEN
+  builds:
+    - name: app
+      workflow: build-app.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy-app.yaml
+      triggers: []
+
+steps:
+  - name: "Initial commit; assert the release token inherits the state token"
+    action: commit
+    commit:
+      message: "feat: add app build and deploy with a state_token but no release_token"
+      files:
+        src/main.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # Release operations use the trigger-capable state token, wrapped.
+            - "token: ${{ secrets.CASCADE_BOT_TOKEN }}"
+          not_contains:
+            # The release token must not silently fall back to GITHUB_TOKEN,
+            # whose ref-creations do not trigger downstream workflows.
+            - "token: ${{ secrets.GITHUB_TOKEN }}"
