@@ -525,7 +525,8 @@ func TestManager_Publish(t *testing.T) {
 				{"ref": "refs/tags/v1.0.0-rc.0"},
 				{"ref": "refs/tags/v1.0.0-rc.3"},
 				{"ref": "refs/tags/v1.0.0-rc.5"},
-				{"ref": "refs/tags/v0.9.0-rc.2"}, // Different base version - should NOT be deleted
+				{"ref": "refs/tags/v0.9.0-rc.2"}, // Superseded earlier base - should be reaped
+				{"ref": "refs/tags/v1.1.0-rc.0"}, // Higher base (future work) - should NOT be deleted
 			})
 			return
 		}
@@ -584,12 +585,14 @@ func TestManager_Publish(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(999), result.ReleaseID)
 
-	// Verify all RC tags for v1.0.0 were deleted, but not v0.9.0-rc.2
-	assert.Len(t, deletedTags, 3)
+	// Publishing v1.0.0 reaps every RC tag whose base is at or below v1.0.0,
+	// including the superseded v0.9.0 base, but never a higher base (v1.1.0).
+	assert.Len(t, deletedTags, 4)
 	assert.Contains(t, deletedTags, "v1.0.0-rc.0")
 	assert.Contains(t, deletedTags, "v1.0.0-rc.3")
 	assert.Contains(t, deletedTags, "v1.0.0-rc.5")
-	assert.NotContains(t, deletedTags, "v0.9.0-rc.2") // Different base version
+	assert.Contains(t, deletedTags, "v0.9.0-rc.2")    // Superseded earlier base
+	assert.NotContains(t, deletedTags, "v1.1.0-rc.0") // Higher base preserved
 }
 
 // TestManager_Publish_CustomTagPrefix verifies that publishing a release with a
@@ -767,6 +770,76 @@ func TestManager_Create_CleansUpStaleDrafts(t *testing.T) {
 	assert.Contains(t, deletedIDs, int64(100))
 	assert.Contains(t, deletedIDs, int64(101))
 	assert.NotContains(t, deletedIDs, int64(102)) // Preserved - different base version
+}
+
+// TestCleanupRCTags_ReapsSupersededBases verifies that publish-time RC cleanup
+// reaps every RC tag whose base version is at or below the published version,
+// including bases from earlier rounds that were never published, while leaving
+// any higher base (work staged for a future release) untouched. A delete that
+// returns 404 (already gone) is treated as a no-op so the cleanup is idempotent,
+// and a base carrying a different tag prefix is never compared across prefixes.
+func TestCleanupRCTags_ReapsSupersededBases(t *testing.T) {
+	listedTags := []string{
+		"v0.9.0-rc.0",          // below published base - reap
+		"v1.0.0-rc.0",          // superseded earlier base, never published - reap
+		"v1.0.0-rc.4",          // below published rc on the same base - reap
+		"v1.0.1-rc.0",          // equal to published base - reap (404 path)
+		"v1.0.1-rc.2",          // equal to published base - reap
+		"v1.1.0-rc.0",          // higher base, future work - preserve
+		"rel-1.0.0-rc.0",       // different prefix - preserve
+		"v1.0.1-rc.1.hotfix.1", // hotfix variant, not a plain RC tag - preserve
+	}
+
+	deletedTags := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/repos/owner/repo/git/refs/tags" {
+			refs := make([]map[string]string, 0, len(listedTags))
+			for _, tag := range listedTags {
+				refs = append(refs, map[string]string{"ref": "refs/tags/" + tag})
+			}
+			_ = json.NewEncoder(w).Encode(refs)
+			return
+		}
+
+		if r.Method == "DELETE" && strings.Contains(r.URL.Path, "/git/refs/tags/") {
+			tag := strings.TrimPrefix(r.URL.Path, "/repos/owner/repo/git/refs/tags/")
+			deletedTags = append(deletedTags, tag)
+			// v1.0.1-rc.0 simulates a tag a prior partial run already removed: a
+			// 404 must be absorbed as a no-op, not surfaced as a failure.
+			if tag == "v1.0.1-rc.0" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}))
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL,
+		token:   "test-token",
+		repo:    "owner/repo",
+	}
+
+	err := manager.cleanupRCTags("v1.0.1")
+	require.NoError(t, err)
+
+	// Every base <= v1.0.1 with the matching prefix is reaped, regardless of which
+	// round produced it. The 404 on v1.0.1-rc.0 is a no-op.
+	assert.ElementsMatch(t, []string{
+		"v0.9.0-rc.0",
+		"v1.0.0-rc.0",
+		"v1.0.0-rc.4",
+		"v1.0.1-rc.0",
+		"v1.0.1-rc.2",
+	}, deletedTags)
+
+	// Higher base, mismatched prefix, and hotfix variants are never touched.
+	assert.NotContains(t, deletedTags, "v1.1.0-rc.0")
+	assert.NotContains(t, deletedTags, "rel-1.0.0-rc.0")
+	assert.NotContains(t, deletedTags, "v1.0.1-rc.1.hotfix.1")
 }
 
 func TestParseRCTag(t *testing.T) {
