@@ -172,7 +172,16 @@ func TestHotfixGenerator_Concurrency(t *testing.T) {
 	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
 	content, err := gen.Generate()
 	require.NoError(t, err)
-	assert.Contains(t, content, "group: hotfix-")
+
+	// The finalize (pull_request close) path keys on a per-repository constant so
+	// concurrent per-environment finalize runs queue instead of racing on the
+	// shared manifest blob SHA. The apply (dispatch) path stays keyed per target
+	// environment so unrelated cherry-picks still run in parallel.
+	assert.Contains(t, content,
+		"github.event_name == 'pull_request' && format('hotfix-finalize-{0}', github.repository)",
+		"finalize must use a per-repository concurrency group so writes queue")
+	assert.Contains(t, content, "format('hotfix-{0}', github.event.inputs.target_env)",
+		"the dispatch path must stay keyed per target environment")
 	assert.Contains(t, content, "cancel-in-progress: false")
 }
 

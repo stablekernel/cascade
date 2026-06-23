@@ -183,11 +183,21 @@ func (g *HotfixGenerator) writePermissions(sb *strings.Builder) {
 	writeTopLevelPermissions(sb, base)
 }
 
-// writeConcurrency keys the group per target environment. On dispatch the env is
-// the operator input; on pull_request close it is derived from the base ref.
+// writeConcurrency keys the apply (dispatch) path per target environment, but
+// keys the finalize (pull_request close) path on a per-repository constant so
+// concurrent per-environment finalize runs QUEUE rather than race.
+//
+// Each env's finalize commits the manifest to trunk through the Contents API.
+// Keyed per base ref, two envs whose resolution PRs close together fall into
+// different concurrency groups and PUT in parallel; the second writer's blob SHA
+// is stale and GitHub returns 409, dropping that env's state. A per-repo finalize
+// group with cancel-in-progress: false serializes those writes instead. This is
+// defense-in-depth: the durable fix is the Contents API 409 read-modify-write
+// retry in internal/statewrite, which still protects against any other writer
+// (orchestrate, promote, rollback) that a manifest-global group cannot serialize.
 func (g *HotfixGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
-	sb.WriteString("  group: hotfix-${{ github.event.inputs.target_env || github.event.pull_request.base.ref }}\n")
+	sb.WriteString("  group: ${{ github.event_name == 'pull_request' && format('hotfix-finalize-{0}', github.repository) || format('hotfix-{0}', github.event.inputs.target_env) }}\n")
 	sb.WriteString("  cancel-in-progress: false\n")
 	sb.WriteString("\n")
 }

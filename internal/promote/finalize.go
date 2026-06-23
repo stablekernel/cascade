@@ -1,7 +1,6 @@
 package promote
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/statewrite"
 	"gopkg.in/yaml.v3"
 )
 
@@ -365,44 +365,63 @@ func isRealGitHub() bool {
 }
 
 // writeStateViaAPI writes the manifest file to the trunk branch through the
-// GitHub Contents REST API using the gh CLI. This produces a signed (Verified)
-// commit and, with a bypass-capable token, can update a protected branch.
+// GitHub Contents REST API using the shared optimistic-lock retry loop. This
+// produces a signed (Verified) commit and, with a bypass-capable token, can
+// update a protected branch. The mutation re-parses whatever trunk bytes the
+// loop fetches and overlays only this finalizer's owned env state, so two
+// concurrent env finalizers merge rather than clobber each other on the file
+// blob SHA.
 func (f *Finalizer) writeStateViaAPI(message string) error {
 	repo := os.Getenv("GITHUB_REPOSITORY")
 	if repo == "" {
 		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
 	}
 	branch := trunkBranchFromEnv()
-
-	data, err := os.ReadFile(f.configPath)
-	if err != nil {
-		return fmt.Errorf("read manifest failed: %w", err)
+	key := config.DefaultManifestKey
+	if f.cicdFile.Config != nil && f.cicdFile.Config.ManifestKey != "" {
+		key = f.cicdFile.Config.ManifestKey
 	}
-	contentB64 := base64.StdEncoding.EncodeToString(data)
+	return statewrite.CommitWithRetry(statewrite.Options{
+		Client:  statewrite.NewGHClient(),
+		Repo:    repo,
+		Path:    f.configPath,
+		Ref:     branch,
+		Message: message,
+		Mutate: func(current []byte) ([]byte, error) {
+			into, err := config.ParseManifestBytes(current, key)
+			if err != nil {
+				return nil, fmt.Errorf("parsing current manifest: %w", err)
+			}
+			f.overlayOwnedState(into)
+			data, err := yaml.Marshal(map[string]any{key: into})
+			if err != nil {
+				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+			}
+			return data, nil
+		},
+	})
+}
 
-	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, f.configPath)
-
-	// Fetch the current blob SHA so the API performs an update rather than a
-	// create. An empty result means the file does not yet exist on the branch.
-	shaCmd := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha")
-	shaOut, _ := shaCmd.Output()
-	currentSHA := strings.TrimSpace(string(shaOut))
-
-	args := []string{
-		"api", apiPath, "-X", "PUT",
-		"-f", "message=" + message,
-		"-f", "content=" + contentB64,
-		"-f", "branch=" + branch,
+// overlayOwnedState copies the state this finalizer owns from its in-memory,
+// already-mutated manifest onto into, the freshly fetched trunk manifest. It
+// overlays only the promoted envs (and, on a publish, the release marker and
+// latest_release) so a concurrent finalizer's keys on into are preserved. It is
+// re-appliable: CommitWithRetry calls it again against re-fetched trunk bytes on
+// a 409, and each call deterministically re-derives the same owned keys.
+func (f *Finalizer) overlayOwnedState(into *config.CICDFile) {
+	if into.State == nil {
+		into.State = make(map[string]*config.EnvState)
 	}
-	if currentSHA != "" {
-		args = append(args, "-f", "sha="+currentSHA)
+	if f.promotionResult != nil {
+		for _, promo := range f.promotionResult.Promotions {
+			into.State[promo.Environment] = f.cicdFile.State[promo.Environment]
+		}
 	}
-
-	cmd := exec.Command("gh", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
+	if f.promotionResult != nil && f.promotionResult.ReleaseAction == "publish" {
+		into.LatestRelease = f.cicdFile.LatestRelease
+		into.State["release"] = f.cicdFile.State["release"]
+		delete(into.State, "prerelease")
 	}
-	return nil
 }
 
 // commitAndPushGit commits the manifest and pushes with plain git. Used in the
