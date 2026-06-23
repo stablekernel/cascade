@@ -122,7 +122,10 @@ func TestActRunner_Start(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Cold-image pulls can exceed two minutes on a fresh runner; match the
+	// RunWorkflow test's five-minute budget so the bare-start test does not flake
+	// on the first image pull.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	runner, err := NewActRunner(ctx, "", "", "", nil)
