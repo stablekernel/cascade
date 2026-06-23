@@ -753,6 +753,35 @@ func TestCommitAndPushGit_DetachedHeadPushesToTrunk(t *testing.T) {
 	require.Contains(t, string(out), "update state after promotion to test")
 }
 
+// TestFinalizeOverlayMerge verifies that overlaying this finalizer's owned env
+// state onto a freshly fetched trunk manifest preserves a concurrent writer's
+// untouched env keys while applying this finalizer's promoted env.
+func TestFinalizeOverlayMerge(t *testing.T) {
+	f := &Finalizer{
+		cicdFile: &config.CICDFile{
+			State: map[string]*config.EnvState{
+				"staging": {SHA: "stg-sha", Version: "v2.0.0"},
+			},
+		},
+		promotionResult: &PromotionResult{
+			Promotions: []EnvPromotion{{Environment: "staging"}},
+		},
+	}
+
+	current := &config.CICDFile{
+		State: map[string]*config.EnvState{
+			"dev": {SHA: "dev-sha"},
+		},
+	}
+
+	f.overlayOwnedState(current)
+
+	require.NotNil(t, current.State["dev"], "concurrent writer's env must survive")
+	require.Equal(t, "dev-sha", current.State["dev"].SHA, "untouched env must be preserved")
+	require.NotNil(t, current.State["staging"], "promoted env must be overlaid")
+	require.Equal(t, "stg-sha", current.State["staging"].SHA)
+}
+
 func TestUpdateState_PushesPriorSnapshotOnTransition(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "manifest.yaml")

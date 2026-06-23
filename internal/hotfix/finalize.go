@@ -1,7 +1,6 @@
 package hotfix
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +12,7 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/release"
+	"github.com/stablekernel/cascade/internal/statewrite"
 	"github.com/stablekernel/cascade/internal/version"
 )
 
@@ -135,10 +135,31 @@ func (execTagLister) ListTags() ([]string, error) {
 type gitStatePusher struct{}
 
 func (gitStatePusher) CommitAndPush(path, branch, message string) error {
-	if isRealGitHub() {
-		return writeStateViaAPI(path, branch, message)
-	}
 	return commitAndPushGit(path, branch, message)
+}
+
+// apiStatePusher commits the manifest to trunk through the GitHub Contents REST
+// API using the shared optimistic-lock retry loop, so concurrent env finalizers
+// that each touch only their own env state merge rather than clobbering each
+// other on the file blob SHA. mutate re-applies this hotfix's state change onto
+// whatever trunk bytes the loop fetches.
+type apiStatePusher struct {
+	mutate statewrite.Mutate
+}
+
+func (p apiStatePusher) CommitAndPush(path, branch, message string) error {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
+	}
+	return statewrite.CommitWithRetry(statewrite.Options{
+		Client:  statewrite.NewGHClient(),
+		Repo:    repo,
+		Path:    path,
+		Ref:     branch,
+		Message: message,
+		Mutate:  p.mutate,
+	})
 }
 
 // isRealGitHub reports whether the workflow runs on github.com rather than an
@@ -147,39 +168,6 @@ func (gitStatePusher) CommitAndPush(path, branch, message string) error {
 func isRealGitHub() bool {
 	server := os.Getenv("GITHUB_SERVER_URL")
 	return server == "" || server == "https://github.com"
-}
-
-// writeStateViaAPI writes the manifest to the trunk branch through the GitHub
-// Contents REST API using the gh CLI, producing a signed (Verified) commit.
-func writeStateViaAPI(path, branch, message string) error {
-	repo := os.Getenv("GITHUB_REPOSITORY")
-	if repo == "" {
-		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read manifest failed: %w", err)
-	}
-	contentB64 := base64.StdEncoding.EncodeToString(data)
-	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, path)
-
-	shaOut, _ := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha").Output()
-	currentSHA := strings.TrimSpace(string(shaOut))
-
-	args := []string{
-		"api", apiPath, "-X", "PUT",
-		"-f", "message=" + message,
-		"-f", "content=" + contentB64,
-		"-f", "branch=" + branch,
-	}
-	if currentSHA != "" {
-		args = append(args, "-f", "sha="+currentSHA)
-	}
-	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return nil
 }
 
 // commitAndPushGit commits the manifest and pushes it to the trunk branch with
@@ -227,6 +215,11 @@ type Finalizer struct {
 	pusher      statePusher
 	tipReader   gitTipReader
 	trunkReader trunkStateReader
+
+	// pusherInjected records whether a caller supplied an explicit statePusher.
+	// When true, Finalize uses that pusher verbatim (tests inject a recorder);
+	// when false on real GitHub, Finalize swaps in the API retry pusher.
+	pusherInjected bool
 }
 
 // FinalizerOptions carries the required inputs for NewFinalizer.
@@ -270,6 +263,7 @@ func WithStatePusher(p statePusher) FinalizeOption {
 	return func(f *Finalizer) {
 		if p != nil {
 			f.pusher = p
+			f.pusherInjected = true
 		}
 	}
 }
@@ -433,32 +427,45 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 		return nil
 	}
 
-	// Snapshot the prior state into the deploy-history ring (newest first,
-	// bounded). The idempotency gate above already returned when the state
-	// records mergeSHA, so this records a genuine transition; the gate inside
-	// PushPreviousSnapshot is belt-and-suspenders.
-	prior.PushPreviousSnapshot(mergeSHA)
-
-	// Carry BaseSHA forward when already diverged; otherwise anchor it now.
-	if prior.BaseSHA == "" {
-		prior.BaseSHA = baseSHA
+	// Apply the state mutation in place onto the trunk manifest, snapshotting the
+	// prior state into the Previous ring and writing the divergence fields and
+	// substates. Extracted so the same change can be re-applied against freshly
+	// fetched trunk bytes inside the optimistic-lock retry loop below.
+	if err := f.applyHotfixState(f.cicd, targetEnv, mergeSHA, hotfixVersion, baseSHA, timestamp, fixSHAs); err != nil {
+		return err
 	}
-	prior.Patches = append(prior.Patches, fixSHAs...)
-	prior.Ref = branch
-	prior.SHA = mergeSHA
-	prior.Version = hotfixVersion
-	prior.CommittedAt = timestamp
-	prior.CommittedBy = f.actor
-
-	// Record per-deploy and per-build substates for successful jobs.
-	f.recordSubstates(prior, mergeSHA, hotfixVersion, timestamp)
 
 	if err := f.writeConfig(); err != nil {
 		return err
 	}
 
 	message := fmt.Sprintf("chore: record hotfix %s on %s [skip ci]", hotfixVersion, targetEnv)
-	if err := f.pusher.CommitAndPush(f.configPath, trunk, message); err != nil {
+
+	pusher := f.pusher
+	if !f.pusherInjected && isRealGitHub() {
+		capturedVersion := hotfixVersion
+		capturedTimestamp := timestamp
+		capturedBaseSHA := baseSHA
+		capturedFixSHAs := append([]string(nil), fixSHAs...)
+		capturedTarget := targetEnv
+		capturedMerge := mergeSHA
+		key := f.manifestKey
+		pusher = apiStatePusher{mutate: func(current []byte) ([]byte, error) {
+			fresh, err := config.ParseManifestBytes(current, key)
+			if err != nil {
+				return nil, fmt.Errorf("parsing current manifest: %w", err)
+			}
+			if err := f.applyHotfixState(fresh, capturedTarget, capturedMerge, capturedVersion, capturedBaseSHA, capturedTimestamp, capturedFixSHAs); err != nil {
+				return nil, err
+			}
+			data, err := yaml.Marshal(map[string]any{key: fresh})
+			if err != nil {
+				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+			}
+			return data, nil
+		}}
+	}
+	if err := pusher.CommitAndPush(f.configPath, trunk, message); err != nil {
 		return fmt.Errorf("committing hotfix state: %w", err)
 	}
 
@@ -468,6 +475,37 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 		return err
 	}
 
+	return nil
+}
+
+// applyHotfixState applies the hotfix state mutation for targetEnv onto cicd
+// using pre-computed values, so it can be re-applied against freshly fetched
+// trunk bytes inside the optimistic-lock retry loop. It is idempotent: when the
+// manifest already records mergeSHA for targetEnv the call is a no-op, so a retry
+// (or rerun) neither double-appends patches nor re-snapshots the Previous ring.
+func (f *Finalizer) applyHotfixState(cicd *config.CICDFile, targetEnv, mergeSHA, hotfixVersion, baseSHA, timestamp string, fixSHAs []string) error {
+	if cicd.State == nil {
+		cicd.State = make(map[string]*config.EnvState)
+	}
+	prior := cicd.State[targetEnv]
+	if prior == nil {
+		prior = &config.EnvState{}
+		cicd.State[targetEnv] = prior
+	}
+	if prior.SHA == mergeSHA {
+		return nil
+	}
+	prior.PushPreviousSnapshot(mergeSHA)
+	if prior.BaseSHA == "" {
+		prior.BaseSHA = baseSHA
+	}
+	prior.Patches = append(prior.Patches, fixSHAs...)
+	prior.Ref = envBranch(targetEnv)
+	prior.SHA = mergeSHA
+	prior.Version = hotfixVersion
+	prior.CommittedAt = timestamp
+	prior.CommittedBy = f.actor
+	f.recordSubstates(prior, mergeSHA, hotfixVersion, timestamp)
 	return nil
 }
 

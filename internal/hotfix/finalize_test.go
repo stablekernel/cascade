@@ -138,6 +138,33 @@ func loadState(t *testing.T, manifest, env string) *config.EnvState {
 	return cicd.State[env]
 }
 
+// TestFinalizeHotfixMutatePreservesUntouchedEnv verifies that applying the
+// hotfix state mutation for one env on a manifest leaves every other env's
+// recorded state untouched, so re-applying it against re-fetched trunk bytes in
+// the optimistic-lock loop merges rather than clobbers concurrent writers.
+func TestFinalizeHotfixMutatePreservesUntouchedEnv(t *testing.T) {
+	cicd := &config.CICDFile{State: map[string]*config.EnvState{
+		"dev":     {SHA: "dev-sha", Version: "v1.0.0"},
+		"staging": {SHA: "stg-sha", Version: "v1.1.0"},
+	}}
+	f := &Finalizer{actor: "tester", manifestKey: "ci"}
+
+	err := f.applyHotfixState(cicd, "staging", "merge-sha", "v1.1.1", "base-sha", "2026-01-01T00:00:00Z", []string{"fix-sha"})
+	if err != nil {
+		t.Fatalf("applyHotfixState: %v", err)
+	}
+
+	if cicd.State["dev"].SHA != "dev-sha" {
+		t.Errorf("dev.sha = %q, want unchanged dev-sha", cicd.State["dev"].SHA)
+	}
+	if cicd.State["staging"].SHA != "merge-sha" {
+		t.Errorf("staging.sha = %q, want merge-sha", cicd.State["staging"].SHA)
+	}
+	if cicd.State["staging"].Version != "v1.1.1" {
+		t.Errorf("staging.version = %q, want v1.1.1", cicd.State["staging"].Version)
+	}
+}
+
 func TestFinalize_WritesDivergedState(t *testing.T) {
 	newScratchRepo(t)
 	base := commitFile(t, "a.txt", "one", "first")
