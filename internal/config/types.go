@@ -325,10 +325,36 @@ func normalizeTokenExpression(value string) string {
 }
 
 // GetReleaseToken returns the configured release token as a resolvable GitHub
-// Actions expression, or "${{ secrets.GITHUB_TOKEN }}" if not specified. A bare
-// secret name (e.g. "MY_TOKEN") is normalized to "${{ secrets.MY_TOKEN }}".
+// Actions expression. A bare secret name (e.g. "MY_TOKEN") is normalized to
+// "${{ secrets.MY_TOKEN }}".
+//
+// When release_token is unset, the result depends on state_token. The release
+// token creates the rc tag, and creating a tag that must trigger downstream
+// workflows (Release, the fleet, promotion) requires a trigger-capable token:
+// GitHub deliberately suppresses workflow triggers for ref creations made with
+// the default GITHUB_TOKEN. So when an adopter has supplied a trigger-capable
+// state_token (typically a PAT or App-backed token for protected-trunk writes)
+// but left release_token unset, defaulting the release token to GITHUB_TOKEN
+// would silently break the rc-to-release chain: the rc tag fires nothing.
+//
+// To avoid that silent dead-chain, an unset release_token falls back to the
+// state token expression whenever state_token is set, reusing the trigger-
+// capable token the adopter already configured. When both are unset, the
+// historical "${{ secrets.GITHUB_TOKEN }}" default is preserved for
+// back-compatibility (a single-token, same-repo setup does not need the
+// chain). When release_token is set, it always wins.
+//
+// Note on App-backed state tokens: a minted App token lives in a generator
+// step output, not in config, so this config-layer resolver can only fall back
+// to the static state_token string. An adopter whose state token is supplied
+// solely via state_token_app (no static state_token) keeps the GITHUB_TOKEN
+// default here; to arm the rc-to-release chain in that shape, set a static,
+// trigger-capable release_token explicitly.
 func (c *TrunkConfig) GetReleaseToken() string {
 	if c.ReleaseToken == "" {
+		if c.StateToken != "" {
+			return normalizeTokenExpression(c.StateToken)
+		}
 		return "${{ secrets.GITHUB_TOKEN }}"
 	}
 	return normalizeTokenExpression(c.ReleaseToken)

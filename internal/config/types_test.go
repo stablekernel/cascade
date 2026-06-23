@@ -420,23 +420,88 @@ func TestGetTagPrefix(t *testing.T) {
 }
 
 func TestGetReleaseToken(t *testing.T) {
-	// Default when not set
-	cfg := &TrunkConfig{}
-	assert.Equal(t, "${{ secrets.GITHUB_TOKEN }}", cfg.GetReleaseToken())
+	tests := []struct {
+		name         string
+		releaseToken string
+		stateToken   string
+		stateApp     *AppTokenSource
+		want         string
+	}{
+		{
+			// Back-compat: neither token set keeps today's GITHUB_TOKEN default.
+			name: "both unset defaults to GITHUB_TOKEN",
+			want: "${{ secrets.GITHUB_TOKEN }}",
+		},
+		{
+			// Explicit release_token always wins, unchanged.
+			name:         "release_token full expression passes through",
+			releaseToken: "${{ secrets.CUSTOM_RELEASE_TOKEN }}",
+			want:         "${{ secrets.CUSTOM_RELEASE_TOKEN }}",
+		},
+		{
+			// Bare secret name is normalized; the field advertises a "GitHub
+			// secret name", so a bare value must not be emitted verbatim.
+			name:         "release_token bare name normalizes to secret",
+			releaseToken: "CASCADE_STATE_TOKEN",
+			want:         "${{ secrets.CASCADE_STATE_TOKEN }}",
+		},
+		{
+			// Unwrapped context form is wrapped.
+			name:         "release_token context form wraps",
+			releaseToken: "secrets.CASCADE_STATE_TOKEN",
+			want:         "${{ secrets.CASCADE_STATE_TOKEN }}",
+		},
+		{
+			// The footgun fix: release_token unset but state_token set falls
+			// back to the state token expression so the rc tag is created with
+			// a trigger-capable token and the rc-to-release chain fires.
+			name:       "state_token set release_token unset falls back to state token",
+			stateToken: "${{ secrets.CASCADE_BOT_TOKEN }}",
+			want:       "${{ secrets.CASCADE_BOT_TOKEN }}",
+		},
+		{
+			// The fallback normalizes a bare state_token name too.
+			name:       "bare state_token name normalizes on fallback",
+			stateToken: "CASCADE_BOT_TOKEN",
+			want:       "${{ secrets.CASCADE_BOT_TOKEN }}",
+		},
+		{
+			// Explicit release_token still wins over a set state_token.
+			name:         "release_token wins over state_token",
+			releaseToken: "${{ secrets.CUSTOM_RELEASE_TOKEN }}",
+			stateToken:   "${{ secrets.CASCADE_BOT_TOKEN }}",
+			want:         "${{ secrets.CUSTOM_RELEASE_TOKEN }}",
+		},
+		{
+			// App-backed state with a static state_token falls back to the
+			// static state token (the App mint output is a generator-level step
+			// output, not a config value).
+			name:       "app-backed state with static state_token falls back to static",
+			stateToken: "${{ secrets.CASCADE_BOT_TOKEN }}",
+			stateApp:   &AppTokenSource{AppID: "CASCADE_APP_ID", PrivateKey: "CASCADE_APP_PRIVATE_KEY"},
+			want:       "${{ secrets.CASCADE_BOT_TOKEN }}",
+		},
+		{
+			// App-only state (state_token_app set, no static state_token, no
+			// release_token) cannot be resolved to a trigger-capable token at
+			// the config layer, so it keeps the GITHUB_TOKEN default. Adopters
+			// in this shape set a static release_token to arm the chain.
+			name:     "app-only state without static token keeps GITHUB_TOKEN default",
+			stateApp: &AppTokenSource{AppID: "CASCADE_APP_ID", PrivateKey: "CASCADE_APP_PRIVATE_KEY"},
+			want:     "${{ secrets.GITHUB_TOKEN }}",
+		},
+	}
 
-	// Configured value (full expression)
-	cfg.ReleaseToken = "${{ secrets.CUSTOM_RELEASE_TOKEN }}"
-	assert.Equal(t, "${{ secrets.CUSTOM_RELEASE_TOKEN }}", cfg.GetReleaseToken())
-
-	// Bare secret name is normalized to a resolvable secrets expression.
-	// The field doc advertises a "GitHub secret name", so a bare name must
-	// not be emitted verbatim (that produces a literal token and a 401).
-	cfg.ReleaseToken = "CASCADE_STATE_TOKEN"
-	assert.Equal(t, "${{ secrets.CASCADE_STATE_TOKEN }}", cfg.GetReleaseToken())
-
-	// Unwrapped context form is also wrapped.
-	cfg.ReleaseToken = "secrets.CASCADE_STATE_TOKEN"
-	assert.Equal(t, "${{ secrets.CASCADE_STATE_TOKEN }}", cfg.GetReleaseToken())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &TrunkConfig{
+				ReleaseToken:  tt.releaseToken,
+				StateToken:    tt.stateToken,
+				StateTokenApp: tt.stateApp,
+			}
+			assert.Equal(t, tt.want, cfg.GetReleaseToken())
+		})
+	}
 }
 
 func TestGetStateToken(t *testing.T) {
