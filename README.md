@@ -37,7 +37,11 @@
 
 ## How it works
 
-The **manifest** (`.github/manifest.yaml`) is the single source of truth. It holds both the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once; after that the generated workflows own their own execution.
+The **manifest** (`.github/manifest.yaml`) is the single source of truth:
+
+- It holds both the pipeline configuration and the live deployment state for every environment.
+- You run `cascade generate-workflow` once.
+- After that, the generated workflows own their own execution.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
@@ -74,7 +78,12 @@ flowchart TD
 
 ## Cross-repo artifact tracking
 
-A primary repo can own the environment chain for artifacts that are built and versioned in other repos. Each external repo dispatches the primary's generated `external-update.yaml`, which writes `{sha, version}` into `state.<env>.external.<name>` of the one shared manifest; concurrent updates serialize on that manifest, then the primary cascades every source through its own environments. A callback can also pull in an external repo's workflow synchronously via `uses:` during the primary's run.
+A primary repo can own the environment chain for artifacts that are built and versioned in other repos:
+
+- Each external repo dispatches the primary's generated `external-update.yaml`.
+- That workflow writes `{sha, version}` into `state.<env>.external.<name>` of the one shared manifest.
+- Concurrent updates serialize on that manifest, then the primary cascades every source through its own environments.
+- A callback can also pull in an external repo's workflow synchronously via `uses:` during the primary's run.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
@@ -109,7 +118,13 @@ flowchart TD
 
 ## Hotfix any environment
 
-Most pipelines can only hotfix the tip, which in practice means production. cascade hotfixes **any** environment: it stages the fix on a per-environment integration branch, deploys that one environment with a clean `-rc.N.hotfix.M` version, and rejoins trunk the next time a trunk SHA that already contains the fix is promoted. The example below lands a fix on **staging** while dev, test, and prod stay exactly where they are.
+Most pipelines can only hotfix the tip, which in practice means production. cascade hotfixes **any** environment:
+
+- It stages the fix on a per-environment integration branch.
+- It deploys that one environment with a clean `-rc.N.hotfix.M` version.
+- It rejoins trunk the next time a trunk SHA that already contains the fix is promoted.
+
+The example below lands a fix on **staging** while dev, test, and prod stay exactly where they are.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
@@ -149,13 +164,22 @@ cascade earns its keep when you promote a built artifact through a chain of envi
 - You want **promotion gates, hotfix-to-any-environment, and rollback** without hand-wiring that state machine.
 - You can adopt **conventional commits** (cascade derives versions, changelogs, and the breaking-change gate from them).
 
-It is likely overkill for a single environment with a plain build-and-release on push, or a repo with no deployments at all, though the no-environment mode still gives you conventional-commit versioning and releases.
+It is likely overkill for a single environment with a plain build-and-release on push. A repo with no deployments at all is a different case: the no-environment mode is a supported shape that still gives you conventional-commit versioning and releases.
 
-**Not trunk-based yet?** cascade promotes *from trunk*: you merge to one trunk branch and cascade promotes that line through your environments. If you run release branches or a GitFlow model today, adopting cascade means moving promotion onto a trunk-based flow. That is a deliberate shift, but cascade is a practical vehicle for it: your existing build and deploy steps become reusable-workflow callbacks, and cascade takes over the promotion, state, and release wiring on top of them.
+**Not trunk-based yet?** cascade promotes *from trunk*:
+
+- You merge to one trunk branch and cascade promotes that line through your environments.
+- If you run release branches or a GitFlow model today, adopting cascade means moving promotion onto a trunk-based flow.
+- That is a deliberate shift, and cascade is a practical vehicle for it: your existing build and deploy steps become reusable-workflow callbacks, and cascade takes over the promotion, state, and release wiring on top of them.
 
 ### What adopting looks like
 
-Keep the build and deploy logic you already have, wrap each as a `workflow_call` reusable workflow, describe your environments and callbacks in the manifest, and let cascade generate the orchestration. Tooling you already rely on stays yours: point cascade's changelog or release step at your own workflow, or switch it off, while cascade owns the promotion cascade.
+Adoption involves a few steps:
+
+- Keep the build and deploy logic you already have, and wrap each as a `workflow_call` reusable workflow.
+- Describe your environments and callbacks in the manifest.
+- Let cascade generate the orchestration.
+- Keep the tooling you rely on: point cascade's changelog or release step at your own workflow, or switch it off, while cascade owns the promotion cascade.
 
 See the **[Adoption guide](https://stablekernel.github.io/cascade/adoption/)** for the full walkthrough on migrating an existing pipeline and wiring in tooling you already use. For reference: the [Getting Started guide](https://stablekernel.github.io/cascade/getting-started/), the [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) for the inputs cascade passes your workflows, and the [hardening guide](https://stablekernel.github.io/cascade/security/hardening/) for the GitHub setup (branch protection, environments, scoped tokens).
 
@@ -347,13 +371,15 @@ Full flag reference: [CLI reference](https://stablekernel.github.io/cascade/cli-
 
 ## Roadmap to stable
 
-cascade is functional and self-hosted. Its own releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas.
+cascade is functional and self-hosted; its own releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas:
 
-**Schema coverage.** A few GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These sit on the direct path to v1.0.0.
+- **Schema coverage.** A few GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These sit on the direct path to v1.0.0.
+- **Hardening.** This covers schema version enforcement (shipped), compatibility docs ([schema versioning](https://stablekernel.github.io/cascade/versioning/)), and more e2e coverage. The added tests confirm that the generated workflows behave correctly under edge cases such as empty builds, cross-repo coordination, and rollback to N-1.
 
-**Hardening.** This covers schema version enforcement (shipped), compatibility docs ([schema versioning](https://stablekernel.github.io/cascade/versioning/)), and more e2e coverage. The added tests confirm that the generated workflows behave correctly under edge cases such as empty builds, cross-repo coordination, and rollback to N-1.
+Schema stability:
 
-The manifest schema field shapes were frozen in v0.1.0 as the v1 contract baseline. Minor versions between now and v1.0.0 may add new optional fields; no existing fields will be removed or renamed before v1.0.0.
+- The manifest schema field shapes were frozen in v0.1.0 as the v1 contract baseline.
+- Minor versions between now and v1.0.0 may add new optional fields; no existing fields will be removed or renamed before v1.0.0.
 
 Open work is tracked in [GitHub Issues](https://github.com/stablekernel/cascade/issues).
 
