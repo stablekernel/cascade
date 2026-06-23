@@ -120,9 +120,10 @@ flowchart TD
 
 Most pipelines can only hotfix the tip, which in practice means production. cascade hotfixes **any** environment:
 
-- It stages the fix on a per-environment integration branch.
-- It deploys that one environment with a clean `-rc.N.hotfix.M` version.
-- It rejoins trunk the next time a trunk SHA that already contains the fix is promoted.
+- It stages the fix or set of fixes on a per-environment integration branch.
+- A hotfix can carry a set of commits and elevate them across the chain up to the target environment.
+- It deploys the diverged environments with a clean `-rc.N.hotfix.M` version.
+- It rejoins trunk the next time a trunk SHA that already contains the fixes is promoted.
 
 The example below lands a fix on **staging** while dev, test, and prod stay exactly where they are.
 
