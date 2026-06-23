@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Action represents the release management action to perform
@@ -35,6 +36,10 @@ type Manager struct {
 	baseURL string
 	token   string
 	repo    string
+	// sleepFn is called between retry attempts in findReleaseByTagOrSHA to give
+	// GitHub's release-list endpoint time to reflect a recently created draft.
+	// Defaults to time.Sleep; tests inject a no-op to keep test runs fast.
+	sleepFn func(time.Duration)
 }
 
 // NewManager creates a new release manager.
@@ -49,6 +54,7 @@ func NewManager(repo, token string) *Manager {
 		baseURL: baseURL,
 		token:   token,
 		repo:    repo,
+		sleepFn: time.Sleep,
 	}
 }
 
@@ -60,6 +66,7 @@ func NewManagerWithURL(repo, token, baseURL string) *Manager {
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		token:   token,
 		repo:    repo,
+		sleepFn: time.Sleep,
 	}
 }
 
@@ -83,6 +90,11 @@ type Options struct {
 	NewTag      string // New tag for publish (semver) - replaces short-sha tag
 	DeleteTag   string // Tag to delete after publish (short-sha cleanup)
 	CreateTag   bool   // Whether to create the git tag (for initial release)
+	// KnownReleaseID is the GitHub release ID returned by a preceding ActionCreate
+	// in the same workflow step. When set, ActionPrerelease and ActionLock use it
+	// directly instead of re-discovering the release by tag, eliminating the
+	// eventual-consistency window between draft creation and the list endpoint.
+	KnownReleaseID int64
 }
 
 // ValidateAction checks if the action is valid
@@ -537,13 +549,26 @@ func (m *Manager) prerelease(opts Options) (*Result, error) {
 		return &Result{}, nil
 	}
 
-	existing, err := m.findRelease(opts.Tag, opts.SHA)
-	if err != nil {
-		return nil, err
-	}
-
-	if existing == nil {
-		return nil, fmt.Errorf("no release found for tag %s (sha: %s)", opts.Tag, opts.SHA)
+	// Resolve the release to promote. When the caller supplies KnownReleaseID
+	// (set by the immediately preceding ActionCreate in the same workflow step),
+	// use it directly - the just-created release needs no re-discovery and
+	// bypassing findRelease eliminates the eventual-consistency race between
+	// draft creation and GitHub's list endpoint propagation.
+	var existingID int64
+	var existingBody string
+	if opts.KnownReleaseID != 0 {
+		existingID = opts.KnownReleaseID
+		// Body will be built from scratch using opts.Changelog below.
+	} else {
+		existing, err := m.findRelease(opts.Tag, opts.SHA)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			return nil, fmt.Errorf("no release found for tag %s (sha: %s)", opts.Tag, opts.SHA)
+		}
+		existingID = existing.ID
+		existingBody = existing.Body
 	}
 
 	// If a new tag is specified, create it and update the release to use it
@@ -560,7 +585,7 @@ func (m *Manager) prerelease(opts Options) (*Result, error) {
 	bodyWithStatus := addStatusLine(opts.Changelog, opts.Environment)
 	if opts.Changelog == "" {
 		// Preserve existing body if no new changelog provided
-		bodyWithStatus = updateStatusLine(existing.Body, opts.Environment)
+		bodyWithStatus = updateStatusLine(existingBody, opts.Environment)
 	}
 
 	payload := map[string]interface{}{
@@ -571,7 +596,7 @@ func (m *Manager) prerelease(opts Options) (*Result, error) {
 		"prerelease": true,
 	}
 
-	release, err := m.apiRequest("PATCH", fmt.Sprintf("/releases/%d", existing.ID), payload)
+	release, err := m.apiRequest("PATCH", fmt.Sprintf("/releases/%d", existingID), payload)
 	if err != nil {
 		return nil, fmt.Errorf("converting to prerelease: %w", err)
 	}
@@ -714,51 +739,86 @@ func (m *Manager) findRelease(tag, sha string) (*GitHubRelease, error) {
 	return m.findReleaseByTagOrSHA(tag, sha)
 }
 
-// findReleaseByTagOrSHA searches all releases (including drafts) for a matching tag_name, name, or SHA.
-// This handles the case where draft releases may have "untagged-..." as tag_name but the
-// correct version as their name field, or where the tag hasn't been indexed yet.
-// SHA matching is the most reliable for recently created drafts.
+// listRetryAttempts is the total number of attempts when scanning the release
+// list for a recently created draft. GitHub's release-list endpoint has an
+// eventual-consistency window of a few seconds after draft creation; bounded
+// retries prevent a spurious "no release found" error during that window.
+const listRetryAttempts = 4
+
+// listRetryBackoff is the base backoff between consecutive list attempts. The
+// actual sleep per attempt is attempt*listRetryBackoff (linear). Tests inject a
+// no-op sleepFn so no real time passes.
+const listRetryBackoff = 2 * time.Second
+
+// findReleaseByTagOrSHA searches all releases (including drafts) for a matching
+// tag_name, name, or SHA. SHA matching is most reliable for recently created
+// drafts.
+//
+// When the first list response is empty (GitHub's release-list endpoint has an
+// eventual-consistency window after draft creation), the function retries with a
+// short backoff before concluding the release does not exist. The retry is
+// bounded (listRetryAttempts total) so the function always terminates.
 func (m *Manager) findReleaseByTagOrSHA(tag, sha string) (*GitHubRelease, error) {
-	req, err := m.newRequest("GET", "/releases?per_page=100", nil)
-	if err != nil {
-		return nil, err
+	sleep := m.sleepFn
+	if sleep == nil {
+		sleep = time.Sleep
 	}
 
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	for attempt := 0; attempt < listRetryAttempts; attempt++ {
+		if attempt > 0 {
+			sleep(time.Duration(attempt) * listRetryBackoff)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
+		req, err := m.newRequest("GET", "/releases?per_page=100", nil)
+		if err != nil {
+			return nil, err
+		}
 
-	var releases []GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
+		resp, err := m.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("API request failed: %w", err)
+		}
 
-	// Find release matching the tag or SHA (prefer draft over published for updates)
-	var found *GitHubRelease
-	for i := range releases {
-		// Match by tag_name, name, or SHA (target_commitish)
-		tagMatch := tag != "" && (releases[i].TagName == tag || releases[i].Name == tag)
-		shaMatch := sha != "" && releases[i].TargetCommitish == sha
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		}
 
-		if tagMatch || shaMatch {
-			if releases[i].Draft {
-				// Prefer draft - return immediately
-				return &releases[i], nil
-			}
-			if found == nil {
-				found = &releases[i]
+		var releases []GitHubRelease
+		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("decoding response: %w", err)
+		}
+		_ = resp.Body.Close()
+
+		// Find release matching the tag or SHA (prefer draft over published for updates)
+		var found *GitHubRelease
+		for i := range releases {
+			// Match by tag_name, name, or SHA (target_commitish)
+			tagMatch := tag != "" && (releases[i].TagName == tag || releases[i].Name == tag)
+			shaMatch := sha != "" && releases[i].TargetCommitish == sha
+
+			if tagMatch || shaMatch {
+				if releases[i].Draft {
+					// Prefer draft - return immediately
+					return &releases[i], nil
+				}
+				if found == nil {
+					found = &releases[i]
+				}
 			}
 		}
+
+		if found != nil {
+			return found, nil
+		}
+		// found == nil: list returned nothing matching - may be a consistency
+		// window; retry on next iteration unless this was the last attempt.
 	}
 
-	return found, nil
+	// All attempts exhausted; release genuinely not found.
+	return nil, nil
 }
 
 func (m *Manager) apiRequest(method, endpoint string, payload map[string]interface{}) (*GitHubRelease, error) {
