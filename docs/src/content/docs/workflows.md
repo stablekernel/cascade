@@ -263,12 +263,12 @@ flowchart TD
     CP -- "conflict" --> PRconf["resolution PR · <b>cascade-hotfix-conflict</b><br/>markers committed; human force-pushes head"]
     PRclean --> MERGE["on merge"]
     PRconf --> MERGE
-    MERGE --> FIN["build -> deploy one env -> finalize<br/>vX.Y.Z-rc.N.hotfix.M · ref env/&lt;env&gt; · patches [fix]"]
+    MERGE --> FIN["build -> deploy one env -> finalize<br/>vX.Y.Z-rc.N.hotfix.M · ref env/&lt;env&gt; · patches [fixes]"]
     FIN --> DIV["environment diverged<br/>other environments untouched"]
     DIV == "promote a trunk SHA containing the fix<br/>patch-containment guard refuses dropping it" ==> REJOIN["rejoin trunk<br/>divergence cleared · env/&lt;env&gt; deleted"]
 ```
 
-A hotfix applies a single trunk commit onto an environment that is pinned to an older trunk base, without dragging in the intervening commits. This is the case the standard promote flow cannot serve: promoting a pointer forward would advance the target environment past every commit between its base and the fix, which is exactly what an operator pinning that environment is trying to avoid.
+A hotfix applies one or more trunk commits onto an environment that is pinned to an older trunk base, without dragging in the intervening commits. This is the case the standard promote flow cannot serve: promoting a pointer forward would advance the target environment past every commit between its base and the fix or set of fixes, which is exactly what an operator pinning that environment is trying to avoid.
 
 ### Roll forward on trunk first (the default)
 
@@ -292,11 +292,17 @@ state:
 
 `cascade status` surfaces `ref`, `base_sha`, and `patches` only when they are set.
 
+### Elevating across the chain
+
+A hotfix can carry a set of commits to a target environment higher in the chain. cascade elevates the set bottom-up across every environment from the one above the first up to and including the target, so each environment that must diverge ends up running its base plus the fixes. Per environment, any commit already present (an ancestor of that environment's state SHA, or already in its `patches`) is skipped; an environment whose whole set is already present is a no-op and the chain moves on. Every commit applied to an environment is recorded in that environment's `patches`, so the recorded set reflects every fix applied there, not just the first. The first environment is never a hotfix target: a fix reaches it by merging to trunk, not by hotfix.
+
 ### Cherry-pick and resolution pull request
 
 A clean cherry-pick opens a pull request labeled `cascade-hotfix` and merges it as the configured `state_token`. The apply job polls the pull request until it is mergeable, so the required checks configured on `env/<env>` still gate the merge, and the pull request is the audit record even when no human touches it. The merge runs as `state_token` rather than the default `GITHUB_TOKEN` on purpose: a merge authored by `GITHUB_TOKEN` does not emit the `pull_request` close event, so the build, deploy, and finalize stages would never run and the diverged state would never be recorded. Configure `state_token` with a trigger-capable token (the same one used for state writes) to get the post-merge stages after an automated hotfix.
 
 On conflict, the conflicted tree is committed with its conflict markers intact, the branch is pushed, and the pull request is opened labeled `cascade-hotfix-conflict`. Committing the markers makes the resolution pull request a real, checkout-able branch: the diff shows exactly where the conflict is, and a human resolves it locally by force-pushing the head branch.
+
+On the chain path a conflict halts the elevation: the environments still pending are listed in the resolution pull request body, and the later environments are left untouched. After the resolution merges, re-engage the hotfix workflow targeting the same environment to resume the chain from where it stopped.
 
 ```
 git fetch && git switch hotfix/<env>/<short-sha>
@@ -324,7 +330,7 @@ The divergence ends the next time the environment receives a normal promotion. P
 
 The workflow carries two triggers in one file:
 
-- `workflow_dispatch` with inputs `commit` (the trunk fix SHA), `target_env` (a choice over every configured environment except the first), `pr_number` (optional, to replay an existing resolution pull request), and `dry_run`.
+- `workflow_dispatch` with inputs `commit` (one or more trunk fix SHAs, comma-delimited), `target_env` (a choice over every configured environment except the first), `pr_number` (optional, to replay an existing resolution pull request), and `dry_run`.
 - `pull_request` on `types: [closed]` against `branches: ['env/*']`, with the post-merge stages gated on the pull request having merged and carrying the `cascade-hotfix` label.
 
 Its jobs:
@@ -332,7 +338,7 @@ Its jobs:
 | Job | Trigger | Role |
 | --- | --- | --- |
 | plan | dispatch | Fetch env branches and tags, run `cascade hotfix plan`, surface branch-protection suggestions as `::notice::` lines |
-| apply | dispatch (not dry-run) | Cherry-pick onto `hotfix/<env>/<sha>`, open the resolution pull request (clean polls until mergeable then merges as `state_token`; conflict opens the labeled resolution pull request) |
+| apply | dispatch (not dry-run) | Cherry-pick the set onto each environment bottom-up; clean picks open the resolution pull request (polled until mergeable, then merged as `state_token`), a conflict opens the labeled resolution pull request and halts the chain |
 | check | open pull request to `env/*` | Validate the manifest while the hotfix pull request is open |
 | build | merged hotfix | Build the merge SHA, since a cherry-picked commit has no prebuilt artifact |
 | deploy | merged hotfix | Deploy to the target environment, paired with a rollback job mirroring the promote workflow |

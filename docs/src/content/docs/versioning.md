@@ -144,7 +144,7 @@ Older tags outside the current release line do not receive backported fixes. See
 
 ## Hotfix version segment
 
-A hotfix applies a single trunk commit onto an environment pinned to an older trunk base (see the Hotfix section of [Workflows](/cascade/workflows/)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (an rc) or already published.
+A hotfix applies one or more trunk commits onto an environment pinned to an older trunk base (see the Hotfix section of [Workflows](/cascade/workflows/)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (an rc) or already published.
 
 ### rc-based (unpublished) base
 

@@ -583,16 +583,30 @@ cascade promote finalize \
 
 ### hotfix
 
-Apply a trunk commit onto an environment pinned to an older base. A hotfix targets one environment on its `env/<env>` integration branch. The fix must already be on trunk; cascade refuses to apply a commit that is not an ancestor of trunk tip. The subcommands compute and validate the hotfix and write its final state; the cherry-pick, build, and deploy run in the generated `cascade-hotfix.yaml` workflow. See the Hotfix section of [Workflows](/cascade/workflows/) for the full flow.
+Apply one or more trunk commits onto an environment pinned to an older base. A hotfix elevates the commit set bottom-up across the environment chain, up to and including the target environment, on each environment's `env/<env>` integration branch. The fixes must already be on trunk; cascade refuses to apply any commit that is not an ancestor of trunk tip. The subcommands compute and validate the hotfix and write its final state; the cherry-pick, build, and deploy run in the generated `cascade-hotfix.yaml` workflow. See the Hotfix section of [Workflows](/cascade/workflows/) for the full flow.
 
 #### hotfix plan
 
-Validate a hotfix request and compute the integration-branch plan. It enforces, in order: trunk ancestry of the fix, target-environment eligibility (a configured environment that is not the first; prod is allowed), no-op detection when the fix is already in the target, the single-flight open-pull-request gate, and `env/<env>` branch reconciliation. With `--dry-run` nothing is mutated (the env branch is planned but not created).
+Validate a hotfix request and compute the integration-branch plan. It enforces, in order: trunk ancestry of every fix, target-environment eligibility (a configured environment that is not the first; prod is allowed), no-op detection when a fix is already present, the single-flight open-pull-request gate, and `env/<env>` branch reconciliation. With `--dry-run` nothing is mutated (the env branches are planned but not created).
+
+Supply the fixes with one of two mutually exclusive flags, exactly one of which is required:
+
+- `--commit <sha>` applies a single commit to the target environment.
+- `--commits <sha,sha,...>` takes a comma-delimited set and elevates it bottom-up across the chain, from the environment above the first up to and including `--target-env`. On this path each (commit, environment) pair is skipped when the commit is already an ancestor of that environment's state SHA or already in its recorded `patches`; an environment whose whole set is already present is a no-op and the chain moves on.
 
 ```bash
 cascade hotfix plan \
   --commit abc1234 \
   --target-env test \
+  --gha-output
+```
+
+To carry a set of commits and elevate them across the chain:
+
+```bash
+cascade hotfix plan \
+  --commits abc1234,def5678 \
+  --target-env staging \
   --gha-output
 ```
 
@@ -602,7 +616,8 @@ cascade hotfix plan \
 |------|------|----------|-------------|
 | `--config`, `-c` | string | No | Path to manifest file (default: `.github/manifest.yaml`) |
 | `--key` | string | No | Top-level manifest key (default: `ci`) |
-| `--commit` | string | Yes | Trunk commit (SHA or ref) carrying the fix |
+| `--commit` | string | One of `commit`/`commits` | Single trunk commit (SHA or ref) carrying the fix; single-env path |
+| `--commits` | string | One of `commit`/`commits` | Comma-delimited trunk commits to elevate across the env chain up to `--target-env` |
 | `--target-env` | string | Yes | Environment to hotfix |
 | `--actor` | string | No | Actor recorded on the plan (default: `$GITHUB_ACTOR`) |
 | `--remote` | string | No | Git remote env branches live on (default: `origin`) |
@@ -630,7 +645,7 @@ With `--json`:
 }
 ```
 
-The GHA output writes `target_env`, `fix_sha`, `branch`, `base_sha`, `no_op`, `branch_created`, `hotfix_version_candidate`, `conflict_expected`, `dry_run`, and the `protection_suggestions` commands (as JSON and as multiline text).
+The GHA output writes `target_env`, `fix_sha`, `branch`, `base_sha`, `no_op`, `branch_created`, `hotfix_version_candidate`, `conflict_expected`, `dry_run`, and the `protection_suggestions` commands (as JSON and as multiline text). On the `--commits` path the plan also writes `env_sequence` (the environments to walk bottom-up) and a `commits_<env>` list per environment that the apply job replays in order.
 
 #### hotfix finalize
 
@@ -654,7 +669,7 @@ cascade hotfix finalize \
 | `--key` | string | No | Top-level manifest key (default: `ci`) |
 | `--target-env` | string | Yes | Environment to finalize |
 | `--merge-sha` | string | Yes | Tip of `env/<target>` after the resolution pull request merged |
-| `--fix-sha` | string | Yes | Trunk commit the hotfix carries |
+| `--fix-sha` | string | Yes | Trunk commit(s) the hotfix carries; comma-delimited for a multi-commit set. Every commit applied to the environment is appended to its recorded `patches` (commits already present in that environment are skipped) |
 | `--base-sha` | string | Yes | Trunk anchor the integration branch diverged from |
 | `--actor` | string | No | Actor recorded on the state (default: `$GITHUB_ACTOR`) |
 | `--dry-run` | bool | No | Validate and compute without writing state, tags, or releases |
