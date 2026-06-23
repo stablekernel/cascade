@@ -342,17 +342,23 @@ func (f *Finalizer) SetBuildResult(name, result string) {
 // Finalize writes the diverged state for a completed hotfix on env/<targetEnv>.
 //
 // targetEnv is the environment being hotfixed; mergeSHA is the tip of
-// env/<targetEnv> after the resolution PR merged; fixSHA is the trunk commit the
-// hotfix carries; baseSHA is the trunk anchor the integration branch diverged
-// from. It cross-checks the merge SHA against the env-branch tip, allocates the
-// next free hotfix version, snapshots the prior state into the Previous ring,
-// writes the divergence fields and substates, commits the manifest to trunk, and
-// creates the hotfix tag and release object.
+// env/<targetEnv> after the resolution PR merged; fixSHAs are the trunk commits
+// the hotfix carries (every cherry-picked commit, in apply order); baseSHA is the
+// trunk anchor the integration branch diverged from. It cross-checks the merge
+// SHA against the env-branch tip, allocates the next free hotfix version,
+// snapshots the prior state into the Previous ring, writes the divergence fields
+// and substates, commits the manifest to trunk, and creates the hotfix tag and
+// release object. Every commit in fixSHAs is appended to the env's recorded
+// patch set so a multi-commit hotfix records all of its commits, not just the
+// first.
 //
 // Finalize is idempotent on identical inputs: a rerun after the state already
 // records the merge SHA is a no-op that neither double-applies patches nor
 // re-snapshots Previous.
-func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error {
+func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseSHA string) error {
+	if len(fixSHAs) == 0 {
+		return fmt.Errorf("no fix commits supplied; finalize needs at least one trunk commit")
+	}
 	cfg := f.cicd.Config
 	if cfg == nil {
 		return fmt.Errorf("manifest has no config block")
@@ -437,7 +443,7 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 	if prior.BaseSHA == "" {
 		prior.BaseSHA = baseSHA
 	}
-	prior.Patches = append(prior.Patches, fixSHA)
+	prior.Patches = append(prior.Patches, fixSHAs...)
 	prior.Ref = branch
 	prior.SHA = mergeSHA
 	prior.Version = hotfixVersion
@@ -456,8 +462,9 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA, fixSHA, baseSHA string) error 
 		return fmt.Errorf("committing hotfix state: %w", err)
 	}
 
-	// Create the hotfix tag and release object.
-	if err := f.createRelease(cfg, targetEnv, mergeSHA, hotfixVersion, fixSHA, baseVersion); err != nil {
+	// Create the hotfix tag and release object. The release body references the
+	// first carried commit as the representative fix SHA.
+	if err := f.createRelease(cfg, targetEnv, mergeSHA, hotfixVersion, fixSHAs[0], baseVersion); err != nil {
 		return err
 	}
 

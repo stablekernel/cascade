@@ -164,7 +164,7 @@ func TestFinalize_WritesDivergedState(t *testing.T) {
 	)
 	f.SetDeployResult("api", "success")
 
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -239,7 +239,7 @@ func TestFinalize_PreviousRingSnapshot(t *testing.T) {
 		WithTagLister(stubTagLister{}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -291,7 +291,7 @@ func TestFinalize_PreviousRingBounded(t *testing.T) {
 		WithTagLister(stubTagLister{}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -305,6 +305,48 @@ func TestFinalize_PreviousRingBounded(t *testing.T) {
 	}
 	if st.Previous[len(st.Previous)-1].SHA == "seed0" {
 		t.Errorf("oldest seed snapshot was not evicted: %+v", st.Previous)
+	}
+}
+
+func TestFinalize_RecordsAllCommitsOfMultiCommitSet(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix1 := commitFile(t, "b.txt", "two", "first fix")
+	fix2 := commitFile(t, "d.txt", "four", "second fix")
+
+	// env/test exists at base; the resolution merged a cherry-pick of both fixes,
+	// so its tip is the merge SHA the workflow finalizes against.
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	commitFile(t, "c.txt", "fixed1", "cp first")
+	merge := commitFile(t, "e.txt", "fixed2", "cp second")
+	runGit(t, "checkout", "main")
+
+	manifest := writeFinalizeManifest(t, []string{"dev", "test", "prod"}, map[string]envFixture{
+		"dev":  {sha: fix2, version: "v1.4.0-rc.2"},
+		"test": {sha: base, version: "v1.4.0-rc.2"},
+		"prod": {sha: base, version: "v1.4.0-rc.2"},
+	})
+
+	f := newFinalizer(t, manifest,
+		WithReleaseManager(&stubReleaseManager{}),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(&recordingPusher{}),
+	)
+
+	// A two-commit hotfix set must record BOTH original trunk SHAs, not just the
+	// first. Finalizing an env with empty patches using both commits yields two
+	// patch entries.
+	if err := f.Finalize("test", merge, []string{fix1, fix2}, base); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	st := loadState(t, manifest, "test")
+	if len(st.Patches) != 2 {
+		t.Fatalf("state.patches = %v, want both commits recorded (len 2)", st.Patches)
+	}
+	if st.Patches[0] != fix1 || st.Patches[1] != fix2 {
+		t.Errorf("state.patches = %v, want [%s %s]", st.Patches, fix1, fix2)
 	}
 }
 
@@ -341,7 +383,7 @@ func TestFinalize_StacksSecondHotfix(t *testing.T) {
 		WithTagLister(stubTagLister{tags: []string{"v1.4.0-rc.2.hotfix.1"}}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	if err := f.Finalize("test", tip, fix2, base); err != nil {
+	if err := f.Finalize("test", tip, []string{fix2}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -379,7 +421,7 @@ func TestFinalize_MergeSHATipMismatch_Fails(t *testing.T) {
 		WithTagLister(stubTagLister{}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	err := f.Finalize("test", other, fix, base)
+	err := f.Finalize("test", other, []string{fix}, base)
 	if err == nil {
 		t.Fatal("expected mismatch error when merge SHA is not env/test tip")
 	}
@@ -412,7 +454,7 @@ func TestFinalize_Idempotent_Rerun(t *testing.T) {
 		WithTagLister(stubTagLister{}),
 		WithStatePusher(pusher),
 	)
-	if err := f1.Finalize("test", merge, fix, base); err != nil {
+	if err := f1.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("first Finalize: %v", err)
 	}
 
@@ -427,7 +469,7 @@ func TestFinalize_Idempotent_Rerun(t *testing.T) {
 		WithTagLister(stubTagLister{tags: []string{"v1.4.0-rc.2.hotfix.1"}}),
 		WithStatePusher(pusher),
 	)
-	if err := f2.Finalize("test", merge, fix, base); err != nil {
+	if err := f2.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("second Finalize (idempotent): %v", err)
 	}
 
@@ -482,7 +524,7 @@ func TestFinalize_StateWriteTargetsTrunkBranch(t *testing.T) {
 		WithTagLister(stubTagLister{}),
 		WithStatePusher(pusher),
 	)
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -529,7 +571,7 @@ func TestFinalize_ReadsPriorStateFromTrunk(t *testing.T) {
 		WithTrunkStateReader(reader),
 	)
 
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize should succeed reading prior state from trunk: %v", err)
 	}
 
@@ -576,7 +618,7 @@ func TestFinalize_TrunkIsSourceOfPriorState(t *testing.T) {
 		WithStatePusher(&recordingPusher{}),
 		WithTrunkStateReader(&stubTrunkReader{bytes: trunkBytes}),
 	)
-	if err := f.Finalize("test", merge, fix, shaB); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, shaB); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -633,7 +675,7 @@ func TestFinalize_DoesNotClobberOtherEnvsTrunkState(t *testing.T) {
 		WithStatePusher(&recordingPusher{}),
 		WithTrunkStateReader(&stubTrunkReader{bytes: trunkBytes}),
 	)
-	if err := f.Finalize("staging", merge, fix, base); err != nil {
+	if err := f.Finalize("staging", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -701,7 +743,7 @@ func TestFinalize_TrunkStateAbsent_Errors(t *testing.T) {
 		WithStatePusher(&recordingPusher{}),
 		WithTrunkStateReader(&stubTrunkReader{bytes: trunkBytes}),
 	)
-	err := f.Finalize("test", merge, fix, base)
+	err := f.Finalize("test", merge, []string{fix}, base)
 	if err == nil {
 		t.Fatal("expected missing-state error when trunk has no recorded SHA for the target env")
 	}
@@ -762,7 +804,7 @@ func TestFinalize_VersionAllocation_SkipsExistingTags(t *testing.T) {
 		WithTagLister(stubTagLister{tags: []string{"v1.4.0-rc.2.hotfix.1", "v1.4.0-rc.2.hotfix.2"}}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -799,7 +841,7 @@ func TestFinalize_PublishedBase_PatchBump_NoCollision(t *testing.T) {
 		WithTagLister(stubTagLister{tags: []string{"v1.3.0", "v1.3.1"}}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	if err := f.Finalize("test", merge, fix, base); err != nil {
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -836,7 +878,7 @@ func TestFinalize_PrereleaseEnv_ReplacesPrerelease(t *testing.T) {
 		WithTagLister(stubTagLister{}),
 		WithStatePusher(&recordingPusher{}),
 	)
-	if err := f.Finalize("uat", merge, fix, base); err != nil {
+	if err := f.Finalize("uat", merge, []string{fix}, base); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
