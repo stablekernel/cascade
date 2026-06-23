@@ -95,6 +95,14 @@ type Options struct {
 	// directly instead of re-discovering the release by tag, eliminating the
 	// eventual-consistency window between draft creation and the list endpoint.
 	KnownReleaseID int64
+	// AllowPublishedDelete permits ActionDelete to remove a non-draft (published
+	// or prerelease) release. It exists ONLY for hotfix-rejoin cleanup, where the
+	// release is a superseded intermediate artifact: a hotfix on the prerelease
+	// env is promoted to a GitHub prerelease (draft:false), so by the time a
+	// later promote rejoins the env the hotfix release is non-draft and the
+	// general guard would otherwise wedge the cleanup. Normal publish/promote
+	// delete paths leave this false so a real published release is still protected.
+	AllowPublishedDelete bool
 }
 
 // ValidateAction checks if the action is valid
@@ -621,6 +629,18 @@ func (m *Manager) publish(opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	// Re-run convergence: a publish that already patched the release to the semver
+	// tag and cleaned up the rc tags will not resolve by the rc tag on a rerun.
+	// Fall back to the semver tag so a partially completed publish (semver tag
+	// created, rc cleanup done, but the manifest write failed) still finds the
+	// already-published object and converges instead of erroring.
+	if existing == nil && searchTag != opts.Tag {
+		existing, err = m.findRelease(opts.Tag, opts.SHA)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if existing == nil {
 		return nil, fmt.Errorf("no release found for tag %s", searchTag)
 	}
@@ -671,8 +691,11 @@ func (m *Manager) delete(opts Options) (*Result, error) {
 		return &Result{}, nil
 	}
 
-	if !existing.Draft {
-		return nil, fmt.Errorf("cannot delete published release %s", opts.Tag)
+	// Guard against destroying a real published release. The hotfix-rejoin
+	// cleanup opts in via AllowPublishedDelete because the release it removes is a
+	// superseded hotfix prerelease (non-draft), not a release a user cares about.
+	if !existing.Draft && !opts.AllowPublishedDelete {
+		return nil, fmt.Errorf("cannot delete non-draft release %s without AllowPublishedDelete", opts.Tag)
 	}
 
 	result := &Result{
@@ -792,26 +815,42 @@ func (m *Manager) findReleaseByTagOrSHA(tag, sha string) (*GitHubRelease, error)
 		}
 		_ = resp.Body.Close()
 
-		// Find release matching the tag or SHA (prefer draft over published for updates)
-		var found *GitHubRelease
+		// Resolve the best match in priority order so a stale draft sharing a
+		// target_commitish cannot win over the intended release:
+		//   1. a draft whose tag matches exactly (strongest signal),
+		//   2. a draft matched only by SHA (fallback for a tagless object whose
+		//      tag a prior partial run already removed),
+		//   3. any non-draft (published/prerelease) match.
+		// An exact tag match is preferred over a SHA-only match because two drafts
+		// can share a target_commitish; the tag disambiguates.
+		var shaOnlyDraft *GitHubRelease
+		var nonDraft *GitHubRelease
 		for i := range releases {
-			// Match by tag_name, name, or SHA (target_commitish)
 			tagMatch := tag != "" && (releases[i].TagName == tag || releases[i].Name == tag)
 			shaMatch := sha != "" && releases[i].TargetCommitish == sha
-
-			if tagMatch || shaMatch {
-				if releases[i].Draft {
-					// Prefer draft - return immediately
+			if !tagMatch && !shaMatch {
+				continue
+			}
+			if releases[i].Draft {
+				if tagMatch {
+					// Strongest signal - return immediately.
 					return &releases[i], nil
 				}
-				if found == nil {
-					found = &releases[i]
+				if shaOnlyDraft == nil {
+					shaOnlyDraft = &releases[i]
 				}
+				continue
+			}
+			if nonDraft == nil {
+				nonDraft = &releases[i]
 			}
 		}
 
-		if found != nil {
-			return found, nil
+		if shaOnlyDraft != nil {
+			return shaOnlyDraft, nil
+		}
+		if nonDraft != nil {
+			return nonDraft, nil
 		}
 		// found == nil: list returned nothing matching - may be a consistency
 		// window; retry on next iteration unless this was the last attempt.
