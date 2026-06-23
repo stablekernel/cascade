@@ -669,7 +669,7 @@ cascade hotfix finalize \
 | `--key` | string | No | Top-level manifest key (default: `ci`) |
 | `--target-env` | string | Yes | Environment to finalize |
 | `--merge-sha` | string | Yes | Tip of `env/<target>` after the resolution pull request merged |
-| `--fix-sha` | string | Yes | Trunk commit(s) the hotfix carries; comma-delimited for a multi-commit set. Every commit is appended to the environment's recorded `patches`, so a multi-commit hotfix records all of its commits |
+| `--fix-sha` | string | Yes | Trunk commit(s) the hotfix carries; comma-delimited for a multi-commit set. Every commit applied to the environment is appended to its recorded `patches` (commits already present in that environment are skipped) |
 | `--base-sha` | string | Yes | Trunk anchor the integration branch diverged from |
 | `--actor` | string | No | Actor recorded on the state (default: `$GITHUB_ACTOR`) |
 | `--dry-run` | bool | No | Validate and compute without writing state, tags, or releases |

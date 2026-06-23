@@ -294,7 +294,7 @@ state:
 
 ### Elevating across the chain
 
-A hotfix can carry a set of commits to a target environment higher in the chain. cascade elevates the set bottom-up across every environment from the one above the first up to and including the target, so each environment that must diverge ends up running its base plus the fixes. Per environment, any commit already present (an ancestor of that environment's state SHA, or already in its `patches`) is skipped; an environment whose whole set is already present is a no-op and the chain moves on. Every commit applied to an environment is recorded in that environment's `patches`, so a multi-commit hotfix records all of its commits, not just the first. The first environment is never a hotfix target: a fix reaches it by merging to trunk, not by hotfix.
+A hotfix can carry a set of commits to a target environment higher in the chain. cascade elevates the set bottom-up across every environment from the one above the first up to and including the target, so each environment that must diverge ends up running its base plus the fixes. Per environment, any commit already present (an ancestor of that environment's state SHA, or already in its `patches`) is skipped; an environment whose whole set is already present is a no-op and the chain moves on. Every commit applied to an environment is recorded in that environment's `patches`, so the recorded set reflects every fix applied there, not just the first. The first environment is never a hotfix target: a fix reaches it by merging to trunk, not by hotfix.
 
 ### Cherry-pick and resolution pull request
 
