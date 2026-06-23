@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/stablekernel/cascade/internal/version"
 )
 
 // Action represents the release management action to perform
@@ -211,33 +213,82 @@ func (m *Manager) deleteGitTag(tagName string) error {
 	return fmt.Errorf("delete tag failed with status %d: %s", resp.StatusCode, string(body))
 }
 
-// cleanupRCTags deletes all RC tags for a given base version.
-// For example, if baseTag is "v1.0.0", this deletes v1.0.0-rc.0, v1.0.0-rc.1, etc.
+// cleanupRCTags deletes every RC tag whose base version is at or below the
+// published version. For example, publishing "v1.0.1" reaps v1.0.1-rc.0,
+// v1.0.1-rc.1, and also any superseded earlier base such as v1.0.0-rc.0 left
+// behind when v1.0.0 was never published. RC tags on a strictly higher base
+// (e.g. v1.1.0-rc.0, staged for a future release) are preserved, as are tags
+// carrying a different tag prefix, which name an unrelated release line.
+//
+// Hotfix-variant RC tags (v1.0.0-rc.2.hotfix.1) are not plain RC tags, so
+// parseRCTag rejects them and this loop skips them; their lifecycle is handled
+// by the hotfix-rejoin cleanup, not publish-time reaping.
+//
 // This is called after publishing a release to clean up the RC tags.
-func (m *Manager) cleanupRCTags(baseTag string) error {
+func (m *Manager) cleanupRCTags(publishedTag string) error {
+	publishedPrefix, published, err := splitVersionPrefix(publishedTag)
+	if err != nil {
+		return fmt.Errorf("parsing published version %q: %w", publishedTag, err)
+	}
+
 	// List all tags in the repository
 	tags, err := m.listTags()
 	if err != nil {
 		return fmt.Errorf("listing tags: %w", err)
 	}
 
-	// Find and delete all RC tags for this base version
+	// Reap every RC tag whose base is <= the published version (same prefix).
 	for _, tag := range tags {
 		tagBase, _, ok := parseRCTag(tag)
 		if !ok {
-			continue // Not an RC tag
+			continue // Not a plain RC tag (or a hotfix variant)
 		}
-		if tagBase == baseTag {
-			fmt.Printf("Cleaning up RC tag: %s\n", tag)
-			if err := m.deleteGitTag(tag); err != nil {
-				fmt.Printf("Warning: failed to delete RC tag %s: %v\n", tag, err)
-				// Continue with other tags
-			}
+		basePrefix, base, err := splitVersionPrefix(tagBase)
+		if err != nil {
+			continue // Unparseable base - leave it alone
+		}
+		// A different prefix names a separate release line; never compare across
+		// prefixes since version.Compare is prefix-agnostic.
+		if basePrefix != publishedPrefix {
+			continue
+		}
+		// Preserve bases strictly greater than the published version (future work).
+		if base.Compare(published) > 0 {
+			continue
+		}
+		fmt.Printf("Cleaning up RC tag: %s\n", tag)
+		if err := m.deleteGitTag(tag); err != nil {
+			fmt.Printf("Warning: failed to delete RC tag %s: %v\n", tag, err)
+			// Continue with other tags
 		}
 	}
 
 	return nil
 }
+
+// splitVersionPrefix splits a base version tag into its tag prefix and the
+// parsed numeric core. version.Parse only recognizes an alphabetic prefix, so a
+// non-letter prefix such as "rel-" or "release/" is peeled off here before
+// parsing the numeric "major.minor.patch" remainder. The returned Version
+// carries no prefix; callers compare the numeric core via version.Compare and
+// compare prefixes separately as strings.
+func splitVersionPrefix(baseTag string) (prefix string, v *version.Version, err error) {
+	loc := versionCorePattern.FindStringIndex(baseTag)
+	if loc == nil {
+		return "", nil, fmt.Errorf("no version core in %q", baseTag)
+	}
+	prefix = baseTag[:loc[0]]
+	parsed, err := version.Parse(baseTag[loc[0]:])
+	if err != nil {
+		return "", nil, err
+	}
+	return prefix, parsed, nil
+}
+
+// versionCorePattern locates the trailing numeric "major.minor.patch" core of a
+// base version tag so any tag prefix (alphabetic, "rel-", "release/", or none)
+// can be split off before the core is parsed.
+var versionCorePattern = regexp.MustCompile(`\d+\.\d+\.\d+$`)
 
 // listTags returns all tags in the repository
 func (m *Manager) listTags() ([]string, error) {
