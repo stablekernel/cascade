@@ -10,10 +10,13 @@ description: |
   non-draft release and wedged the rejoin.
 
   The act/gitea backend skips GitHub release-object operations (no release API),
-  so the release-object delete is a no-op here; the observable rejoin contract
-  this scenario exercises is the state rejoin, the env/<env> branch deletion, and
-  the hotfix tag cleanup. The real-GitHub release-object delete is covered by the
-  validation fleet and the internal/promote + internal/release unit tests.
+  and the hotfix tag is materialized only through that same release-object path,
+  so neither the tag nor its later delete is observable here. The observable
+  rejoin contract this scenario exercises is the recorded divergence state (the
+  minted hotfix version on env/<env>) and, after rejoin, the cleared state and
+  the env/<env> branch deletion. The real-GitHub hotfix tag and release-object
+  create/delete are covered by the validation fleet and the internal/promote +
+  internal/release unit tests.
 
   Because the recorded patch is the original trunk commit SHA, landing that same
   trunk ancestor on dev and cascading it into staging satisfies containment and
@@ -70,7 +73,7 @@ steps:
     expect:
       state:
         staging:
-          version: "v0.1.0-rc.1"
+          version: "v0.1.0-rc.0"
 
   - name: "Commit a trunk fix to hotfix into staging"
     action: commit
@@ -102,16 +105,21 @@ steps:
     merge_pr:
       label: cascade-hotfix
 
-  - name: "Finalize hotfix; staging diverges and mints a hotfix tag"
+  - name: "Finalize hotfix; staging diverges and mints a hotfix version"
     action: hotfix_merged
     hotfix_merged:
       target_env: staging
+    # The hotfix tag (v0.1.0-rc.0.hotfix.1) is materialized only through the
+    # GitHub release-object path, which the act/gitea backend skips (no release
+    # API), so no such tag lands in gitea here. The observable divergence on this
+    # backend is the recorded state: env/staging ref and the minted hotfix
+    # version. The git-tag create/delete is covered by the internal/release and
+    # internal/promote rejoin tests.
     expect:
       state:
         staging:
           ref: "env/staging"
-      tags:
-        exist: ["v0.1.0-rc.1.hotfix.1"]
+          version: "v0.1.0-rc.0.hotfix.1"
 
   # Land a normal trunk commit. Trunk now contains commit2 (the recorded patch)
   # as an ancestor, so a promotion of any later trunk SHA into staging will
@@ -149,5 +157,9 @@ steps:
           unchanged: true
       branches:
         deleted: ["env/staging"]
-      tags:
-        deleted: ["v0.1.0-rc.1.hotfix.1"]
+      # The hotfix tag and release-object delete run only on the GitHub
+      # release-object path, which the act/gitea backend skips, so no tag is
+      # materialized here to observe a delete against. The observable rejoin
+      # contract on this backend is the cleared divergence state and the deleted
+      # env/staging branch; the tag and release-object cleanup is covered by the
+      # internal/promote rejoin and internal/release unit tests.
