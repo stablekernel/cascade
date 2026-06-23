@@ -35,6 +35,11 @@ type Config struct {
 	// manifest. It accepts a full ${{ secrets.* }} expression or a bare secret
 	// name; the generator normalizes a bare name to a resolvable expression.
 	ReleaseToken string `yaml:"release_token,omitempty"`
+	// StateToken carries the state_token field through to the generated manifest,
+	// the same way ReleaseToken does. Without this field a scenario's state_token
+	// is silently dropped on marshal, so the generated workflows fall back to the
+	// default token.
+	StateToken string `yaml:"state_token,omitempty"`
 	// ReleaseTokenApp and StateTokenApp carry the optional GitHub App identities
 	// (app_id, private_key secret references) through to the generated manifest
 	// untouched. A generic map keeps the harness decoupled from the generator's
