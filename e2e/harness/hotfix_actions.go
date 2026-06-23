@@ -145,12 +145,19 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 		return nil
 	}
 
-	commit := r.resolveCommit(step.CommitRef)
+	// CommitRef may be a comma-delimited set so a single apply (and the single
+	// finalize that follows it) carries a multi-commit hotfix, mirroring the
+	// product workflow's per-env $COMMITS cherry-pick loop. resolveCommits maps each
+	// scenario ref to its SHA and rejoins with commas; a single ref resolves
+	// identically to resolveCommit, keeping single-commit scenarios stable.
+	commitList := r.resolveCommits(step.CommitRef)
+	commits := strings.Split(commitList, ",")
+	commit := commits[0]
 	env := step.TargetEnv
 	envBranch := "env/" + env
 	short := shortSHA(commit)
 	hotfixBranch := "hotfix/" + env + "/" + short
-	r.t.Logf("  HotfixApply: commit=%s env=%s branch=%s", truncateSHA(commit), env, hotfixBranch)
+	r.t.Logf("  HotfixApply: commits=%s env=%s branch=%s", commitList, env, hotfixBranch)
 
 	// Ensure env/<env> exists, anchored at the env's recorded state SHA (or HEAD).
 	branches, err := r.harness.gitea.ListBranches(ctx, r.harness.repo)
@@ -205,16 +212,21 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 		"git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags >/dev/null 2>&1",
 		fmt.Sprintf("git branch -D %q >/dev/null 2>&1 || true", hotfixBranch),
 		fmt.Sprintf("git switch -c %q %q", hotfixBranch, "origin/"+envBranch),
-		fmt.Sprintf("git cherry-pick -x %q", commit),
-		"CP_EXIT=$?",
-		"if [ \"$CP_EXIT\" -ne 0 ]; then",
-		"  CONFLICTS=$(git diff --name-only --diff-filter=U | tr '\\n' ' ')",
-		"  echo \"CONFLICT_FILES=$CONFLICTS\"",
-		"  git add -A",
-		fmt.Sprintf("  git -c core.editor=true cherry-pick --continue || git commit -m %q", "hotfix: cherry-pick "+short8+" with conflicts"),
-		"else",
-		"  echo \"CONFLICT_FILES=\"",
-		"fi",
+		// Cherry-pick every commit in the set onto the hotfix branch, mirroring the
+		// product apply loop. On the first conflict, classify and force-commit the
+		// partial resolution, then stop; clean sets apply all commits.
+		"CONFLICT_FILES=",
+		fmt.Sprintf("for commit in %s; do", strings.Join(commits, " ")),
+		"  git cherry-pick -x \"$commit\"",
+		"  CP_EXIT=$?",
+		"  if [ \"$CP_EXIT\" -ne 0 ]; then",
+		"    CONFLICT_FILES=$(git diff --name-only --diff-filter=U | tr '\\n' ' ')",
+		"    git add -A",
+		fmt.Sprintf("    git -c core.editor=true cherry-pick --continue || git commit -m %q", "hotfix: cherry-pick "+short8+" with conflicts"),
+		"    break",
+		"  fi",
+		"done",
+		"echo \"CONFLICT_FILES=$CONFLICT_FILES\"",
 		// Force-push the uniquely-named, per-apply throwaway hotfix branch. The
 		// branch name embeds the source short SHA, so a force-push only ever
 		// overwrites this apply's own prior attempt (e.g. a retried sync), never a
@@ -242,7 +254,7 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 
 	// Build the PR body with the three product trailers; append the conflict file
 	// list on the conflict path.
-	body := fmt.Sprintf("Cascade-Hotfix-Target: %s\nCascade-Hotfix-Source: %s\nCascade-Hotfix-Base: %s\n", env, commit, baseSHA)
+	body := fmt.Sprintf("Cascade-Hotfix-Target: %s\nCascade-Hotfix-Source: %s\nCascade-Hotfix-Base: %s\n", env, commitList, baseSHA)
 	title := fmt.Sprintf("hotfix(%s): cherry-pick %s", env, short)
 	label := "cascade-hotfix"
 	if conflict {

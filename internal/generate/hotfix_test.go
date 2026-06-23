@@ -223,6 +223,33 @@ func TestHotfixGenerator_ConflictPath(t *testing.T) {
 	assert.Contains(t, content, "Cascade-Hotfix-Base:")
 }
 
+// TestHotfixGenerator_SourceTrailerCarriesFullCommitSet guards the multi-commit
+// patch-accumulation fix: the resolution PR's Cascade-Hotfix-Source trailer must
+// carry the whole per-env $COMMITS set so the post-merge finalize records every
+// cherry-picked commit, not just the first. Stamping only the first commit (the
+// old $FIRST_COMMIT trailer) dropped the rest from state.<env>.patches.
+func TestHotfixGenerator_SourceTrailerCarriesFullCommitSet(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The trailer interpolates the full comma-joined per-env commit set.
+	assert.Contains(t, content, `Cascade-Hotfix-Source: %s\n`,
+		"the Source trailer must be a printf field")
+	assert.Contains(t, content, `"$env" "$COMMITS" "$BASE"`,
+		"the Source trailer must carry the full per-env $COMMITS set, not just the first commit")
+	assert.NotContains(t, content, `"$env" "$FIRST_COMMIT" "$BASE"`,
+		"the Source trailer must not stamp only the first commit")
+
+	// The context job recovers the whole Source value (it strips the prefix and
+	// keeps the comma-joined remainder) and the finalize job passes it straight
+	// to --fix-sha, which the command splits back into the full set.
+	assert.Contains(t, content, `sed 's/^Cascade-Hotfix-Source:[[:space:]]*//'`,
+		"the context job must keep the whole Source value, not a single field")
+	assert.Contains(t, content, `--fix-sha "$FIX_SHA"`,
+		"the finalize job must forward the recovered (possibly comma-joined) fix-sha set")
+}
+
 func TestHotfixGenerator_CleanPath(t *testing.T) {
 	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
 	content, err := gen.Generate()

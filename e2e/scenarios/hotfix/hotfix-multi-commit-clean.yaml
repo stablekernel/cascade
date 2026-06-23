@@ -1,0 +1,102 @@
+name: "Hotfix Multi-Commit Single Cycle"
+description: |
+  Verifies that a single hotfix apply-merge-finalize cycle carrying a SET of trunk
+  commits records every commit in state.<env>.patches, not just the first.
+
+  This is the multi-commit-per-finalize case the multi-env-clean scenario does not
+  reach: that scenario applies one commit per cycle, so each finalize records a
+  single patch. Here one apply cherry-picks both commit2 and commit3 onto env/test
+  in a single PR; the apply stamps the full comma-joined set in the
+  Cascade-Hotfix-Source trailer, and the single finalize must append both to the
+  patch set.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-staging
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish test/staging/prod baselines"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote again to carry the baseline down the chain"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Promote once more so every env shares the baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "First trunk fix"
+    action: commit
+    commit:
+      message: "fix: first patch"
+      files:
+        src/fix1.go: |
+          package main
+          func fix1() {}
+
+  - name: "Second trunk fix"
+    action: commit
+    commit:
+      message: "fix: second patch"
+      files:
+        src/fix2.go: |
+          package main
+          func fix2() {}
+
+  # One apply cherry-picks both fixes onto env/test in a single PR, stamping the
+  # full comma-joined commit set in the Cascade-Hotfix-Source trailer.
+  - name: "Apply both fixes onto env/test in one cycle"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2,commit3
+
+  - name: "Merge the multi-commit test PR"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  # A single finalize must record BOTH commits, not just commit2.
+  - name: "Finalize; test carries both patches from one cycle"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2, commit3]

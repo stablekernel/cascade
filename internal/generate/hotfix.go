@@ -390,9 +390,11 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("              git fetch origin \"+refs/heads/env/${env}:refs/remotes/origin/env/${env}\"\n")
 	sb.WriteString("            fi\n")
 	sb.WriteString("            git switch -c \"$BRANCH\" \"$BASE\"\n")
-	// The PR-body trailers carry the first applied commit and the base anchor so
-	// the post-merge context job can recover the fix and base SHAs.
-	sb.WriteString("            BODY=$(printf 'Cascade-Hotfix-Target: %s\\nCascade-Hotfix-Source: %s\\nCascade-Hotfix-Base: %s\\n' \"$env\" \"$FIRST_COMMIT\" \"$BASE\")\n")
+	// The PR-body trailers carry the full comma-joined set of applied trunk
+	// commits and the base anchor so the post-merge context job can recover every
+	// fix SHA (not just the first) and the base SHA. The Source trailer mirrors the
+	// per-env $COMMITS list the cherry-pick loop below applies.
+	sb.WriteString("            BODY=$(printf 'Cascade-Hotfix-Target: %s\\nCascade-Hotfix-Source: %s\\nCascade-Hotfix-Base: %s\\n' \"$env\" \"$COMMITS\" \"$BASE\")\n")
 	sb.WriteString("            CLEAN=true\n")
 	sb.WriteString("            CONFLICT_COMMIT=\"\"\n")
 	sb.WriteString("            CONFLICTS=\"\"\n")
@@ -518,10 +520,12 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	sb.WriteString("          PR_BODY: ${{ github.event.pull_request.body }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          TARGET_ENV=\"${BASE_REF#env/}\"\n")
-	// Recover the trunk fix commit and the trunk base anchor from the trailers
-	// the apply job stamped into the resolution PR body. grep tolerates absent
-	// trailers (the || true) so the step never hard-fails here; the finalize
-	// command enforces that the required SHAs are present.
+	// Recover the full comma-joined set of trunk fix commits and the trunk base
+	// anchor from the trailers the apply job stamped into the resolution PR body.
+	// The Source trailer carries every applied commit, so keeping the whole value
+	// (rather than the first field) threads the complete set to finalize. grep
+	// tolerates absent trailers (the || true) so the step never hard-fails here;
+	// the finalize command enforces that the required SHAs are present.
 	sb.WriteString("          FIX_SHA=$(printf '%s\\n' \"$PR_BODY\" | grep -m1 '^Cascade-Hotfix-Source:' | sed 's/^Cascade-Hotfix-Source:[[:space:]]*//' || true)\n")
 	sb.WriteString("          BASE_SHA=$(printf '%s\\n' \"$PR_BODY\" | grep -m1 '^Cascade-Hotfix-Base:' | sed 's/^Cascade-Hotfix-Base:[[:space:]]*//' || true)\n")
 	// Resolve the auto-rollback target: the target env's state SHA as recorded in

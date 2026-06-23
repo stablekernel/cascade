@@ -90,7 +90,12 @@ records the merge SHA is a no-op.`,
 				finalizer.SetBuildResult(name, result)
 			}
 
-			return finalizer.Finalize(targetEnv, mergeSHA, fixSHA, baseSHA)
+			fixSHAs, err := parseCommitRefs(fixSHA)
+			if err != nil {
+				return fmt.Errorf("invalid --fix-sha %q: %w", fixSHA, err)
+			}
+
+			return finalizer.Finalize(targetEnv, mergeSHA, fixSHAs, baseSHA)
 		},
 	}
 
@@ -98,7 +103,7 @@ records the merge SHA is a no-op.`,
 	cmd.Flags().StringVar(&manifestKey, "key", config.DefaultManifestKey, "Top-level manifest key")
 	cmd.Flags().StringVar(&targetEnv, "target-env", "", "Environment to finalize (required)")
 	cmd.Flags().StringVar(&mergeSHA, "merge-sha", "", "Tip of env/<target> after the resolution PR merged (required)")
-	cmd.Flags().StringVar(&fixSHA, "fix-sha", "", "Trunk commit the hotfix carries (required)")
+	cmd.Flags().StringVar(&fixSHA, "fix-sha", "", "Trunk commit(s) the hotfix carries; comma-delimited for a multi-commit set (required)")
 	cmd.Flags().StringVar(&baseSHA, "base-sha", "", "Trunk anchor the integration branch diverged from (required)")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the state (default: $GITHUB_ACTOR)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate and compute without writing state, tags, or releases")

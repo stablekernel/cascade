@@ -93,7 +93,7 @@ func TestFinalize_Integration_PlanThenMergeThenFinalize(t *testing.T) {
 	f.SetDeployResult("api", "success")
 	f.SetBuildResult("api", "success")
 
-	if err := f.Finalize("test", mergeSHA, fix, base); err != nil {
+	if err := f.Finalize("test", mergeSHA, []string{fix}, base); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
 
