@@ -25,5 +25,5 @@ ci:
     prerelease:
       sha: 1f4244a103a909f2196d9aad70f0e911b02d4461
       version: v0.3.0-rc.24
-      committed_at: "2026-06-23T18:01:29Z"
+      committed_at: "2026-06-23T18:42:36Z"
       committed_by: joshua-temple
