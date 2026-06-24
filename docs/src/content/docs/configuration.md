@@ -429,6 +429,8 @@ ci:
       repo: org/my-backend
       workflow: external-update.yaml
       token: PRIMARY_REPO_TOKEN
+      deploy_name: artifact-a
+      environment: staging
 ```
 
 | Field | Type | Required | Description |
@@ -436,8 +438,12 @@ ci:
 | `repo` | string | Yes | Primary repository to notify |
 | `workflow` | string | No | Workflow name (default: `external-update.yaml`) |
 | `token` | string | No | Secret name for cross-repo dispatch (default: `PRIMARY_REPO_TOKEN`) |
+| `deploy_name` | string | No | Deploy name to dispatch. Set this when the primary recognizes this satellite under a name that differs from its local deploy/build name. Defaults to the first local deploy name, then the first build name. |
+| `environment` | string | No | Environment to dispatch. Set this when the primary expects an environment that differs from the satellite's first local environment (for example a build-only satellite with no environments). Defaults to the first local environment, then `dev`. |
 
 When configured, the orchestrate workflow's finalize job dispatches to the primary repo after deploying to the first environment.
+
+Use `deploy_name` and `environment` when the satellite's local names do not match the external deploy the primary defines. The primary validates the dispatched `deploy_name` and `environment` against its own config, so a satellite whose local build name or environment differs from what the primary expects must send the parent-recognized values here.
 
 **Important:** A repository cannot be both primary (has `external`) and satellite (has `notify`).
 

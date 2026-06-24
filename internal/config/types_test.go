@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -980,6 +981,32 @@ func TestNotifyConfig_GetToken(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.notify.GetToken())
 		})
 	}
+}
+
+func TestNotifyConfig_DeployNameAndEnvironmentOverrides_RoundTrip(t *testing.T) {
+	const manifest = `repo: example/primary-backend
+workflow: .github/workflows/external-update.yaml
+deploy_name: artifact-a
+environment: staging
+`
+
+	var n NotifyConfig
+	require.NoError(t, yaml.Unmarshal([]byte(manifest), &n))
+
+	assert.Equal(t, "example/primary-backend", n.Repo)
+	assert.Equal(t, "artifact-a", n.DeployName)
+	assert.Equal(t, "staging", n.Environment)
+}
+
+func TestNotifyConfig_Overrides_OmittedWhenUnset(t *testing.T) {
+	const manifest = `repo: example/primary-backend
+`
+
+	var n NotifyConfig
+	require.NoError(t, yaml.Unmarshal([]byte(manifest), &n))
+
+	assert.Empty(t, n.DeployName)
+	assert.Empty(t, n.Environment)
 }
 
 func TestExternalRepoConfig_GetRef(t *testing.T) {
