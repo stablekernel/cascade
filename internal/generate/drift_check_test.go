@@ -131,6 +131,19 @@ func TestDriftCheckGenerator_Deterministic(t *testing.T) {
 	assert.Equal(t, comment1, comment2)
 }
 
+// TestDriftCheckGenerator_SetupCLIPassesToken asserts that the setup-cli step
+// passes github.token so that gh release download can authenticate on a cold
+// tool-cache. Without the token: input the composite action's GH_TOKEN is
+// empty and gh exits non-zero.
+func TestDriftCheckGenerator_SetupCLIPassesToken(t *testing.T) {
+	gen := NewDriftCheckGenerator(driftCheckConfig(false), "")
+	check, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, check, "token: ${{ github.token }}",
+		"setup-cli step must pass github.token so gh release download succeeds on a cold cache")
+}
+
 // TestDriftCheckGenerator_PinModeSHA proves third-party actions are SHA-pinned
 // when pin_mode is sha, matching how cascade pins actions elsewhere.
 func TestDriftCheckGenerator_PinModeSHA(t *testing.T) {

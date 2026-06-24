@@ -452,6 +452,19 @@ func TestHotfixGenerator_ValidYAML(t *testing.T) {
 	assert.Contains(t, parsed, "permissions")
 }
 
+// TestHotfixGenerator_SetupCLIPassesToken asserts that the setup-cli step
+// passes github.token so that gh release download can authenticate on a cold
+// tool-cache. Without the token: input the composite action's GH_TOKEN is
+// empty and gh exits non-zero.
+func TestHotfixGenerator_SetupCLIPassesToken(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "token: ${{ github.token }}",
+		"setup-cli step must pass github.token so gh release download succeeds on a cold cache")
+}
+
 // TestHotfixGenerator_PinModeSHA confirms third-party action refs route through
 // the shared pin helper rather than emitting a raw @v4.
 func TestHotfixGenerator_PinModeSHA(t *testing.T) {

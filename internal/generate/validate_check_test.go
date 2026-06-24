@@ -71,6 +71,23 @@ func TestValidateCheckGenerator_Steps(t *testing.T) {
 	assert.NotContains(t, content, "createComment")
 }
 
+// TestValidateCheckGenerator_SetupCLIPassesToken asserts that the setup-cli
+// step passes github.token so that gh release download can authenticate on a
+// cold tool-cache. Without the token: input the composite action's GH_TOKEN is
+// empty and gh exits non-zero.
+func TestValidateCheckGenerator_SetupCLIPassesToken(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:   "main",
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+	}
+	gen := NewValidateCheckGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "token: ${{ github.token }}",
+		"setup-cli step must pass github.token so gh release download succeeds on a cold cache")
+}
+
 // TestValidateCheckGenerator_PinModeSHA confirms third-party action refs route
 // through the shared pin helper rather than emitting a raw @v4.
 func TestValidateCheckGenerator_PinModeSHA(t *testing.T) {

@@ -136,6 +136,9 @@ func (g *DriftCheckGenerator) writeCheckJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
 	sb.WriteString("        with:\n")
 	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	// github.token is the built-in Actions token, sufficient to authenticate
+	// gh release download against the public stablekernel/cascade repository.
+	sb.WriteString("          token: ${{ github.token }}\n")
 	sb.WriteString("\n")
 
 	// Run verify, capturing stdout/stderr and the exit code without failing the
