@@ -1,0 +1,225 @@
+# Fleet Reconcile - the structural coverage gate for the cascade example fleet.
+#
+# This is maintainer fleet infra: hand-written tooling that lives in cascade's
+# repo and is CALLED by each example repo's scenario-suite.yaml as its final
+# job. It is NOT a cascade product feature and NOT part of cascade's generated
+# output.
+#
+# Why it exists: a scenario suite only verifies the runs it remembers to wait
+# on. A single scenario action causes SECONDARY runs (a PR-close hotfix Finalize
+# run, a seed-PR preview run, an incidental push-orchestrate) that suites
+# routinely forget to gate, so a suite can stay green over a red run it caused.
+# This gate makes "no unasserted run in the scenario window" a structural
+# invariant: it enumerates EVERY run the repo produced since the scenario began
+# and fails if any run is in the window but not in the suite's run ledger, or
+# concluded other than the suite registered.
+#
+# How a suite uses it:
+#   1. At scenario start, record an ISO-8601 timestamp (window-start).
+#   2. For every run the suite gates, call the register-run composite action
+#      (stablekernel/cascade/.github/actions/register-run@<ref>) with the run
+#      id and its expected conclusion. For a MULTI-JOB suite, pass upload: true
+#      so each job's ledger reaches this job as an artifact; for a single-job
+#      suite, pass the workspace ledger path via `ledger-path`.
+#   3. As the suite's final job (needs: [<all scenario jobs>], if: always()),
+#      call this workflow with window-start and the ledger artifact name.
+#
+# The reconcile logic lives in cascade's own Go (internal/fleetreconcile), so it
+# is unit-tested with synthetic run lists and cannot silently regress.
+name: Fleet Reconcile
+
+on:
+  workflow_call:
+    inputs:
+      window-start:
+        description: >-
+          ISO-8601 timestamp (UTC, e.g. 2026-06-23T14:00:00Z) of when the
+          scenario began. Every run created at or after this in this repo is
+          reconciled against the ledger.
+        required: true
+        type: string
+      ledger-artifact:
+        description: >-
+          Name (or glob) of the run-ledger artifact(s) uploaded by register-run.
+          Defaults to the per-job pattern register-run uses. Downloaded and
+          merged before reconcile. Leave empty when the suite passed an
+          in-workspace ledger via ledger-path instead.
+        required: false
+        type: string
+        default: 'cascade-run-ledger-*'
+      ledger-path:
+        description: >-
+          Path to an in-workspace ledger (single-job suites). Used only when no
+          artifact is found. Empty by default.
+        required: false
+        type: string
+        default: ''
+      cascade-ref:
+        description: >-
+          The cascade ref to check out for the reconcile core (the rc tag under
+          test, or a branch/sha). When empty, falls back to github.workflow_sha,
+          the SHA of this reusable workflow as resolved for the caller, so the
+          Go core always matches the gate version the caller pinned.
+        required: false
+        type: string
+        default: ''
+      allow-workflows:
+        description: >-
+          Comma-separated workflow names to reconcile. Empty (default) means all
+          cascade-generated workflows in the window. Set this to scope out an
+          unrelated sibling workflow that shares the repo.
+        required: false
+        type: string
+        default: ''
+      run-list-limit:
+        description: 'Max runs to fetch per page from gh run list (paginated to capture all).'
+        required: false
+        type: number
+        default: 200
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    name: Reconcile scenario-window runs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      # Check out cascade itself for the reconcile core. The reusable workflow
+      # is referenced at a ref by the caller; we re-check-out cascade at that
+      # same ref (or an override) so the Go core matches the gate version.
+      - name: Check out cascade (reconcile core)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: stablekernel/cascade
+          ref: ${{ inputs.cascade-ref || github.workflow_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Merge every per-job ledger artifact into one JSONL file. merge-multiple
+      # concatenates same-named files across artifacts; the glob captures every
+      # registering job's upload. Missing artifacts are tolerated (a suite that
+      # gated nothing, or one using the in-workspace ledger path instead).
+      - name: Download run-ledger artifacts
+        id: ledger
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: ${{ inputs.ledger-artifact }}
+          path: ${{ runner.temp }}/ledger-artifacts
+          merge-multiple: true
+
+      - name: Assemble the ledger
+        id: assemble
+        env:
+          ART_DIR: ${{ runner.temp }}/ledger-artifacts
+          LEDGER_PATH_IN: ${{ inputs.ledger-path }}
+        run: |
+          set -euo pipefail
+          LEDGER="${RUNNER_TEMP}/cascade-run-ledger.jsonl"
+          : > "$LEDGER"
+
+          # Prefer downloaded artifacts; merge-multiple may have produced one or
+          # more .jsonl files. Concatenate them all.
+          if [ -d "$ART_DIR" ]; then
+            found=$(find "$ART_DIR" -type f -name '*.jsonl' | wc -l | tr -d ' ')
+            if [ "$found" -gt 0 ]; then
+              find "$ART_DIR" -type f -name '*.jsonl' -exec cat {} + >> "$LEDGER"
+            fi
+          fi
+
+          # Fall back to an in-workspace ledger (single-job suite path).
+          if [ ! -s "$LEDGER" ] && [ -n "$LEDGER_PATH_IN" ] && [ -f "$LEDGER_PATH_IN" ]; then
+            cat "$LEDGER_PATH_IN" >> "$LEDGER"
+          fi
+
+          lines=$(grep -c . "$LEDGER" || true)
+          echo "ledger has ${lines:-0} registered run(s)"
+          echo "ledger-path=$LEDGER" >> "$GITHUB_OUTPUT"
+
+      # Enumerate EVERY run created in this repo since window-start, paginating
+      # so a busy scenario window is fully captured. gh run list paginates with
+      # --limit; we loop, advancing nothing (the API has no cursor on this
+      # endpoint), so we request a high limit and de-dup defensively.
+      - name: Enumerate scenario-window runs
+        id: runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WINDOW_START: ${{ inputs.window-start }}
+          LIMIT: ${{ inputs.run-list-limit }}
+        run: |
+          set -euo pipefail
+          RUNS_JSON="${RUNNER_TEMP}/scenario-runs.json"
+
+          # gh run list --created ">=<ts>" filters server-side to the window.
+          # --limit caps results; we set it high and page by walking creation
+          # time: fetch a page, and if it is full, narrow to runs strictly older
+          # than the oldest seen and fetch again, accumulating. Run ids dedupe
+          # the boundary overlap.
+          fetch_page() {
+            local since="$1"
+            gh run list --repo "$REPO" \
+              --created ">=${since}" \
+              --limit "$LIMIT" \
+              --json databaseId,workflowName,event,conclusion,status,headBranch,createdAt
+          }
+
+          acc="[]"
+          since="$WINDOW_START"
+          for _ in $(seq 1 20); do
+            page=$(fetch_page "$since")
+            count=$(echo "$page" | jq 'length')
+            acc=$(jq -s '.[0] + .[1] | unique_by(.databaseId)' \
+                    <(echo "$acc") <(echo "$page"))
+            if [ "$count" -lt "$LIMIT" ]; then
+              break
+            fi
+            # Page was full: advance the window to the oldest createdAt in this
+            # page so the next request walks further back. (>= is inclusive, so
+            # the oldest run reappears and is de-duped by databaseId.)
+            since=$(echo "$page" | jq -r 'min_by(.createdAt) | .createdAt')
+          done
+
+          echo "$acc" > "$RUNS_JSON"
+          total=$(jq 'length' "$RUNS_JSON")
+          echo "captured ${total} run(s) in the scenario window"
+          echo "runs-path=$RUNS_JSON" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile
+        env:
+          LEDGER: ${{ steps.assemble.outputs.ledger-path }}
+          RUNS: ${{ steps.runs.outputs.runs-path }}
+          SELF_RUN_ID: ${{ github.run_id }}
+          ALLOW: ${{ inputs.allow-workflows }}
+        run: |
+          set -euo pipefail
+          # Exit 0 = every run accounted for; 1 = a coverage gap reds the gate;
+          # 2 = tool/input error. The report is printed to the job log and the
+          # step summary so a red gate names the unaccounted run.
+          set +e
+          OUT=$(go run ./internal/fleetreconcile/cmd \
+            --runs "$RUNS" \
+            --ledger "$LEDGER" \
+            --self-run-id "$SELF_RUN_ID" \
+            --allow-workflows "$ALLOW")
+          code=$?
+          set -e
+
+          echo "$OUT"
+          {
+            echo "## Fleet Reconcile"
+            echo ""
+            echo '```'
+            echo "$OUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$code"
