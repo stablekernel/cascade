@@ -41,3 +41,4 @@ steps:
             - "preview:"
             - "Plan Preview"
             - "--environment staging"
+            - "token: ${{ github.token }}"

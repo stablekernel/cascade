@@ -173,6 +173,20 @@ func TestPRPreviewGenerator_CommentAddsScriptAndPermission(t *testing.T) {
 	assert.Contains(t, content, "createComment")
 }
 
+// TestPRPreviewGenerator_SetupCLIPassesToken asserts that the setup-cli step in
+// the generated preview workflow passes the built-in github.token so that
+// gh release download can authenticate even on a cold tool-cache. Without the
+// token: input the composite action's GH_TOKEN is empty and gh exits non-zero.
+func TestPRPreviewGenerator_SetupCLIPassesToken(t *testing.T) {
+	gen := NewPRPreviewGenerator(prPreviewConfig(false), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The setup-cli with: block must carry a token: line.
+	assert.Contains(t, content, "token: ${{ github.token }}",
+		"setup-cli step must pass github.token so gh release download succeeds on a cold cache")
+}
+
 func TestPRPreviewGenerator_ActionRefsPinUnderSHAMode(t *testing.T) {
 	cfg := prPreviewConfig(true)
 	cfg.PinMode = config.PinModeSHA

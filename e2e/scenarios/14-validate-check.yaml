@@ -36,3 +36,4 @@ steps:
             - ".github/manifest.yaml"
             - "validate-manifest:"
             - "cascade parse-config"
+            - "token: ${{ github.token }}"

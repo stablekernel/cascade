@@ -35,3 +35,4 @@ steps:
             - "merge-queue-validate:"
             - "cascade parse-config"
             - "cascade --dry-run orchestrate setup"
+            - "token: ${{ github.token }}"
