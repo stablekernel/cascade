@@ -102,10 +102,15 @@ func TestNormalizeWorkflowPath_ActionlintClean(t *testing.T) {
 		t.Fatalf("WriteFile: %v", writeErr)
 	}
 
-	// Disable the shellcheck integration: this test governs workflow structure
-	// and uses: reference validity, not the style of cascade-owned run: scripts
-	// (which carry their own pre-existing SC2129-style notes).
-	out, runErr := exec.Command(actionlint, "-shellcheck=", path).CombinedOutput()
+	// Disable the optional external-linter integrations (shellcheck and
+	// pyflakes): this test governs workflow structure and uses: reference
+	// validity, not the style of cascade-owned run: scripts (which carry their
+	// own pre-existing SC2129-style notes). Leaving these integrations on the
+	// default-enabled setting makes the result depend on whether (and which
+	// version of) shellcheck/pyflakes happens to be installed in the runner,
+	// which is the source of the cross-environment flakiness. -no-color keeps
+	// the captured output stable for the failure message.
+	out, runErr := exec.Command(actionlint, "-shellcheck=", "-pyflakes=", "-no-color", path).CombinedOutput()
 	if runErr != nil {
 		t.Errorf("actionlint found errors in generated workflow:\n%s", out)
 	}
