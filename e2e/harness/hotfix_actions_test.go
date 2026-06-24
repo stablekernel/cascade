@@ -298,6 +298,71 @@ func TestAssertStateDivergence(t *testing.T) {
 	}
 }
 
+// TestResolveEnvAnchor verifies the deterministic env-branch anchor resolution
+// that fixes the hotfix-conflict-resolution flake: an explicit base_ref wins, a
+// recorded state SHA is the fallback, and an unresolvable anchor errors loudly
+// rather than silently anchoring on trunk HEAD (which would flip an engineered
+// conflict into an empty clean cherry-pick run-to-run).
+func TestResolveEnvAnchor(t *testing.T) {
+	t.Run("base_ref resolved via execution context wins", func(t *testing.T) {
+		r := NewRunner(t, nil)
+		r.ctx.RecordCommit("commit1", "base1111aaaa")
+		r.ctx.RecordState("test", "tip2222bbbb", "v0.1.0")
+
+		anchor, err := r.resolveEnvAnchor("test", "commit1")
+		require.NoError(t, err)
+		assert.Equal(t, "base1111aaaa", anchor, "base_ref must take precedence over the recorded state SHA")
+	})
+
+	t.Run("base_ref literal SHA when not a known reference", func(t *testing.T) {
+		r := NewRunner(t, nil)
+		anchor, err := r.resolveEnvAnchor("test", "literalsha9999")
+		require.NoError(t, err)
+		assert.Equal(t, "literalsha9999", anchor)
+	})
+
+	t.Run("falls back to recorded state SHA when no base_ref", func(t *testing.T) {
+		r := NewRunner(t, nil)
+		r.ctx.RecordState("test", "tip2222bbbb", "v0.1.0")
+		anchor, err := r.resolveEnvAnchor("test", "")
+		require.NoError(t, err)
+		assert.Equal(t, "tip2222bbbb", anchor)
+	})
+
+	t.Run("errors when no base_ref and state SHA empty (no trunk-HEAD fallback)", func(t *testing.T) {
+		r := NewRunner(t, nil)
+		anchor, err := r.resolveEnvAnchor("test", "")
+		require.Error(t, err)
+		assert.Empty(t, anchor)
+		assert.Contains(t, err.Error(), "base_ref")
+		assert.Contains(t, err.Error(), "deterministic")
+	})
+}
+
+// TestParseHotfixApplyBaseRef verifies the hotfix_apply base_ref field unmarshals
+// so a scenario can pin the env anchor for a deterministic cherry-pick outcome.
+func TestParseHotfixApplyBaseRef(t *testing.T) {
+	yamlDoc := `
+name: "Hotfix apply base_ref"
+config:
+  environments: [test]
+steps:
+  - name: "Apply with pinned base"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit3
+      base_ref: commit1
+`
+	s, err := ParseMultiStepScenario([]byte(yamlDoc))
+	require.NoError(t, err)
+	require.Len(t, s.Steps, 1)
+	require.NotNil(t, s.Steps[0].HotfixApply)
+	assert.Equal(t, "test", s.Steps[0].HotfixApply.TargetEnv)
+	assert.Equal(t, "commit3", s.Steps[0].HotfixApply.CommitRef)
+	assert.Equal(t, "commit1", s.Steps[0].HotfixApply.BaseRef)
+}
+
 // TestRunnerHotfixActionsNoHarness proves the dispatch wiring for each new
 // action returns nil (the no-harness guard path) without containers.
 func TestRunnerHotfixActionsNoHarness(t *testing.T) {

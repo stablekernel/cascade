@@ -115,9 +115,18 @@ type HotfixPlanStep struct {
 // HotfixApplyStep defines a hotfix_apply action: a harness-driven cherry-pick of
 // CommitRef onto env/<TargetEnv>, pushing a hotfix branch and opening a labeled
 // PR. CommitRef is resolved via the execution context (falling back to literal).
+//
+// BaseRef, when set, pins the env/<TargetEnv> anchor to a specific commit
+// (resolved via the execution context, falling back to literal) when the env
+// branch does not yet exist. This makes the cherry-pick outcome deterministic:
+// whether commit3's diff applies cleanly or conflicts depends entirely on the
+// content at the env anchor, so a scenario that engineers a conflict must pin
+// the anchor rather than depend on the synced state SHA, which a gitea
+// state-propagation race can momentarily report empty.
 type HotfixApplyStep struct {
 	TargetEnv string `yaml:"target_env"`
 	CommitRef string `yaml:"commit_ref"`
+	BaseRef   string `yaml:"base_ref,omitempty"`
 }
 
 // MergePRStep defines a merge_pr action. Index identifies the PR directly; if
