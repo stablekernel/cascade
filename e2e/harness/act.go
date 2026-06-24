@@ -37,6 +37,19 @@ type RunOpts struct {
 	RepoPath        string            // Path to cloned repo in container
 }
 
+// actStartupTimeout bounds how long the container readiness probe waits for the
+// act container to become runnable. testcontainers' default is 60s, which is
+// ample for the probe itself but offers no slack when a cold first-run image
+// pull has already consumed wall-clock and daemon bandwidth. A generous-but-
+// finite budget tolerates the one-time cold pull while still failing closed if
+// the container never becomes ready.
+const actStartupTimeout = 5 * time.Minute
+
+// actStartupPollInterval is how often the readiness probe re-checks while
+// waiting. A brisk interval detects a healthy container promptly once the pull
+// completes, without hammering the daemon.
+const actStartupPollInterval = 2 * time.Second
+
 // NewActRunner starts a new act container
 func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string, net *testcontainers.DockerNetwork) (*ActRunner, error) {
 	var networks []string
@@ -50,10 +63,22 @@ func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string,
 	// network alias directly. Job containers are configured separately
 	// in actrc below.
 	req := testcontainers.ContainerRequest{
-		Image:      "ghcr.io/catthehacker/ubuntu:act-latest",
-		Cmd:        []string{"sleep", "infinity"}, // Keep container running
-		Networks:   networks,
-		WaitingFor: wait.ForExec([]string{"echo", "ready"}),
+		Image:    "ghcr.io/catthehacker/ubuntu:act-latest",
+		Cmd:      []string{"sleep", "infinity"}, // Keep container running
+		Networks: networks,
+		// The readiness exec ("echo ready") only proves the container is up; it
+		// is near-instant once the container is running. The slow, variable part
+		// is the FIRST-RUN image pull, which testcontainers performs as part of
+		// container creation, before this wait strategy's clock starts. The
+		// strategy's own startup budget defaults to 60s, which is fine for the
+		// exec itself but leaves no slack when a cold pull has already eaten into
+		// the daemon's bandwidth. Give the readiness probe an explicit,
+		// generous budget (still a hard cap: a container that never becomes
+		// runnable fails after actStartupTimeout) and poll briskly so a healthy
+		// container is detected promptly.
+		WaitingFor: wait.ForExec([]string{"echo", "ready"}).
+			WithStartupTimeout(actStartupTimeout).
+			WithPollInterval(actStartupPollInterval),
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.Mounts = append(hc.Mounts, mount.Mount{
 				Type:   mount.TypeBind,
