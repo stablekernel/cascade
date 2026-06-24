@@ -44,7 +44,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.3.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
@@ -117,7 +117,7 @@ jobs:
             echo "_No outputs produced_" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.3.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.1.0
