@@ -1686,11 +1686,15 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	sb.WriteString("                source_repo: context.repo.owner + '/' + context.repo.repo,\n")
 
 	// deploy_name is required: true by the primary's external-update consumer, so
-	// it must always be present and non-empty. Prefer the first deploy name
-	// (satellites typically have one deploy); fall back to the first build name
-	// for build-only artifact satellites; otherwise use the satellite's own repo
-	// name from the runtime context as a last-resort identifier.
+	// it must always be present and non-empty. An explicit notify.deploy_name
+	// override wins: it lets a satellite dispatch the name the primary recognizes
+	// when that differs from the satellite's local deploy/build name. Otherwise,
+	// prefer the first deploy name (satellites typically have one deploy); fall
+	// back to the first build name for build-only artifact satellites; otherwise
+	// use the satellite's own repo name from the runtime context as a last resort.
 	switch {
+	case g.config.Notify.DeployName != "":
+		fmt.Fprintf(sb, "                deploy_name: '%s',\n", g.config.Notify.DeployName)
 	case len(g.config.Deploys) > 0:
 		fmt.Fprintf(sb, "                deploy_name: '%s',\n", g.config.Deploys[0].Name)
 	case len(g.config.Builds) > 0:
@@ -1699,9 +1703,15 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 		sb.WriteString("                deploy_name: context.repo.repo,\n")
 	}
 
-	if len(g.config.Environments) > 0 {
+	// An explicit notify.environment override wins: it lets a satellite dispatch
+	// the environment the primary recognizes when that differs from the
+	// satellite's first local environment (or when the satellite has none).
+	switch {
+	case g.config.Notify.Environment != "":
+		fmt.Fprintf(sb, "                environment: '%s',\n", g.config.Notify.Environment)
+	case len(g.config.Environments) > 0:
 		fmt.Fprintf(sb, "                environment: context.payload.inputs?.environment || '%s',\n", g.config.Environments[0])
-	} else {
+	default:
 		sb.WriteString("                environment: 'dev',\n")
 	}
 	sb.WriteString("                sha: context.sha,\n")

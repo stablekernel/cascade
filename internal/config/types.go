@@ -710,6 +710,17 @@ type NotifyConfig struct {
 	Repo     string `yaml:"repo" json:"repo"`                             // Primary repo to notify (e.g., "org/my-backend")
 	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"` // Workflow to dispatch (default: "external-update.yaml")
 	Token    string `yaml:"token,omitempty" json:"token,omitempty"`       // Secret name for cross-repo dispatch (default: "PRIMARY_REPO_TOKEN")
+	// DeployName, when set, overrides the dispatched deploy_name with the name the
+	// primary recognizes for this satellite. Use it when the satellite's local
+	// build/deploy name differs from the external deploy name in the primary's
+	// config. When empty the deploy_name is derived from the local deploys/builds.
+	DeployName string `yaml:"deploy_name,omitempty" json:"deploy_name,omitempty"`
+	// Environment, when set, overrides the dispatched environment with the
+	// environment the primary recognizes for this satellite's external deploy. Use
+	// it when the satellite's first local environment differs from (or is absent
+	// for build-only satellites) the environment the primary expects. When empty
+	// the environment is derived from the local environments (or defaults to dev).
+	Environment string `yaml:"environment,omitempty" json:"environment,omitempty"`
 }
 
 // GetWorkflow returns the notify workflow name or default

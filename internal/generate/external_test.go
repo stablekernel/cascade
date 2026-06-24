@@ -861,6 +861,78 @@ func TestNotifyPrimaryStep_BuildOnlySatellite_EmitsDeployName(t *testing.T) {
 		"build-only satellite must emit a non-empty deploy_name (consumer requires it)")
 }
 
+// TestNotifyPrimaryStep_OverridesEmitParentNames verifies that when notify
+// sets deploy_name and environment overrides, the dispatch to the primary's
+// external-update workflow uses the parent-recognized names instead of the
+// satellite's locally-derived build name and first environment. A build-only
+// satellite named "shared" notifying a primary that knows it as external deploy
+// "artifact-a" at environment "staging" must dispatch those parent names, or
+// the primary rejects the dispatch ("external deploy 'shared' not found").
+func TestNotifyPrimaryStep_OverridesEmitParentNames(t *testing.T) {
+	baseDir := t.TempDir()
+	createMockWorkflow(t, baseDir, ".github/workflows/build-shared.yaml")
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "shared", Workflow: ".github/workflows/build-shared.yaml", Triggers: []string{"src/**"}},
+		},
+		Notify: &config.NotifyConfig{
+			Repo:        "example/primary-backend",
+			Workflow:    ".github/workflows/external-update.yaml",
+			DeployName:  "artifact-a",
+			Environment: "staging",
+		},
+	}
+
+	gen := NewGenerator(cfg, baseDir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "deploy_name: 'artifact-a',",
+		"override must emit the parent-recognized deploy_name, not the local build name")
+	assert.Contains(t, content, "environment: 'staging',",
+		"override must emit the parent-recognized environment, not the local first environment")
+	assert.NotContains(t, content, "deploy_name: 'shared',",
+		"the local build name must not leak into the dispatch when an override is set")
+}
+
+// TestNotifyPrimaryStep_OverridesOffStateByteIdentical verifies that leaving the
+// deploy_name and environment overrides unset produces output byte-identical to
+// the existing derivation, so the additive fields are a no-op when absent.
+func TestNotifyPrimaryStep_OverridesOffStateByteIdentical(t *testing.T) {
+	baseDir := t.TempDir()
+	createMockWorkflow(t, baseDir, ".github/workflows/build-shared.yaml")
+
+	newCfg := func() *config.TrunkConfig {
+		return &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"dev"},
+			Builds: []config.BuildConfig{
+				{Name: "shared", Workflow: ".github/workflows/build-shared.yaml", Triggers: []string{"src/**"}},
+			},
+			Notify: &config.NotifyConfig{
+				Repo:     "example/primary-backend",
+				Workflow: ".github/workflows/external-update.yaml",
+			},
+		}
+	}
+
+	withoutOverrides, err := NewGenerator(newCfg(), baseDir).Generate()
+	require.NoError(t, err)
+
+	// Same config but with the override fields explicitly empty: must be identical.
+	cfg := newCfg()
+	cfg.Notify.DeployName = ""
+	cfg.Notify.Environment = ""
+	withEmptyOverrides, err := NewGenerator(cfg, baseDir).Generate()
+	require.NoError(t, err)
+
+	assert.Equal(t, withoutOverrides, withEmptyOverrides,
+		"unset overrides must be byte-identical to the existing derivation")
+}
+
 // TestNotifyPrimaryStep_NoStrayDotInJobsAccessor verifies the github-script
 // context accessor uses context.jobs['id'] form with no stray dot before the
 // bracket. The earlier context.jobs.['id'] form is invalid JavaScript and would
