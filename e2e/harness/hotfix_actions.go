@@ -135,6 +135,32 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 	return nil
 }
 
+// resolveEnvAnchor determines the commit env/<env> must be created at when it
+// does not yet exist. The anchor's tree content fully determines whether a later
+// cherry-pick applies cleanly or conflicts, so it is resolved deterministically:
+//
+//  1. an explicit baseRef (resolved via the execution context, falling back to
+//     literal) when the scenario pins the base, then
+//  2. the env's recorded state SHA.
+//
+// A silent fallback to trunk HEAD is deliberately NOT used. When the recorded
+// SHA is momentarily empty (a gitea state-propagation race), anchoring on trunk
+// HEAD would seed env/<env> with the just-patched tip, turning an engineered
+// conflict into an empty (clean) cherry-pick and flipping the resulting PR label
+// run-to-run. An empty resolution returns an error so the race surfaces loudly
+// instead of being masked by a non-deterministic anchor.
+func (r *Runner) resolveEnvAnchor(env, baseRef string) (string, error) {
+	if baseRef != "" {
+		if anchor := r.resolveCommit(baseRef); anchor != "" {
+			return anchor, nil
+		}
+	}
+	if anchor := r.ctx.GetState(env).SHA; anchor != "" {
+		return anchor, nil
+	}
+	return "", fmt.Errorf("hotfix_apply: cannot anchor env/%s: no base_ref given and recorded state SHA for %q is empty (likely a gitea state sync race); pin the scenario step's base_ref to make the cherry-pick outcome deterministic", env, env)
+}
+
 // executeHotfixApply performs a harness-driven cherry-pick of a trunk commit onto
 // env/<target>, pushing a hotfix branch and opening a labeled PR. It mirrors the
 // product workflow's apply recipe (internal/generate/hotfix.go) but runs the git
@@ -159,18 +185,15 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	hotfixBranch := "hotfix/" + env + "/" + short
 	r.t.Logf("  HotfixApply: commits=%s env=%s branch=%s", commitList, env, hotfixBranch)
 
-	// Ensure env/<env> exists, anchored at the env's recorded state SHA (or HEAD).
+	// Ensure env/<env> exists, anchored at the env's true base (resolveEnvAnchor).
 	branches, err := r.harness.gitea.ListBranches(ctx, r.harness.repo)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
 	if !containsString(branches, envBranch) {
-		anchor := r.ctx.GetState(env).SHA
-		if anchor == "" {
-			anchor, err = r.harness.gitea.getHeadSHA(ctx, r.harness.repo)
-			if err != nil {
-				return fmt.Errorf("get HEAD SHA for env branch anchor: %w", err)
-			}
+		anchor, err := r.resolveEnvAnchor(env, step.BaseRef)
+		if err != nil {
+			return err
 		}
 		if err := r.harness.gitea.CreateBranch(ctx, r.harness.repo, envBranch, anchor); err != nil {
 			return fmt.Errorf("create env branch %s: %w", envBranch, err)

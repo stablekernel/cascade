@@ -118,19 +118,26 @@ steps:
     hotfix_apply:
       target_env: test
       commit_ref: commit3
+      # Pin the env/test anchor to commit1 (Version "1"). The cherry-pick outcome
+      # is fully determined by the anchor content: commit3's diff rewrites the
+      # Version line from "2" to "2-patched", so applying it onto a tree where
+      # that line reads "1" produces a textual conflict every run. Without this
+      # pin the harness anchored on the recorded test SHA, which a gitea state
+      # sync race could momentarily report empty and silently flip the anchor to
+      # the just-patched trunk tip, turning the conflict into an empty (clean)
+      # cherry-pick and the PR label from -conflict to plain cascade-hotfix.
+      base_ref: commit1
     expect:
       branches:
         exist: ["env/test"]
-      # Whether the cherry-pick of commit3 onto env/test surfaces a textual
-      # conflict is a host-side mechanic: real GitHub's server-side merge flags
-      # the overlapping Version edit, while the gitea-backed cherry-pick here
-      # applies it cleanly and opens a cascade-hotfix PR. The e2e backend is
-      # gitea, so this step asserts the label gitea actually produces; the
-      # conflict-labeled PR path is exercised by the real-GitHub validation
-      # fleet. The resolve step below still pushes resolved content onto the PR
-      # head and replays the check, so the resolution path stays covered.
+      # The cherry-pick conflicts deterministically here (see base_ref above):
+      # commit3's Version edit overlaps the "1" still on env/test, so the apply
+      # job opens the conflict-resolution PR labeled cascade-hotfix-conflict.
+      # The resolve step below pushes resolved content onto the PR head and
+      # replays the check, exercising the full conflict-resolution path the
+      # scenario name promises.
       prs:
-        open_with_label: "cascade-hotfix"
+        open_with_label: "cascade-hotfix-conflict"
       # The gitea harness creates PR labels on demand, so it cannot reproduce the
       # real-GitHub behavior where "gh pr create --label X" fails hard when X does
       # not yet exist. That gap let a missing label seed ship undetected: the
@@ -157,9 +164,10 @@ steps:
   - name: "Merge hotfix PR"
     action: merge_pr
     merge_pr:
-      # Matches the label gitea applied at apply time (see the note on the apply
-      # step): the cherry-pick lands clean here, so the PR carries cascade-hotfix.
-      label: "cascade-hotfix"
+      # Matches the label the apply step recorded: the cherry-pick conflicts here
+      # (see the base_ref note on the apply step), so the resolution PR carries
+      # cascade-hotfix-conflict.
+      label: "cascade-hotfix-conflict"
 
   - name: "Finalize hotfix for test"
     action: hotfix_merged
