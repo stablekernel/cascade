@@ -54,6 +54,20 @@ on:
         required: false
         type: string
         default: ''
+      require-ledger:
+        description: >-
+          When true (the default), the gate requires a ledger to be present: a
+          missing ledger artifact (or, with ledger-path, a missing/empty file)
+          fails the gate instead of reconciling against an empty ledger. This is
+          fail-closed - a ledger that merely failed to download must never look
+          like "no registered runs" and let an expected:failure run that
+          actually succeeded pass as benign. Set false ONLY for a suite that
+          intentionally registers nothing (every run in its window is meant to
+          be benign-unregistered); such a suite has no expected:failure runs to
+          mis-pass.
+        required: false
+        type: boolean
+        default: true
       cascade-ref:
         description: >-
           The cascade ref to check out for the reconcile core (the rc tag under
@@ -72,7 +86,11 @@ on:
         type: string
         default: ''
       run-list-limit:
-        description: 'Max runs to fetch per page from gh run list (paginated to capture all).'
+        description: >-
+          Page size for the strict-backward run enumeration (the gh run list
+          --limit per page). The Go core pages until the window is exhausted and
+          fails closed on truncation, so this is a per-page size, not a hard cap
+          on total runs reconciled.
         required: false
         type: number
         default: 200
@@ -121,13 +139,17 @@ jobs:
         env:
           ART_DIR: ${{ runner.temp }}/ledger-artifacts
           LEDGER_PATH_IN: ${{ inputs.ledger-path }}
+          REQUIRE_LEDGER: ${{ inputs.require-ledger }}
+          DOWNLOAD_OUTCOME: ${{ steps.ledger.outcome }}
         run: |
           set -euo pipefail
           LEDGER="${RUNNER_TEMP}/cascade-run-ledger.jsonl"
           : > "$LEDGER"
 
           # Prefer downloaded artifacts; merge-multiple may have produced one or
-          # more .jsonl files. Concatenate them all.
+          # more .jsonl files. Concatenate them all. Count what we found so the
+          # empty case can be distinguished from a present-but-empty ledger.
+          found=0
           if [ -d "$ART_DIR" ]; then
             found=$(find "$ART_DIR" -type f -name '*.jsonl' | wc -l | tr -d ' ')
             if [ "$found" -gt 0 ]; then
@@ -136,80 +158,71 @@ jobs:
           fi
 
           # Fall back to an in-workspace ledger (single-job suite path).
+          used_path=false
           if [ ! -s "$LEDGER" ] && [ -n "$LEDGER_PATH_IN" ] && [ -f "$LEDGER_PATH_IN" ]; then
             cat "$LEDGER_PATH_IN" >> "$LEDGER"
+            used_path=true
           fi
 
           lines=$(grep -c . "$LEDGER" || true)
-          echo "ledger has ${lines:-0} registered run(s)"
+          echo "ledger has ${lines:-0} registered run(s) (artifact files: ${found}, download outcome: ${DOWNLOAD_OUTCOME})"
+
+          # Fail-closed: when a ledger is required (default), a download that
+          # failed or produced no ledger must NOT pass as "no registered runs".
+          # An expected:failure run whose ledger entry merely failed to download
+          # would otherwise look benign-unregistered and wrongly pass the gate.
+          if [ "$REQUIRE_LEDGER" = "true" ]; then
+            if [ -n "$LEDGER_PATH_IN" ]; then
+              # In-workspace mode: the named ledger must exist and be non-empty.
+              if [ "$used_path" != "true" ] || [ ! -s "$LEDGER" ]; then
+                echo "::error::fleet-reconcile: require-ledger is set but no ledger was found at ledger-path '${LEDGER_PATH_IN}'. Refusing to reconcile against an empty ledger (an expected:failure run that succeeded could pass as benign). Set require-ledger:false only for a suite that registers nothing."
+                exit 1
+              fi
+            else
+              # Artifact mode: the download must have succeeded and yielded at
+              # least one ledger file. A missing artifact is treated as an error
+              # (a suite that registers runs must always upload its ledger).
+              if [ "$DOWNLOAD_OUTCOME" != "success" ] || [ "$found" -eq 0 ]; then
+                echo "::error::fleet-reconcile: require-ledger is set but no ledger artifact was downloaded (outcome: ${DOWNLOAD_OUTCOME}, files: ${found}). Refusing to reconcile against an empty ledger (an expected:failure run that succeeded could pass as benign). Ensure the suite uploads its ledger, or set require-ledger:false for a suite that registers nothing."
+                exit 1
+              fi
+            fi
+          fi
+
           echo "ledger-path=$LEDGER" >> "$GITHUB_OUTPUT"
 
-      # Enumerate EVERY run created in this repo since window-start, paginating
-      # so a busy scenario window is fully captured. gh run list paginates with
-      # --limit; we loop, advancing nothing (the API has no cursor on this
-      # endpoint), so we request a high limit and de-dup defensively.
-      - name: Enumerate scenario-window runs
-        id: runs
+      # Enumerate EVERY run created in this repo since window-start AND reconcile
+      # in one binary call. The enumeration/pagination lives in the unit-tested
+      # Go core (internal/fleetreconcile.EnumerateRuns): it pages strictly
+      # backward by (createdAt, run id) so a boundary-timestamp cluster cannot
+      # stall the walk, dedupes by run id, and - critically - FAILS CLOSED if the
+      # page cap is reached on a full page or a same-timestamp cluster cannot be
+      # paged. It never reconciles a truncated window. The binary shells out to
+      # `gh run list --created ">=window-start" ...` for each page.
+      - name: Enumerate and reconcile scenario-window runs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           WINDOW_START: ${{ inputs.window-start }}
           LIMIT: ${{ inputs.run-list-limit }}
-        run: |
-          set -euo pipefail
-          RUNS_JSON="${RUNNER_TEMP}/scenario-runs.json"
-
-          # gh run list --created ">=<ts>" filters server-side to the window.
-          # --limit caps results; we set it high and page by walking creation
-          # time: fetch a page, and if it is full, narrow to runs strictly older
-          # than the oldest seen and fetch again, accumulating. Run ids dedupe
-          # the boundary overlap.
-          fetch_page() {
-            local since="$1"
-            gh run list --repo "$REPO" \
-              --created ">=${since}" \
-              --limit "$LIMIT" \
-              --json databaseId,workflowName,event,conclusion,status,headBranch,createdAt
-          }
-
-          acc="[]"
-          since="$WINDOW_START"
-          for _ in $(seq 1 20); do
-            page=$(fetch_page "$since")
-            count=$(echo "$page" | jq 'length')
-            acc=$(jq -s '.[0] + .[1] | unique_by(.databaseId)' \
-                    <(echo "$acc") <(echo "$page"))
-            if [ "$count" -lt "$LIMIT" ]; then
-              break
-            fi
-            # Page was full: advance the window to the oldest createdAt in this
-            # page so the next request walks further back. (>= is inclusive, so
-            # the oldest run reappears and is de-duped by databaseId.)
-            since=$(echo "$page" | jq -r 'min_by(.createdAt) | .createdAt')
-          done
-
-          echo "$acc" > "$RUNS_JSON"
-          total=$(jq 'length' "$RUNS_JSON")
-          echo "captured ${total} run(s) in the scenario window"
-          echo "runs-path=$RUNS_JSON" >> "$GITHUB_OUTPUT"
-
-      - name: Reconcile
-        env:
           LEDGER: ${{ steps.assemble.outputs.ledger-path }}
-          RUNS: ${{ steps.runs.outputs.runs-path }}
           SELF_RUN_ID: ${{ github.run_id }}
           ALLOW: ${{ inputs.allow-workflows }}
         run: |
           set -euo pipefail
           # Exit 0 = every run accounted for; 1 = a coverage gap reds the gate;
-          # 2 = tool/input error. The report is printed to the job log and the
-          # step summary so a red gate names the unaccounted run.
+          # 2 = tool/input error (which includes a truncated/stalled enumeration,
+          # so a window we could not fully enumerate also reds the gate). The
+          # report is printed to the job log and the step summary so a red gate
+          # names the unaccounted run.
           set +e
           OUT=$(go run ./internal/fleetreconcile/cmd \
-            --runs "$RUNS" \
+            --window-start "$WINDOW_START" \
+            --repo "$REPO" \
+            --page-size "$LIMIT" \
             --ledger "$LEDGER" \
             --self-run-id "$SELF_RUN_ID" \
-            --allow-workflows "$ALLOW")
+            --allow-workflows "$ALLOW" 2>&1)
           code=$?
           set -e
 

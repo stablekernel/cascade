@@ -36,6 +36,11 @@ type Run struct {
 	Conclusion   string `json:"conclusion"` // success|failure|cancelled|skipped|"" (in-flight)
 	Status       string `json:"status"`     // completed|in_progress|queued
 	HeadBranch   string `json:"headBranch"`
+	// CreatedAt is the run's ISO-8601 creation timestamp (the gh `createdAt`
+	// key). It is the cursor the enumerator pages backward on. ISO-8601 UTC
+	// timestamps in the gh output sort lexicographically in time order, so the
+	// enumerator compares them as strings.
+	CreatedAt string `json:"createdAt"`
 }
 
 // Verdict classifies one run against the ledger. Outcome buckets are mutually

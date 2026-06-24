@@ -1,6 +1,7 @@
 package fleetreconcile
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,22 @@ import (
 // completed is a helper for a finished run.
 func completed(id int64, wf, conclusion, branch string) Run {
 	return Run{DatabaseID: id, WorkflowName: wf, Event: "push", Status: "completed", Conclusion: conclusion, HeadBranch: branch}
+}
+
+// completedAt is completed with an explicit createdAt for enumerator tests.
+func completedAt(id int64, wf, conclusion, branch, createdAt string) Run {
+	r := completed(id, wf, conclusion, branch)
+	r.CreatedAt = createdAt
+	return r
+}
+
+// descendingTS yields strictly descending ISO-8601 timestamps as i grows, so a
+// set of runs built from increasing i has distinct, always-advancing createdAt
+// values inside a single day.
+func descendingTS(i int) string {
+	h := 23 - (i / 60)
+	m := 59 - (i % 60)
+	return fmt.Sprintf("2026-06-23T%02d:%02d:00Z", h, m)
 }
 
 func TestReconcile(t *testing.T) {
