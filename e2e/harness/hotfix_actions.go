@@ -1,11 +1,9 @@
 package harness
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 )
@@ -60,11 +58,16 @@ func (r *Runner) execInRepo(ctx context.Context, script string) (int, string, er
 	if err != nil {
 		return exitCode, "", err
 	}
-	var out bytes.Buffer
-	if reader != nil {
-		_, _ = io.Copy(&out, reader)
+	// readDemuxedStream strips Docker's per-frame multiplexing headers (stream
+	// type + big-endian length prefix on each chunk). A plain io.Copy leaves those
+	// 8-byte binary headers interspersed in the output, corrupting sentinel lines
+	// like "CONFLICT_FILES=..." so that HasPrefix never matches, silently turning
+	// an engineered cherry-pick conflict into a clean apply.
+	out, demuxErr := readDemuxedStream(reader)
+	if demuxErr != nil {
+		return exitCode, "", fmt.Errorf("exec output: %w", demuxErr)
 	}
-	return exitCode, out.String(), nil
+	return exitCode, out, nil
 }
 
 // repoEnv builds the standard workflow environment (GITHUB_REPOSITORY) shared by
@@ -135,6 +138,32 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 	return nil
 }
 
+// resolveEnvAnchor determines the commit env/<env> must be created at when it
+// does not yet exist. The anchor's tree content fully determines whether a later
+// cherry-pick applies cleanly or conflicts, so it is resolved deterministically:
+//
+//  1. an explicit baseRef (resolved via the execution context, falling back to
+//     literal) when the scenario pins the base, then
+//  2. the env's recorded state SHA.
+//
+// A silent fallback to trunk HEAD is deliberately NOT used. When the recorded
+// SHA is momentarily empty (a gitea state-propagation race), anchoring on trunk
+// HEAD would seed env/<env> with the just-patched tip, turning an engineered
+// conflict into an empty (clean) cherry-pick and flipping the resulting PR label
+// run-to-run. An empty resolution returns an error so the race surfaces loudly
+// instead of being masked by a non-deterministic anchor.
+func (r *Runner) resolveEnvAnchor(env, baseRef string) (string, error) {
+	if baseRef != "" {
+		if anchor := r.resolveCommit(baseRef); anchor != "" {
+			return anchor, nil
+		}
+	}
+	if anchor := r.ctx.GetState(env).SHA; anchor != "" {
+		return anchor, nil
+	}
+	return "", fmt.Errorf("hotfix_apply: cannot anchor env/%s: no base_ref given and recorded state SHA for %q is empty (likely a gitea state sync race); pin the scenario step's base_ref to make the cherry-pick outcome deterministic", env, env)
+}
+
 // executeHotfixApply performs a harness-driven cherry-pick of a trunk commit onto
 // env/<target>, pushing a hotfix branch and opening a labeled PR. It mirrors the
 // product workflow's apply recipe (internal/generate/hotfix.go) but runs the git
@@ -159,34 +188,23 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	hotfixBranch := "hotfix/" + env + "/" + short
 	r.t.Logf("  HotfixApply: commits=%s env=%s branch=%s", commitList, env, hotfixBranch)
 
-	// Ensure env/<env> exists, anchored at the env's recorded state SHA (or HEAD).
+	// Determine whether env/<env> already exists so we know whether to seed it.
 	branches, err := r.harness.gitea.ListBranches(ctx, r.harness.repo)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
-	if !containsString(branches, envBranch) {
-		anchor := r.ctx.GetState(env).SHA
-		if anchor == "" {
-			anchor, err = r.harness.gitea.getHeadSHA(ctx, r.harness.repo)
-			if err != nil {
-				return fmt.Errorf("get HEAD SHA for env branch anchor: %w", err)
-			}
-		}
-		if err := r.harness.gitea.CreateBranch(ctx, r.harness.repo, envBranch, anchor); err != nil {
-			return fmt.Errorf("create env branch %s: %w", envBranch, err)
-		}
-		r.t.Logf("  HotfixApply: created %s at %s", envBranch, truncateSHA(anchor))
-		// Gitea's branch-list endpoint lags a create: wait until the new branch
-		// is listed so a later branches.exist assertion (which lists branches)
-		// observes it rather than racing the create.
-		if err := r.waitForBranchListed(ctx, envBranch, 30*time.Second); err != nil {
-			return fmt.Errorf("waiting for env branch %s to be listed: %w", envBranch, err)
-		}
-	}
+	needsSeedEnvBranch := !containsString(branches, envBranch)
 
-	baseSHA, err := r.harness.gitea.GetBranchSHA(ctx, r.harness.repo, envBranch)
-	if err != nil {
-		return fmt.Errorf("get base SHA for %s: %w", envBranch, err)
+	// Resolve the anchor SHA for env branch seeding. The anchor's tree content
+	// determines the cherry-pick outcome: only needed when the branch is absent.
+	// resolveEnvAnchor errors (rather than silently using trunk HEAD) when the
+	// anchor is unresolvable, surfacing sync races loudly.
+	var anchorSHA string
+	if needsSeedEnvBranch {
+		anchorSHA, err = r.resolveEnvAnchor(env, step.BaseRef)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
@@ -198,12 +216,35 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	// conflict PR body. The push uses the admin-credentialed origin URL.
 	pushURL := r.authedRepoURL()
 	short8 := short
-	script := strings.Join([]string{
+
+	// Env branch seed snippet: when env/<env> does not yet exist, push the anchor
+	// SHA directly via git rather than the gitea HTTP branches API. The HTTP API
+	// accepts old_ref_name as a branch or tag name; passing a raw commit SHA is
+	// not reliable across gitea versions (some ignore it and branch from HEAD
+	// instead). A git push from inside the act container is precise: git resolves
+	// the object by its SHA and the push creates the remote ref at exactly that
+	// commit. The act container has the full object database (SyncRepoToActContainer
+	// fetches all of main including the anchor commit) so the push always finds the
+	// object.
+	seedEnvBranchLines := []string{}
+	if needsSeedEnvBranch {
+		seedEnvBranchLines = []string{
+			// Create env/<env> at anchorSHA via git push. --force handles the case
+			// where a prior scenario retry created a stale copy.
+			fmt.Sprintf("git push --force %q %q", pushURL, anchorSHA+":refs/heads/"+envBranch),
+			"echo \"SEED_ENV_EXIT=$?\"",
+		}
+	}
+
+	scriptLines := []string{
 		"set +e",
 		// Abort any half-finished cherry-pick left in the shared /tmp/repo by a
 		// prior apply in this scenario, then drop any stale local hotfix branch so
 		// the re-create below always anchors on the freshly-fetched remote tip.
 		"git cherry-pick --abort >/dev/null 2>&1 || true",
+	}
+	scriptLines = append(scriptLines, seedEnvBranchLines...)
+	scriptLines = append(scriptLines,
 		// Force-update the env tracking ref so a second apply onto an env branch
 		// the first finalize already advanced (squash-merge) anchors on the
 		// current tip rather than a stale ref, otherwise the cherry-pick replays
@@ -233,11 +274,25 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 		// shared branch.
 		fmt.Sprintf("git push --force %q %q", pushURL, hotfixBranch+":"+hotfixBranch),
 		"echo \"PUSH_EXIT=$?\"",
-	}, "\n")
+	)
+	script := strings.Join(scriptLines, "\n")
 
 	_, out, err := r.execInRepo(ctx, script)
 	if err != nil {
 		return fmt.Errorf("cherry-pick exec: %w", err)
+	}
+	if needsSeedEnvBranch {
+		if strings.Contains(out, "SEED_ENV_EXIT=") && !strings.Contains(out, "SEED_ENV_EXIT=0") {
+			r.t.Logf("  HotfixApply seed-env push output:\n%s", out)
+			return fmt.Errorf("failed to seed env branch %s at %s", envBranch, truncateSHA(anchorSHA))
+		}
+		r.t.Logf("  HotfixApply: seeded %s at %s via git push", envBranch, truncateSHA(anchorSHA))
+		// Gitea's branch-list endpoint lags a push: wait until the new branch
+		// is listed so a later branches.exist assertion (which lists branches)
+		// observes it rather than racing the push.
+		if err := r.waitForBranchListed(ctx, envBranch, 30*time.Second); err != nil {
+			return fmt.Errorf("waiting for seeded env branch %s to be listed: %w", envBranch, err)
+		}
 	}
 	conflictFiles := parseSentinel(out, "CONFLICT_FILES=")
 	conflict := strings.TrimSpace(conflictFiles) != ""
@@ -250,6 +305,13 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	// before opening the PR, polling until Gitea reports the pushed branch.
 	if err := r.waitForBranch(ctx, hotfixBranch, 30*time.Second); err != nil {
 		return fmt.Errorf("waiting for pushed branch %s: %w", hotfixBranch, err)
+	}
+
+	// Read the env branch's current tip as the base for the PR trailers. This is
+	// read after the script so it reflects the seeded-or-pre-existing branch head.
+	baseSHA, err := r.harness.gitea.GetBranchSHA(ctx, r.harness.repo, envBranch)
+	if err != nil {
+		return fmt.Errorf("get base SHA for %s: %w", envBranch, err)
 	}
 
 	// Build the PR body with the three product trailers; append the conflict file
