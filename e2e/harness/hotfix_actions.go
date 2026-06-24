@@ -1,11 +1,9 @@
 package harness
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 )
@@ -60,11 +58,16 @@ func (r *Runner) execInRepo(ctx context.Context, script string) (int, string, er
 	if err != nil {
 		return exitCode, "", err
 	}
-	var out bytes.Buffer
-	if reader != nil {
-		_, _ = io.Copy(&out, reader)
+	// readDemuxedStream strips Docker's per-frame multiplexing headers (stream
+	// type + big-endian length prefix on each chunk). A plain io.Copy leaves those
+	// 8-byte binary headers interspersed in the output, corrupting sentinel lines
+	// like "CONFLICT_FILES=..." so that HasPrefix never matches, silently turning
+	// an engineered cherry-pick conflict into a clean apply.
+	out, demuxErr := readDemuxedStream(reader)
+	if demuxErr != nil {
+		return exitCode, "", fmt.Errorf("exec output: %w", demuxErr)
 	}
-	return exitCode, out.String(), nil
+	return exitCode, out, nil
 }
 
 // repoEnv builds the standard workflow environment (GITHUB_REPOSITORY) shared by
