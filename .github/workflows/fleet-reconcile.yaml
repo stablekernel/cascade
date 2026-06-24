@@ -121,10 +121,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Merge every per-job ledger artifact into one JSONL file. merge-multiple
-      # concatenates same-named files across artifacts; the glob captures every
-      # registering job's upload. Missing artifacts are tolerated (a suite that
-      # gated nothing, or one using the in-workspace ledger path instead).
+      # Download every per-job ledger artifact, each into its own subdirectory.
+      # Do NOT use merge-multiple: the per-job files all share the basename
+      # cascade-run-ledger.jsonl, so flattening them into one directory would
+      # overwrite each other and only one job's ledger would survive. With
+      # per-artifact subdirectories the assemble step's recursive find then
+      # concatenates one file per job. Missing artifacts are tolerated (a suite
+      # that gated nothing, or one using the in-workspace ledger path instead).
       - name: Download run-ledger artifacts
         id: ledger
         continue-on-error: true
@@ -132,7 +135,6 @@ jobs:
         with:
           pattern: ${{ inputs.ledger-artifact }}
           path: ${{ runner.temp }}/ledger-artifacts
-          merge-multiple: true
 
       - name: Assemble the ledger
         id: assemble
