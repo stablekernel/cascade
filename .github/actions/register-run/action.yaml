@@ -1,0 +1,128 @@
+name: 'Register fleet run'
+description: >-
+  Record a run a scenario suite gates - its id and the conclusion it expects -
+  into the fleet run ledger. The fleet-reconcile reusable workflow later
+  enumerates every run the repo produced in the scenario window and fails if any
+  run is in the window but not in this ledger, turning every fire-and-forget run
+  into a hard red. Call this right after a suite resolves a dispatched or
+  triggered run id, before (or alongside) the `gh run watch` that awaits it.
+  Safe to call many times across a suite: it appends one JSON line per call.
+
+inputs:
+  run-id:
+    description: 'The run id the suite is gating (the databaseId from gh run list).'
+    required: true
+  expected-conclusion:
+    description: >-
+      The conclusion this run must reach: "success" (the default) or "failure"
+      for a registered negative (a guard that must refuse, e.g. the
+      divergence-promote guard). Reconcile requires the actual conclusion to
+      equal this.
+    required: false
+    default: 'success'
+  reason:
+    description: >-
+      A short tag naming the scenario step that registered this run (e.g.
+      "hotfix-finalize" or "divergence-guard"). Appears in the reconcile report
+      so a gap is attributable.
+    required: true
+  ledger-path:
+    description: >-
+      Path to the ledger file. Defaults under $RUNNER_TEMP so it is per-runner
+      and survives across steps of the same job. For a MULTI-JOB suite, set
+      upload to "true" in every job that registers, and have the reconcile job
+      download every "cascade-run-ledger-*" artifact (see fleet-reconcile.yaml);
+      a single-job suite can leave upload off and pass this same path to
+      reconcile directly.
+    required: false
+    default: ''
+  upload:
+    description: >-
+      When "true", upload the ledger as a per-job artifact so it reaches the
+      reconcile job in a multi-job suite. Leave "false" (default) for a
+      single-job suite that passes the workspace ledger path straight to
+      reconcile.
+    required: false
+    default: 'false'
+  artifact-name:
+    description: >-
+      Artifact name when upload is "true". Must be unique per job so concurrent
+      jobs do not collide; default appends the job + a random suffix. The
+      reconcile job globs "cascade-run-ledger-*" to merge them.
+    required: false
+    default: ''
+
+outputs:
+  ledger-path:
+    description: 'The resolved ledger file path the entry was appended to.'
+    value: ${{ steps.append.outputs.ledger-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Append run to the ledger
+      id: append
+      shell: bash
+      env:
+        RUN_ID: ${{ inputs.run-id }}
+        EXPECTED: ${{ inputs.expected-conclusion }}
+        REASON: ${{ inputs.reason }}
+        LEDGER_PATH_IN: ${{ inputs.ledger-path }}
+      run: |
+        set -euo pipefail
+
+        # Validate the expectation up front so a typo cannot silently register a
+        # run that reconcile can never match.
+        case "$EXPECTED" in
+          success|failure) ;;
+          *) echo "::error::register-run: expected-conclusion must be 'success' or 'failure', got '$EXPECTED'"; exit 1 ;;
+        esac
+        if ! [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
+          echo "::error::register-run: run-id must be numeric, got '$RUN_ID'"; exit 1
+        fi
+        if [ -z "${REASON:-}" ]; then
+          echo "::error::register-run: reason is required"; exit 1
+        fi
+
+        LEDGER="$LEDGER_PATH_IN"
+        if [ -z "$LEDGER" ]; then
+          LEDGER="${RUNNER_TEMP}/cascade-run-ledger.jsonl"
+        fi
+        mkdir -p "$(dirname "$LEDGER")"
+
+        # Append one JSON line. jq -c guarantees valid JSON and correct escaping
+        # of the reason. Append (>>) is intentional: many calls build one ledger.
+        jq -cn \
+          --argjson run_id "$RUN_ID" \
+          --arg expected "$EXPECTED" \
+          --arg reason "$REASON" \
+          '{run_id: $run_id, expected: $expected, reason: $reason}' >> "$LEDGER"
+
+        echo "registered run $RUN_ID (expected=$EXPECTED, reason=$REASON) -> $LEDGER"
+        echo "ledger-path=$LEDGER" >> "$GITHUB_OUTPUT"
+
+    - name: Stage ledger for artifact upload
+      if: inputs.upload == 'true'
+      id: stage
+      shell: bash
+      env:
+        LEDGER: ${{ steps.append.outputs.ledger-path }}
+        ART_NAME_IN: ${{ inputs.artifact-name }}
+      run: |
+        set -euo pipefail
+        ART_NAME="$ART_NAME_IN"
+        if [ -z "$ART_NAME" ]; then
+          # Unique per job + run so concurrent registering jobs never collide.
+          ART_NAME="cascade-run-ledger-${GITHUB_JOB}-${GITHUB_RUN_ID}-${RANDOM}"
+        fi
+        echo "artifact-name=$ART_NAME" >> "$GITHUB_OUTPUT"
+
+    - name: Upload ledger artifact
+      if: inputs.upload == 'true'
+      uses: actions/upload-artifact@de65e23aa2b7e23d713bb51fbfcb6d502f8067d6 # v4.6.2
+      with:
+        name: ${{ steps.stage.outputs.artifact-name }}
+        path: ${{ steps.append.outputs.ledger-path }}
+        if-no-files-found: error
+        retention-days: 7
+        overwrite: true
