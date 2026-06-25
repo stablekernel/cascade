@@ -1,6 +1,7 @@
 ---
 title: "pipeline"
 ---
+%%{init: {"theme": "base", "themeVariables": {"lineColor": "#57606a"}}}%%
 flowchart TD
     validate([Validate &#40;validate&#41;])
     build_api[Build &#40;api&#41;]
@@ -15,3 +16,9 @@ flowchart TD
     deploy_staging --> build_web
     deploy_prod --> validate
     deploy_prod --> deploy_staging
+    classDef node_validate fill:#1f6feb,stroke:#0b3d91,color:#ffffff
+    classDef node_build fill:#2da44e,stroke:#116329,color:#ffffff
+    classDef node_deploy fill:#8250df,stroke:#512a97,color:#ffffff
+    class validate node_validate
+    class build_api,build_web node_build
+    class deploy_staging,deploy_prod node_deploy

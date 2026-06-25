@@ -169,6 +169,105 @@ func TestRun_UnknownTheme_Errors(t *testing.T) {
 	require.Contains(t, err.Error(), "midnight")
 }
 
+func TestRun_BlandTheme_StylesOutput(t *testing.T) {
+	path := writeManifest(t)
+	o := baseOptions(path)
+	o.Theme = "bland"
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	require.Contains(t, got, "flowchart TD")
+	// The bland theme sets a neutral Mermaid base and its own line color.
+	require.Contains(t, got, `"theme": "neutral"`)
+	require.Contains(t, got, "classDef node_validate")
+}
+
+func TestRun_CascadeAndBland_Differ(t *testing.T) {
+	path := writeManifest(t)
+
+	var cascade, bland bytes.Buffer
+	co := baseOptions(path)
+	co.Theme = "cascade"
+	require.NoError(t, Run(co, &cascade))
+
+	bo := baseOptions(path)
+	bo.Theme = "bland"
+	require.NoError(t, Run(bo, &bland))
+
+	require.NotEqual(t, cascade.String(), bland.String())
+}
+
+func TestRun_DefaultAliasesCascade(t *testing.T) {
+	path := writeManifest(t)
+
+	var def, cascade bytes.Buffer
+	do := baseOptions(path)
+	do.Theme = "default"
+	require.NoError(t, Run(do, &def))
+
+	co := baseOptions(path)
+	co.Theme = "cascade"
+	require.NoError(t, Run(co, &cascade))
+
+	require.Equal(t, cascade.String(), def.String())
+}
+
+func TestRun_FileTheme_Applied(t *testing.T) {
+	path := writeManifest(t)
+
+	dir := t.TempDir()
+	themePath := filepath.Join(dir, "custom.json")
+	body := `{"name":"custom","base":"base","lineColor":"#abcdef","nodeStyles":{"validate":{"fill":"#123456"}}}`
+	require.NoError(t, os.WriteFile(themePath, []byte(body), 0o600))
+
+	o := baseOptions(path)
+	o.Theme = themePath
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+	require.Contains(t, out.String(), "fill:#123456")
+}
+
+func TestRun_FileTheme_JSONReportsName(t *testing.T) {
+	path := writeManifest(t)
+
+	dir := t.TempDir()
+	themePath := filepath.Join(dir, "custom.json")
+	require.NoError(t, os.WriteFile(themePath, []byte(`{"name":"custom","base":"base"}`), 0o600))
+
+	o := baseOptions(path)
+	o.Theme = themePath
+	o.JSON = true
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	var payload struct {
+		Theme string `json:"theme"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
+	require.Equal(t, "custom", payload.Theme)
+}
+
+func TestRun_MalformedThemeFile_Errors(t *testing.T) {
+	path := writeManifest(t)
+
+	dir := t.TempDir()
+	themePath := filepath.Join(dir, "bad.json")
+	require.NoError(t, os.WriteFile(themePath, []byte("{not json"), 0o600))
+
+	o := baseOptions(path)
+	o.Theme = themePath
+
+	var out bytes.Buffer
+	err := Run(o, &out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "theme")
+	require.Empty(t, out.String())
+}
+
 func TestRun_MissingManifest_Errors(t *testing.T) {
 	o := baseOptions(filepath.Join(t.TempDir(), "absent.yaml"))
 
