@@ -1,0 +1,39 @@
+package simulate
+
+// ActionContext carries the inputs an Action needs to replay orchestration
+// against the cloned manifest. ClonePath points at the temp copy of the user's
+// manifest; the real file is never handed to an action.
+type ActionContext struct {
+	// ClonePath is the path to the temp clone of the manifest the action may
+	// mutate. The real promoter writes its transitions here.
+	ClonePath string
+
+	// Actor is the identity that performs the hypothetical action.
+	Actor string
+}
+
+// ActionOutcome is what an Action returns after replaying orchestration. It
+// carries the ordered effects plus the path holding the resolved after-state
+// (the clone path, since the real promoter writes there).
+type ActionOutcome struct {
+	// Effects is the ordered list of steps the orchestration would take.
+	Effects []Effect
+
+	// AfterStatePath is the manifest path holding the after-state.
+	AfterStatePath string
+}
+
+// Action is a hypothetical operation the what-if engine can replay against a
+// cloned manifest. Implementations drive the real orchestration logic in
+// record-only mode and report the effects it would produce.
+type Action interface {
+	// Name is a short identifier for the action (for example "promote").
+	Name() string
+
+	// Describe returns a one-line human-readable summary of the action.
+	Describe() string
+
+	// Apply replays the action against the clone manifest and returns the
+	// effects plus the after-state path.
+	Apply(ctx ActionContext) (*ActionOutcome, error)
+}
