@@ -19,8 +19,32 @@ func BuildStagesViewModel(cfg *config.TrunkConfig) (ViewModel, error) {
 		return ViewModel{}, fmt.Errorf("visualize: nil config")
 	}
 
-	// Candidate stages in lifecycle order, each gated on whether the manifest
-	// actually exercises it. Trunk and release are unconditional bookends.
+	vm := ViewModel{Kind: DiagramFlowchart}
+
+	var prev string
+	for _, c := range presentStages(cfg) {
+		vm.Nodes = append(vm.Nodes, Node{ID: c.id, Label: c.label, Kind: NodeStage})
+		if prev != "" {
+			vm.Edges = append(vm.Edges, Edge{From: prev, To: c.id, Kind: EdgeStage})
+		}
+		prev = c.id
+	}
+
+	return vm, nil
+}
+
+// stageDef is one coarse lifecycle stage with its display label.
+type stageDef struct {
+	id    string
+	label string
+}
+
+// presentStages returns the lifecycle stages the manifest exercises, in order.
+// Trunk and release are unconditional bookends; build, deploy, and promote are
+// each gated on whether the manifest declares the corresponding work. The cross-
+// repo projection reuses it to render the primary repo's pipeline lane, so the
+// stage gating stays defined in one place.
+func presentStages(cfg *config.TrunkConfig) []stageDef {
 	candidates := []struct {
 		id      string
 		label   string
@@ -33,19 +57,11 @@ func BuildStagesViewModel(cfg *config.TrunkConfig) (ViewModel, error) {
 		{id: "release", label: "Release", present: true},
 	}
 
-	vm := ViewModel{Kind: DiagramFlowchart}
-
-	var prev string
+	var stages []stageDef
 	for _, c := range candidates {
-		if !c.present {
-			continue
+		if c.present {
+			stages = append(stages, stageDef{id: c.id, label: c.label})
 		}
-		vm.Nodes = append(vm.Nodes, Node{ID: c.id, Label: c.label, Kind: NodeStage})
-		if prev != "" {
-			vm.Edges = append(vm.Edges, Edge{From: prev, To: c.id, Kind: EdgeStage})
-		}
-		prev = c.id
 	}
-
-	return vm, nil
+	return stages
 }

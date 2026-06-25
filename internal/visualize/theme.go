@@ -59,6 +59,7 @@ var CascadeTheme = Theme{
 		NodeStage:    {Fill: "#bf8700", Stroke: "#7d4e00", Text: "#ffffff"},
 		NodeEnv:      {Fill: "#1f6feb", Stroke: "#0b3d91", Text: "#ffffff"},
 		NodeHotfix:   {Fill: "#cf222e", Stroke: "#82071e", Text: "#ffffff"},
+		NodeRepo:     {Fill: "#6e7781", Stroke: "#424a53", Text: "#ffffff"},
 	},
 }
 
@@ -76,6 +77,7 @@ var BlandTheme = Theme{
 		NodeStage:    {Fill: "#eaeef2", Stroke: "#6e7781", Text: "#24292f"},
 		NodeEnv:      {Fill: "#f6f8fa", Stroke: "#6e7781", Text: "#24292f"},
 		NodeHotfix:   {Fill: "#d0d7de", Stroke: "#57606a", Text: "#24292f"},
+		NodeRepo:     {Fill: "#d0d7de", Stroke: "#57606a", Text: "#24292f"},
 	},
 }
 

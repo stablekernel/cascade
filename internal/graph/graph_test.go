@@ -147,6 +147,75 @@ func TestRun_EnvGranularity_EmitsStateMachine(t *testing.T) {
 	require.Contains(t, got, "dev_hotfix --> prod : rejoin")
 }
 
+// writeCrossRepoManifest lays down a primary manifest that coordinates one
+// external satellite and notifies an upstream primary, so the cross-repo
+// projection renders a lane per repo and edges in both directions end to end.
+func writeCrossRepoManifest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github"), 0o755))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		Deploys: []config.DeployConfig{
+			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
+		},
+		External: []config.ExternalRepoConfig{
+			{
+				Repo: "org/cdk-infra",
+				Deploys: []config.ExternalDeployConfig{
+					{Name: "cdk", Workflow: ".github/workflows/cdk.yaml"},
+				},
+			},
+		},
+		Notify: &config.NotifyConfig{Repo: "org/platform"},
+	}
+	manifest := map[string]any{config.DefaultManifestKey: config.CICDFile{Config: cfg}}
+	body, err := yaml.Marshal(manifest)
+	require.NoError(t, err)
+	path := filepath.Join(dir, ".github", "manifest.yaml")
+	require.NoError(t, os.WriteFile(path, body, 0o644))
+	return path
+}
+
+func TestRun_CrossRepoGranularity_EmitsLanesAndEdges(t *testing.T) {
+	path := writeCrossRepoManifest(t)
+	o := baseOptions(path)
+	o.Granularity = string(GranularityCrossRepo)
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	require.Contains(t, got, "flowchart TD")
+	// A lane per repository.
+	require.Contains(t, got, `subgraph primary["primary"]`)
+	require.Contains(t, got, `subgraph repo_org_cdk_infra["org/cdk-infra"]`)
+	require.Contains(t, got, `subgraph repo_org_platform["org/platform"]`)
+	// Cross-repo edges in both directions: primary coordinates the dependent and
+	// the local pipeline notifies its upstream primary.
+	require.Contains(t, got, "==>|cdk|")
+	require.Contains(t, got, "-. notify .->")
+}
+
+func TestRun_CrossRepoGranularity_NoExternals_RendersPrimary(t *testing.T) {
+	// A single-repo manifest with no external coordination still renders its
+	// primary pipeline with no cross-repo lanes, so the granularity is safe to
+	// request on any manifest.
+	path := writeManifest(t)
+	o := baseOptions(path)
+	o.Granularity = string(GranularityCrossRepo)
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	require.Contains(t, got, "flowchart TD")
+	require.Contains(t, got, "release")
+	require.NotContains(t, got, "subgraph")
+}
+
 func TestRun_UnknownGranularity_Errors(t *testing.T) {
 	path := writeManifest(t)
 	o := baseOptions(path)

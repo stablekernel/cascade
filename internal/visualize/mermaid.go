@@ -53,14 +53,8 @@ func (MermaidEmitter) Emit(vm ViewModel, theme Theme, opts ...Option) (string, e
 // edges in model order, then the theme's class styling, so dependency or stage
 // flow reads in a stable order and a reader can tell the node kinds apart.
 func emitFlowchart(b *strings.Builder, vm ViewModel, theme Theme) (string, error) {
-	b.WriteString("flowchart TD\n")
-
-	for _, n := range vm.Nodes {
-		// Node shape per kind: stadium for validate, rectangle for build,
-		// subroutine for deploy, rounded for a stage. The label is bracket-escaped
-		// so a display name with brackets cannot terminate the node early.
-		open, close := nodeBrackets(n.Kind)
-		fmt.Fprintf(b, "    %s%s%s%s\n", mermaidID(n.ID), open, mermaidLabel(n.Label), close)
+	if err := writeFlowchartNodes(b, vm); err != nil {
+		return "", err
 	}
 
 	for _, e := range vm.Edges {
@@ -70,6 +64,14 @@ func emitFlowchart(b *strings.Builder, vm ViewModel, theme Theme) (string, error
 			fmt.Fprintf(b, "    %s -.-> %s\n", mermaidID(e.From), mermaidID(e.To))
 		case EdgeHard, EdgeStage:
 			fmt.Fprintf(b, "    %s --> %s\n", mermaidID(e.From), mermaidID(e.To))
+		case EdgeExternal:
+			// Thick labeled arrow marks the primary coordinating a dependent repo,
+			// styled distinctly from the intra-repo solid and dotted edges.
+			writeLabeledEdge(b, "%s ==> %s", "%s ==>|%s| %s", e)
+		case EdgeNotify:
+			// Dotted arrow with an inline caption marks a satellite notifying its
+			// primary, reading back up the cross-repo flow.
+			writeLabeledEdge(b, "%s -.-> %s", "%s -. %s .-> %s", e)
 		default:
 			return "", fmt.Errorf("visualize: mermaid: unknown flowchart edge kind %q", e.Kind)
 		}
@@ -78,6 +80,67 @@ func emitFlowchart(b *strings.Builder, vm ViewModel, theme Theme) (string, error
 	writeThemeClasses(b, vm, theme)
 
 	return b.String(), nil
+}
+
+// writeFlowchartNodes declares the model's nodes. When the model carries groups,
+// grouped nodes are wrapped in a Mermaid subgraph per lane (in group order, then
+// member order) and any ungrouped node is declared after the lanes; without
+// groups every node is declared flat in model order, matching the original
+// single-repo flowchart output.
+func writeFlowchartNodes(b *strings.Builder, vm ViewModel) error {
+	b.WriteString("flowchart TD\n")
+
+	if len(vm.Groups) == 0 {
+		for _, n := range vm.Nodes {
+			writeFlowchartNode(b, n, "    ")
+		}
+		return nil
+	}
+
+	byID := make(map[string]Node, len(vm.Nodes))
+	for _, n := range vm.Nodes {
+		byID[n.ID] = n
+	}
+
+	grouped := make(map[string]bool, len(vm.Nodes))
+	for _, g := range vm.Groups {
+		fmt.Fprintf(b, "    subgraph %s[%s]\n", mermaidID(g.ID), mermaidSubgraphLabel(g.Label))
+		for _, id := range g.NodeIDs {
+			n, ok := byID[id]
+			if !ok {
+				return fmt.Errorf("visualize: mermaid: group %q references unknown node %q", g.ID, id)
+			}
+			writeFlowchartNode(b, n, "        ")
+			grouped[id] = true
+		}
+		b.WriteString("    end\n")
+	}
+
+	for _, n := range vm.Nodes {
+		if !grouped[n.ID] {
+			writeFlowchartNode(b, n, "    ")
+		}
+	}
+	return nil
+}
+
+// writeFlowchartNode declares one node with the shape its kind selects, indented
+// by indent (deeper inside a subgraph). The label is escaped so a display name
+// with brackets cannot terminate the node early.
+func writeFlowchartNode(b *strings.Builder, n Node, indent string) {
+	open, close := nodeBrackets(n.Kind)
+	fmt.Fprintf(b, "%s%s%s%s%s\n", indent, mermaidID(n.ID), open, mermaidLabel(n.Label), close)
+}
+
+// writeLabeledEdge emits a flowchart edge, choosing the plain format when the
+// edge has no caption and the labeled format otherwise, so cross-repo edges read
+// with their deploy or notify caption without a stray empty label segment.
+func writeLabeledEdge(b *strings.Builder, plain, labeled string, e Edge) {
+	if e.Label == "" {
+		fmt.Fprintf(b, "    "+plain+"\n", mermaidID(e.From), mermaidID(e.To))
+		return
+	}
+	fmt.Fprintf(b, "    "+labeled+"\n", mermaidID(e.From), mermaidEdgeLabel(e.Label), mermaidID(e.To))
 }
 
 // emitState renders a state-machine model (the env projection) as a
@@ -224,6 +287,28 @@ func mermaidStateLabel(label string) string {
 func mermaidTransitionLabel(label string) string {
 	r := strings.NewReplacer(
 		":", "&#58;",
+		"\n", " ",
+		"\r", " ",
+	)
+	return r.Replace(label)
+}
+
+// mermaidSubgraphLabel renders a lane caption as a quoted Mermaid string for the
+// `subgraph id["label"]` form, escaping any embedded quote so a repo name with
+// punctuation cannot break the subgraph header.
+func mermaidSubgraphLabel(label string) string {
+	return `"` + strings.ReplaceAll(label, `"`, "&quot;") + `"`
+}
+
+// mermaidEdgeLabel sanitizes a flowchart edge caption. A pipe would close the
+// `|label|` segment early and brackets or quotes confuse the parser, so each is
+// folded to an entity Mermaid renders verbatim, keeping the caption on one line.
+func mermaidEdgeLabel(label string) string {
+	r := strings.NewReplacer(
+		"|", "&#124;",
+		"[", "&#91;",
+		"]", "&#93;",
+		`"`, "&quot;",
 		"\n", " ",
 		"\r", " ",
 	)
