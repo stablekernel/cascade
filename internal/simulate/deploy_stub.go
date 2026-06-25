@@ -101,7 +101,7 @@ func (s *DeployStub) recordedEffects() []Effect {
 	if !s.hasCallbacks() {
 		return nil
 	}
-	effects := make([]Effect, 0, len(s.builds)+len(s.deploys))
+	effects := make([]Effect, 0)
 	for _, name := range s.builds {
 		effects = append(effects, s.callbackEffect("build", name))
 	}
