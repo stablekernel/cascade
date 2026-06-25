@@ -1,0 +1,59 @@
+name: "No Change Skip"
+description: "Re-orchestrating with no intervening commit skips the build instead of re-running it"
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  # Step 1: Push a src commit to trunk -> build runs, draft release v0.1.0-rc.0
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add initial feature"
+      files:
+        src/app.go: |
+          package main
+          func main() {
+            println("Hello v0.1.0")
+          }
+
+  - name: "Orchestrate after first commit"
+    action: orchestrate
+    expect:
+      state:
+        prerelease:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]
+
+  # Step 2: Re-orchestrate with NO new source commit. The only thing that moved
+  # HEAD since step 1 is cascade's own "chore: update state" finalize commit,
+  # which touches .github/manifest.yaml and never matches the src/** trigger.
+  # Change detection now anchors on the build's recorded SHA (and the env-level
+  # SHA), so the build has nothing new to do and must be SKIPPED rather than
+  # re-running on every dispatch.
+  #
+  # The prerelease SHA and version are intentionally not asserted here: the
+  # finalize state commit advances HEAD and the rc number recomputes, both of
+  # which are orthogonal to the no-change-skip fix. The rc tag from step 1 still
+  # exists, and build-app: skipped is the load-bearing assertion.
+  - name: "Orchestrate again with no new commit"
+    action: orchestrate
+    expect:
+      jobs:
+        build-app: skipped
+      tags:
+        exist: ["v0.1.0-rc.0"]

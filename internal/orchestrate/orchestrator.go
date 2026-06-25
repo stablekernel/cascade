@@ -189,6 +189,28 @@ func (o *Orchestrator) Finalize(headSHA, version string, deployResults, buildRes
 		}
 	}
 
+	// Update per-build state for successful builds. Recording the build SHA here
+	// is what lets the next dispatch's base-SHA ladder anchor change detection on
+	// the last successful build, so an unchanged HEAD skips the build instead of
+	// re-running it.
+	if envState.Builds == nil {
+		envState.Builds = make(map[string]*config.BuildState)
+	}
+
+	for name, result := range buildResults {
+		if result == "success" {
+			if envState.Builds[name] == nil {
+				envState.Builds[name] = &config.BuildState{}
+			}
+			envState.Builds[name].SHA = headSHA
+			envState.Builds[name].BuiltAt = timestamp
+			envState.Builds[name].BuiltBy = actor
+			log.Info("Updated %s.builds.%s state", o.environment, name)
+		} else {
+			log.Debug("Skipping %s build state update (result=%s)", name, result)
+		}
+	}
+
 	// Write updated config
 	if err := o.writeConfig(); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
@@ -213,20 +235,42 @@ func (o *Orchestrator) calculateBaseSHAs(envState *config.EnvState) map[string]s
 		defaultBase, _ = o.gitOutput("rev-list", "--max-parents=0", "HEAD")
 	}
 
-	// Set base SHAs from per-deployable state
+	// Set base SHAs from per-deployable state. The build base-SHA ladder is, in
+	// priority order:
+	//
+	//  1. The build's own recorded state SHA (envState.Builds[name].SHA). This is
+	//     the precise "last time this build ran" anchor, recorded by Finalize.
+	//  2. The dependent deploy's state SHA. Preserves the original behavior for
+	//     builds whose artifact is carried forward by a deploy that depends on it.
+	//  3. The env-level last-orchestrated SHA (envState.SHA). This is the fallback
+	//     that fixes no-environment / no-dependent-deploy builds: after the first
+	//     orchestrate at HEAD, envState.SHA == HEAD, so a no-change re-dispatch
+	//     diffs HEAD..HEAD (empty) and the build is skipped instead of re-running.
+	//  4. defaultBase (HEAD~1, or the initial commit) as the first-run fallback.
 	for _, build := range o.cicdFile.Config.Builds {
 		key := "build_" + build.Name
-		if envState != nil && envState.Deploys != nil {
-			// For builds, use the deploy state of the dependent deploy
-			for _, deploy := range o.cicdFile.Config.Deploys {
-				if contains(deploy.DependsOn, build.Name) {
-					if ds := envState.Deploys[deploy.Name]; ds != nil && ds.SHA != "" {
-						baseSHAs[key] = ds.SHA
-						break
+		if envState != nil {
+			// 1. The build's own recorded state SHA.
+			if bs := envState.Builds[build.Name]; bs != nil && bs.SHA != "" {
+				baseSHAs[key] = bs.SHA
+			}
+			// 2. The dependent deploy's state SHA.
+			if baseSHAs[key] == "" && envState.Deploys != nil {
+				for _, deploy := range o.cicdFile.Config.Deploys {
+					if contains(deploy.DependsOn, build.Name) {
+						if ds := envState.Deploys[deploy.Name]; ds != nil && ds.SHA != "" {
+							baseSHAs[key] = ds.SHA
+							break
+						}
 					}
 				}
 			}
+			// 3. The env-level last-orchestrated SHA.
+			if baseSHAs[key] == "" && envState.SHA != "" {
+				baseSHAs[key] = envState.SHA
+			}
 		}
+		// 4. First-run fallback.
 		if baseSHAs[key] == "" {
 			baseSHAs[key] = defaultBase
 		}
