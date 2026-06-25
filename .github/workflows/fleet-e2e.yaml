@@ -200,12 +200,12 @@ jobs:
       - name: Repin each example repo to the rc
         run: |
           set -euo pipefail
-          # The 8 example repos. Repinning means: set manifest cli_version to the
+          # The 10 example repos. Repinning means: set manifest cli_version to the
           # rc, replace any other in-repo rc-version refs, regenerate the workflows
           # with the rc binary, then commit + push only if something changed. This
           # preserves every hand-written suite feature: regeneration only rewrites
           # the generated workflows, and we touch nothing else.
-          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only"
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks"
 
           # Apply the repin mutation to the checkout in the current directory:
           # point cli_version at the rc, rewrite any other in-repo rc refs, then
@@ -383,7 +383,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repo: [4env, 3env, 2env, single-env, release-only]
+        repo: [4env, 3env, 2env, single-env, release-only, no-env, callbacks]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Dispatch and watch
@@ -423,10 +423,10 @@ jobs:
             echo ""
             echo "| Stage | Result |"
             echo "|---|---|"
-            echo "| repin (all 8 repos to rc) | $R_REPIN |"
+            echo "| repin (all 10 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
-            echo "| independents (4env, 3env, 2env, single-env, release-only) | $R_INDEPENDENTS |"
+            echo "| independents (4env, 3env, 2env, single-env, release-only, no-env, callbacks) | $R_INDEPENDENTS |"
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
             echo "> the rc tag. The repin step pinned each suite to this rc before"
