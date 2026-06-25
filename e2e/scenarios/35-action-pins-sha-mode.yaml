@@ -1,0 +1,40 @@
+name: "Action pins: sha mode pins to an immutable commit"
+description: |
+  Verifies that pin_mode: sha rewrites third-party action refs to a 40-hex
+  commit SHA with a trailing version comment, instead of the default mutable
+  major tag (#327).
+
+  Covers:
+  - pin_mode: sha emits actions/checkout@<40hex> # v6.0.3
+  - the default mutable major tag (v6) no longer appears once sha-pinned
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  pin_mode: sha
+
+steps:
+  - name: "Initial commit; assert the sha-pinned uses: form in orchestrate.yaml"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # sha mode pins checkout to its 40-hex SHA with a version comment.
+            - "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3"
+          not_contains:
+            # the mutable major tag must not appear once sha-pinned.
+            - "uses: actions/checkout@v6\n"

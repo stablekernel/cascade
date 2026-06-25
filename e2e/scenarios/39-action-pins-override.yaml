@@ -1,0 +1,43 @@
+name: "Action pins: per-action override is honored over the pin mode"
+description: |
+  Verifies that a per-action action_pins override wins over the active pin
+  mode, emitting the override ref verbatim. This is both the per-action
+  override and the mutable-ref escape hatch: even under pin_mode: sha, an
+  override ref (here a mutable major tag) is emitted unchanged (#327).
+
+  Covers:
+  - action_pins[actions/checkout] override wins under pin_mode: sha
+  - the override ref is emitted verbatim, not the built-in sha pin
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  pin_mode: sha
+  action_pins:
+    actions/checkout: "v6"
+
+steps:
+  - name: "Initial commit; assert the override ref wins over the sha pin"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # the override ref is emitted verbatim, as a mutable-ref opt-in.
+            - "uses: actions/checkout@v6\n"
+          not_contains:
+            # the built-in sha pin must not appear when overridden.
+            - "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"

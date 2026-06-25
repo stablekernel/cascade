@@ -108,6 +108,20 @@ type Config struct {
 	// can declare any reserved release field without the harness needing to know
 	// its structure.
 	Release map[string]any `yaml:"release,omitempty"`
+	// ExtraTriggers carries the optional extra orchestrate triggers (schedule,
+	// repository_dispatch, workflow_run, merge_group) through to the generated
+	// manifest untouched, so a scenario can assert each extra on: entry is
+	// emitted into the orchestrate workflow. A generic map keeps the harness
+	// decoupled from the generator's ExtraTriggers shape.
+	ExtraTriggers map[string]any `yaml:"extra_triggers,omitempty"`
+	// PinMode carries the action pin mode (tag or sha) through to the generated
+	// manifest so a scenario can assert the sha-pinned uses: form versus the
+	// default tag form.
+	PinMode string `yaml:"pin_mode,omitempty"`
+	// ActionPins carries per-action ref overrides through to the generated
+	// manifest so a scenario can assert an overridden uses: ref is honored
+	// regardless of pin mode.
+	ActionPins map[string]string `yaml:"action_pins,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published

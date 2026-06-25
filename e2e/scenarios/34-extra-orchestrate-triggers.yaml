@@ -1,0 +1,65 @@
+name: "Extra orchestrate triggers"
+description: |
+  Verifies that declaring extra_triggers in the manifest emits each extra
+  on: entry into the generated orchestrate workflow alongside the baseline
+  push and workflow_dispatch triggers (#324).
+
+  Covers all four extra trigger kinds in one manifest:
+  - schedule with cron expressions
+  - repository_dispatch with event types
+  - workflow_run with workflows and types
+  - merge_group (bare presence)
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  extra_triggers:
+    schedule:
+      - cron: "0 2 * * *"
+    repository_dispatch:
+      types:
+        - external-update
+        - redeploy
+    workflow_run:
+      workflows:
+        - Upstream CI
+      types:
+        - completed
+    merge_group: {}
+
+steps:
+  - name: "Initial commit; assert every extra trigger is emitted in orchestrate.yaml"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # Baseline triggers remain present.
+            - "  push:\n"
+            - "  workflow_dispatch:\n"
+            # schedule extra trigger.
+            - "  schedule:\n"
+            - "    - cron: '0 2 * * *'\n"
+            # repository_dispatch extra trigger with both types.
+            - "  repository_dispatch:\n"
+            - "      - external-update\n"
+            - "      - redeploy\n"
+            # workflow_run extra trigger with workflow name and type.
+            - "  workflow_run:\n"
+            - "      - 'Upstream CI'\n"
+            - "      - completed\n"
+            # merge_group extra trigger (bare presence).
+            - "  merge_group:\n"
