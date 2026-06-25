@@ -8,6 +8,11 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
+// boundaryNote states the orchestration-not-deploys boundary in the simulation
+// output. The simulator validates the run, skip, and gate decisions, not the
+// user's real build and deploy scripts, which never execute in a what-if.
+const boundaryNote = "Note: build and deploy results are simulated, not executed. cascade validates orchestration, not your build and deploy scripts."
+
 // Result is the outcome of one simulation: the action identity, the before and
 // after state diff, and the ordered effect sequence.
 type Result struct {
@@ -22,14 +27,19 @@ type Result struct {
 
 	// Effects is the ordered list of orchestration steps.
 	Effects []Effect `json:"effects"`
+
+	// Note states the orchestration-not-deploys boundary so a green simulation
+	// is never read as a passing deploy.
+	Note string `json:"note,omitempty"`
 }
 
 // Engine runs hypothetical actions against a clone of the user's manifest and
 // reports the resulting state diff and effect sequence. It never mutates the
 // user's real manifest and never touches git or the network.
 type Engine struct {
-	manifestPath string
-	actor        string
+	manifestPath   string
+	actor          string
+	deployOutcomes map[string]DeployOutcome
 }
 
 // Option configures an Engine.
@@ -40,6 +50,24 @@ func WithActor(actor string) Option {
 	return func(e *Engine) {
 		if actor != "" {
 			e.actor = actor
+		}
+	}
+}
+
+// WithDeployResults injects per-callback simulated outcomes keyed by build or
+// deploy name. Callbacks not named here default to success. Use it to preview
+// the orchestration's gating behavior, for example a deploy failure holding back
+// finalize. Real build and deploy scripts never run regardless of the outcome.
+func WithDeployResults(outcomes map[string]DeployOutcome) Option {
+	return func(e *Engine) {
+		if len(outcomes) == 0 {
+			return
+		}
+		if e.deployOutcomes == nil {
+			e.deployOutcomes = make(map[string]DeployOutcome, len(outcomes))
+		}
+		for name, outcome := range outcomes {
+			e.deployOutcomes[name] = outcome
 		}
 	}
 }
@@ -79,7 +107,13 @@ func (e *Engine) Simulate(a Action) (*Result, error) {
 	}
 	defer cleanup()
 
-	outcome, err := a.Apply(ActionContext{ClonePath: clonePath, Actor: e.actor})
+	builds, deploys, err := parseCallbackNames(e.manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("parse callbacks: %w", err)
+	}
+	stub := newDeployStub(builds, deploys, e.deployOutcomes)
+
+	outcome, err := a.Apply(ActionContext{ClonePath: clonePath, Actor: e.actor, Deploys: stub})
 	if err != nil {
 		return nil, fmt.Errorf("apply action: %w", err)
 	}
@@ -98,6 +132,7 @@ func (e *Engine) Simulate(a Action) (*Result, error) {
 		ActionDescribe: a.Describe(),
 		Diff:           DiffState(beforeState, afterState),
 		Effects:        outcome.Effects,
+		Note:           boundaryNote,
 	}, nil
 }
 
@@ -133,6 +168,27 @@ func parseState(path string) (map[string]*config.EnvState, error) {
 		return map[string]*config.EnvState{}, nil
 	}
 	return cicd.State, nil
+}
+
+// parseCallbackNames reads a manifest file and returns the configured build and
+// deploy callback names in declaration order. A manifest with no config or no
+// callbacks yields empty slices, which leaves the deploy-stub model recording
+// nothing.
+func parseCallbackNames(path string) (builds, deploys []string, err error) {
+	cicd, err := config.ParseManifestFile(path, config.DefaultManifestKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cicd.Config == nil {
+		return nil, nil, nil
+	}
+	for _, b := range cicd.Config.Builds {
+		builds = append(builds, b.Name)
+	}
+	for _, d := range cicd.Config.Deploys {
+		deploys = append(deploys, d.Name)
+	}
+	return builds, deploys, nil
 }
 
 // cloneStateMap returns a deep value copy of the environment state map so a

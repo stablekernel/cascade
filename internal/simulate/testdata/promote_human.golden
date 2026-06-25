@@ -8,3 +8,5 @@ Effects (in order):
   2. [run] write state uat (sha a1b2c3d, version v1.2.0-rc.1)
   3. [run] release prerelease v1.2.0 (rc v1.2.0-rc.1, sha a1b2c3d)
   4. [skip] promote prod (no change required)
+
+Note: build and deploy results are simulated, not executed. cascade validates orchestration, not your build and deploy scripts.

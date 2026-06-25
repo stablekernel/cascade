@@ -55,7 +55,7 @@ func (a *PromoteAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 	}
 
 	return &ActionOutcome{
-		Effects:        effectsFromResult(result),
+		Effects:        effectsFromResult(result, ctx.Deploys),
 		AfterStatePath: ctx.ClonePath,
 	}, nil
 }
@@ -65,13 +65,20 @@ func (a *PromoteAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 // marker advance) followed by a write-state effect; skipped envs yield a single
 // skip effect. The mapping stays faithful to the result and invents no steps it
 // does not contain.
-func effectsFromResult(result *promote.PromotionResult) []Effect {
+//
+// When the manifest declares build or deploy callbacks, the deploy-stub model
+// records each as a stubbed effect carrying its simulated outcome after the
+// generic deploy marker, and a deploy that did not succeed gates the env's
+// write-state effect (the simulated finalize), matching the real finalizers.
+// Nothing is executed; the stub records outcomes only.
+func effectsFromResult(result *promote.PromotionResult, stub *DeployStub) []Effect {
 	if result == nil {
 		return nil
 	}
 
 	var effects []Effect
 	for _, p := range result.Promotions {
+		gated := ""
 		if p.NeedsDeploy {
 			effects = append(effects, Effect{
 				Disposition: DispositionRun,
@@ -79,6 +86,17 @@ func effectsFromResult(result *promote.PromotionResult) []Effect {
 				Target:      p.Environment,
 				Detail:      fmt.Sprintf("from %s (sha %s, version %s)", p.SourceEnv, shortOrNone(p.SHA), orNone(p.Version)),
 			})
+			effects = append(effects, stub.recordedEffects()...)
+			gated = stub.gate()
+		}
+		if gated != "" {
+			effects = append(effects, Effect{
+				Disposition: DispositionGate,
+				Action:      "write state",
+				Target:      p.Environment,
+				Detail:      gated,
+			})
+			continue
 		}
 		effects = append(effects, Effect{
 			Disposition: DispositionRun,

@@ -15,9 +15,24 @@ import (
 // bound per NewCommand invocation rather than as package globals so concurrent
 // command construction (for example parallel tests) never races on shared state.
 type commonFlags struct {
-	config string
-	json   bool
-	actor  string
+	config        string
+	json          bool
+	actor         string
+	deployResults []string
+}
+
+// engineOptions builds the engine options shared by every subcommand from the
+// common flags, parsing the repeatable --deploy-result pairs.
+func (cf *commonFlags) engineOptions() ([]Option, error) {
+	opts := []Option{WithActor(cf.actor)}
+	outcomes, err := ParseDeployResults(cf.deployResults)
+	if err != nil {
+		return nil, err
+	}
+	if len(outcomes) > 0 {
+		opts = append(opts, WithDeployResults(outcomes))
+	}
+	return opts, nil
 }
 
 const simulateLong = `Run a hypothetical action against a clone of your manifest and print what
@@ -59,6 +74,7 @@ func NewCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&cf.config, "config", "", "Path to manifest file (default: .github/manifest.yaml)")
 	cmd.PersistentFlags().BoolVar(&cf.json, "json", false, "Output result as JSON")
 	cmd.PersistentFlags().StringVar(&cf.actor, "actor", "", "Actor performing the hypothetical action")
+	cmd.PersistentFlags().StringArrayVar(&cf.deployResults, "deploy-result", nil, "Simulated outcome for a build or deploy callback, name=success|failure|skipped (repeatable)")
 
 	cmd.AddCommand(newPromoteCommand(cf))
 	cmd.AddCommand(newRollbackCommand(cf))
@@ -71,7 +87,11 @@ func NewCommand() *cobra.Command {
 // runSimulation builds the engine and renders the action result, shared by every
 // subcommand so output formatting stays identical across actions.
 func runSimulation(cf *commonFlags, a Action) error {
-	engine, err := NewEngine(cf.config, WithActor(cf.actor))
+	opts, err := cf.engineOptions()
+	if err != nil {
+		return err
+	}
+	engine, err := NewEngine(cf.config, opts...)
 	if err != nil {
 		return err
 	}

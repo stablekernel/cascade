@@ -10,6 +10,13 @@ type ActionContext struct {
 
 	// Actor is the identity that performs the hypothetical action.
 	Actor string
+
+	// Deploys is the deploy-stub model for the manifest's build and deploy
+	// callbacks. The simulator validates orchestration, not the user's real
+	// build and deploy scripts, so an action records each callback as a stubbed
+	// effect with a simulated outcome and gates finalize on the result rather
+	// than executing anything. It is never nil when supplied by the engine.
+	Deploys *DeployStub
 }
 
 // ActionOutcome is what an Action returns after replaying orchestration. It
