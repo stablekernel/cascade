@@ -1,9 +1,9 @@
 ---
 title: Stage Graph
-description: The mental model for cascade - how trunk, the environment chain, and the prerelease/release boundary fit together, with rollback and hotfix off-ramps, and the manifest field and generated workflow behind each stage.
+description: The mental model for cascade. How trunk, the environment chain, and the prerelease/release boundary fit together, with rollback and hotfix off-ramps, and the manifest field and generated workflow behind each stage.
 ---
 
-Cascade turns one manifest into a chain of stages. A change starts on trunk, moves through your environments in order, and crosses a prerelease/release boundary near the top of the chain. Two off-ramps - rollback and hotfix - branch off that line when something needs to move backward or sideways. This page is the map. It names every stage, ties each to the manifest field that turns it on and the generated workflow file that runs it, and says when it fires. Once the shape is clear, the deeper pages fill in the detail.
+Cascade turns one manifest into a chain of stages. A change starts on trunk, moves through your environments in order, and crosses a prerelease/release boundary near the top of the chain. Two off-ramps, rollback and hotfix, branch off that line when something needs to move backward or sideways. This page is the map. It names every stage, ties each to the manifest field that turns it on and the generated workflow file that runs it, and says when it fires. Once the shape is clear, the deeper pages fill in the detail.
 
 ## The graph
 
@@ -122,7 +122,7 @@ Fails a pull request when the committed workflows fall out of sync with the mani
 
 This page is the entry point. Follow the threads from here:
 
-- [Manifest Reference](/cascade/configuration/) - every field behind every stage above.
-- [Workflows](/cascade/workflows/) - what orchestrate, promote, and release do step by step.
-- [Architecture](/cascade/architecture/) - how the generator turns the manifest into these files.
-- [CLI Reference](/cascade/cli-reference/) - `generate-workflow`, `verify`, and the rest of the commands.
+- [Manifest Reference](/cascade/configuration/): every field behind every stage above.
+- [Workflows](/cascade/workflows/): what orchestrate, promote, and release do step by step.
+- [Architecture](/cascade/architecture/): how the generator turns the manifest into these files.
+- [CLI Reference](/cascade/cli-reference/): `generate-workflow`, `verify`, and the rest of the commands.

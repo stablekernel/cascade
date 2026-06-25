@@ -554,11 +554,11 @@ For satellite repos with notify config:
 
 ## Extension Points
 
-1. **Custom Changelog** - Override with `changelog.workflow`
-2. **Custom Release** - Override with `release.tag` for external tools
-3. **Custom Inputs** - Pass arbitrary inputs via `inputs`/`env_inputs`
-4. **Output Chaining** - Outputs auto-discovered and passed to dependents
-5. **GitHub Environments** - `environment_config` per-env settings emitted by `cascade environments`; see [GitHub Deployments API and Environments REST](#github-deployments-api-and-environments-rest) below
+1. **Custom Changelog**: override with `changelog.workflow`
+2. **Custom Release**: override with `release.tag` for external tools
+3. **Custom Inputs**: pass arbitrary inputs via `inputs`/`env_inputs`
+4. **Output Chaining**: outputs auto-discovered and passed to dependents
+5. **GitHub Environments**: `environment_config` per-env settings emitted by `cascade environments`; see [GitHub Deployments API and Environments REST](#github-deployments-api-and-environments-rest) below
 
 ## GitHub Deployments API and Environments REST
 

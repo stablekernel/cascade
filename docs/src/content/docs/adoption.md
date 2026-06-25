@@ -1,6 +1,6 @@
 ---
 title: Adoption Guide
-description: A journey-oriented guide to adopting cascade - the mental model, building a pipeline from scratch, migrating an existing one, and wiring tools like release-please and goreleaser into reusable-workflow callbacks.
+description: A journey-oriented guide to adopting cascade. It covers the mental model, building a pipeline from scratch, migrating an existing one, and wiring tools like release-please and goreleaser into reusable-workflow callbacks.
 ---
 
 This guide ties the reference docs together into one path: how to think about cascade, how to build a pipeline from nothing, and how to migrate an existing pipeline (and existing tools) onto it. If you have never run cascade, start with [Getting Started](/cascade/getting-started/) for installation, then come back here for the bigger picture.
@@ -16,7 +16,7 @@ The flow in one line: you write a manifest plus callback workflows, run `cascade
 ## Prerequisites
 
 - **GitHub Actions enabled** on the repository, with trunk-based development (a single primary branch).
-- **Conventional Commits - required.** cascade derives the semver bump, the changelog, and breaking-change detection entirely from Conventional Commit messages. This is not optional. Commits that do not follow the convention are not processed correctly and version derivation can fail. See [Versioning and schema compatibility](/cascade/versioning/).
+- **Conventional Commits are required.** cascade derives the semver bump, the changelog, and breaking-change detection entirely from Conventional Commit messages. This is not optional. Commits that do not follow the convention are not processed correctly and version derivation can fail. See [Versioning and schema compatibility](/cascade/versioning/).
 - **GitHub setup**: environments for each deploy stage, branch and tag protection, the secrets your callbacks consume, and scoped tokens. The [Security and Hardening](/cascade/security/hardening/) checklist is the authoritative list; wire it up before your first production promotion.
 - The `cascade` CLI for local generation (Go 1.25+ to `go install`; in Actions, the setup action installs it for you). See [Getting Started](/cascade/getting-started/).
 
@@ -209,9 +209,9 @@ The full, ordered checklist is in [Security and Hardening](/cascade/security/har
 
 Environment count is structural. Pick the shape that matches your project:
 
-- **No-env (release-only)** - omit `environments`. For libraries and CLIs that publish releases without deploying anywhere.
-- **2-env** - `dev` + `prod`. Smallest promotion chain with a prerelease stage.
-- **3-env** - `dev` + `staging` + `prod` (or `pre` + `staging` + `prod`). The common default.
-- **4-env** - `dev` + `staging` + `pre` + `prod`. Adds a dedicated prerelease stage before production.
+- **No-env (release-only)**: omit `environments`. For libraries and CLIs that publish releases without deploying anywhere.
+- **2-env**: `dev` + `prod`. Smallest promotion chain with a prerelease stage.
+- **3-env**: `dev` + `staging` + `prod` (or `pre` + `staging` + `prod`). The common default.
+- **4-env**: `dev` + `staging` + `pre` + `prod`. Adds a dedicated prerelease stage before production.
 
 Worked example repositories are not published yet (examples TBD). Until then, the [Getting Started](/cascade/getting-started/) walkthrough and the [Callback Contract](/cascade/callback-contract/) skeletons are the reference implementations.
