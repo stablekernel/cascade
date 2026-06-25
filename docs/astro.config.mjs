@@ -82,6 +82,7 @@ export default defineConfig({
           items: [{ label: 'Overview', link: '/workflows/' }],
         },
         { label: 'CLI Reference', link: '/cli-reference/' },
+        { label: 'Local Simulation', link: '/simulate/' },
         { label: 'Architecture', link: '/architecture/' },
         { label: 'How it is tested', link: '/testing/' },
         { label: 'Security & Hardening', link: '/security/hardening/' },

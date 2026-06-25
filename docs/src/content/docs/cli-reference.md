@@ -779,6 +779,32 @@ cascade schema --output manifest.schema.json
 
 The same schema is published at `https://stablekernel.github.io/cascade/manifest.schema.json`. `parse-config` remains the authority for semantic and cross-field rules; the schema covers structure, types, enums, and hover docs.
 
+### simulate
+
+Preview a hypothetical action against a clone of your manifest and print what would happen, without changing anything. The engine replays the real orchestration logic in record-only mode: it touches no GitHub, starts no container, runs no git command, and leaves the manifest untouched. It validates orchestration, the state transitions and run/skip/gate decisions, not your build and deploy scripts.
+
+```bash
+cascade simulate promote
+cascade simulate release
+cascade simulate rollback --env prod
+cascade simulate hotfix --env uat --fix <sha>
+```
+
+Each run prints a before/after state diff and an ordered effect sequence. The four subcommands are `promote`, `release`, `rollback`, and `hotfix`. See [Local Simulation](/cascade/simulate/) for the full walkthrough, example output, and the deploy-stub model.
+
+#### Flags
+
+The following flags are shared by every subcommand.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config` | string | auto-detect | Path to manifest file |
+| `--actor` | string | (none) | Actor performing the hypothetical action |
+| `--deploy-result` | string | (none) | Simulated outcome for a build or deploy callback, `name=success\|failure\|skipped` (repeatable) |
+| `--json` | bool | `false` | Output result as JSON |
+
+Subcommand-specific flags: `promote` takes `--mode` (`default` or `cascade`) and `--target`; `rollback` takes `--env` (required), `--to`, and `--deployable`; `hotfix` takes `--env` (required), `--fix`, and `--merge-sha`; `release` takes only the shared flags.
+
 ## Environment Variables
 
 | Variable | Description |
