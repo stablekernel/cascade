@@ -20,32 +20,39 @@ var _ Emitter = (*MermaidEmitter)(nil)
 
 // Emit renders vm as Mermaid source. The diagram family follows the model's
 // Kind: a state machine (env projection) becomes a stateDiagram-v2, every other
-// model becomes a top-down flowchart. theme is accepted for interface
-// conformance and future styling; the current output does not vary by theme. A
+// model becomes a top-down flowchart. theme styles the output: it is rendered
+// into a leading init directive and trailing classDef and class lines, so a
+// theme swap restyles the header block while leaving the structure unchanged. A
 // title option, if set, is emitted as a Mermaid title in the frontmatter block.
-func (MermaidEmitter) Emit(vm ViewModel, _ Theme, opts ...Option) (string, error) {
+func (MermaidEmitter) Emit(vm ViewModel, theme Theme, opts ...Option) (string, error) {
 	o := applyOptions(opts)
 
 	var b strings.Builder
 
 	if o.Title != "" {
 		// Mermaid reads a title from a YAML frontmatter block. Quote it so
-		// punctuation in the title cannot break the parse.
+		// punctuation in the title cannot break the parse. The block must be the
+		// first content, ahead of any init directive.
 		b.WriteString("---\n")
 		fmt.Fprintf(&b, "title: %q\n", o.Title)
 		b.WriteString("---\n")
 	}
 
+	// The init directive carries the theme's base and edge color. It sits after
+	// the frontmatter and before the diagram keyword, where Mermaid reads it.
+	writeThemeInit(&b, theme)
+
 	if vm.Kind == DiagramState {
-		return emitState(&b, vm)
+		return emitState(&b, vm, theme)
 	}
-	return emitFlowchart(&b, vm)
+	return emitFlowchart(&b, vm, theme)
 }
 
 // emitFlowchart renders a directed-graph model (jobs and stages) as a top-down
 // flowchart. Nodes are declared first in model order with a shape per kind, then
-// edges in model order, so dependency or stage flow reads in a stable order.
-func emitFlowchart(b *strings.Builder, vm ViewModel) (string, error) {
+// edges in model order, then the theme's class styling, so dependency or stage
+// flow reads in a stable order and a reader can tell the node kinds apart.
+func emitFlowchart(b *strings.Builder, vm ViewModel, theme Theme) (string, error) {
 	b.WriteString("flowchart TD\n")
 
 	for _, n := range vm.Nodes {
@@ -68,6 +75,8 @@ func emitFlowchart(b *strings.Builder, vm ViewModel) (string, error) {
 		}
 	}
 
+	writeThemeClasses(b, vm, theme)
+
 	return b.String(), nil
 }
 
@@ -76,7 +85,7 @@ func emitFlowchart(b *strings.Builder, vm ViewModel) (string, error) {
 // rather than declared states; every other node is declared with a renamed
 // label when its label differs from its id. Transitions follow model order and
 // carry their optional caption, so promote, diverge, and rejoin read distinctly.
-func emitState(b *strings.Builder, vm ViewModel) (string, error) {
+func emitState(b *strings.Builder, vm ViewModel, theme Theme) (string, error) {
 	b.WriteString("stateDiagram-v2\n")
 
 	// Map each node id to the token it renders as, so edges can resolve a start
@@ -118,7 +127,63 @@ func emitState(b *strings.Builder, vm ViewModel) (string, error) {
 		}
 	}
 
+	writeThemeClasses(b, vm, theme)
+
 	return b.String(), nil
+}
+
+// writeThemeInit emits the Mermaid init directive carrying the theme's base and
+// edge color. It writes nothing when the theme sets neither, so an unstyled
+// theme produces no directive. The directive must follow any frontmatter block
+// and precede the diagram keyword.
+func writeThemeInit(b *strings.Builder, theme Theme) {
+	if theme.Base == "" && theme.LineColor == "" {
+		return
+	}
+	base := theme.Base
+	if base == "" {
+		base = "base"
+	}
+	fmt.Fprintf(b, "%%%%{init: {%q: %q", "theme", base)
+	if theme.LineColor != "" {
+		fmt.Fprintf(b, ", %q: {%q: %q}", "themeVariables", "lineColor", theme.LineColor)
+	}
+	b.WriteString("}}%%\n")
+}
+
+// writeThemeClasses emits the theme's per-kind classDef lines followed by the
+// class assignments that bind each node to its kind's class. Kinds appear in
+// first-encounter model order so the output is deterministic, pseudo-states
+// (start and end) are skipped because they render as [*] rather than declared
+// nodes, and a kind with no style is left unclassed so the renderer default
+// applies. It writes nothing when the theme defines no node styles.
+func writeThemeClasses(b *strings.Builder, vm ViewModel, theme Theme) {
+	if len(theme.NodeStyles) == 0 {
+		return
+	}
+
+	var order []NodeKind
+	members := make(map[NodeKind][]string)
+	for _, n := range vm.Nodes {
+		if n.Kind == NodeStart || n.Kind == NodeEnd {
+			continue
+		}
+		style, ok := theme.NodeStyles[n.Kind]
+		if !ok || style.isZero() {
+			continue
+		}
+		if _, seen := members[n.Kind]; !seen {
+			order = append(order, n.Kind)
+		}
+		members[n.Kind] = append(members[n.Kind], mermaidID(n.ID))
+	}
+
+	for _, k := range order {
+		fmt.Fprintf(b, "    classDef %s %s\n", className(k), classDefBody(theme.NodeStyles[k]))
+	}
+	for _, k := range order {
+		fmt.Fprintf(b, "    class %s %s\n", strings.Join(members[k], ","), className(k))
+	}
 }
 
 // nodeBrackets returns the opening and closing Mermaid shape delimiters for a

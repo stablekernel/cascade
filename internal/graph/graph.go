@@ -34,8 +34,9 @@ const (
 // behavior change.
 const formatMermaid = "mermaid"
 
-// defaultThemeName is the only theme available today. It mirrors the visualize
-// package default so a manifest renders without a theme flag.
+// defaultThemeName is the theme applied when no theme flag is set. It mirrors
+// the visualize package default (the branded cascade palette) so a manifest
+// renders styled without a theme flag.
 var defaultThemeName = visualize.DefaultTheme.Name
 
 // Options carries the inputs to a graph render. ConfigPath and ManifestKey
@@ -86,12 +87,9 @@ func Run(o Options, stdout io.Writer) error {
 			granularity, GranularityJobs, GranularityStages, GranularityEnv)
 	}
 
-	theme := o.Theme
-	if theme == "" {
-		theme = defaultThemeName
-	}
-	if theme != defaultThemeName {
-		return fmt.Errorf("unknown theme %q: only %q is available", theme, defaultThemeName)
+	theme, err := resolveTheme(o.Theme)
+	if err != nil {
+		return err
 	}
 
 	configPath := o.ConfigPath
@@ -108,13 +106,13 @@ func Run(o Options, stdout io.Writer) error {
 		return err
 	}
 
-	diagram, err := visualize.NewMermaidEmitter().Emit(vm, visualize.DefaultTheme)
+	diagram, err := visualize.NewMermaidEmitter().Emit(vm, theme)
 	if err != nil {
 		return fmt.Errorf("rendering %s: %w", format, err)
 	}
 
 	if o.JSON {
-		return writeJSON(stdout, format, granularity, theme, diagram)
+		return writeJSON(stdout, format, granularity, theme.Name, diagram)
 	}
 
 	// The emitter terminates the diagram with a newline, so Fprint avoids an
@@ -123,6 +121,21 @@ func Run(o Options, stdout io.Writer) error {
 		return fmt.Errorf("writing diagram: %w", err)
 	}
 	return nil
+}
+
+// resolveTheme turns the --theme value into a concrete theme. An empty value or
+// a built-in name (default, cascade, bland) selects a built-in palette; any
+// other value is treated as a path to a user-supplied JSON theme file, loaded
+// and validated so a malformed file fails fast with a clear error.
+func resolveTheme(name string) (visualize.Theme, error) {
+	if theme, ok := visualize.LookupTheme(name); ok {
+		return theme, nil
+	}
+	theme, err := visualize.LoadTheme(name)
+	if err != nil {
+		return visualize.Theme{}, fmt.Errorf("loading theme: %w", err)
+	}
+	return theme, nil
 }
 
 // buildView loads the manifest and projects it into the view model the chosen

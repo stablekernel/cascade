@@ -1,6 +1,7 @@
 ---
 title: "stages"
 ---
+%%{init: {"theme": "base", "themeVariables": {"lineColor": "#57606a"}}}%%
 flowchart TD
     trunk(Trunk)
     build(Build)
@@ -11,3 +12,5 @@ flowchart TD
     build --> deploy
     deploy --> promote
     promote --> release
+    classDef node_stage fill:#bf8700,stroke:#7d4e00,color:#ffffff
+    class trunk,build,deploy,promote,release node_stage

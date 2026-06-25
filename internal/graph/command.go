@@ -42,7 +42,7 @@ missing or invalid manifest is reported as an error.`,
 	cmd.Flags().StringVar(&o.ManifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
 	cmd.Flags().StringVar(&o.Granularity, "granularity", string(GranularityJobs), "Pipeline projection to render; supported values: jobs, stages, env")
 	cmd.Flags().StringVar(&o.Format, "format", formatMermaid, "Diagram output format; supported value: mermaid")
-	cmd.Flags().StringVar(&o.Theme, "theme", defaultThemeName, "Diagram theme; supported value: default")
+	cmd.Flags().StringVar(&o.Theme, "theme", defaultThemeName, "Diagram theme: cascade, bland, or a path to a JSON theme file")
 
 	return cmd
 }
