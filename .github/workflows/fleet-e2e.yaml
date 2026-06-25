@@ -301,17 +301,25 @@ jobs:
           # Confirm the repo's main actually carries the rc cli_version after the
           # push. Belt-and-suspenders: a silent no-op (push that landed nothing)
           # can never report green because this reads the published main back.
+          # The contents API can serve stale cached bytes for a few seconds after
+          # a push, so retry the read-back with linear backoff (matching the push
+          # loop) rather than redding the fleet on a single lagged read.
           verify_pinned() {
-            local slug="$1" actual
-            actual=$(gh api "repos/${slug}/contents/.github/manifest.yaml" \
-              --jq '.content' | base64 -d \
-              | grep -E "^[[:space:]]*cli_version:" | head -n 1 \
-              | sed -E 's|^[[:space:]]*cli_version:[[:space:]]*||' | tr -d '"' | tr -d "'") || return 1
-            if [ "$actual" != "$RC_VERSION" ]; then
-              echo "::error::${slug} main cli_version is '${actual}', expected '${RC_VERSION}'"
-              return 1
-            fi
-            echo "${slug} main verified at ${RC_VERSION}"
+            local slug="$1" actual attempt
+            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+              actual=$(gh api "repos/${slug}/contents/.github/manifest.yaml" \
+                --jq '.content' | base64 -d \
+                | grep -E "^[[:space:]]*cli_version:" | head -n 1 \
+                | sed -E 's|^[[:space:]]*cli_version:[[:space:]]*||' | tr -d '"' | tr -d "'") || actual=""
+              if [ "$actual" = "$RC_VERSION" ]; then
+                echo "${slug} main verified at ${RC_VERSION} (attempt ${attempt})"
+                return 0
+              fi
+              echo "verify attempt ${attempt}/${MAX_ATTEMPTS} for ${slug}: read '${actual}', want '${RC_VERSION}'"
+              sleep "$attempt"
+            done
+            echo "::error::${slug} main cli_version is '${actual}', expected '${RC_VERSION}' after ${MAX_ATTEMPTS} attempts"
+            return 1
           }
 
           failed=""
