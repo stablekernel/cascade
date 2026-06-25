@@ -1,0 +1,17 @@
+---
+title: "pipeline"
+---
+flowchart TD
+    validate([Validate &#40;validate&#41;])
+    build_api[Build &#40;api&#41;]
+    build_web[Build &#40;web&#41;]
+    deploy_staging[[Deploy &#40;staging&#41;]]
+    deploy_prod[[Deploy &#40;prod&#41;]]
+    build_api --> validate
+    build_web --> validate
+    build_web -.-> build_api
+    deploy_staging --> validate
+    deploy_staging --> build_api
+    deploy_staging --> build_web
+    deploy_prod --> validate
+    deploy_prod --> deploy_staging
