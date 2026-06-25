@@ -485,6 +485,7 @@
       "properties": {
         "disabled": { "type": "boolean", "description": "Disable cascade-managed releases." },
         "tag": { "type": "string", "description": "callback.output reference for releases created by an external tool." },
+        "workflow": { "type": "string", "description": "Path to a reusable release-build workflow dispatched after a release is published." },
         "version_overrides": { "$ref": "#/definitions/versionOverridesConfig" }
       }
     },
