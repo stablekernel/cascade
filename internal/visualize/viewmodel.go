@@ -11,28 +11,68 @@ import (
 	"github.com/stablekernel/cascade/internal/generate"
 )
 
-// NodeKind classifies a pipeline node for rendering. The set mirrors the
-// callback types cascade already models (validate, build, deploy). It is a
-// rendering hint only; an emitter may map several kinds to one visual style.
+// DiagramKind tells an emitter which family of diagram a ViewModel describes.
+// The job and stage projections are directed graphs (a flowchart); the env
+// projection is a promotion state machine (a state diagram). The kind lives on
+// the model, not in the emitter, so the emitter stays a thin renderer that
+// switches on what the model already declares rather than on the granularity.
+type DiagramKind string
+
+// Diagram kinds. The zero value renders as a flowchart so a model built without
+// setting Kind (the original job projection) keeps its behavior.
+const (
+	DiagramFlowchart DiagramKind = "flowchart"
+	DiagramState     DiagramKind = "state"
+)
+
+// NodeKind classifies a node for rendering. The first three mirror the callback
+// types cascade models (validate, build, deploy) for the job DAG. NodeStage is
+// a coarse lifecycle stage; NodeEnv, NodeHotfix, NodeStart, and NodeEnd describe
+// the env state machine. It is a rendering hint only; an emitter may map several
+// kinds to one visual style.
 type NodeKind string
 
-// Node kinds, one per cascade callback type.
+// Node kinds.
 const (
 	NodeValidate NodeKind = "validate"
 	NodeBuild    NodeKind = "build"
 	NodeDeploy   NodeKind = "deploy"
+	// NodeStage is one coarse lifecycle stage in the stages projection.
+	NodeStage NodeKind = "stage"
+	// NodeEnv is one environment state in the env promotion ladder.
+	NodeEnv NodeKind = "env"
+	// NodeHotfix is a diverged integration-branch state hanging off an env.
+	NodeHotfix NodeKind = "hotfix"
+	// NodeStart marks the state-machine entry point. An emitter renders it as the
+	// renderer's initial pseudo-state rather than a declared node.
+	NodeStart NodeKind = "start"
+	// NodeEnd marks the state-machine terminal. An emitter renders it as the
+	// renderer's final pseudo-state rather than a declared node.
+	NodeEnd NodeKind = "end"
 )
 
-// EdgeKind classifies a dependency edge. Hard edges come from Edges (they both
-// order a job and skip-gate it); optional edges come from OptionalEdges (they
-// order only). Emitters render the two with visually distinct styling so a
-// reader can tell a blocking dependency from an ordering-only one.
+// EdgeKind classifies an edge. Hard edges come from Edges (they both order a job
+// and skip-gate it); optional edges come from OptionalEdges (they order only).
+// Stage edges connect lifecycle stages. Promote, diverge, and rejoin edges are
+// transitions in the env state machine. Emitters render the kinds with visually
+// distinct styling so a reader can tell them apart.
 type EdgeKind string
 
 // Edge kinds.
 const (
 	EdgeHard     EdgeKind = "hard"
 	EdgeOptional EdgeKind = "optional"
+	// EdgeStage connects two lifecycle stages in the stages projection.
+	EdgeStage EdgeKind = "stage"
+	// EdgePromote is a promotion transition between two consecutive envs.
+	EdgePromote EdgeKind = "promote"
+	// EdgeDiverge is the transition from an env onto its hotfix branch.
+	EdgeDiverge EdgeKind = "diverge"
+	// EdgeRejoin is the transition from a hotfix branch back onto the ladder.
+	EdgeRejoin EdgeKind = "rejoin"
+	// EdgeTransition is an unlabeled state-machine transition, used for the
+	// start and end bookend edges.
+	EdgeTransition EdgeKind = "transition"
 )
 
 // Node is one pipeline job in the view. ID is the stable, prefixed job ID
@@ -44,21 +84,24 @@ type Node struct {
 	Kind  NodeKind
 }
 
-// Edge is one dependency from a job to one of its dependencies. From is the
-// dependent job ID, To is the job it depends on, and Kind separates hard from
-// optional dependencies.
+// Edge is one connection from a source node to a target node. From and To are
+// node IDs, Kind selects the visual style, and Label is an optional transition
+// caption an emitter renders when the renderer supports edge labels (the env
+// state machine uses it for promote, diverge, and rejoin). An empty Label emits
+// no caption, matching the unlabeled job and stage edges.
 type Edge struct {
-	From string
-	To   string
-	Kind EdgeKind
+	From  string
+	To    string
+	Kind  EdgeKind
+	Label string
 }
 
-// ViewModel is the deterministic, render-agnostic description of a pipeline's
-// job DAG. Nodes follow manifest declaration order (the graph's Order seed) and
-// edges follow node order then dependency-list order, so two builds of the same
-// manifest produce byte-identical emitter output. The model holds no diagram
-// syntax.
+// ViewModel is the deterministic, render-agnostic description of one pipeline
+// projection. Kind tells the emitter which diagram family to render; Nodes and
+// edges follow a stable construction order so two builds of the same manifest
+// produce byte-identical emitter output. The model holds no diagram syntax.
 type ViewModel struct {
+	Kind  DiagramKind
 	Nodes []Node
 	Edges []Edge
 }
@@ -82,6 +125,7 @@ func BuildViewModel(g *generate.DependencyGraph) (ViewModel, error) {
 	}
 
 	vm := ViewModel{
+		Kind:  DiagramFlowchart,
 		Nodes: make([]Node, 0, len(g.Order)),
 	}
 

@@ -1,0 +1,13 @@
+---
+title: "stages"
+---
+flowchart TD
+    trunk(Trunk)
+    build(Build)
+    deploy(Deploy)
+    promote(Promote)
+    release(Release)
+    trunk --> build
+    build --> deploy
+    deploy --> promote
+    promote --> release

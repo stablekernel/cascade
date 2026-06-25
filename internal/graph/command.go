@@ -21,11 +21,13 @@ func NewCommand() *cobra.Command {
 		Short: "Render the generated pipeline as a Mermaid diagram",
 		Long: `Render the manifest's generated pipeline as a diagram on stdout.
 
-graph loads the manifest, builds the same job dependency graph the generator
-uses, and emits it as Mermaid that GitHub renders natively in Markdown. Pipe the
-output into a file or paste it into a README or pull request to show how the
-pipeline's jobs depend on one another. Hard dependencies render as solid arrows
-and optional ordering-only dependencies as dotted arrows.
+graph loads the manifest and emits Mermaid that GitHub renders natively in
+Markdown. Pipe the output into a file or paste it into a README or pull request.
+The --granularity flag chooses the projection: jobs renders the full job
+dependency graph (hard dependencies as solid arrows, optional ordering-only ones
+as dotted arrows); stages renders the coarse lifecycle flow from trunk through
+build, deploy, and promote to release; env renders the promotion state machine,
+including any hotfix divergence and rejoin.
 
 graph is read-only: it never writes files, runs git, or modifies the repo. A
 missing or invalid manifest is reported as an error.`,
@@ -38,7 +40,7 @@ missing or invalid manifest is reported as an error.`,
 
 	cmd.Flags().StringVarP(&o.ConfigPath, "config", "c", "", "Path to config file (default: auto-detect .github/manifest.yaml)")
 	cmd.Flags().StringVar(&o.ManifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
-	cmd.Flags().StringVar(&o.Granularity, "granularity", string(GranularityJobs), "Pipeline projection to render; supported value: jobs")
+	cmd.Flags().StringVar(&o.Granularity, "granularity", string(GranularityJobs), "Pipeline projection to render; supported values: jobs, stages, env")
 	cmd.Flags().StringVar(&o.Format, "format", formatMermaid, "Diagram output format; supported value: mermaid")
 	cmd.Flags().StringVar(&o.Theme, "theme", defaultThemeName, "Diagram theme; supported value: default")
 

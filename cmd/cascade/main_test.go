@@ -318,6 +318,67 @@ func TestGraphCommand_MissingManifest(t *testing.T) {
 	}
 }
 
+// graphEnvManifestContent is a two-environment manifest whose dev env state
+// tracks a hotfix integration branch, so the env projection must render the
+// promotion state machine with a divergence branch that rejoins at prod.
+const graphEnvManifestContent = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+  state:
+    dev:
+      ref: hotfix/patch
+    prod: {}
+`
+
+func writeGraphEnvManifest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.yaml")
+	if err := os.WriteFile(path, []byte(graphEnvManifestContent), 0644); err != nil {
+		t.Fatalf("Failed to write manifest: %v", err)
+	}
+	return path
+}
+
+func TestGraphCommand_EnvGranularityEmitsStateMachine(t *testing.T) {
+	manifest := writeGraphEnvManifest(t)
+	stdout, stderr, err := runCLI("graph", "--config", manifest, "--granularity", "env")
+	if err != nil {
+		t.Fatalf("graph --granularity env failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{
+		"stateDiagram-v2",
+		"[*] --> dev",
+		"dev --> prod : promote",
+		"dev --> dev_hotfix : diverge",
+		"dev_hotfix --> prod : rejoin",
+	} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in env projection, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestGraphCommand_StagesGranularityEmitsFlowchart(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	stdout, stderr, err := runCLI("graph", "--config", manifest, "--granularity", "stages")
+	if err != nil {
+		t.Fatalf("graph --granularity stages failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{"flowchart TD", "trunk", "build", "deploy", "promote", "release"} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in stages projection, got:\n%s", want, stdout)
+		}
+	}
+	// The stage rollup must not carry per-callback job nodes.
+	if contains(stdout, "build_app") || contains(stdout, "deploy_app") {
+		t.Errorf("stages projection leaked per-callback nodes:\n%s", stdout)
+	}
+}
+
 // -------- status command integration tests --------
 
 // fixtureManifestPath returns the path to the on-disk status fixture.
