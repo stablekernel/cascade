@@ -101,7 +101,7 @@ func (a *HotfixAction) effects(pusher *recordingPusher, relMgr *recordingRelease
 		}}
 	}
 
-	effects := make([]Effect, 0, len(a.fixSHAs)+1+len(relMgr.calls))
+	effects := make([]Effect, 0)
 	for _, sha := range a.fixSHAs {
 		effects = append(effects, Effect{
 			Disposition: DispositionRun,
