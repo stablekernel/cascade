@@ -1,0 +1,53 @@
+name: "Release workflow breaking-change gate, dry-run, concurrency"
+description: |
+  Verifies that the single-environment release workflow emits its
+  breaking-change gate, the dry_run skip wiring, and the serialized
+  non-cancelling concurrency block (#322).
+
+  A single-environment manifest generates a Release workflow into
+  promote.yaml (see 09-single-env-repo.yaml). This asserts the generated
+  shape of that workflow.
+
+  Covers:
+  - allow_breaking_changes workflow_dispatch input
+  - the Check Breaking Changes preflight step and its can_proceed outputs
+  - the dry_run workflow_dispatch input and the release-job skip guard
+  - the top-level concurrency block with cancel-in-progress: false
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [prod]
+  deploys:
+    - name: app
+      workflow: .github/workflows/deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit generates release-flavored promote.yaml; assert the breaking gate"
+    action: commit
+    commit:
+      message: "feat: add app source"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            # Breaking-change gate input and detection step.
+            - "      allow_breaking_changes:\n"
+            - "      - name: Check Breaking Changes\n"
+            - "          ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n"
+            - "          echo \"has_breaking=$HAS_BREAKING\" >> \"$GITHUB_OUTPUT\"\n"
+            # The gate proceeds only when allowed, and blocks otherwise.
+            - "              echo \"can_proceed=true\" >> \"$GITHUB_OUTPUT\"\n"
+            - "              echo \"can_proceed=false\" >> \"$GITHUB_OUTPUT\"\n"
+            # dry_run input and the release-job skip guard.
+            - "      dry_run:\n"
+            - "    if: ${{ github.event.inputs.dry_run != 'true' }}\n"
+            # Serialized, non-cancelling concurrency block.
+            - "concurrency:\n"
+            - "  cancel-in-progress: false\n"
