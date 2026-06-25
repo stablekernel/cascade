@@ -55,7 +55,7 @@ func (a *ReleaseAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 	}
 
 	return &ActionOutcome{
-		Effects:        effectsFromResult(result),
+		Effects:        effectsFromResult(result, ctx.Deploys),
 		AfterStatePath: ctx.ClonePath,
 	}, nil
 }

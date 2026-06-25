@@ -57,5 +57,6 @@
       "target": "prod",
       "detail": "no change required"
     }
-  ]
+  ],
+  "note": "Note: build and deploy results are simulated, not executed. cascade validates orchestration, not your build and deploy scripts."
 }

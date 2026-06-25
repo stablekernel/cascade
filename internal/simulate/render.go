@@ -17,7 +17,15 @@ func (r *Result) RenderHuman(w io.Writer) error {
 	if err := r.renderDiff(w); err != nil {
 		return err
 	}
-	return r.renderEffects(w)
+	if err := r.renderEffects(w); err != nil {
+		return err
+	}
+	if r.Note != "" {
+		if _, err := fmt.Fprintf(w, "\n%s\n", r.Note); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Result) renderDiff(w io.Writer) error {

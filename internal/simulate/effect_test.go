@@ -20,7 +20,7 @@ func TestEffectsFromResult_DeployAndWriteState(t *testing.T) {
 		},
 	}
 
-	effects := effectsFromResult(result)
+	effects := effectsFromResult(result, nil)
 	require.Len(t, effects, 2)
 
 	assert.Equal(t, DispositionRun, effects[0].Disposition)
@@ -43,7 +43,7 @@ func TestEffectsFromResult_ReleaseMarkerAdvanceIsWriteStateNotDeploy(t *testing.
 		},
 	}
 
-	effects := effectsFromResult(result)
+	effects := effectsFromResult(result, nil)
 	require.Len(t, effects, 1)
 	assert.Equal(t, DispositionRun, effects[0].Disposition)
 	assert.Equal(t, "write state", effects[0].Action)
@@ -108,7 +108,7 @@ func TestEffectsFromResult_AppendsReleaseMarkerAfterPromotions(t *testing.T) {
 		SkippedEnvs:   []string{"prod"},
 	}
 
-	effects := effectsFromResult(result)
+	effects := effectsFromResult(result, nil)
 	require.Len(t, effects, 4)
 	assert.Equal(t, "deploy", effects[0].Action)
 	assert.Equal(t, "write state", effects[1].Action)
@@ -126,7 +126,7 @@ func TestEffectsFromResult_SkippedEnvs(t *testing.T) {
 		SkippedEnvs: []string{"prod"},
 	}
 
-	effects := effectsFromResult(result)
+	effects := effectsFromResult(result, nil)
 	require.Len(t, effects, 1)
 	assert.Equal(t, DispositionSkip, effects[0].Disposition)
 	assert.Equal(t, "prod", effects[0].Target)
@@ -145,7 +145,7 @@ func TestEffectsFromResult_OrderedPromotionsThenSkips(t *testing.T) {
 		SkippedEnvs: []string{"sandbox"},
 	}
 
-	effects := effectsFromResult(result)
+	effects := effectsFromResult(result, nil)
 	require.Len(t, effects, 5)
 
 	assert.Equal(t, "deploy", effects[0].Action)

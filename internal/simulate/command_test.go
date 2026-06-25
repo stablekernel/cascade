@@ -85,6 +85,31 @@ func TestSimulateHotfixHelp_MentionsScopeAndIsolation(t *testing.T) {
 	assert.Contains(t, out, "no containers")
 }
 
+func TestSimulateHelp_MentionsDeployResultFlag(t *testing.T) {
+	t.Parallel()
+
+	out := helpText(t, "--help")
+	assert.Contains(t, out, "--deploy-result")
+}
+
+func TestCommonFlags_EngineOptions_InvalidDeployResult(t *testing.T) {
+	t.Parallel()
+
+	cf := &commonFlags{deployResults: []string{"services=maybe"}}
+	_, err := cf.engineOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown outcome")
+}
+
+func TestCommonFlags_EngineOptions_DefaultIsActorOnly(t *testing.T) {
+	t.Parallel()
+
+	cf := &commonFlags{actor: "tester"}
+	opts, err := cf.engineOptions()
+	require.NoError(t, err)
+	assert.Len(t, opts, 1, "no deploy-result pairs adds no extra option")
+}
+
 func TestParseCommaList(t *testing.T) {
 	t.Parallel()
 
