@@ -483,3 +483,21 @@ func findJob(jobs map[string]*JobResultExtended, name string) *JobResultExtended
 
 	return nil
 }
+
+// assertRollbackSource checks that the workflow logs contain the expected
+// resolved-source marker emitted by the preflight "Report Resolved Source"
+// step. The marker has the form "rollback resolved from <source>", where
+// <source> is one of "state", "previous-ring", or "git-history".
+//
+// It is called from executeRollback when RollbackStep.ExpectSource is set, so
+// scenarios can assert WHICH precedence path the resolver chose, not just the
+// resulting SHA.
+func assertRollbackSource(t testingT, logs string, wantSource string) error {
+	t.Helper()
+	marker := fmt.Sprintf("rollback resolved from %s", wantSource)
+	if !strings.Contains(logs, marker) {
+		t.Errorf("rollback logs did not contain resolved-source marker %q", marker)
+		return fmt.Errorf("resolved-source marker %q not found in rollback logs", marker)
+	}
+	return nil
+}

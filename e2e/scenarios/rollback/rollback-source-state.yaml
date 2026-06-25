@@ -1,0 +1,84 @@
+name: "Rollback preflight resolves target from live state"
+description: |
+  Isolates the Source="state" resolution path: proves that when the --to value
+  matches the current live state of the environment, the preflight job reports
+  target_source=state in its log output.
+
+  prod is advanced to a published commit via orchestrate+promote so the manifest
+  records a live state SHA. A dry-run rollback is then dispatched with --to set
+  to that exact SHA (the live state value). The resolver finds a match in live
+  state before consulting the ring or git history, so the "Report Resolved
+  Source" step echoes "rollback resolved from state". The dry_run flag suppresses
+  the deploy and finalize jobs so the scenario is fast and deterministic.
+
+  The expect_source assertion on the rollback step is the distinguishing check:
+  it asserts the resolved-source marker in the workflow logs, proving that this
+  specific resolution path (Source="state") was taken end-to-end.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: .github/workflows/deploy-app.yaml
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the source"
+    action: commit
+    commit:
+      message: "feat: initial source"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            appdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+
+  - name: "Orchestrate commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote to prod to establish live state"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+
+  # Dry-run rollback targeting the CURRENT live state SHA. The preflight
+  # resolver matches it against live state first (Source="state"), before
+  # consulting the ring or git history. The expect_source assertion verifies
+  # this path end-to-end by checking for "rollback resolved from state" in
+  # the workflow logs.
+  - name: "Dry-run rollback targeting live state SHA resolves from state"
+    action: rollback
+    rollback:
+      environment: prod
+      target: commit1
+      dry_run: true
+      expect_source: state

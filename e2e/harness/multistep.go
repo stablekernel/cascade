@@ -201,13 +201,16 @@ type PromoteStep struct {
 // deployable. DryRun sets the dry_run input, which suppresses the deploy and
 // finalize jobs. ExpectFailure marks a run that is expected to conclude in
 // failure (for example a rollback whose preflight cannot resolve a target),
-// mirroring PromoteStep.ExpectFailure.
+// mirroring PromoteStep.ExpectFailure. ExpectSource, when non-empty, asserts the
+// resolved-target source label that the preflight job echoes to its job log
+// (one of "state", "previous-ring", or "git-history").
 type RollbackStep struct {
 	Environment   string `yaml:"environment"`
 	Target        string `yaml:"target,omitempty"`
 	Deployable    string `yaml:"deployable,omitempty"`
 	DryRun        bool   `yaml:"dry_run,omitempty"`
 	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
+	ExpectSource  string `yaml:"expect_source,omitempty"`
 }
 
 // VerifyStep defines a verify action: a read-only `cascade verify` run in the

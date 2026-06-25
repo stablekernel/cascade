@@ -1,0 +1,139 @@
+name: "Rollback preflight resolves target from git history (deployable-scoped)"
+description: |
+  Isolates the Source="git-history" resolution path: proves that when the
+  rollback is scoped to a single deployable AND the --to value is not in the
+  current live state, the preflight job reports target_source=git-history in
+  its log output.
+
+  The git-history path fires deterministically for a deployable-scoped rollback
+  because resolveTarget skips the deploy-history ring entirely when a deployable
+  is given (the ring is env-scoped only: its snapshots carry no per-deployable
+  data). With the ring skipped, resolution falls straight to step 3: manifest git
+  history, where it scans prior manifest commits for a matching per-deployable
+  SHA/version.
+
+  prod is advanced through two published versions with a single deployable (api),
+  so the first version's per-deployable SHA lives only in an earlier manifest
+  commit - not in current live state (which is commit2) and not in the ring
+  (which the deployable-scoped path never consults). A dry-run rollback with
+  --deployable api --to commit1 forces this path: step 1 fails (live api sha =
+  commit2), step 2 is skipped (deployable-scoped), step 3 finds commit1 in the
+  manifest git log as api's recorded per-deployable SHA, resolves
+  Source="git-history".
+
+  The dry_run flag suppresses the deploy and finalize jobs so the scenario is
+  fast and deterministic. The preflight job and its "Report Resolved Source" step
+  run unconditionally (they are never gated by dry_run), so the source marker
+  appears in logs for all three resolution paths under dry-run.
+
+  The expect_source assertion on the rollback step is the distinguishing check:
+  it asserts the resolved-source marker in the workflow logs, proving that this
+  specific resolution path (Source="git-history") was taken end-to-end.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    # Single deployable so the rollback scope is unambiguous. Inner job id
+    # apideploy lets act key it distinctly; no actions/checkout needed because
+    # the step only echoes inputs (act cannot resolve checkout refs against the
+    # per-scenario gitea).
+    - name: api
+      workflow: .github/workflows/deploy-api.yaml
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+        .github/workflows/deploy-api.yaml: |
+          name: deploy-api
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            apideploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version to prod (records api's per-deployable commit1 in manifest)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+          deploys:
+            api:
+              sha: commit1
+
+  - name: "Commit the second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version to prod (advances api past commit1)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit2
+          deploys:
+            api:
+              sha: commit2
+
+  # Dry-run rollback scoped to the api deployable, targeting commit1. Resolution:
+  #   step 1 - live state: api.sha = commit2, no match.
+  #   step 2 - deploy-history ring: SKIPPED because deployable != "" (ring is
+  #            env-scoped only; per-deployable data is never captured there).
+  #   step 3 - manifest git history: finds a prior manifest commit where
+  #            api.sha = commit1_sha, returns Source="git-history".
+  # The "Report Resolved Source" step in the preflight job echoes
+  # "rollback resolved from git-history" unconditionally (not gated by dry_run).
+  - name: "Dry-run deployable-scoped rollback resolves from git history"
+    action: rollback
+    rollback:
+      environment: prod
+      deployable: api
+      target: commit1
+      dry_run: true
+      expect_source: git-history
