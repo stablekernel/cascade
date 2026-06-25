@@ -83,6 +83,7 @@ export default defineConfig({
         },
         { label: 'CLI Reference', link: '/cli-reference/' },
         { label: 'Architecture', link: '/architecture/' },
+        { label: 'How it is tested', link: '/testing/' },
         { label: 'Security & Hardening', link: '/security/hardening/' },
         { label: 'Versioning & Schema', link: '/versioning/' },
       ],
