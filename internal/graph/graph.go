@@ -24,9 +24,10 @@ type Granularity string
 
 // Granularity values.
 const (
-	GranularityJobs   Granularity = "jobs"
-	GranularityStages Granularity = "stages"
-	GranularityEnv    Granularity = "env"
+	GranularityJobs      Granularity = "jobs"
+	GranularityStages    Granularity = "stages"
+	GranularityEnv       Granularity = "env"
+	GranularityCrossRepo Granularity = "cross-repo"
 )
 
 // formatMermaid is the only diagram format cascade graph emits today. The flag
@@ -80,11 +81,11 @@ func Run(o Options, stdout io.Writer) error {
 		granularity = string(GranularityJobs)
 	}
 	switch Granularity(granularity) {
-	case GranularityJobs, GranularityStages, GranularityEnv:
+	case GranularityJobs, GranularityStages, GranularityEnv, GranularityCrossRepo:
 		// Each granularity maps to a supported projection.
 	default:
-		return fmt.Errorf("unknown granularity %q: supported values are %q, %q, and %q",
-			granularity, GranularityJobs, GranularityStages, GranularityEnv)
+		return fmt.Errorf("unknown granularity %q: supported values are %q, %q, %q, and %q",
+			granularity, GranularityJobs, GranularityStages, GranularityEnv, GranularityCrossRepo)
 	}
 
 	theme, err := resolveTheme(o.Theme)
@@ -163,6 +164,16 @@ func buildView(granularity Granularity, configPath, key string) (visualize.ViewM
 		vm, err := visualize.BuildStagesViewModel(cfg)
 		if err != nil {
 			return visualize.ViewModel{}, fmt.Errorf("building stages view: %w", err)
+		}
+		return vm, nil
+	case GranularityCrossRepo:
+		cfg, err := config.ParseWithKey(configPath, key)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("loading manifest: %w", err)
+		}
+		vm, err := visualize.BuildCrossRepoViewModel(cfg)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("building cross-repo view: %w", err)
 		}
 		return vm, nil
 	default:

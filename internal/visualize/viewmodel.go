@@ -49,6 +49,10 @@ const (
 	// NodeEnd marks the state-machine terminal. An emitter renders it as the
 	// renderer's final pseudo-state rather than a declared node.
 	NodeEnd NodeKind = "end"
+	// NodeRepo is another repository rendered as an opaque node in the cross-repo
+	// projection, used for an upstream primary a satellite notifies or a
+	// dependent repo that declares no individual deployables.
+	NodeRepo NodeKind = "repo"
 )
 
 // EdgeKind classifies an edge. Hard edges come from Edges (they both order a job
@@ -73,6 +77,13 @@ const (
 	// EdgeTransition is an unlabeled state-machine transition, used for the
 	// start and end bookend edges.
 	EdgeTransition EdgeKind = "transition"
+	// EdgeExternal is the cross-repo coordination edge from the primary's
+	// pipeline to a dependent satellite's deployable, labeled with the deploy
+	// the primary drives.
+	EdgeExternal EdgeKind = "external"
+	// EdgeNotify is the cross-repo notify edge from a satellite's pipeline back to
+	// the primary it informs after a dev deploy.
+	EdgeNotify EdgeKind = "notify"
 )
 
 // Node is one pipeline job in the view. ID is the stable, prefixed job ID
@@ -96,14 +107,29 @@ type Edge struct {
 	Label string
 }
 
+// Group is a named lane that visually clusters a subset of nodes, used by the
+// cross-repo projection to draw one lane per repository. ID is the stable lane
+// identity, Label is the human-facing caption, and NodeIDs lists the member node
+// IDs in render order. An emitter that has no notion of grouping (or a model with
+// no groups) ignores it, so grouping is additive and never reshapes the existing
+// flat projections.
+type Group struct {
+	ID      string
+	Label   string
+	NodeIDs []string
+}
+
 // ViewModel is the deterministic, render-agnostic description of one pipeline
 // projection. Kind tells the emitter which diagram family to render; Nodes and
 // edges follow a stable construction order so two builds of the same manifest
-// produce byte-identical emitter output. The model holds no diagram syntax.
+// produce byte-identical emitter output. Groups, when present, cluster nodes into
+// named lanes (the cross-repo projection draws one lane per repo); a model with
+// no groups renders flat as before. The model holds no diagram syntax.
 type ViewModel struct {
-	Kind  DiagramKind
-	Nodes []Node
-	Edges []Edge
+	Kind   DiagramKind
+	Nodes  []Node
+	Edges  []Edge
+	Groups []Group
 }
 
 // BuildViewModel projects a generated DependencyGraph into a render-agnostic

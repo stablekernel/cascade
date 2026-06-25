@@ -27,7 +27,9 @@ The --granularity flag chooses the projection: jobs renders the full job
 dependency graph (hard dependencies as solid arrows, optional ordering-only ones
 as dotted arrows); stages renders the coarse lifecycle flow from trunk through
 build, deploy, and promote to release; env renders the promotion state machine,
-including any hotfix divergence and rejoin.
+including any hotfix divergence and rejoin; cross-repo renders the multi-repo
+flow, a lane per repository with the primary coordinating its dependent
+satellites and any satellite-to-primary notify edge.
 
 graph is read-only: it never writes files, runs git, or modifies the repo. A
 missing or invalid manifest is reported as an error.`,
@@ -40,7 +42,7 @@ missing or invalid manifest is reported as an error.`,
 
 	cmd.Flags().StringVarP(&o.ConfigPath, "config", "c", "", "Path to config file (default: auto-detect .github/manifest.yaml)")
 	cmd.Flags().StringVar(&o.ManifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
-	cmd.Flags().StringVar(&o.Granularity, "granularity", string(GranularityJobs), "Pipeline projection to render; supported values: jobs, stages, env")
+	cmd.Flags().StringVar(&o.Granularity, "granularity", string(GranularityJobs), "Pipeline projection to render; supported values: jobs, stages, env, cross-repo")
 	cmd.Flags().StringVar(&o.Format, "format", formatMermaid, "Diagram output format; supported value: mermaid")
 	cmd.Flags().StringVar(&o.Theme, "theme", defaultThemeName, "Diagram theme: cascade, bland, or a path to a JSON theme file")
 
