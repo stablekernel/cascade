@@ -156,7 +156,7 @@ func diffDeploys(before, after map[string]*config.DeployState) []DeployDiff {
 }
 
 func unionKeys(before, after map[string]*config.EnvState) []string {
-	seen := make(map[string]struct{}, len(before)+len(after))
+	seen := make(map[string]struct{})
 	for k := range before {
 		seen[k] = struct{}{}
 	}
@@ -171,7 +171,7 @@ func unionKeys(before, after map[string]*config.EnvState) []string {
 }
 
 func deployUnionKeys(before, after map[string]*config.DeployState) []string {
-	seen := make(map[string]struct{}, len(before)+len(after))
+	seen := make(map[string]struct{})
 	for k := range before {
 		seen[k] = struct{}{}
 	}
