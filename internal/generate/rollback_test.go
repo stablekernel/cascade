@@ -64,6 +64,13 @@ func TestRollbackGenerator_PreflightResolves(t *testing.T) {
 	assert.Contains(t, content, "target_sha: ${{ steps.preflight.outputs.target_sha }}")
 	assert.Contains(t, content, "target_env: ${{ steps.preflight.outputs.target_env }}")
 	assert.Contains(t, content, "can_proceed: ${{ steps.preflight.outputs.can_proceed }}")
+	// target_source must be wired as a job output so downstream steps and the
+	// e2e harness can observe which resolution path the preflight chose.
+	assert.Contains(t, content, "target_source: ${{ steps.preflight.outputs.target_source }}")
+	// The "Report Resolved Source" step echoes the source to the job log so the
+	// e2e harness can assert it via log inspection.
+	assert.Contains(t, content, "Report Resolved Source")
+	assert.Contains(t, content, "rollback resolved from ${{ steps.preflight.outputs.target_source }}")
 }
 
 func TestRollbackGenerator_DeployJobsKeyedOnTargetSha(t *testing.T) {

@@ -396,3 +396,112 @@ func TestRollbackFinalize_NoDeploysConfigured_StillApplies(t *testing.T) {
 		t.Errorf("ref %q is not a rollback ref", prod.Ref)
 	}
 }
+
+// TestRollbackPreflight_GHAOutput_EmitsTargetSource_State asserts that when
+// the requested --to resolves against the live state (Source="state"), the
+// preflight gha-output includes target_source=state.
+func TestRollbackPreflight_GHAOutput_EmitsTargetSource_State(t *testing.T) {
+	path := ringManifest(t)
+	outFile := filepath.Join(t.TempDir(), "gha_output")
+	t.Setenv("GITHUB_OUTPUT", outFile)
+
+	cmd := NewCommand()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	// v2.0.0 is the live state version, so the resolver hits state first.
+	cmd.SetArgs([]string{
+		"preflight",
+		"--config", path,
+		"--env", "prod",
+		"--to", "v2.0.0",
+		"--gha-output",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read gha output: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "target_source=state") {
+		t.Errorf("gha output missing target_source=state\n%s", got)
+	}
+	if !strings.Contains(got, "can_proceed=true") {
+		t.Errorf("can_proceed not true\n%s", got)
+	}
+}
+
+// TestRollbackPreflight_GHAOutput_EmitsTargetSource_PreviousRing asserts that
+// when the requested --to resolves against the deploy-history ring
+// (Source="previous-ring"), the preflight gha-output includes
+// target_source=previous-ring.
+func TestRollbackPreflight_GHAOutput_EmitsTargetSource_PreviousRing(t *testing.T) {
+	path := ringManifest(t)
+	outFile := filepath.Join(t.TempDir(), "gha_output")
+	t.Setenv("GITHUB_OUTPUT", outFile)
+
+	cmd := NewCommand()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	// v1.9.0 is in the ring but not the live state; resolver hits previous-ring.
+	cmd.SetArgs([]string{
+		"preflight",
+		"--config", path,
+		"--env", "prod",
+		"--to", "v1.9.0",
+		"--gha-output",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read gha output: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "target_source=previous-ring") {
+		t.Errorf("gha output missing target_source=previous-ring\n%s", got)
+	}
+	if !strings.Contains(got, "can_proceed=true") {
+		t.Errorf("can_proceed not true\n%s", got)
+	}
+}
+
+// TestRollbackPreflight_GHAOutput_EmitsTargetSource_DefaultPreviousRing
+// asserts that when no --to is given and the ring has a distinct N-1 entry,
+// the default resolver picks it (Source="previous-ring") and the gha-output
+// reflects that.
+func TestRollbackPreflight_GHAOutput_EmitsTargetSource_DefaultPreviousRing(t *testing.T) {
+	path := ringManifest(t)
+	outFile := filepath.Join(t.TempDir(), "gha_output")
+	t.Setenv("GITHUB_OUTPUT", outFile)
+
+	cmd := NewCommand()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	// No --to: default resolves N-1 from the ring.
+	cmd.SetArgs([]string{
+		"preflight",
+		"--config", path,
+		"--env", "prod",
+		"--gha-output",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read gha output: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "target_source=previous-ring") {
+		t.Errorf("gha output missing target_source=previous-ring\n%s", got)
+	}
+	if !strings.Contains(got, "can_proceed=true") {
+		t.Errorf("can_proceed not true\n%s", got)
+	}
+}

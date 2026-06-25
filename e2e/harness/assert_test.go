@@ -406,3 +406,47 @@ func (m *mockT) Helper() {}
 
 var _ testingT = (*testing.T)(nil)
 var _ testingT = (*mockT)(nil)
+
+func TestAssertRollbackSource(t *testing.T) {
+	t.Run("marker present passes", func(t *testing.T) {
+		logs := "some output\nrollback resolved from previous-ring\nmore output\n"
+		mt := &mockT{}
+		err := assertRollbackSource(mt, logs, "previous-ring")
+		assert.NoError(t, err)
+		assert.False(t, mt.failed)
+	})
+
+	t.Run("marker absent fails", func(t *testing.T) {
+		logs := "some output\nrollback resolved from state\nmore output\n"
+		mt := &mockT{}
+		err := assertRollbackSource(mt, logs, "previous-ring")
+		assert.Error(t, err)
+		assert.True(t, mt.failed)
+		assert.Contains(t, mt.errors[0], "previous-ring")
+	})
+
+	t.Run("state source marker", func(t *testing.T) {
+		logs := "pre\nrollback resolved from state\npost\n"
+		mt := &mockT{}
+		err := assertRollbackSource(mt, logs, "state")
+		assert.NoError(t, err)
+		assert.False(t, mt.failed)
+	})
+
+	t.Run("git-history source marker", func(t *testing.T) {
+		logs := "pre\nrollback resolved from git-history\npost\n"
+		mt := &mockT{}
+		err := assertRollbackSource(mt, logs, "git-history")
+		assert.NoError(t, err)
+		assert.False(t, mt.failed)
+	})
+
+	t.Run("wrong source in logs fails", func(t *testing.T) {
+		logs := "rollback resolved from git-history\n"
+		mt := &mockT{}
+		err := assertRollbackSource(mt, logs, "state")
+		assert.Error(t, err)
+		assert.True(t, mt.failed)
+		assert.Contains(t, mt.errors[0], "state")
+	})
+}
