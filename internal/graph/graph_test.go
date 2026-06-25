@@ -43,6 +43,34 @@ func writeManifest(t *testing.T) string {
 	return path
 }
 
+// writeDivergedManifest lays down a two-environment manifest whose dev env state
+// tracks a hotfix integration branch, so the env projection must draw a
+// divergence branch off dev that rejoins at prod.
+func writeDivergedManifest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github"), 0o755))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+	}
+	manifest := map[string]any{
+		config.DefaultManifestKey: config.CICDFile{
+			Config: cfg,
+			State: map[string]*config.EnvState{
+				"dev":  {Ref: "hotfix/patch"},
+				"prod": {},
+			},
+		},
+	}
+	body, err := yaml.Marshal(manifest)
+	require.NoError(t, err)
+	path := filepath.Join(dir, ".github", "manifest.yaml")
+	require.NoError(t, os.WriteFile(path, body, 0o644))
+	return path
+}
+
 // baseOptions returns valid options pointed at the given manifest, so each test
 // can override the one field under exercise.
 func baseOptions(manifestPath string) Options {
@@ -82,27 +110,41 @@ func TestRun_UnknownFormat_Errors(t *testing.T) {
 	require.Empty(t, out.String())
 }
 
-func TestRun_StagesGranularity_NotYetSupported(t *testing.T) {
+func TestRun_StagesGranularity_EmitsFlowchart(t *testing.T) {
 	path := writeManifest(t)
 	o := baseOptions(path)
 	o.Granularity = string(GranularityStages)
 
 	var out bytes.Buffer
-	err := Run(o, &out)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "stages")
-	require.Contains(t, err.Error(), "jobs")
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	require.Contains(t, got, "flowchart TD")
+	// The stage rollup shows coarse stages, not the per-callback job nodes.
+	require.Contains(t, got, "trunk")
+	require.Contains(t, got, "build")
+	require.Contains(t, got, "deploy")
+	require.Contains(t, got, "promote")
+	require.Contains(t, got, "release")
+	require.NotContains(t, got, "build_app")
+	require.NotContains(t, got, "deploy_app")
 }
 
-func TestRun_EnvGranularity_NotYetSupported(t *testing.T) {
-	path := writeManifest(t)
+func TestRun_EnvGranularity_EmitsStateMachine(t *testing.T) {
+	path := writeDivergedManifest(t)
 	o := baseOptions(path)
 	o.Granularity = string(GranularityEnv)
 
 	var out bytes.Buffer
-	err := Run(o, &out)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "env")
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	require.Contains(t, got, "stateDiagram-v2")
+	require.Contains(t, got, "[*] --> dev")
+	require.Contains(t, got, "dev --> prod : promote")
+	// The diverged dev env draws a hotfix branch that rejoins downstream.
+	require.Contains(t, got, "dev --> dev_hotfix : diverge")
+	require.Contains(t, got, "dev_hotfix --> prod : rejoin")
 }
 
 func TestRun_UnknownGranularity_Errors(t *testing.T) {

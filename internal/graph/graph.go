@@ -16,13 +16,13 @@ import (
 	"github.com/stablekernel/cascade/internal/visualize"
 )
 
-// Granularity selects which projection of the pipeline the graph renders. The
-// job DAG is the only projection that exists today; env and stage rollups are
-// recognized values that Run rejects with a clear message until their
-// projections land, so the flag contract is stable as the projections grow.
+// Granularity selects which projection of the pipeline the graph renders. Each
+// value maps to a distinct view-model build feeding the same emitter: jobs is
+// the full job DAG, stages is the coarse lifecycle flow, and env is the
+// promotion state machine with its hotfix divergence and rejoin.
 type Granularity string
 
-// Granularity values. Only GranularityJobs produces a diagram today.
+// Granularity values.
 const (
 	GranularityJobs   Granularity = "jobs"
 	GranularityStages Granularity = "stages"
@@ -79,12 +79,11 @@ func Run(o Options, stdout io.Writer) error {
 		granularity = string(GranularityJobs)
 	}
 	switch Granularity(granularity) {
-	case GranularityJobs:
-		// The job DAG is the implemented projection.
-	case GranularityStages, GranularityEnv:
-		return fmt.Errorf("granularity %q is not yet available: only %q is supported", granularity, GranularityJobs)
+	case GranularityJobs, GranularityStages, GranularityEnv:
+		// Each granularity maps to a supported projection.
 	default:
-		return fmt.Errorf("unknown granularity %q: supported value is %q", granularity, GranularityJobs)
+		return fmt.Errorf("unknown granularity %q: supported values are %q, %q, and %q",
+			granularity, GranularityJobs, GranularityStages, GranularityEnv)
 	}
 
 	theme := o.Theme
@@ -104,14 +103,9 @@ func Run(o Options, stdout io.Writer) error {
 		key = config.DefaultManifestKey
 	}
 
-	cfg, err := config.ParseWithKey(configPath, key)
+	vm, err := buildView(Granularity(granularity), configPath, key)
 	if err != nil {
-		return fmt.Errorf("loading manifest: %w", err)
-	}
-
-	vm, err := visualize.BuildViewModel(generate.BuildDependencyGraph(cfg))
-	if err != nil {
-		return fmt.Errorf("building graph view: %w", err)
+		return err
 	}
 
 	diagram, err := visualize.NewMermaidEmitter().Emit(vm, visualize.DefaultTheme)
@@ -129,6 +123,46 @@ func Run(o Options, stdout io.Writer) error {
 		return fmt.Errorf("writing diagram: %w", err)
 	}
 	return nil
+}
+
+// buildView loads the manifest and projects it into the view model the chosen
+// granularity calls for. The jobs and stages projections need only the pipeline
+// config; the env projection also needs the per-environment state so it can draw
+// hotfix divergence, so it loads the full manifest file rather than just the
+// config section.
+func buildView(granularity Granularity, configPath, key string) (visualize.ViewModel, error) {
+	switch granularity {
+	case GranularityEnv:
+		file, err := config.ParseManifestFile(configPath, key)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("loading manifest: %w", err)
+		}
+		vm, err := visualize.BuildEnvViewModel(file.Config, file.State)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("building env view: %w", err)
+		}
+		return vm, nil
+	case GranularityStages:
+		cfg, err := config.ParseWithKey(configPath, key)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("loading manifest: %w", err)
+		}
+		vm, err := visualize.BuildStagesViewModel(cfg)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("building stages view: %w", err)
+		}
+		return vm, nil
+	default:
+		cfg, err := config.ParseWithKey(configPath, key)
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("loading manifest: %w", err)
+		}
+		vm, err := visualize.BuildViewModel(generate.BuildDependencyGraph(cfg))
+		if err != nil {
+			return visualize.ViewModel{}, fmt.Errorf("building graph view: %w", err)
+		}
+		return vm, nil
+	}
 }
 
 // writeJSON emits the diagram wrapped in a structured envelope so a caller can
