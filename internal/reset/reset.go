@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -317,19 +318,117 @@ func (r *Resetter) commitAndPush() error {
 		return err
 	}
 
-	// Add, commit, push
+	// Add and commit the baseline reset.
 	if err := r.gitRun("add", configPath); err != nil {
 		return err
 	}
-	if err := r.gitRun("commit", "-m", "chore: reset state for testing [skip ci]"); err != nil {
-		return err
-	}
-	if err := r.gitRun("push"); err != nil {
+	if err := r.gitRun("commit", "-m", resetCommitMessage); err != nil {
 		return err
 	}
 
-	log.Info("Committed and pushed state reset")
-	return nil
+	return r.pushWithRetry(configPath)
+}
+
+// resetCommitMessage is the commit subject used for every state-reset commit,
+// including each re-applied attempt after a non-fast-forward push.
+const resetCommitMessage = "chore: reset state for testing [skip ci]"
+
+// maxPushAttempts bounds the non-fast-forward recovery loop, matching the bound
+// used by the other state-write push paths.
+const maxPushAttempts = 3
+
+// pushWithRetry pushes the committed reset, recovering from a non-fast-forward
+// rejection. Concurrent writers can advance the trunk between the reset's read
+// and its push; on rejection it fetches the updated trunk, re-applies the
+// baseline reset on top of it, recommits, and retries. The reset always wins:
+// the baseline overwrites the state section rather than merging a concurrent
+// writer's state back in.
+func (r *Resetter) pushWithRetry(configPath string) error {
+	for attempt := 1; ; attempt++ {
+		pushErr := r.gitRun("push")
+		if pushErr == nil {
+			log.Info("Committed and pushed state reset")
+			return nil
+		}
+
+		if attempt >= maxPushAttempts {
+			return fmt.Errorf("push rejected after %d attempts: %w", maxPushAttempts, pushErr)
+		}
+
+		log.Warn("Push rejected (attempt %d/%d); re-applying reset onto updated trunk", attempt, maxPushAttempts)
+		recommitted, err := r.reapplyResetOntoTrunk(configPath)
+		if err != nil {
+			return err
+		}
+		if !recommitted {
+			// The trunk already carries the baseline state, so there is nothing
+			// left for this reset to push.
+			log.Info("Trunk already at baseline state after fetch; nothing to push")
+			return nil
+		}
+
+		time.Sleep(pushRetryBackoff)
+	}
+}
+
+// pushRetryBackoff is the short pause between non-fast-forward recovery attempts.
+const pushRetryBackoff = 2 * time.Second
+
+// reapplyResetOntoTrunk fetches the current trunk, hard-resets the working tree
+// onto it, re-applies the baseline reset to the freshly fetched manifest, and
+// commits the result. It reports whether a new commit was created; a false value
+// means the trunk is already at the baseline and there is nothing to push.
+func (r *Resetter) reapplyResetOntoTrunk(configPath string) (bool, error) {
+	branch, err := r.currentBranch()
+	if err != nil {
+		return false, err
+	}
+
+	if err := r.gitRun("fetch", "origin", branch); err != nil {
+		return false, fmt.Errorf("fetch origin during non-fast-forward recovery: %w", err)
+	}
+	if err := r.gitRun("reset", "--hard", "origin/"+branch); err != nil {
+		return false, fmt.Errorf("reset to trunk tip during non-fast-forward recovery: %w", err)
+	}
+
+	// Re-read the freshly fetched manifest so the baseline is applied on top of
+	// the current trunk, not the stale copy the reset first read.
+	cicdFile, err := config.ParseManifestFile(r.configPath, r.manifestKey)
+	if err != nil {
+		return false, fmt.Errorf("reload manifest during non-fast-forward recovery: %w", err)
+	}
+	r.cicdFile = cicdFile
+	r.cicdFile.State = nil
+	r.cicdFile.LatestRelease = nil
+	if err := r.writeConfig(); err != nil {
+		return false, fmt.Errorf("rewrite baseline during non-fast-forward recovery: %w", err)
+	}
+
+	status, _ := r.gitOutput("status", "--porcelain", configPath)
+	if strings.TrimSpace(status) == "" {
+		return false, nil
+	}
+
+	if err := r.gitRun("add", configPath); err != nil {
+		return false, err
+	}
+	if err := r.gitRun("commit", "-m", resetCommitMessage); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// currentBranch returns the checked-out branch name, scoped to the repo path.
+func (r *Resetter) currentBranch() (string, error) {
+	branch, err := r.gitOutput("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve current branch: %w", err)
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" {
+		return "", fmt.Errorf("resolve current branch: detached or empty HEAD")
+	}
+	return branch, nil
 }
 
 // Helper functions
