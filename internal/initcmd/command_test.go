@@ -215,6 +215,114 @@ func TestRun_CLIVersionOverride(t *testing.T) {
 	assert.Contains(t, string(got), "v9.9.9")
 }
 
+// TestRun_AllTopologiesOrderedManifestEnvs drives the cobra command end-to-end
+// for every built-in topology and asserts the manifest that lands on disk
+// carries exactly the preset's ordered environment list (release stage last).
+// This exercises cli.init.topology and cli.init.envs ordering through the real
+// command and the real parser, for all four presets, not just the default.
+func TestRun_AllTopologiesOrderedManifestEnvs(t *testing.T) {
+	cases := []struct {
+		topology string
+		want     []string
+	}{
+		{"no-env", nil},
+		{"two-env", []string{"dev", "prod"}},
+		{"three-env", []string{"dev", "staging", "prod"}},
+		{"four-env", []string{"dev", "test", "uat", "prod"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.topology, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := runInit(t, "--topology", tc.topology, "--name", "svc", "--dir", dir)
+			require.NoError(t, err)
+
+			parsed, err := config.ParseManifestFile(manifestPathFor(dir), config.DefaultManifestKey)
+			require.NoError(t, err)
+			require.NotNil(t, parsed.Config)
+
+			if len(tc.want) == 0 {
+				assert.Empty(t, parsed.Config.Environments, "release-only manifest omits environments")
+				assert.Empty(t, parsed.Config.Deploys, "release-only manifest has no deploys")
+			} else {
+				// Exact ordered equality: order is load-bearing because the last
+				// environment is the release stage.
+				assert.Equal(t, tc.want, parsed.Config.Environments)
+			}
+
+			// The manifest that landed on disk must survive the real generator.
+			parsedAsMap := map[string]string{}
+			b, readErr := os.ReadFile(manifestPathFor(dir))
+			require.NoError(t, readErr)
+			parsedAsMap[config.DefaultManifestFile] = string(b)
+			for _, rel := range []string{".github/workflows/build.yaml", ".github/workflows/deploy.yaml"} {
+				wb, statErr := os.ReadFile(filepath.Join(dir, rel))
+				if statErr == nil {
+					parsedAsMap[rel] = string(wb)
+				}
+			}
+			require.NoError(t, scaffold.SelfCheck(parsedAsMap))
+		})
+	}
+}
+
+// TestRun_DirLandsFilesInTargetDir asserts cli.init.dir: a non-current target
+// directory receives the scaffold, and the current working directory is left
+// untouched.
+func TestRun_DirLandsFilesInTargetDir(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "nested", "service")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+
+	_, err := runInit(t, "--topology", "two-env", "--name", "svc", "--dir", target)
+	require.NoError(t, err)
+
+	// Files land under the target directory.
+	for _, rel := range []string{
+		config.DefaultManifestFile,
+		".github/workflows/build.yaml",
+		".github/workflows/deploy.yaml",
+	} {
+		_, statErr := os.Stat(filepath.Join(target, rel))
+		require.NoError(t, statErr, "expected %s under target dir", rel)
+	}
+
+	// The parent (outside the target) is not polluted with a manifest.
+	_, statErr := os.Stat(filepath.Join(parent, config.DefaultManifestFile))
+	assert.True(t, os.IsNotExist(statErr), "no manifest should be written outside the target dir")
+}
+
+// TestRun_NameWovenIntoStubs asserts cli.init.name: the project name reaches the
+// rendered callback stubs on disk, and defaults to the target directory base
+// name when --name is omitted.
+func TestRun_NameWovenIntoStubs(t *testing.T) {
+	t.Run("explicit", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := runInit(t, "--topology", "two-env", "--name", "payments-api", "--dir", dir)
+		require.NoError(t, err)
+
+		build, readErr := os.ReadFile(filepath.Join(dir, ".github/workflows/build.yaml"))
+		require.NoError(t, readErr)
+		assert.Contains(t, string(build), "Build payments-api")
+
+		deploy, readErr := os.ReadFile(filepath.Join(dir, ".github/workflows/deploy.yaml"))
+		require.NoError(t, readErr)
+		assert.Contains(t, string(deploy), "Deploy payments-api")
+	})
+
+	t.Run("defaults-to-dir-base", func(t *testing.T) {
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "billing-svc")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+
+		_, err := runInit(t, "--topology", "two-env", "--dir", dir)
+		require.NoError(t, err)
+
+		build, readErr := os.ReadFile(filepath.Join(dir, ".github/workflows/build.yaml"))
+		require.NoError(t, readErr)
+		assert.Contains(t, string(build), "Build billing-svc")
+	})
+}
+
 func TestRun_ScaffoldFailureWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	// An environment name containing a dot is not job-ID-safe; the scaffold

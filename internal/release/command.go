@@ -58,17 +58,8 @@ Outputs (to stdout):
 			}
 
 			// Validate required fields
-			if repo == "" {
-				return fmt.Errorf("--repo is required")
-			}
-			if environment == "" {
-				return fmt.Errorf("--environment is required")
-			}
-			if sha == "" {
-				return fmt.Errorf("--sha is required")
-			}
-			if tag == "" {
-				return fmt.Errorf("--tag is required")
+			if err := validateManageReleaseFlags(act, repo, environment, sha, tag); err != nil {
+				return err
 			}
 
 			// Get token from flag or environment
@@ -132,8 +123,38 @@ Outputs (to stdout):
 	_ = cmd.MarkFlagRequired("repo")
 	_ = cmd.MarkFlagRequired("action")
 	_ = cmd.MarkFlagRequired("environment")
-	_ = cmd.MarkFlagRequired("sha")
 	_ = cmd.MarkFlagRequired("tag")
 
 	return cmd
+}
+
+// tagCreatingActions are the actions that materialize a git tag pointing at a
+// specific commit and therefore require --sha. The remaining actions (lock,
+// update, delete) resolve an existing release by its tag and treat SHA only as
+// an optional disambiguator, so SHA is not required for them.
+var tagCreatingActions = map[Action]bool{
+	ActionCreate:     true,
+	ActionPrerelease: true,
+	ActionPublish:    true,
+}
+
+// validateManageReleaseFlags checks the flags required by the manage-release
+// command. repo, environment, and tag are required for every action. SHA is
+// required only for the tag-creating actions (create, prerelease, publish),
+// which tag a commit; the tag-addressed actions (lock, update, delete) resolve
+// the release by tag and do not need it.
+func validateManageReleaseFlags(act Action, repo, environment, sha, tag string) error {
+	if repo == "" {
+		return fmt.Errorf("--repo is required")
+	}
+	if environment == "" {
+		return fmt.Errorf("--environment is required")
+	}
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+	if sha == "" && tagCreatingActions[act] {
+		return fmt.Errorf("--sha is required for action %q", act)
+	}
+	return nil
 }

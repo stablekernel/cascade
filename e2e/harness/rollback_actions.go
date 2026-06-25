@@ -104,5 +104,12 @@ func (r *Runner) executeRollback(ctx context.Context, rollback *RollbackStep, co
 	}
 
 	r.t.Logf("  Rollback: workflow completed successfully")
+
+	if rollback.ExpectSource != "" {
+		if err := assertRollbackSource(r.t, result.Logs, rollback.ExpectSource); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

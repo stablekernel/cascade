@@ -272,13 +272,14 @@ func (h *MultiRepoHarness) prepareRepoInActContainer(ctx context.Context, repoCt
 	}
 
 	// Copy the (already-built) CLI binary into the repo so the mock setup-cli
-	// action can install it onto PATH inside job containers.
-	binaryPath, err := h.base.ensureCLIBinary(ctx)
-	if err != nil {
+	// action can install it onto PATH inside job containers. The copy streams
+	// the cached binary bytes (not the on-disk file) to avoid the archive/tar
+	// size-mismatch race (#336).
+	if _, err := h.base.ensureCLIBinary(ctx); err != nil {
 		return err
 	}
-	if err := h.act.Container().CopyFileToContainer(ctx, binaryPath, "/usr/local/bin/cascade", 0755); err != nil {
-		return fmt.Errorf("failed to copy CLI to container: %w", err)
+	if err := copyCLIToContainer(ctx, h.act.Container(), cliBinaryBytes, "/usr/local/bin/cascade"); err != nil {
+		return err
 	}
 	copyToRepoCmd := []string{
 		"bash", "-c",

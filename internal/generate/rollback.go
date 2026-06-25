@@ -248,6 +248,7 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      target_env: ${{ steps.preflight.outputs.target_env }}\n")
 	sb.WriteString("      target_sha: ${{ steps.preflight.outputs.target_sha }}\n")
 	sb.WriteString("      target_version: ${{ steps.preflight.outputs.target_version }}\n")
+	sb.WriteString("      target_source: ${{ steps.preflight.outputs.target_source }}\n")
 	sb.WriteString("      can_proceed: ${{ steps.preflight.outputs.can_proceed }}\n")
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamRelease)
@@ -270,6 +271,8 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Fail if Cannot Proceed\n")
 	sb.WriteString("        if: steps.preflight.outputs.can_proceed == 'false'\n")
 	sb.WriteString("        run: exit 1\n")
+	sb.WriteString("      - name: Report Resolved Source\n")
+	sb.WriteString("        run: echo \"rollback resolved from ${{ steps.preflight.outputs.target_source }}\"\n")
 	sb.WriteString("\n")
 }
 

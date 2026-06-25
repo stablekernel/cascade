@@ -99,6 +99,7 @@ func runPreflight(opts preflightOptions) error {
 		w.Set("target_env", plan.Environment)
 		w.Set("target_sha", plan.Target.SHA)
 		w.Set("target_version", plan.Target.Version)
+		w.Set("target_source", plan.Target.Source)
 		w.SetBool("can_proceed", true)
 		return w.Flush()
 	}

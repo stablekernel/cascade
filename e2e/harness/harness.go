@@ -27,10 +27,20 @@ import (
 // and downstream orchestrate steps to fail with "No such file or directory".
 // Build once per process under sync.Once and reuse a stable, package-private
 // path; all scenarios share the same source so the binary is identical.
+//
+// We also cache the built binary's BYTES, not just its path. testcontainers'
+// CopyFileToContainer re-Stats the file and then streams it, declaring the
+// stat'd size in the tar header before writing the bytes. If anything mutates
+// the file in the gap between the stat and the stream, the bytes written no
+// longer match the declared header size and archive/tar fails the copy with
+// "write too long" (issue #336). Copying from a stable in-memory slice via
+// CopyToContainer makes the declared size and the written bytes derive from the
+// same immutable buffer, so that size-mismatch window cannot exist.
 var (
-	cliBinaryOnce sync.Once
-	cliBinaryPath string
-	cliBinaryErr  error
+	cliBinaryOnce  sync.Once
+	cliBinaryPath  string
+	cliBinaryBytes []byte
+	cliBinaryErr   error
 )
 
 // normalizeCallbackStubPath returns the canonical path where a callback stub
@@ -508,14 +518,14 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 	}
 
 	// Build CLI once for the whole test process and copy into this scenario's
-	// act container.
-	binaryPath, err := h.ensureCLIBinary(ctx)
-	if err != nil {
+	// act container. The copy streams the cached binary bytes (not the on-disk
+	// file) to avoid the archive/tar size-mismatch race (#336).
+	if _, err := h.ensureCLIBinary(ctx); err != nil {
 		return err
 	}
 
-	if err := h.act.Container().CopyFileToContainer(ctx, binaryPath, "/usr/local/bin/cascade", 0755); err != nil {
-		return fmt.Errorf("failed to copy CLI to container: %w", err)
+	if err := copyCLIToContainer(ctx, h.act.Container(), cliBinaryBytes, "/usr/local/bin/cascade"); err != nil {
+		return err
 	}
 
 	// Also copy the CLI into the repo so job containers can access it
@@ -833,9 +843,70 @@ func (h *Harness) ensureCLIBinary(ctx context.Context) (string, error) {
 			cliBinaryErr = fmt.Errorf("failed to build CLI: %w\nOutput: %s", err, output)
 			return
 		}
+
+		// Read the freshly built binary into a stable in-memory slice once, so
+		// every container copy streams from an immutable buffer rather than
+		// re-reading (and re-stat'ing) the on-disk file. This is what closes the
+		// archive/tar size-mismatch race (#336): the tar header size and the
+		// payload bytes both come from this single slice.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			_ = os.Remove(path)
+			cliBinaryErr = fmt.Errorf("failed to read built CLI: %w", err)
+			return
+		}
 		cliBinaryPath = path
+		cliBinaryBytes = data
 	})
 	return cliBinaryPath, cliBinaryErr
+}
+
+// cliCopyMaxAttempts bounds how many times copyCLIToContainer retries the tar
+// copy. The copy itself is deterministic now that it streams from a stable
+// in-memory slice, so a retry only absorbs a genuine, transient Docker daemon
+// API blip (a dropped connection mid-copy, a momentary daemon stall). A small
+// fixed budget clears that; a copy that keeps failing surfaces the real error.
+const cliCopyMaxAttempts = 3
+
+// cliCopyBackoff returns the pause before the retry that follows a failed copy
+// attempt (attempt is 1-based). It is a var so tests can zero the wait. The
+// growth (250ms, 500ms) lets a momentary daemon stall clear without stalling
+// the suite.
+var cliCopyBackoff = func(attempt int) time.Duration {
+	return time.Duration(attempt) * 250 * time.Millisecond
+}
+
+// containerCopier is the slice of the container surface copyCLIToContainer
+// needs: copying a byte slice to an in-container path. The real
+// testcontainers.Container satisfies it, and a fake satisfies it in tests, so
+// the copy/retry logic is exercisable without Docker.
+type containerCopier interface {
+	CopyToContainer(ctx context.Context, fileContent []byte, containerFilePath string, fileMode int64) error
+}
+
+// copyCLIToContainer copies the cached CLI binary bytes into the container at
+// destPath, retrying a transient Docker daemon copy blip up to
+// cliCopyMaxAttempts. It streams from the stable cliBinaryBytes slice via
+// CopyToContainer, so the archive/tar header size always matches the payload
+// (the #336 root cause). The bounded retry only covers a genuine transport
+// blip and fails closed, surfacing the last error once the budget is spent.
+func copyCLIToContainer(ctx context.Context, dst containerCopier, content []byte, destPath string) error {
+	var lastErr error
+	for attempt := 1; attempt <= cliCopyMaxAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("CLI copy cancelled after %d attempt(s): %w", attempt-1, ctx.Err())
+			case <-time.After(cliCopyBackoff(attempt - 1)):
+			}
+		}
+		err := dst.CopyToContainer(ctx, content, destPath, 0o755)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("failed to copy CLI to container after %d attempt(s): %w", cliCopyMaxAttempts, lastErr)
 }
 
 // localizeWorkflows rewrites generated workflows so external action refs

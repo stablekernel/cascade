@@ -1,0 +1,111 @@
+name: "Rollback preflight resolves target from previous-deploy ring"
+description: |
+  Isolates the Source="previous-ring" resolution path: proves that when the
+  --to value is NOT the current live state but IS present in the deploy-history
+  ring (state.<env>.previous), the preflight job reports
+  target_source=previous-ring in its log output.
+
+  prod is advanced through two published versions so the ring captures the first
+  commit as the N-1 entry. A dry-run rollback is then dispatched with --to set
+  to the first commit's SHA. The resolver checks live state first (no match:
+  live state is commit2), then finds a match in the ring, so the "Report
+  Resolved Source" step echoes "rollback resolved from previous-ring". The
+  dry_run flag suppresses the deploy and finalize jobs.
+
+  The expect_source assertion on the rollback step is the distinguishing check:
+  it asserts the resolved-source marker in the workflow logs, proving that this
+  specific resolution path (Source="previous-ring") was taken end-to-end.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: .github/workflows/deploy-app.yaml
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            appdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version to prod (establishes the ring entry)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+
+  - name: "Commit the second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version to prod (advances state past commit1)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit2
+
+  # Dry-run rollback targeting commit1 which is now in the deploy-history ring
+  # (recorded when the second promotion advanced prod past it) but NOT the live
+  # state (commit2). The resolver skips live state, finds commit1 in the ring,
+  # and reports Source="previous-ring". The expect_source assertion verifies this
+  # path end-to-end.
+  - name: "Dry-run rollback targeting ring entry resolves from previous-ring"
+    action: rollback
+    rollback:
+      environment: prod
+      target: commit1
+      dry_run: true
+      expect_source: previous-ring

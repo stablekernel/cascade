@@ -1,6 +1,6 @@
 ---
 title: Security and hardening
-description: Cascade's security model and a shared-responsibility guide to deploying it safely - what cascade provides secure by construction versus what your organization configures in GitHub and your cloud - plus a concrete hardening checklist.
+description: Cascade's security model and a shared-responsibility guide to deploying it safely. It covers what cascade provides secure by construction versus what your organization configures in GitHub and your cloud, plus a concrete hardening checklist.
 ---
 
 Cascade generates GitHub Actions workflow definitions and coordinates promotion across environments. Those workflows are committed to, and run inside, your own repositories, under your own runners, branch protection, and environment gates. Security is shared: cascade emits sound, reviewable workflow definitions, and your organization configures the GitHub and cloud controls that decide what those workflows are allowed to do.
