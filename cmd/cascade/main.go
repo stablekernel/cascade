@@ -15,6 +15,7 @@ import (
 	"github.com/stablekernel/cascade/internal/external"
 	"github.com/stablekernel/cascade/internal/generate"
 	"github.com/stablekernel/cascade/internal/globals"
+	"github.com/stablekernel/cascade/internal/graph"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	initcmd "github.com/stablekernel/cascade/internal/initcmd"
 	"github.com/stablekernel/cascade/internal/log"
@@ -80,6 +81,7 @@ change detection, and changelog generation.`,
 	rootCmd.AddCommand(environments.NewCommand())
 	rootCmd.AddCommand(external.NewCommand())
 	rootCmd.AddCommand(generate.NewCommand())
+	rootCmd.AddCommand(graph.NewCommand())
 	rootCmd.AddCommand(verify.NewCommand())
 	rootCmd.AddCommand(plan.NewCommand())
 	rootCmd.AddCommand(hotfix.NewCommand())
