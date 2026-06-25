@@ -145,6 +145,7 @@ func (gitStatePusher) CommitAndPush(path, branch, message string) error {
 // whatever trunk bytes the loop fetches.
 type apiStatePusher struct {
 	mutate statewrite.Mutate
+	author statewrite.Identity
 }
 
 func (p apiStatePusher) CommitAndPush(path, branch, message string) error {
@@ -159,7 +160,19 @@ func (p apiStatePusher) CommitAndPush(path, branch, message string) error {
 		Ref:     branch,
 		Message: message,
 		Mutate:  p.mutate,
+		Author:  p.author,
 	})
+}
+
+// gitIdentity resolves the author/committer for a Contents API state commit from
+// the manifest git config, defaulting to the github-actions[bot] identity when
+// the config is absent. This attributes the automated state commit to the bot
+// rather than the token owner GitHub would otherwise stamp.
+func gitIdentity(cfg *config.TrunkConfig) statewrite.Identity {
+	if cfg == nil {
+		return statewrite.Identity{}
+	}
+	return statewrite.Identity{Name: cfg.GetGitUserName(), Email: cfg.GetGitUserEmail()}
 }
 
 // isRealGitHub reports whether the workflow runs on github.com rather than an
@@ -462,7 +475,7 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 		capturedTarget := targetEnv
 		capturedMerge := mergeSHA
 		key := f.manifestKey
-		pusher = apiStatePusher{mutate: func(current []byte) ([]byte, error) {
+		pusher = apiStatePusher{author: gitIdentity(f.cicd.Config), mutate: func(current []byte) ([]byte, error) {
 			fresh, err := config.ParseManifestBytes(current, key)
 			if err != nil {
 				return nil, fmt.Errorf("parsing current manifest: %w", err)
