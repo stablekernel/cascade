@@ -46,6 +46,12 @@
       "detail": "sha a1b2c3d, version v1.2.0-rc.1"
     },
     {
+      "disposition": "run",
+      "action": "release prerelease",
+      "target": "v1.2.0",
+      "detail": "rc v1.2.0-rc.1, sha a1b2c3d"
+    },
+    {
       "disposition": "skip",
       "action": "promote",
       "target": "prod",

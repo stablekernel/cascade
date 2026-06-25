@@ -281,6 +281,18 @@ func WithTrunkStateReader(r trunkStateReader) FinalizeOption {
 	}
 }
 
+// WithTipReader injects the reader Finalize uses to cross-check the merge SHA
+// against the resolution branch tip. The default reads the local env-branch tip
+// via git. The what-if simulator injects a record-only reader so finalize can
+// run without a git checkout.
+func WithTipReader(r gitTipReader) FinalizeOption {
+	return func(f *Finalizer) {
+		if r != nil {
+			f.tipReader = r
+		}
+	}
+}
+
 // NewFinalizer constructs a Finalizer over the manifest at opts.ConfigPath.
 func NewFinalizer(opts FinalizerOptions, options ...FinalizeOption) (*Finalizer, error) {
 	key := opts.ManifestKey

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/stablekernel/cascade/internal/promote"
+	"github.com/stablekernel/cascade/internal/release"
 )
 
 // PromoteAction replays the real promotion orchestration against a cloned
@@ -87,6 +88,10 @@ func effectsFromResult(result *promote.PromotionResult) []Effect {
 		})
 	}
 
+	if marker, ok := releaseMarkerEffect(result); ok {
+		effects = append(effects, marker)
+	}
+
 	for _, env := range result.SkippedEnvs {
 		effects = append(effects, Effect{
 			Disposition: DispositionSkip,
@@ -97,6 +102,42 @@ func effectsFromResult(result *promote.PromotionResult) []Effect {
 	}
 
 	return effects
+}
+
+// releaseMarkerEffect translates the publish-marker step of a promotion into a
+// distinct effect. The promoter sets result.ReleaseAction to "prerelease" or
+// "publish" when a crossing reaches the release boundary; the review of the
+// engine seam noted that step was folded into the generic write-state effect and
+// could not be told apart. The action label is taken from the internal/release
+// vocabulary so the simulator and the real release executor agree on the names.
+// The ok return is false when the result carries no release marker.
+func releaseMarkerEffect(result *promote.PromotionResult) (Effect, bool) {
+	if result == nil || result.ReleaseAction == "" {
+		return Effect{}, false
+	}
+
+	act, err := release.ValidateAction(result.ReleaseAction)
+	if err != nil {
+		// An unrecognized marker is surfaced verbatim rather than dropped, so
+		// the operator still sees that a release step would run.
+		act = release.Action(result.ReleaseAction)
+	}
+
+	target := "release"
+	detail := "release marker advance"
+	if data := result.ReleaseData; data != nil {
+		if data.SemVersion != "" {
+			target = data.SemVersion
+		}
+		detail = fmt.Sprintf("rc %s, sha %s", orNone(data.RCVersion), shortOrNone(data.SHA))
+	}
+
+	return Effect{
+		Disposition: DispositionRun,
+		Action:      "release " + string(act),
+		Target:      target,
+		Detail:      detail,
+	}, true
 }
 
 // shortOrNone renders the first 7 characters of a SHA, or (none) when empty.

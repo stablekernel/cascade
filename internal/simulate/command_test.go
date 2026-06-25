@@ -48,3 +48,53 @@ func TestSimulatePromote_InvalidMode(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid mode")
 }
+
+func TestSimulateSubcommands_Registered(t *testing.T) {
+	t.Parallel()
+
+	out := helpText(t, "--help")
+	for _, sub := range []string{"promote", "rollback", "release", "hotfix"} {
+		assert.Contains(t, out, sub)
+	}
+}
+
+func TestSimulateRollbackHelp_MentionsScopeAndIsolation(t *testing.T) {
+	t.Parallel()
+
+	out := strings.ToLower(helpText(t, "rollback", "--help"))
+	assert.Contains(t, out, "orchestration")
+	assert.Contains(t, out, "no github")
+	assert.Contains(t, out, "no containers")
+}
+
+func TestSimulateReleaseHelp_MentionsScopeAndIsolation(t *testing.T) {
+	t.Parallel()
+
+	out := strings.ToLower(helpText(t, "release", "--help"))
+	assert.Contains(t, out, "orchestration")
+	assert.Contains(t, out, "no github")
+	assert.Contains(t, out, "no containers")
+}
+
+func TestSimulateHotfixHelp_MentionsScopeAndIsolation(t *testing.T) {
+	t.Parallel()
+
+	out := strings.ToLower(helpText(t, "hotfix", "--help"))
+	assert.Contains(t, out, "orchestration")
+	assert.Contains(t, out, "no github")
+	assert.Contains(t, out, "no containers")
+}
+
+func TestParseCommaList(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseCommaList(" a , b ,c")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b", "c"}, got)
+
+	_, err = parseCommaList("")
+	require.Error(t, err)
+
+	_, err = parseCommaList("a,,b")
+	require.Error(t, err)
+}
