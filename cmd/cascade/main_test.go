@@ -229,6 +229,95 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
+// -------- graph command integration tests --------
+
+// graphManifestContent is a two-environment manifest with a validate gate, one
+// build, and a deploy that depends on the build, so the rendered graph carries
+// every node kind and a hard edge.
+const graphManifestContent = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+    validate:
+      workflow: .github/workflows/validate.yaml
+    builds:
+      - name: app
+        workflow: .github/workflows/build.yaml
+        triggers:
+          - "src/**"
+    deploys:
+      - name: app
+        workflow: .github/workflows/deploy.yaml
+        triggers:
+          - "src/**"
+        depends_on:
+          - app
+`
+
+func writeGraphManifest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.yaml")
+	if err := os.WriteFile(path, []byte(graphManifestContent), 0644); err != nil {
+		t.Fatalf("Failed to write manifest: %v", err)
+	}
+	return path
+}
+
+func TestGraphCommand_EmitsMermaid(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	stdout, stderr, err := runCLI("graph", "--config", manifest)
+	if err != nil {
+		t.Fatalf("graph command failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{"flowchart TD", "validate", "build_app", "deploy_app", "deploy_app --> build_app"} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in graph output, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestGraphCommand_JSONWrapsDiagram(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	stdout, stderr, err := runCLI("graph", "--config", manifest, "--json")
+	if err != nil {
+		t.Fatalf("graph --json command failed: %v\nstderr: %s", err, stderr)
+	}
+	var payload struct {
+		Format  string `json:"format"`
+		Diagram string `json:"diagram"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("Failed to parse JSON output: %v\noutput: %s", err, stdout)
+	}
+	if payload.Format != "mermaid" {
+		t.Errorf("expected format mermaid, got %q", payload.Format)
+	}
+	if !contains(payload.Diagram, "flowchart TD") {
+		t.Errorf("expected diagram in JSON envelope, got: %s", payload.Diagram)
+	}
+}
+
+func TestGraphCommand_RejectsUnknownFormat(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	_, stderr, err := runCLI("graph", "--config", manifest, "--format", "svg")
+	if err == nil {
+		t.Error("Expected non-zero exit for unknown format")
+	}
+	if !contains(stderr, "mermaid") {
+		t.Errorf("expected error mentioning mermaid, got: %s", stderr)
+	}
+}
+
+func TestGraphCommand_MissingManifest(t *testing.T) {
+	_, _, err := runCLI("graph", "--config", "/nonexistent/path/manifest.yaml")
+	if err == nil {
+		t.Error("Expected non-zero exit for missing manifest")
+	}
+}
+
 // -------- status command integration tests --------
 
 // fixtureManifestPath returns the path to the on-disk status fixture.
