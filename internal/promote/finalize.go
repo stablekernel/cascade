@@ -381,6 +381,17 @@ func isRealGitHub() bool {
 // loop fetches and overlays only this finalizer's owned env state, so two
 // concurrent env finalizers merge rather than clobber each other on the file
 // blob SHA.
+// gitIdentity resolves the author/committer for a Contents API state commit from
+// the manifest git config, defaulting to the github-actions[bot] identity when
+// the config is absent. This attributes the automated state commit to the bot
+// rather than the token owner GitHub would otherwise stamp.
+func gitIdentity(cfg *config.TrunkConfig) statewrite.Identity {
+	if cfg == nil {
+		return statewrite.Identity{}
+	}
+	return statewrite.Identity{Name: cfg.GetGitUserName(), Email: cfg.GetGitUserEmail()}
+}
+
 func (f *Finalizer) writeStateViaAPI(message string) error {
 	repo := os.Getenv("GITHUB_REPOSITORY")
 	if repo == "" {
@@ -397,6 +408,7 @@ func (f *Finalizer) writeStateViaAPI(message string) error {
 		Path:    f.configPath,
 		Ref:     branch,
 		Message: message,
+		Author:  gitIdentity(f.cicdFile.Config),
 		Mutate: func(current []byte) ([]byte, error) {
 			into, err := config.ParseManifestBytes(current, key)
 			if err != nil {

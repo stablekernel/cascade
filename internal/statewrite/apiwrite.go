@@ -26,6 +26,39 @@ const maxAttempts = 5
 // waits N*retryBackoff so concurrent writers stagger rather than re-collide.
 const retryBackoff = 500 * time.Millisecond
 
+// defaultBotName and defaultBotEmail are the identity stamped on a state commit
+// when the manifest git config supplies no override. They match the identity the
+// git-based state writers use, so a Contents API commit is attributed to the
+// automation bot rather than the token owner.
+const (
+	defaultBotName  = "github-actions[bot]"
+	defaultBotEmail = "github-actions[bot]@users.noreply.github.com"
+)
+
+// Identity is the name and email stamped as both the author and the committer of
+// a Contents API state commit. State writers populate it from the manifest git
+// config (GetGitUserName/GetGitUserEmail) so automated commits are attributed to
+// the bot identity rather than the token owner that GitHub would otherwise use.
+type Identity struct {
+	// Name is the commit author/committer name. Empty falls back to the bot default.
+	Name string
+	// Email is the commit author/committer email. Empty falls back to the bot default.
+	Email string
+}
+
+// orDefault returns the identity with any empty field filled from the bot
+// default, so a commit is always attributed to a concrete identity and behavior
+// is never worse than before this attribution was threaded through.
+func (id Identity) orDefault() Identity {
+	if id.Name == "" {
+		id.Name = defaultBotName
+	}
+	if id.Email == "" {
+		id.Email = defaultBotEmail
+	}
+	return id
+}
+
 // ContentsClient is the minimal GitHub Contents API surface the retry loop
 // needs. The production implementation shells out to the gh CLI; tests inject a
 // fake that returns a 409 on the first PUT and succeeds on the second.
@@ -37,7 +70,7 @@ const retryBackoff = 500 * time.Millisecond
 // when the blob SHA no longer matches.
 type ContentsClient interface {
 	GetContent(repo, path, ref string) (content []byte, sha string, err error)
-	PutContent(repo, path, ref, sha, message string, content []byte) error
+	PutContent(repo, path, ref, sha, message string, content []byte, author Identity) error
 }
 
 // ConflictError reports an optimistic-lock (HTTP 409) failure from the Contents
@@ -114,6 +147,11 @@ type Options struct {
 	// Mutate derives the bytes to write from the current manifest bytes. It is
 	// re-applied on every retry. Required.
 	Mutate Mutate
+	// Author is the identity stamped as both author and committer of the state
+	// commit. Callers populate it from the manifest git config so the commit is
+	// attributed to the bot identity. An empty field falls back to the
+	// github-actions[bot] default.
+	Author Identity
 	// Sleep is called between retries. Defaults to time.Sleep; tests inject a
 	// no-op so no real time passes.
 	Sleep func(time.Duration)
@@ -136,6 +174,7 @@ func CommitWithRetry(opts Options) error {
 	if sleep == nil {
 		sleep = time.Sleep
 	}
+	author := opts.Author.orDefault()
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -149,7 +188,7 @@ func CommitWithRetry(opts Options) error {
 			return fmt.Errorf("applying state mutation: %w", err)
 		}
 
-		err = opts.Client.PutContent(opts.Repo, opts.Path, opts.Ref, sha, opts.Message, next)
+		err = opts.Client.PutContent(opts.Repo, opts.Path, opts.Ref, sha, opts.Message, next, author)
 		if err == nil {
 			return nil
 		}

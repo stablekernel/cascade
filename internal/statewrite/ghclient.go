@@ -43,15 +43,22 @@ func (ghContents) GetContent(repo, path, ref string) ([]byte, string, error) {
 
 // PutContent writes content at ref through the Contents API. When sha is
 // non-empty the write is an update guarded by that optimistic-lock token; an
-// empty sha creates the file. It classifies a 409 optimistic-lock failure as a
+// empty sha creates the file. It stamps author with both the commit author and
+// committer so the state commit is attributed to the bot identity rather than
+// the token owner, and classifies a 409 optimistic-lock failure as a
 // ConflictError so the retry loop recognizes it.
-func (ghContents) PutContent(repo, path, ref, sha, message string, content []byte) error {
+func (ghContents) PutContent(repo, path, ref, sha, message string, content []byte, author Identity) error {
+	author = author.orDefault()
 	b64 := base64.StdEncoding.EncodeToString(content)
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/contents/%s", repo, path), "-X", "PUT",
 		"-f", "message=" + message,
 		"-f", "content=" + b64,
 		"-f", "branch=" + ref,
+		"-f", "author[name]=" + author.Name,
+		"-f", "author[email]=" + author.Email,
+		"-f", "committer[name]=" + author.Name,
+		"-f", "committer[email]=" + author.Email,
 	}
 	if sha != "" {
 		args = append(args, "-f", "sha="+sha)

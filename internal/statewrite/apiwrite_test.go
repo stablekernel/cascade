@@ -23,10 +23,11 @@ type fakeContents struct {
 	// past the slice default to applying successfully.
 	putErrs []error
 
-	puts    int      // number of PutContent calls
-	gets    int      // number of GetContent calls
-	putSeen []string // content bytes presented to each PutContent
-	shaSeen []string // sha presented to each PutContent
+	puts    int        // number of PutContent calls
+	gets    int        // number of GetContent calls
+	putSeen []string   // content bytes presented to each PutContent
+	shaSeen []string   // sha presented to each PutContent
+	idSeen  []Identity // author/committer identity presented to each PutContent
 }
 
 func (f *fakeContents) GetContent(_, _, _ string) ([]byte, string, error) {
@@ -34,10 +35,11 @@ func (f *fakeContents) GetContent(_, _, _ string) ([]byte, string, error) {
 	return []byte(f.content), f.sha, nil
 }
 
-func (f *fakeContents) PutContent(_, _, _, sha, _ string, content []byte) error {
+func (f *fakeContents) PutContent(_, _, _, sha, _ string, content []byte, author Identity) error {
 	f.puts++
 	f.putSeen = append(f.putSeen, string(content))
 	f.shaSeen = append(f.shaSeen, sha)
+	f.idSeen = append(f.idSeen, author)
 	if f.puts-1 < len(f.putErrs) {
 		if err := f.putErrs[f.puts-1]; err != nil {
 			return err
@@ -165,6 +167,85 @@ func TestCommitWithRetry_NonConflictErrorIsNotRetried(t *testing.T) {
 	assert.False(t, IsConflict(err))
 	assert.Equal(t, 1, fake.puts, "a non-409 error must not be retried")
 	assert.Equal(t, 0, slept, "a non-409 error must not back off")
+}
+
+func TestCommitWithRetry_StampsBotAuthorAndCommitter(t *testing.T) {
+	// State commits must be attributed to the bot identity (both author and
+	// committer) so GitHub does not stamp them with the token owner. With no
+	// override the identity defaults to github-actions[bot]; a manifest git
+	// override flows through verbatim.
+	tests := []struct {
+		name string
+		give Identity
+		want Identity
+	}{
+		{
+			name: "defaults to github-actions[bot] when unset",
+			give: Identity{},
+			want: Identity{
+				Name:  "github-actions[bot]",
+				Email: "github-actions[bot]@users.noreply.github.com",
+			},
+		},
+		{
+			name: "honors a manifest git override",
+			give: Identity{Name: "release-bot", Email: "release-bot@example.com"},
+			want: Identity{Name: "release-bot", Email: "release-bot@example.com"},
+		},
+		{
+			name: "fills only the missing field from the default",
+			give: Identity{Name: "release-bot"},
+			want: Identity{Name: "release-bot", Email: "github-actions[bot]@users.noreply.github.com"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeContents{content: "ci.state.test: A\n", sha: "sha-0"}
+
+			err := CommitWithRetry(Options{
+				Client:  fake,
+				Repo:    "owner/name",
+				Path:    ".github/manifest.yaml",
+				Ref:     "main",
+				Message: "chore: update state [skip ci]",
+				Mutate:  appendLine("ci.state.staging: B"),
+				Author:  tc.give,
+				Sleep:   noSleep(new(int)),
+			})
+
+			require.NoError(t, err)
+			require.Len(t, fake.idSeen, 1, "exactly one PUT must be issued")
+			assert.Equal(t, tc.want, fake.idSeen[0], "the PUT must carry the resolved bot identity")
+		})
+	}
+}
+
+func TestCommitWithRetry_IdentityPersistsAcrossRetries(t *testing.T) {
+	// A 409 retry re-fetches and re-PUTs; the resolved identity must accompany
+	// every attempt, not just the first.
+	fake := &fakeContents{
+		content: "ci.state.test: A\n",
+		sha:     "sha-0",
+		putErrs: []error{rawConflict()},
+	}
+
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: update state [skip ci]",
+		Mutate:  appendLine("ci.state.staging: B"),
+		Author:  Identity{Name: "release-bot", Email: "release-bot@example.com"},
+		Sleep:   noSleep(new(int)),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, fake.idSeen, 2, "the 409 must drive a second PUT")
+	for i, got := range fake.idSeen {
+		assert.Equal(t, Identity{Name: "release-bot", Email: "release-bot@example.com"}, got,
+			"attempt %d must carry the configured identity", i+1)
+	}
 }
 
 func TestIsConflict(t *testing.T) {
