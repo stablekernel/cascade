@@ -30,6 +30,8 @@ The fleet (`.github/workflows/fleet-e2e.yaml`) fans out to a set of purpose-buil
 
 The fleet proves the things that only real GitHub can prove: a real release object transitioning from draft to prerelease to published, real release-candidate tags being reaped on publish, the Contents API state-write path, cross-repo dispatch between real repositories, and real branch protection being written through a scoped token.
 
+The fleet fans out in sequenced lanes so peak live concurrency on its one shared token stays low, accepts a `repos` selector for running a single lane during development, and is cut and promoted under a nightly gate that releases only on a fully green fleet. The [Release orchestration](/cascade/release-orchestration/) page documents that machinery in full.
+
 ### Unit tests (pure logic)
 
 Underneath both layers, the Go packages carry conventional unit tests for the pure logic: version calculation, change detection, changelog assembly, manifest parsing and validation. These run on every build and are the fastest feedback loop.
@@ -57,6 +59,7 @@ The example repositories span the supported pipeline shapes, so each topology is
 | `cascade-example-release-only` | Release-only repository (no deploy environments), changelog and contributor assembly |
 | `cascade-example-primary` | Primary repository receiving external-update and notify handoffs from satellites |
 | `cascade-example-artifact-a`, `cascade-example-artifact-b` | Satellite repositories in an artifact-dependency graph that notify the primary |
+| `cascade-example-rollback-dispatch` | The automated rollback entry point, where a real `repository_dispatch` payload drives a rollback and the reverted state is read back |
 
 The `no-environment` library shape is covered today in the act plus gitea harness; the other topologies above are validated in both layers.
 
