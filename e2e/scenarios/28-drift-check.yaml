@@ -36,6 +36,28 @@ steps:
           package main
 
           func main() {}
+    expect:
+      workflow_files:
+        # The fork-safe comment companion runs on workflow_run with secrets in
+        # scope, so its top-level token must default to nothing and each job opts
+        # into only the scope it needs. Pinning the empty top-level block proves
+        # the least-privilege posture the security model depends on.
+        - path: ".github/workflows/cascade-drift-comment.yaml"
+          contains:
+            - "permissions: {}"
+            # The single comment job opts into only what it needs: write to PRs
+            # and read the source run; no broader scope leaks in.
+            - "    permissions:\n      pull-requests: write\n      actions: read\n"
+          not_contains:
+            # The companion must never grant itself write to repo contents.
+            - "contents: write"
+        # The pull_request check lane runs on fork-controlled input, so its
+        # top-level token is read-only and re-stated read-only at the job.
+        - path: ".github/workflows/cascade-drift-check.yaml"
+          contains:
+            - "permissions:\n  contents: read\n"
+          not_contains:
+            - "\npermissions:\n  contents: write"
 
   - name: "Verify clean against pristine generated output"
     action: verify

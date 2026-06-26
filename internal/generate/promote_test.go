@@ -1830,3 +1830,46 @@ func TestPromoteGenerator_ConcurrencyOverride(t *testing.T) {
 	assert.Contains(t, content, "group: my-custom-promote", "custom group must propagate to promote")
 	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to promote")
 }
+
+// TestPromoteGenerator_SelectiveDeploysAndForcePassthrough pins the generator
+// emission that the selective-deploy filter and the force flag actually reach
+// the preflight CLI. The runtime effect of --deploys (run only the named
+// deploys) is unit-asserted in internal/promote (TestPreflight_DeploysFilter),
+// and the force-continue semantics in TestPreflight_ForceFlag; this guards the
+// workflow plumbing that carries both inputs from the dispatch form into the
+// CLI invocation, which was previously unasserted at generation time.
+func TestPromoteGenerator_SelectiveDeploysAndForcePassthrough(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "prod"},
+		Deploys: []config.DeployConfig{
+			{Name: "infra", Workflow: "deploy-infra.yaml"},
+			{Name: "app", Workflow: "deploy-app.yaml"},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	// The dispatch form exposes both the deploys filter and the force toggle.
+	assert.Contains(t, content, "      deploys:")
+	assert.Contains(t, content, "      force:")
+
+	// Both inputs are threaded into the preflight environment...
+	assert.Contains(t, content, "          DEPLOYS: ${{ github.event.inputs.deploys }}")
+	assert.Contains(t, content, "          PROMOTION_FORCE: ${{ github.event.inputs.force }}")
+
+	// ...and forwarded to the preflight CLI flags that perform the filtering and
+	// the force-continue behavior. Defaulting deploys to "all" preserves the
+	// promote-everything path when the input is left blank.
+	assert.Contains(t, content, `--deploys="${DEPLOYS:-all}"`)
+	assert.Contains(t, content, `--force="${PROMOTION_FORCE:-false}"`)
+
+	// Each selected deploy renders as its own reusable-workflow job gated on the
+	// resolved deploys_to_run set, so an unnamed deploy is skipped at runtime
+	// while finalize still commits via its always() guard, the plumbing that lets
+	// promote continue past a failed deploy.
+	assert.Contains(t, content, "contains(fromJSON(needs.preflight.outputs.deploys_to_run), 'infra')")
+	assert.Contains(t, content, "contains(fromJSON(needs.preflight.outputs.deploys_to_run), 'app')")
+}
