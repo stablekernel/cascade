@@ -12,6 +12,7 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/ghaoutput"
+	"github.com/stablekernel/cascade/internal/statewrite"
 )
 
 // newPreflightCommand creates the `cascade rollback preflight` subcommand. It
@@ -213,7 +214,7 @@ func runFinalize(opts finalizeOptions) error {
 	}
 
 	if opts.commitPush {
-		if err := commitAndPush(rb.ConfigPath(), plan.Environment); err != nil {
+		if err := commitAndPush(rb.ConfigPath(), plan.Environment, rb.GitIdentity()); err != nil {
 			return fmt.Errorf("failed to commit and push: %w", err)
 		}
 		fmt.Printf("State updated and committed for %s\n", plan.Environment)
@@ -290,7 +291,7 @@ func readDeployResultsFromEnv(deployNames []string) map[string]string {
 // update a protected trunk. In the act/gitea environment there is no GitHub API,
 // so the change is committed and pushed with plain git. The environment is
 // detected exactly as the promote finalize path does, by GITHUB_SERVER_URL.
-func commitAndPush(path, env string) error {
+func commitAndPush(path, env string, author statewrite.Identity) error {
 	status, err := exec.Command("git", "status", "--porcelain", path).Output()
 	if err != nil {
 		return fmt.Errorf("git status failed: %w", err)
@@ -302,9 +303,9 @@ func commitAndPush(path, env string) error {
 	message := fmt.Sprintf("chore: update state after rollback of %s [skip ci]", env)
 
 	if isRealGitHub() {
-		return writeStateViaAPI(path, message)
+		return writeStateViaAPI(path, message, author)
 	}
-	return commitAndPushGit(path, message)
+	return commitAndPushGit(path, message, author)
 }
 
 // isRealGitHub reports whether the workflow runs on github.com rather than an
@@ -317,7 +318,7 @@ func isRealGitHub() bool {
 // writeStateViaAPI writes the manifest to the trunk branch through the GitHub
 // Contents REST API using the gh CLI, producing a signed commit that can update
 // a protected branch when the token is bypass-capable.
-func writeStateViaAPI(path, message string) error {
+func writeStateViaAPI(path, message string, author statewrite.Identity) error {
 	repo := os.Getenv("GITHUB_REPOSITORY")
 	if repo == "" {
 		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
@@ -335,15 +336,7 @@ func writeStateViaAPI(path, message string) error {
 	shaOut, _ := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha").Output()
 	currentSHA := strings.TrimSpace(string(shaOut))
 
-	args := []string{
-		"api", apiPath, "-X", "PUT",
-		"-f", "message=" + message,
-		"-f", "content=" + contentB64,
-		"-f", "branch=" + branch,
-	}
-	if currentSHA != "" {
-		args = append(args, "-f", "sha="+currentSHA)
-	}
+	args := buildStatePutArgs(apiPath, branch, currentSHA, message, contentB64, author)
 
 	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
@@ -351,13 +344,37 @@ func writeStateViaAPI(path, message string) error {
 	return nil
 }
 
+// buildStatePutArgs assembles the gh CLI arguments for the Contents API PUT that
+// writes the manifest. It stamps both author and committer with the resolved
+// identity so the API attributes the commit to the bot rather than the token
+// owner GitHub would otherwise use when those fields are absent. An empty
+// currentSHA creates the file rather than guarding an update.
+func buildStatePutArgs(apiPath, branch, currentSHA, message, contentB64 string, author statewrite.Identity) []string {
+	id := author.OrDefault()
+	args := []string{
+		"api", apiPath, "-X", "PUT",
+		"-f", "message=" + message,
+		"-f", "content=" + contentB64,
+		"-f", "branch=" + branch,
+		"-f", "author[name]=" + id.Name,
+		"-f", "author[email]=" + id.Email,
+		"-f", "committer[name]=" + id.Name,
+		"-f", "committer[email]=" + id.Email,
+	}
+	if currentSHA != "" {
+		args = append(args, "-f", "sha="+currentSHA)
+	}
+	return args
+}
+
 // commitAndPushGit commits the manifest and pushes with plain git, used in the
 // act/gitea environment which enforces neither branch protection nor signatures.
-func commitAndPushGit(path, message string) error {
-	if err := exec.Command("git", "config", "user.name", "github-actions[bot]").Run(); err != nil {
+func commitAndPushGit(path, message string, author statewrite.Identity) error {
+	id := author.OrDefault()
+	if err := exec.Command("git", "config", "user.name", id.Name).Run(); err != nil {
 		return fmt.Errorf("git config user.name failed: %w", err)
 	}
-	if err := exec.Command("git", "config", "user.email", "github-actions[bot]@users.noreply.github.com").Run(); err != nil {
+	if err := exec.Command("git", "config", "user.email", id.Email).Run(); err != nil {
 		return fmt.Errorf("git config user.email failed: %w", err)
 	}
 	if err := exec.Command("git", "add", path).Run(); err != nil {

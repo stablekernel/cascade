@@ -28,7 +28,23 @@ type stateWriteParams struct {
 	// A token able to bypass branch protection lets the write land on a protected
 	// trunk and produces a verified, signed commit.
 	successLabel string
+	// authorName and authorEmail are the identity stamped as both the author and
+	// the committer of the Contents API state commit. Without them the API
+	// attributes the commit to the token owner; callers populate them from the
+	// manifest git config (GetGitUserName/GetGitUserEmail) so the commit is the
+	// automation bot. Empty fields fall back to the github-actions[bot] default.
+	authorName  string
+	authorEmail string
 }
+
+// defaultStateAuthorName and defaultStateAuthorEmail are the identity stamped on
+// a Contents API state commit when a caller supplies no override. They match the
+// git-config identity the act/gitea git-commit path uses, so both write paths
+// attribute the commit to the automation bot rather than the token owner.
+const (
+	defaultStateAuthorName  = "github-actions[bot]"
+	defaultStateAuthorEmail = "github-actions[bot]@users.noreply.github.com"
+)
 
 // writeStateCommitPush emits the dual-path state-write logic into an already-open
 // "run: |" block at the given indent. The caller must have already set the
@@ -53,6 +69,18 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 			return
 		}
 		fmt.Fprintf(sb, indent+format+"\n", args...)
+	}
+
+	// Resolve the commit identity so an absent override never leaves the API write
+	// to default to the token owner. Callers pass the manifest git config identity;
+	// an empty field falls back to the automation bot.
+	authorName := params.authorName
+	if authorName == "" {
+		authorName = defaultStateAuthorName
+	}
+	authorEmail := params.authorEmail
+	if authorEmail == "" {
+		authorEmail = defaultStateAuthorEmail
 	}
 
 	w("if [[ \"$GITHUB_SERVER_URL\" != \"https://github.com\" ]]; then")
@@ -99,7 +127,13 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("  API_ARGS=(\"repos/${{ github.repository }}/contents/$MANIFEST_FILE\" -X PUT")
 	w("    -f \"message=%s\"", shellSingleLineMessage(params.commitMessage))
 	w("    -f \"content=$CONTENT_B64\"")
-	w("    -f \"branch=$BRANCH\")")
+	w("    -f \"branch=$BRANCH\"")
+	// Stamp author and committer so the API attributes the commit to the bot
+	// identity rather than the token owner GitHub would otherwise use.
+	w("    -f \"author[name]=%s\"", authorName)
+	w("    -f \"author[email]=%s\"", authorEmail)
+	w("    -f \"committer[name]=%s\"", authorName)
+	w("    -f \"committer[email]=%s\")", authorEmail)
 	w("  if [[ -n \"$CURRENT_SHA\" ]]; then")
 	w("    API_ARGS+=(-f \"sha=$CURRENT_SHA\")")
 	w("  fi")

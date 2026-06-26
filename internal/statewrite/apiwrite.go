@@ -46,10 +46,12 @@ type Identity struct {
 	Email string
 }
 
-// orDefault returns the identity with any empty field filled from the bot
+// OrDefault returns the identity with any empty field filled from the bot
 // default, so a commit is always attributed to a concrete identity and behavior
-// is never worse than before this attribution was threaded through.
-func (id Identity) orDefault() Identity {
+// is never worse than before this attribution was threaded through. It is
+// exported so other state writers that build their own Contents API request can
+// resolve the same identity without duplicating the bot defaults.
+func (id Identity) OrDefault() Identity {
 	if id.Name == "" {
 		id.Name = defaultBotName
 	}
@@ -174,7 +176,7 @@ func CommitWithRetry(opts Options) error {
 	if sleep == nil {
 		sleep = time.Sleep
 	}
-	author := opts.Author.orDefault()
+	author := opts.Author.OrDefault()
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
