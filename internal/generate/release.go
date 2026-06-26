@@ -424,6 +424,8 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 		commitMessage: "chore: update latest_release state\n\nVersion: $SEMVER_TAG",
 		noChangeLabel: "No latest_release state changes",
 		successLabel:  "Pushed latest_release state",
+		authorName:    g.config.GetGitUserName(),
+		authorEmail:   g.config.GetGitUserEmail(),
 	})
 
 	// Summary

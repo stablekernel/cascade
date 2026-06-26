@@ -48,7 +48,7 @@ func (ghContents) GetContent(repo, path, ref string) ([]byte, string, error) {
 // the token owner, and classifies a 409 optimistic-lock failure as a
 // ConflictError so the retry loop recognizes it.
 func (ghContents) PutContent(repo, path, ref, sha, message string, content []byte, author Identity) error {
-	author = author.orDefault()
+	author = author.OrDefault()
 	b64 := base64.StdEncoding.EncodeToString(content)
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/contents/%s", repo, path), "-X", "PUT",

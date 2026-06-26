@@ -8,6 +8,7 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/promote"
+	"github.com/stablekernel/cascade/internal/statewrite"
 )
 
 // ringManifest writes a manifest whose prod env carries a deploy-history ring
@@ -503,5 +504,47 @@ func TestRollbackPreflight_GHAOutput_EmitsTargetSource_DefaultPreviousRing(t *te
 	}
 	if !strings.Contains(got, "can_proceed=true") {
 		t.Errorf("can_proceed not true\n%s", got)
+	}
+}
+
+// TestBuildStatePutArgs_StampsBotAuthor verifies the rollback Contents API state
+// write attributes the commit to the github-actions[bot] default, not the token
+// owner GitHub would otherwise stamp when author and committer are absent.
+func TestBuildStatePutArgs_StampsBotAuthor(t *testing.T) {
+	args := buildStatePutArgs("repos/acme/widgets/contents/m.yaml", "main", "deadbeef", "chore: update state after rollback of prod [skip ci]", "Y29udGVudA==", statewrite.Identity{})
+
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"author[name]=github-actions[bot]",
+		"author[email]=github-actions[bot]@users.noreply.github.com",
+		"committer[name]=github-actions[bot]",
+		"committer[email]=github-actions[bot]@users.noreply.github.com",
+		"sha=deadbeef",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("buildStatePutArgs missing %q in args %v", want, args)
+		}
+	}
+}
+
+// TestBuildStatePutArgs_HonorsCustomIdentity verifies a manifest git override
+// flows into the rollback API author and committer fields.
+func TestBuildStatePutArgs_HonorsCustomIdentity(t *testing.T) {
+	id := statewrite.Identity{Name: "release-bot", Email: "release-bot@example.com"}
+	args := buildStatePutArgs("repos/acme/widgets/contents/m.yaml", "main", "", "msg", "Y29udGVudA==", id)
+
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"author[name]=release-bot",
+		"author[email]=release-bot@example.com",
+		"committer[name]=release-bot",
+		"committer[email]=release-bot@example.com",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("buildStatePutArgs missing %q in args %v", want, args)
+		}
+	}
+	if strings.Contains(joined, "sha=") {
+		t.Errorf("empty sha must not add a sha arg: %v", args)
 	}
 }

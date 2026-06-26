@@ -132,6 +132,86 @@ func TestPromoteFinalizeStateTokenAuth(t *testing.T) {
 		"Finalize Promotion must auth the API state write with state_token")
 }
 
+// assertAPIAuthorStamp asserts the Contents API state-write path stamps both the
+// author and the committer with the given identity, so an API-created state
+// commit is attributed to the bot rather than the token owner GitHub would
+// otherwise default to.
+func assertAPIAuthorStamp(t *testing.T, content, name, email string) {
+	t.Helper()
+	for _, want := range []string{
+		`-f "author[name]=` + name + `"`,
+		`-f "author[email]=` + email + `"`,
+		`-f "committer[name]=` + name + `"`,
+		`-f "committer[email]=` + email + `"`,
+	} {
+		assert.Contains(t, content, want,
+			"Contents API state write must stamp the bot identity on author and committer")
+	}
+}
+
+// TestOrchestrateFinalizeStampsBotAuthor verifies the orchestrate state-write API
+// path attributes the commit to the github-actions[bot] default rather than the
+// token owner.
+func TestOrchestrateFinalizeStampsBotAuthor(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	content, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	assertAPIAuthorStamp(t, content, "github-actions[bot]", "github-actions[bot]@users.noreply.github.com")
+}
+
+// TestReleaseFinalizeStampsBotAuthor verifies the release latest_release state
+// write attributes the API commit to the bot default.
+func TestReleaseFinalizeStampsBotAuthor(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+	}
+
+	content, err := NewReleaseGenerator(cfg, "").Generate()
+	require.NoError(t, err)
+
+	assertAPIAuthorStamp(t, content, "github-actions[bot]", "github-actions[bot]@users.noreply.github.com")
+}
+
+// TestStateWriteHonorsCustomGitIdentity verifies a manifest git config override
+// flows into the Contents API author and committer fields, so operators can
+// attribute automated state commits to a custom identity.
+func TestStateWriteHonorsCustomGitIdentity(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Git: &config.GitConfig{
+			Mode:      config.GitModeCustom,
+			UserName:  "release-bot",
+			UserEmail: "release-bot@example.com",
+		},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	content, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	assertAPIAuthorStamp(t, content, "release-bot", "release-bot@example.com")
+}
+
 // TestStateWriteNoEmDash guards the hard project rule that generated output
 // contains no em dashes.
 func TestStateWriteNoEmDash(t *testing.T) {

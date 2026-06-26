@@ -1637,6 +1637,8 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 		commitMessage: commitMessage,
 		noChangeLabel: "No state changes",
 		successLabel:  "Pushed state",
+		authorName:    g.config.GetGitUserName(),
+		authorEmail:   g.config.GetGitUserEmail(),
 	})
 }
 

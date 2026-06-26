@@ -17,6 +17,7 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/promote"
+	"github.com/stablekernel/cascade/internal/statewrite"
 	"gopkg.in/yaml.v3"
 )
 
@@ -124,6 +125,20 @@ func New(opts Options) (*Rollbacker, error) {
 // trunk branch.
 func (r *Rollbacker) ConfigPath() string {
 	return r.configPath
+}
+
+// GitIdentity returns the commit identity for the post-rollback state write,
+// taken from the manifest git config so an automated rollback commit is
+// attributed to the configured bot rather than the token owner. An absent or
+// empty git config resolves to the github-actions[bot] default.
+func (r *Rollbacker) GitIdentity() statewrite.Identity {
+	if r.cicdFile == nil || r.cicdFile.Config == nil {
+		return statewrite.Identity{}
+	}
+	return statewrite.Identity{
+		Name:  r.cicdFile.Config.GetGitUserName(),
+		Email: r.cicdFile.Config.GetGitUserEmail(),
+	}
 }
 
 // DeployNames returns the names of the deploys declared in the manifest, in
