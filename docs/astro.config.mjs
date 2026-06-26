@@ -85,6 +85,7 @@ export default defineConfig({
         { label: 'Local Simulation', link: '/simulate/' },
         { label: 'Architecture', link: '/architecture/' },
         { label: 'How it is tested', link: '/testing/' },
+        { label: 'Feature coverage matrix', link: '/coverage-matrix/' },
         { label: 'Security & Hardening', link: '/security/hardening/' },
         { label: 'Versioning & Schema', link: '/versioning/' },
       ],
