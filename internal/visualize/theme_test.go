@@ -62,6 +62,34 @@ func TestBuiltinThemes_EmitValidMermaid(t *testing.T) {
 	}
 }
 
+// TestMermaidEmitter_BlandGolden pins the bland-theme emitter output for the job
+// DAG. The cascade-theme rendering of the same projection is pinned by
+// TestMermaidEmitter_Golden, so this golden guards the second built-in palette so
+// a styling regression on bland surfaces as a diff rather than passing silently
+// through the substring checks.
+func TestMermaidEmitter_BlandGolden(t *testing.T) {
+	vm := buildVM(t, representativeConfig())
+
+	got, err := NewMermaidEmitter().Emit(vm, BlandTheme, WithTitle("pipeline"))
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	golden := filepath.Join("testdata", "representative_bland.mmd")
+	if *update {
+		if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read golden (run with -update to create): %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("emitted bland Mermaid does not match golden.\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
 // TestCascadeAndBland_Differ asserts the two built-in themes produce distinct
 // output for the same manifest, so a theme swap is visually meaningful.
 func TestCascadeAndBland_Differ(t *testing.T) {

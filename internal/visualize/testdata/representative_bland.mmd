@@ -1,0 +1,24 @@
+---
+title: "pipeline"
+---
+%%{init: {"theme": "neutral", "themeVariables": {"lineColor": "#8c959f"}}}%%
+flowchart TD
+    validate([Validate &#40;validate&#41;])
+    build_api[Build &#40;api&#41;]
+    build_web[Build &#40;web&#41;]
+    deploy_staging[[Deploy &#40;staging&#41;]]
+    deploy_prod[[Deploy &#40;prod&#41;]]
+    build_api --> validate
+    build_web --> validate
+    build_web -.-> build_api
+    deploy_staging --> validate
+    deploy_staging --> build_api
+    deploy_staging --> build_web
+    deploy_prod --> validate
+    deploy_prod --> deploy_staging
+    classDef node_validate fill:#f6f8fa,stroke:#6e7781,color:#24292f
+    classDef node_build fill:#eaeef2,stroke:#6e7781,color:#24292f
+    classDef node_deploy fill:#d0d7de,stroke:#57606a,color:#24292f
+    class validate node_validate
+    class build_api,build_web node_build
+    class deploy_staging,deploy_prod node_deploy
