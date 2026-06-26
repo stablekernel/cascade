@@ -130,6 +130,27 @@ func commitPresentInEnv(fixSHA, baseSHA string, patches []string) (bool, error) 
 	return already, nil
 }
 
+// verifyRemoteEnvTip fails the plan when the fetched remote env branch tip has
+// diverged from the recorded base SHA. When the remote ref is absent (the env
+// has never been hotfixed, so the apply job will create env/<env> at baseSHA)
+// there is nothing to diverge from and the check passes, leaving the normal
+// path untouched. This mirrors reconcileBranch's local-branch guard but runs
+// against the remote-tracking ref the generated hotfix workflow fetches, which
+// is the only env ref present in CI.
+func (p *Planner) verifyRemoteEnvTip(branch, baseSHA string) error {
+	tip, exists, err := p.gitRunner.RemoteBranchSHA(p.remote, branch)
+	if err != nil {
+		return fmt.Errorf("reading remote tip of %s: %w", branch, err)
+	}
+	if !exists {
+		return nil
+	}
+	if tip != baseSHA {
+		return envTipDivergenceError(branch, tip, baseSHA)
+	}
+	return nil
+}
+
 // PlanChain validates and computes the per-environment plan for elevating a set
 // of trunk commits across the bottom-up environment chain up to and including
 // targetEnv. Commits are kept in the caller's ref order; environments run
@@ -168,6 +189,15 @@ func (p *Planner) PlanChain(refs []string, targetEnv string) (*PlanChainResult, 
 			return nil, fmt.Errorf("environment %q has no recorded state SHA", env)
 		}
 		baseSHA := state.SHA
+
+		// Guard against a remote env branch that has drifted from recorded state
+		// before deriving a cherry-pick base from it. The base is state.SHA, but
+		// the apply job opens the resolution PR against the live env/<env> branch;
+		// if the fetched remote tip has diverged the cherry-pick lands on a stale
+		// base and the PR is unmergeable, surfacing only as a merge-poll timeout.
+		if err := p.verifyRemoteEnvTip(envBranch(env), baseSHA); err != nil {
+			return nil, err
+		}
 
 		ep := EnvPlan{
 			Env:     env,

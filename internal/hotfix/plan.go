@@ -64,6 +64,10 @@ type gitRunner interface {
 	LocalBranchExists(name string) (bool, error)
 	// LocalBranchSHA returns the tip SHA of a local branch.
 	LocalBranchSHA(name string) (string, error)
+	// RemoteBranchSHA returns the tip SHA of a remote-tracking branch
+	// (refs/remotes/<remote>/<name>) and whether that ref exists. A missing ref
+	// returns ("", false, nil); only an unexpected git failure returns an error.
+	RemoteBranchSHA(remote, name string) (string, bool, error)
 	// CreateBranch creates a branch pointing at sha.
 	CreateBranch(name, sha string) error
 }
@@ -95,6 +99,20 @@ func (execGitRunner) LocalBranchSHA(name string) (string, error) {
 		return "", fmt.Errorf("git rev-parse refs/heads/%s: %w", name, err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func (execGitRunner) RemoteBranchSHA(remote, name string) (string, bool, error) {
+	ref := "refs/remotes/" + remote + "/" + name
+	out, err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref).Output()
+	if err != nil {
+		// rev-parse --quiet exits non-zero with no output when the ref is
+		// absent; treat that as "remote branch not fetched", not a hard failure.
+		if _, ok := err.(*exec.ExitError); ok {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("git rev-parse %s: %w", ref, err)
+	}
+	return strings.TrimSpace(string(out)), true, nil
 }
 
 func (execGitRunner) CreateBranch(name, sha string) error {
@@ -318,9 +336,7 @@ func (p *Planner) reconcileBranch(branch, baseSHA string) (bool, error) {
 			return false, fmt.Errorf("reading tip of %s: %w", branch, err)
 		}
 		if tip != baseSHA {
-			return false, fmt.Errorf(
-				"branch %s tip %s does not match recorded state SHA %s; this indicates an interrupted hotfix or manual edits: replay the hotfix workflow for the open PR, or reset %s to %s, before re-running",
-				branch, short(tip), short(baseSHA), branch, short(baseSHA))
+			return false, envTipDivergenceError(branch, tip, baseSHA)
 		}
 		return false, nil
 	}
@@ -333,6 +349,19 @@ func (p *Planner) reconcileBranch(branch, baseSHA string) (bool, error) {
 		return false, fmt.Errorf("creating %s at %s: %w", branch, short(baseSHA), err)
 	}
 	return true, nil
+}
+
+// envTipDivergenceError reports that an env branch tip no longer matches the
+// recorded state SHA the cherry-pick base is derived from. It names the env
+// branch and both SHAs and gives the operator the recovery path: replay the
+// hotfix so recorded state matches the branch, or reset the branch back to the
+// recorded SHA. Both the local-branch guard (reconcileBranch) and the chain
+// path's remote-tip guard (verifyRemoteEnvTip) raise this single message so the
+// two divergence checks stay in lockstep.
+func envTipDivergenceError(branch, tip, baseSHA string) error {
+	return fmt.Errorf(
+		"branch %s tip %s does not match recorded state SHA %s; this indicates an interrupted hotfix or manual edits: replay the hotfix workflow for the open PR, or reset %s to %s, before re-running",
+		branch, short(tip), short(baseSHA), branch, short(baseSHA))
 }
 
 // hotfixVersionCandidate returns the next free hotfix version over the base of
