@@ -110,8 +110,11 @@ runs:
         # This loop retries on transient API errors while still failing closed on
         # real run failures and on timeout.
         #
-        # MAX_ATTEMPTS * WATCH_INTERVAL = wall-clock cap (~30 min at 60s each).
-        MAX_ATTEMPTS=30
+        # MAX_ATTEMPTS * WATCH_INTERVAL = wall-clock cap (~75 min at 60s each).
+        # The 4env suite runs the full lifecycle plus a chained multi-env hotfix
+        # and the Step 13 conflict probe, each a serial cascade run, so the cap
+        # must clear its 60-minute internal job timeout with headroom.
+        MAX_ATTEMPTS=75
         CONSEC_ERRORS=0
         MAX_CONSEC_ERRORS=5
         attempt=0
