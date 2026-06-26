@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/log"
 )
@@ -272,14 +270,16 @@ func (r *Resetter) resetState() error {
 	return nil
 }
 
-// writeConfig writes the updated manifest back to disk.
+// writeConfig writes the updated manifest back to disk. It rewrites only the
+// mutable state subtree of the on-disk manifest, so any configuration this
+// binary does not model is preserved rather than dropped on the round-trip.
 func (r *Resetter) writeConfig() error {
-	// Wrap the CICDFile in the manifest key
-	wrapper := map[string]interface{}{
-		r.manifestKey: r.cicdFile,
+	current, err := os.ReadFile(r.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config: %w", err)
 	}
 
-	data, err := yaml.Marshal(wrapper)
+	data, err := config.WriteManifestState(current, r.manifestKey, r.cicdFile.State, r.cicdFile.LatestRelease)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}

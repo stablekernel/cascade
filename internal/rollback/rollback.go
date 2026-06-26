@@ -18,7 +18,6 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/promote"
 	"github.com/stablekernel/cascade/internal/statewrite"
-	"gopkg.in/yaml.v3"
 )
 
 // Target describes a resolved rollback destination: the SHA and version a
@@ -459,8 +458,9 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 	return r.writeConfig()
 }
 
-// writeConfig marshals the manifest back to disk, wrapped in the manifest key,
-// matching the promote/finalize write path.
+// writeConfig writes the manifest back to disk, rewriting only the mutable state
+// subtree so any configuration this binary does not model is preserved rather
+// than dropped on the round-trip. It matches the promote/finalize write path.
 func (r *Rollbacker) writeConfig() error {
 	key := r.manifestKey
 	if key == "" {
@@ -470,8 +470,11 @@ func (r *Rollbacker) writeConfig() error {
 		key = r.cicdFile.Config.ManifestKey
 	}
 
-	wrapper := map[string]any{key: r.cicdFile}
-	data, err := yaml.Marshal(wrapper)
+	current, err := os.ReadFile(r.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read manifest: %w", err)
+	}
+	data, err := config.WriteManifestState(current, key, r.cicdFile.State, r.cicdFile.LatestRelease)
 	if err != nil {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}

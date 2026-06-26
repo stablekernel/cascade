@@ -302,7 +302,9 @@ func TestResetState_NilConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "config not loaded")
 }
 
-// TestWriteConfig tests that config is written with manifest key wrapper
+// TestWriteConfig tests that a state reset rewrites only the state subtree,
+// preserving the manifest key wrapper, the config block, and any configuration
+// this binary does not model.
 func TestWriteConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -310,7 +312,23 @@ func TestWriteConfig(t *testing.T) {
 
 	configPath := filepath.Join(tmpDir, ".github", "manifest.yaml")
 
-	// Create a minimal CICDFile
+	// Seed an on-disk manifest with config, state, and an unmodeled config-level
+	// key (mirrors how a newer field looks to an older binary). reset always reads
+	// the manifest it loaded, so writeConfig reads this file back.
+	const seeded = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - prod
+    future_knob: keep-me
+  state:
+    dev:
+      sha: oldsha
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(seeded), 0644))
+
+	// resetState clears state before writing.
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
@@ -327,9 +345,12 @@ func TestWriteConfig(t *testing.T) {
 	err := r.writeConfig()
 	require.NoError(t, err)
 
-	// Verify file was written with ci: wrapper
 	content, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "ci:")
 	assert.Contains(t, string(content), "trunk_branch: main")
+	// The unmodeled config key must survive the reset round-trip.
+	assert.Contains(t, string(content), "future_knob: keep-me")
+	// State was cleared, so the stale env entry must be gone.
+	assert.NotContains(t, string(content), "oldsha")
 }
