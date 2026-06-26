@@ -610,6 +610,24 @@ func TestValidateConfigLevelRules(t *testing.T) {
 			t.Fatalf("expected pin_mode rejection, got %v", errs)
 		}
 	})
+	t.Run("cli_version_sha non-hex rejected", func(t *testing.T) {
+		cfg := parseInline(t, "cli_version_sha: not-a-sha\n")
+		if errs := Validate(cfg); !hasErrContaining(errs, "cli_version_sha must be a 40-character lowercase hex commit SHA") {
+			t.Fatalf("expected cli_version_sha rejection, got %v", errs)
+		}
+	})
+	t.Run("cli_version_sha short hex rejected", func(t *testing.T) {
+		cfg := parseInline(t, "cli_version_sha: 9dc69a1f\n")
+		if errs := Validate(cfg); !hasErrContaining(errs, "cli_version_sha must be a 40-character lowercase hex commit SHA") {
+			t.Fatalf("expected short cli_version_sha rejection, got %v", errs)
+		}
+	})
+	t.Run("cli_version_sha valid 40-hex accepted", func(t *testing.T) {
+		cfg := parseInline(t, "cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803\n")
+		if errs := Validate(cfg); hasErrContaining(errs, "cli_version_sha") {
+			t.Fatalf("expected valid cli_version_sha to pass, got %v", errs)
+		}
+	})
 	t.Run("reserved dispatch input shadow rejected", func(t *testing.T) {
 		cfg := parseInline(t, `
 dispatch_inputs:

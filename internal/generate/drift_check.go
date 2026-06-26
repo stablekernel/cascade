@@ -65,10 +65,7 @@ func (g *DriftCheckGenerator) commentEnabled() bool {
 // (cli_version unset or "latest") resolves to an immutable release tag, so
 // consumers never run an unpinned mutable ref; "beta" opts in to "master".
 func (g *DriftCheckGenerator) getCLIRef() string {
-	if g.config.CLIVersion == "beta" {
-		return "master"
-	}
-	return g.config.GetCLIVersion()
+	return cliSetupRef(g.config)
 }
 
 // Generate creates the pull_request drift-check workflow content.

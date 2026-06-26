@@ -84,6 +84,11 @@
           "type": "string",
           "description": "cascade CLI version pinned into generated workflows (for example \"v1.0.0\"). Defaults to the pinned release tag when unset or \"latest\"."
         },
+        "cli_version_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "40-character lowercase-hex commit SHA that cli_version resolves to. When set and pin_mode is sha, generated setup-cli self-action refs are pinned to this commit with cli_version carried as a trailing comment. Written by the version-bump automation, which peels the annotated cli_version tag to its commit."
+        },
         "tag_prefix": {
           "type": "string",
           "description": "Version tag prefix (default: \"v\")."
