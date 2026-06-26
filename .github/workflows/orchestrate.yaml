@@ -214,7 +214,11 @@ jobs:
             API_ARGS=("repos/${{ github.repository }}/contents/$MANIFEST_FILE" -X PUT
               -f "message=chore: update state [skip ci]"
               -f "content=$CONTENT_B64"
-              -f "branch=$BRANCH")
+              -f "branch=$BRANCH"
+              -f "author[name]=github-actions[bot]"
+              -f "author[email]=github-actions[bot]@users.noreply.github.com"
+              -f "committer[name]=github-actions[bot]"
+              -f "committer[email]=github-actions[bot]@users.noreply.github.com")
             if [[ -n "$CURRENT_SHA" ]]; then
               API_ARGS+=(-f "sha=$CURRENT_SHA")
             fi
