@@ -200,7 +200,7 @@ jobs:
           PRIMARY_REPO="primary"
           DEPENDENTS="artifact-a artifact-b"
           HEAVY_REPO="4env"
-          REMAINDER="3env 2env single-env release-only no-env callbacks"
+          REMAINDER="3env 2env single-env release-only no-env callbacks rollback-dispatch"
           # -------------------------------------------------------------------
 
           RAW="${REPOS_INPUT:-all}"
@@ -351,7 +351,7 @@ jobs:
           # if something changed. This preserves every hand-written suite feature:
           # regeneration only rewrites the generated workflows, and we touch
           # nothing else.
-          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks"
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch"
 
           # Apply the repin mutation to the checkout in the current directory:
           # point cli_version at the rc, rewrite any other in-repo rc refs, then
@@ -614,7 +614,7 @@ jobs:
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
             echo "| 4env (heavy, alone) | $R_HEAVY |"
-            echo "| remainder (3env, 2env, single-env, release-only, no-env, callbacks) | $R_REMAINDER |"
+            echo "| remainder (3env, 2env, single-env, release-only, no-env, callbacks, rollback-dispatch) | $R_REMAINDER |"
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
             echo "> the rc tag. The repin step pinned each suite to this rc before"
