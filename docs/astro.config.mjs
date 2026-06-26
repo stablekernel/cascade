@@ -86,6 +86,7 @@ export default defineConfig({
         { label: 'Architecture', link: '/architecture/' },
         { label: 'How it is tested', link: '/testing/' },
         { label: 'Feature coverage matrix', link: '/coverage-matrix/' },
+        { label: 'Release orchestration', link: '/release-orchestration/' },
         { label: 'Security & Hardening', link: '/security/hardening/' },
         { label: 'Versioning & Schema', link: '/versioning/' },
       ],

@@ -17,10 +17,10 @@ covered at that layer by design, not by omission. The "why both layers" section
 below explains those choices.
 
 :::tip[Last validated]
-This matrix was last validated against a fully green live-fleet run on `v0.5.0-rc.10`:
-all ten example repos (primary, artifact-a, artifact-b, single-env, 2env, 3env, 4env,
-release-only, no-env, callbacks) passed every probe, and the shared fail-closed reconcile
-gate accounted for every run in each scenario window.
+This matrix was last validated against the fully green live-fleet run behind `v0.5.1`:
+all eleven example repos (primary, artifact-a, artifact-b, single-env, 2env, 3env, 4env,
+release-only, no-env, callbacks, rollback-dispatch) passed every probe, and the shared
+fail-closed reconcile gate accounted for every run in each scenario window.
 :::
 
 ## Why two layers, restated for this matrix
@@ -62,13 +62,14 @@ only under real installation tokens on the fleet, never in the token-free harnes
 
 | Feature | act plus gitea scenario | Live-fleet probe (repo) | Unit | What the layer proves |
 |---|---|---|---|---|
-| Orchestrate trunk build to release candidate | `01`, `02`, `03`, `04`, `34-extra-orchestrate-triggers` | every repo, orchestrate-on-merge (all 10) | `internal/orchestrate` | A trunk merge mints an RC draft and writes state, across every topology, on real Actions |
+| Orchestrate trunk build to release candidate | `01`, `02`, `03`, `04`, `34-extra-orchestrate-triggers` | every repo, orchestrate-on-merge (all 11) | `internal/orchestrate` | A trunk merge mints an RC draft and writes state, across every topology, on real Actions |
 | Default promotion (env to next env) | `04`, `promote/cascade-deploy-enabled` | `promote-staging` (2env, 3env, primary) | `internal/promote` | One promotion step copies source state into the target on a real release object |
 | Cascade-mode promotion (atomic multi-step) | `04-cascade-promotion` | `lifecycle` dev to prod (4env) | `internal/promote` | The full ladder advances through intermediates and publishes at the top |
 | Standalone release lane (draft, prerelease, publish) | `05-publish-callback`, `37`, `38` | dispatch prerelease then release (single-env); `release-only` | `internal/release` | A real release transitions draft to prerelease to published with RC reaping |
 | Hotfix clean apply | `hotfix/hotfix-clean-apply`, `hotfix-multi-commit-clean`, `hotfix-multi-env-clean`, `hotfix-rejoin` | hotfix plan, apply, PR merge, finalize (3env) | `internal/hotfix` | A pinned-env fix lands, diverges state, and rejoins on real branches and PRs |
 | Hotfix cherry-pick conflict and halt | `hotfix/hotfix-conflict-resolution`, `hotfix-multi-env-conflict-halt` | `probe_hotfix_conflict` (4env) | `internal/hotfix` | A guaranteed conflict raises the conflict label and halts the downstream lane |
 | Rollback to prior version or SHA | `rollback/*` (8 scenarios) | `probe_rollback` (4env), `rollback-check` (2env) | `internal/rollback` | An env rewinds, is marked diverged, and the ring snapshot advances |
+| External rollback via `repository_dispatch` | | repository_dispatch rollback, state revert asserted (rollback-dispatch) | `internal/rollback` | A real `repository_dispatch` payload drives the automated rollback entry point and the target env's state is read back reverted |
 | Drift check and comment | `22-verify-drift`, `27-verify-orphan`, `28-drift-check` | `probe_drift` (4env) | `internal/verify`, `internal/generate` | Generated-vs-committed drift is detected and surfaced on a real run |
 | Validate gate | `14-validate-check`, `17-validate-callback` | `probe_validate` (4env); pre-build validate gate (3env) | `internal/generate` | A validate callback gates the build before it proceeds |
 | Merge queue | `15-merge-queue` | `probe_merge_queue` (4env) | `internal/generate` | The merge-queue lane is emitted and runs (harness covers the no-configured-queue case) |
@@ -136,6 +137,7 @@ from a general case.
 | Release-only (no deploy environments) | `cascade-example-release-only` | none specific (release lane via `37`, `38`) |
 | No-environment library shape | covered in harness only by design | `01-no-env-repo` |
 | Primary plus artifact satellites (cross-repo graph) | `cascade-example-primary`, `cascade-example-artifact-a`, `cascade-example-artifact-b` | `multi-repo/*`, `21-cross-repo-callback` |
+| External rollback entry point (`repository_dispatch`) | `cascade-example-rollback-dispatch` | `rollback/*` |
 
 The no-environment library shape is covered in the act plus gitea harness; a live
 `cascade-example-no-env` suite also asserts that orchestrate goes straight from a
