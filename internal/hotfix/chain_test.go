@@ -353,3 +353,92 @@ func TestPlanChain_RejectsNonTrunkCommit(t *testing.T) {
 		t.Errorf("error %q should mention trunk", err.Error())
 	}
 }
+
+// setRemoteEnvTip points the remote-tracking ref the generated workflow fetches
+// (refs/remotes/origin/env/<env>) at sha, simulating a fetched remote env branch
+// whose tip the planner can inspect. Using update-ref avoids needing a real
+// second repository to act as origin.
+func setRemoteEnvTip(t *testing.T, env, sha string) {
+	t.Helper()
+	runGit(t, "update-ref", "refs/remotes/origin/env/"+env, sha)
+}
+
+// short7 mirrors the planner's short() truncation so the divergence assertions
+// can check that both SHAs surface in the operator-facing error.
+func short7(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+// TestPlanChain_RemoteEnvTipDiverged_FailsWithGuidance asserts the planner
+// aborts when the fetched remote env/<env> tip no longer matches the recorded
+// state SHA the cherry-pick base is derived from. Without this guard the apply
+// job cherry-picks onto the stale base and opens a PR GitHub finds unmergeable,
+// surfacing only as a merge-poll timeout.
+func TestPlanChain_RemoteEnvTipDiverged_FailsWithGuidance(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	diverged := commitFile(t, "b.txt", "two", "out-of-band env edit")
+	fix := commitFile(t, "c.txt", "three", "fix on trunk")
+
+	// test records base as its state SHA, but the remote env/test tip has moved
+	// on to diverged: recorded state and the branch no longer agree.
+	manifest := writeManifestFull(t, []string{"dev", "test", "prod"}, map[string]envSpec{
+		"dev":  {sha: fix},
+		"test": {sha: base},
+		"prod": {sha: base},
+	})
+	setRemoteEnvTip(t, "test", diverged)
+
+	p := newPlanner(t, manifest)
+	_, err := p.PlanChain([]string{fix}, "test")
+	if err == nil {
+		t.Fatal("expected divergence error when remote env tip differs from recorded state SHA")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "env/test") {
+		t.Errorf("error %q should name the diverged env branch", msg)
+	}
+	if !strings.Contains(msg, short7(diverged)) || !strings.Contains(msg, short7(base)) {
+		t.Errorf("error %q should report both the branch tip %s and the recorded SHA %s",
+			msg, short7(diverged), short7(base))
+	}
+	if !strings.Contains(strings.ToLower(msg), "replay") {
+		t.Errorf("error %q should give reconcile/replay guidance", msg)
+	}
+}
+
+// TestPlanChain_RemoteEnvTipInSync_PlansCleanly is the negative control: when
+// the remote env/<env> tip equals the recorded state SHA the plan proceeds
+// exactly as before, proving the guard fires only on genuine divergence.
+func TestPlanChain_RemoteEnvTipInSync_PlansCleanly(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "c.txt", "three", "fix on trunk")
+
+	manifest := writeManifestFull(t, []string{"dev", "test", "prod"}, map[string]envSpec{
+		"dev":  {sha: fix},
+		"test": {sha: base},
+		"prod": {sha: base},
+	})
+	// Remote env tip agrees with recorded state: no divergence.
+	setRemoteEnvTip(t, "test", base)
+
+	p := newPlanner(t, manifest)
+	res, err := p.PlanChain([]string{fix}, "test")
+	if err != nil {
+		t.Fatalf("PlanChain with in-sync remote tip should succeed: %v", err)
+	}
+	if len(res.Envs) != 1 || res.Envs[0].Env != "test" {
+		t.Fatalf("expected a single test env plan, got %+v", res.Envs)
+	}
+	ep := res.Envs[0]
+	if ep.NoOp || len(ep.Commits) != 1 || ep.Commits[0] != fix {
+		t.Errorf("test env should plan the fix unchanged, got %+v", ep)
+	}
+	if ep.BaseSHA != base {
+		t.Errorf("base SHA = %q, want %q", ep.BaseSHA, base)
+	}
+}
