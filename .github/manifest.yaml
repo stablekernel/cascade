@@ -1,6 +1,7 @@
 ci:
   config:
     trunk_branch: main
+    release_trigger: dispatch
     state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
     release_token: ${{ secrets.CASCADE_STATE_TOKEN }}
     triggers:

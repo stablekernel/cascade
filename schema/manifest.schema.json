@@ -70,6 +70,11 @@
           "items": { "type": "string" },
           "description": "Global path patterns for the orchestrate workflow paths filter. When set, these are used exclusively instead of per-callback triggers."
         },
+        "release_trigger": {
+          "type": "string",
+          "enum": ["push", "dispatch"],
+          "description": "How the generated orchestrate workflow fires. \"push\" (default) keeps the trunk-push trigger plus workflow_dispatch. \"dispatch\" drops the push trigger so orchestrate runs only on workflow_dispatch, for a maintainer-gated release cadence."
+        },
         "environments": {
           "type": "array",
           "items": { "type": "string" },

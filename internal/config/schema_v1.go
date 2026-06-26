@@ -311,6 +311,16 @@ const (
 	PinModeSHA = "sha"
 )
 
+// Release trigger modes for the generated orchestrate workflow.
+const (
+	// ReleaseTriggerPush is the default: orchestrate fires on trunk pushes
+	// (filtered by triggers:) plus workflow_dispatch.
+	ReleaseTriggerPush = "push"
+	// ReleaseTriggerDispatch drops the push: trigger so orchestrate runs only
+	// on workflow_dispatch (maintainer-gated release cadence).
+	ReleaseTriggerDispatch = "dispatch"
+)
+
 // TelemetryConfig is the reserved vendor-neutral metrics seam.
 type TelemetryConfig struct {
 	Enabled bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`

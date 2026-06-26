@@ -31,6 +31,11 @@ type Config struct {
 	TrunkBranch       string         `yaml:"trunk_branch"`
 	Environments      []string       `yaml:"environments"`
 	JobTimeoutMinutes int            `yaml:"job_timeout_minutes,omitempty"`
+	// ReleaseTrigger carries the release_trigger field through to the generated
+	// manifest so a scenario can make orchestrate dispatch-only. Without this
+	// field the value is silently dropped on marshal, the same hazard the token
+	// fields below document, and the generated orchestrate keeps its push trigger.
+	ReleaseTrigger string `yaml:"release_trigger,omitempty"`
 	// ReleaseToken carries the release_token field through to the generated
 	// manifest. It accepts a full ${{ secrets.* }} expression or a bare secret
 	// name; the generator normalizes a bare name to a resolvable expression.

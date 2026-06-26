@@ -75,8 +75,13 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     # Top-level guard: only fan out for a manual dispatch, or a green
-    # Release run that was a push of an rc tag. This filters out
-    # non-rc tag publishes and any non-success completions.
+    # Release run that was a push of a candidate tag. This filters out
+    # non-candidate tag publishes and any non-success completions.
+    #
+    # A candidate is an rc tag (vX.Y.Z-rc.N) or a dry-run tag
+    # (vX.Y.Z-dryrun.N). Accepting -dryrun. lets a nightly dry run fan out
+    # across the full staged fleet exactly like a real rc; auto-promote's
+    # unchanged -rc.-only gate still keeps a dry run from ever publishing.
     #
     # workflow_run.head_branch carries the short ref name of whatever triggered
     # the source run. For a tag push that is the tag's short name (e.g.
@@ -88,7 +93,8 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v') &&
-       contains(github.event.workflow_run.head_branch, '-rc.'))
+       (contains(github.event.workflow_run.head_branch, '-rc.') ||
+        contains(github.event.workflow_run.head_branch, '-dryrun.')))
     permissions:
       contents: read
       actions: read
@@ -114,14 +120,15 @@ jobs:
             # Primary path: the rc tag short-name from the source push run.
             VERSION="$WR_HEAD_BRANCH"
           elif [ -n "$WR_HEAD_SHA" ]; then
-            # Fallback: head_branch was empty; resolve the rc tag pointing at the
-            # source run's head_sha. Tolerated to be empty (dispatch with no
-            # input), so guard the lookup.
-            # A sha can carry more than one rc tag; pick the highest by version
-            # sort so selection is deterministic regardless of API ordering.
+            # Fallback: head_branch was empty; resolve the candidate tag pointing
+            # at the source run's head_sha. Tolerated to be empty (dispatch with
+            # no input), so guard the lookup.
+            # A sha can carry more than one candidate tag; pick the highest by
+            # version sort so selection is deterministic regardless of API
+            # ordering. Accept rc and dryrun tags (see the resolve gate).
             VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
               --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
-              | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
+              | grep -E -- '-(rc|dryrun)\.' | sort -V -r | head -n 1 || true)
           else
             VERSION=""
           fi

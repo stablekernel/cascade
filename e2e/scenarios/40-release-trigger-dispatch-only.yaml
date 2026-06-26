@@ -1,0 +1,44 @@
+name: "Release trigger dispatch-only"
+description: |
+  Verifies that release_trigger: dispatch makes the generated orchestrate
+  workflow omit its push: trigger so it runs only on workflow_dispatch. A
+  maintainer-owned gate (for example a nightly schedule) then decides when a
+  release candidate is cut, instead of every trunk merge cutting one.
+
+  Covers:
+  - the push: trigger and its branches:/paths: filter are gone
+  - workflow_dispatch and its dry_run input survive
+  - the default (push) behavior is unaffected, asserted by 13-dispatch-inputs
+    and every other generator scenario that does not set release_trigger
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  release_trigger: dispatch
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert orchestrate omits push trigger"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "  workflow_dispatch:"
+            - "      dry_run:"
+          not_contains:
+            - "  push:"
+            - "    branches: [main]"
+            - "    paths:"

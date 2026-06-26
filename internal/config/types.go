@@ -117,6 +117,12 @@ type TrunkConfig struct {
 	SchemaVersion int      `yaml:"schema_version,omitempty" json:"schema_version,omitempty"` // Manifest schema generation (default: CurrentSchemaVersion when omitted)
 	TrunkBranch   string   `yaml:"trunk_branch" json:"trunk_branch"`
 	Triggers      []string `yaml:"triggers,omitempty" json:"triggers,omitempty"`           // Global triggers for orchestration workflow paths filter
+	// ReleaseTrigger selects how the generated orchestrate workflow fires.
+	// "" or "push" (default) keeps the push-on-trunk + workflow_dispatch
+	// triggers. "dispatch" drops the push: trigger so orchestrate runs only on
+	// workflow_dispatch, letting a maintainer-owned gate decide when a release
+	// candidate is cut. Opt-in; repos that do not set it keep push triggers.
+	ReleaseTrigger string `yaml:"release_trigger,omitempty" json:"release_trigger,omitempty"`
 	Environments  []string `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
 	CLIVersion    string   `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
 	TagPrefix     string   `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
@@ -175,6 +181,12 @@ type TrunkConfig struct {
 type ConcurrencyConfig struct {
 	Group            string `yaml:"group,omitempty" json:"group,omitempty"`
 	CancelInProgress bool   `yaml:"cancel_in_progress" json:"cancel_in_progress"`
+}
+
+// OrchestrateDispatchOnly reports whether the generated orchestrate workflow
+// should omit its push: trigger and run only on workflow_dispatch.
+func (c *TrunkConfig) OrchestrateDispatchOnly() bool {
+	return c.ReleaseTrigger == ReleaseTriggerDispatch
 }
 
 // GetConcurrencyGroup returns the configured group expression or the default.

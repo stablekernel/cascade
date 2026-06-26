@@ -4,14 +4,6 @@
 name: Orchestrate CI/CD
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'cmd/**'
-      - 'e2e/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/**'
   workflow_dispatch:
     inputs:
       dry_run:
