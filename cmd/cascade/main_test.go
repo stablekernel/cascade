@@ -931,6 +931,323 @@ func TestVerifyCommand_QuietDrift_NoReportBodyExitNonZero(t *testing.T) {
 	}
 }
 
+// -------- graph theme integration tests --------
+
+func TestGraphCommand_BlandThemeStylesNodes(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	stdout, stderr, err := runCLI("graph", "--config", manifest, "--theme", "bland")
+	if err != nil {
+		t.Fatalf("graph --theme bland failed: %v\nstderr: %s", err, stderr)
+	}
+	// The bland palette is monotone: a neutral Mermaid base, a muted gray edge
+	// color, and grayscale node fills. These tokens are absent from the branded
+	// cascade default, so their presence proves the bland theme reached the
+	// emitter rather than the default palette.
+	for _, want := range []string{`"theme": "neutral"`, "#8c959f", "#f6f8fa"} {
+		if !contains(stdout, want) {
+			t.Errorf("expected bland token %q in output, got:\n%s", want, stdout)
+		}
+	}
+	// The branded cascade accent must not appear under the bland theme.
+	if contains(stdout, "#1f6feb") {
+		t.Errorf("cascade accent leaked into bland render:\n%s", stdout)
+	}
+}
+
+func TestGraphCommand_CustomThemeFileStylesNodes(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	themePath := filepath.Join(t.TempDir(), "custom.json")
+	themeBody := `{
+  "name": "midnight",
+  "base": "dark",
+  "lineColor": "#abcdef",
+  "nodeStyles": {
+    "build": {"fill": "#123456", "stroke": "#012345", "text": "#fefefe"}
+  }
+}`
+	if err := os.WriteFile(themePath, []byte(themeBody), 0o644); err != nil {
+		t.Fatalf("write theme file: %v", err)
+	}
+
+	stdout, stderr, err := runCLI("graph", "--config", manifest, "--theme", themePath, "--json")
+	if err != nil {
+		t.Fatalf("graph --theme <file> failed: %v\nstderr: %s", err, stderr)
+	}
+	var payload struct {
+		Theme   string `json:"theme"`
+		Diagram string `json:"diagram"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("Failed to parse JSON output: %v\noutput: %s", err, stdout)
+	}
+	if payload.Theme != "midnight" {
+		t.Errorf("expected theme name midnight, got %q", payload.Theme)
+	}
+	for _, want := range []string{`"theme": "dark"`, "#abcdef", "fill:#123456"} {
+		if !contains(payload.Diagram, want) {
+			t.Errorf("expected custom theme token %q in diagram, got:\n%s", want, payload.Diagram)
+		}
+	}
+}
+
+func TestGraphCommand_MalformedThemeFileErrors(t *testing.T) {
+	manifest := writeGraphManifest(t)
+	themePath := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(themePath, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatalf("write theme file: %v", err)
+	}
+
+	_, stderr, err := runCLI("graph", "--config", manifest, "--theme", themePath)
+	if err == nil {
+		t.Error("expected non-zero exit for malformed theme file")
+	}
+	if !contains(stderr, "loading theme") {
+		t.Errorf("expected wrapped 'loading theme' error, got: %s", stderr)
+	}
+}
+
+// -------- simulate command integration tests --------
+
+// simulatePromoteManifest seeds dev with a concrete sha and version and leaves
+// uat empty, with prod present so the dev-to-uat crossing is a normal sequential
+// deploy rather than the publish boundary. It declares one build and one deploy
+// callback so a simulated promotion drives the stubbed deploy-result gating.
+const simulatePromoteManifest = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - uat
+      - prod
+    builds:
+      - name: app
+        workflow: .github/workflows/build.yaml
+        triggers:
+          - "src/**"
+    deploys:
+      - name: services
+        workflow: .github/workflows/deploy.yaml
+        triggers:
+          - "deploy/**"
+        depends_on:
+          - app
+  state:
+    dev:
+      sha: a1b2c3d4e5f6
+      version: v1.2.0-rc.1
+      committed_at: "2026-01-01T10:00:00Z"
+      committed_by: seed-user
+    uat: {}
+`
+
+// simulateRollbackManifest holds a prod env with a current state and a single
+// distinct prior snapshot in the deploy-history ring, so a rollback resolves the
+// previous-ring target and reverts to it.
+const simulateRollbackManifest = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - uat
+      - prod
+  state:
+    prod:
+      sha: newsha0000000
+      version: v2.0.0
+      committed_at: "2026-02-01T10:00:00Z"
+      committed_by: seed-user
+      previous:
+        - sha: oldsha0000000
+          version: v1.0.0
+          committed_at: "2026-01-01T10:00:00Z"
+          committed_by: seed-user
+`
+
+func writeSimulateManifest(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write manifest: %v", err)
+	}
+	return path
+}
+
+// simulateJSON is the subset of the simulate result envelope the CLI tests
+// assert against. It mirrors the json tags on internal/simulate.Result.
+type simulateJSON struct {
+	Action   string `json:"action"`
+	Describe string `json:"describe"`
+	Diff     struct {
+		Envs []struct {
+			Environment string `json:"environment"`
+			Version     struct {
+				From    string `json:"from"`
+				To      string `json:"to"`
+				Changed bool   `json:"changed"`
+			} `json:"version"`
+			SHA struct {
+				From    string `json:"from"`
+				To      string `json:"to"`
+				Changed bool   `json:"changed"`
+			} `json:"sha"`
+		} `json:"envs"`
+	} `json:"diff"`
+	Effects []struct {
+		Disposition string `json:"disposition"`
+		Action      string `json:"action"`
+		Target      string `json:"target"`
+		Detail      string `json:"detail"`
+	} `json:"effects"`
+	Note string `json:"note"`
+}
+
+func TestSimulateCommand_PromoteEmitsDiffAndEffects(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulatePromoteManifest)
+	stdout, stderr, err := runCLI("simulate", "promote", "--config", manifest)
+	if err != nil {
+		t.Fatalf("simulate promote failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{
+		"Simulating: promote (mode=default)",
+		"State diff:",
+		"uat:",
+		"version: (none) -> v1.2.0-rc.1",
+		"sha:     (none) -> a1b2c3d4e5f6",
+		"Effects (in order):",
+		"write state",
+		// The orchestration-not-deploys note must accompany the effect sequence.
+		"build and deploy results are simulated",
+	} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in simulate output, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestSimulateCommand_PromoteJSONMatchesHumanRender(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulatePromoteManifest)
+
+	human, stderr, err := runCLI("simulate", "promote", "--config", manifest)
+	if err != nil {
+		t.Fatalf("simulate promote failed: %v\nstderr: %s", err, stderr)
+	}
+
+	jsonOut, stderr, err := runCLI("simulate", "promote", "--config", manifest, "--json")
+	if err != nil {
+		t.Fatalf("simulate promote --json failed: %v\nstderr: %s", err, stderr)
+	}
+
+	var env simulateJSON
+	if err := json.Unmarshal([]byte(jsonOut), &env); err != nil {
+		t.Fatalf("Failed to parse JSON envelope: %v\noutput: %s", err, jsonOut)
+	}
+	if env.Action != "promote" {
+		t.Errorf("expected action promote, got %q", env.Action)
+	}
+	if env.Describe == "" {
+		t.Error("expected non-empty describe in JSON envelope")
+	}
+	if len(env.Diff.Envs) == 0 {
+		t.Fatalf("expected at least one env in the diff, got none")
+	}
+	if len(env.Effects) == 0 {
+		t.Fatalf("expected at least one effect, got none")
+	}
+
+	// The JSON envelope must agree with the human render: the uat sha the diff
+	// advances to in JSON is the same string the human output prints.
+	var uatTo string
+	for _, e := range env.Diff.Envs {
+		if e.Environment == "uat" {
+			uatTo = e.SHA.To
+		}
+	}
+	if uatTo != "a1b2c3d4e5f6" {
+		t.Errorf("expected uat sha.to a1b2c3d4e5f6 in JSON, got %q", uatTo)
+	}
+	if !contains(human, uatTo) {
+		t.Errorf("human render is missing the JSON-reported sha %q:\n%s", uatTo, human)
+	}
+	if env.Note == "" || !contains(human, "build and deploy results are simulated") {
+		t.Errorf("note should appear in both renders; json note=%q", env.Note)
+	}
+}
+
+func TestSimulateCommand_DeployResultGatesFinalize(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulatePromoteManifest)
+	stdout, stderr, err := runCLI("simulate", "promote", "--config", manifest,
+		"--deploy-result", "services=failure", "--json")
+	if err != nil {
+		t.Fatalf("simulate promote --deploy-result failed: %v\nstderr: %s", err, stderr)
+	}
+
+	var env simulateJSON
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
+		t.Fatalf("Failed to parse JSON envelope: %v\noutput: %s", err, stdout)
+	}
+
+	var (
+		sawFailedDeploy bool
+		gatedFinalize   bool
+	)
+	for _, e := range env.Effects {
+		if e.Action == "deploy" && e.Target == "services" {
+			sawFailedDeploy = contains(e.Detail, "simulated failure")
+		}
+		if e.Action == "write state" {
+			gatedFinalize = e.Disposition == "gate"
+		}
+	}
+	if !sawFailedDeploy {
+		t.Errorf("expected the services deploy to record a simulated failure, effects: %+v", env.Effects)
+	}
+	if !gatedFinalize {
+		t.Errorf("expected a failed deploy to gate the write-state finalize, effects: %+v", env.Effects)
+	}
+}
+
+func TestSimulateCommand_RollbackEmitsRevert(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateRollbackManifest)
+	stdout, stderr, err := runCLI("simulate", "rollback", "--env", "prod", "--config", manifest)
+	if err != nil {
+		t.Fatalf("simulate rollback failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{
+		"Simulating: rollback",
+		"prod:",
+		"sha:     newsha0000000 -> oldsha0000000",
+		"version: v2.0.0 -> v1.0.0",
+		"revert",
+		"write state",
+	} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in rollback output, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestSimulateCommand_RollbackMissingEnv(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateRollbackManifest)
+	_, stderr, err := runCLI("simulate", "rollback", "--config", manifest)
+	if err == nil {
+		t.Error("expected non-zero exit when --env is missing")
+	}
+	if !contains(stderr, "env") {
+		t.Errorf("expected error mentioning env, got: %s", stderr)
+	}
+}
+
+func TestSimulateCommand_HotfixMissingEnv(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulatePromoteManifest)
+	_, stderr, err := runCLI("simulate", "hotfix", "--config", manifest)
+	if err == nil {
+		t.Error("expected non-zero exit when --env is missing")
+	}
+	if !contains(stderr, "env") {
+		t.Errorf("expected error mentioning env, got: %s", stderr)
+	}
+}
+
 // keysOf returns the top-level keys of a decoded JSON object, for diagnostics.
 func keysOf(m map[string]interface{}) []string {
 	ks := make([]string, 0, len(m))
