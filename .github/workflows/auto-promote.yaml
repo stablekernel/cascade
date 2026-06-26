@@ -56,10 +56,11 @@ jobs:
       rc_version: ${{ steps.compute.outputs.rc_version }}
       base_version: ${{ steps.compute.outputs.base_version }}
     steps:
-      # Primary source of truth: the resolved version the fleet validated. Soft
-      # failure (continue-on-error) so a missing artifact falls through to the
-      # head_branch / head_sha fallback below rather than failing the resolve.
-      - name: Download version-under-test artifact
+      # Primary source of truth: the resolved version the fleet validated and
+      # whether it was a full (all repos) or selective (subset) run. Soft failure
+      # (continue-on-error) so a missing artifact falls through to the head_branch
+      # / head_sha fallback below rather than failing the resolve.
+      - name: Download version-under-test and run-completeness artifacts
         id: artifact
         continue-on-error: true
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
@@ -78,6 +79,25 @@ jobs:
           WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+
+          # Read the full_run marker (true only for repos=all/default). Selective
+          # fleet runs (any subset) must never promote, even if they pass, because
+          # only full validation is a safe release signal. This gate prevents
+          # accidental promotion from a maintainer's debug run (e.g. repos=4env).
+          FULL_RUN="false"
+          if [ -f full-run.txt ]; then
+            FULL_RUN=$(tr -d '[:space:]' < full-run.txt)
+            echo "::notice::Read full-run marker: '$FULL_RUN'"
+          else
+            echo "::notice::No full-run marker; assuming pre-selector artifact (full run)."
+            FULL_RUN="true"
+          fi
+
+          if [ "$FULL_RUN" != "true" ]; then
+            echo "::notice::Fleet run was selective (repos=subset), not a full validation. Skipping promotion."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # Primary: the version-under-test artifact carries the exact resolved
           # version the fleet pinned every suite to. Authoritative when present.
@@ -120,7 +140,7 @@ jobs:
             echo "rc_version=$RC"
             echo "base_version=$BASE"
           } >> "$GITHUB_OUTPUT"
-          echo "::notice::Green fleet for $RC -> promoting final $BASE"
+          echo "::notice::Green full fleet for $RC -> promoting final $BASE"
 
   # Cut the final tag on the rc's commit and drive GoReleaser to publish it.
   promote:

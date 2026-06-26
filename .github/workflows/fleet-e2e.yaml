@@ -2,9 +2,15 @@
 #
 # This is maintainer CI: hand-written tooling that lives in cascade's repo, not
 # a product feature and not part of cascade's generated output. A green Fleet
-# run means: this cascade version validated across all 8 example
-# repos, each running its own scenario-suite.yaml in its OWN repo context (own
-# token, own main, own manifest). It is the release-candidate fleet gate.
+# run means: this cascade version validated across all example repos, each
+# running its own scenario-suite.yaml in its OWN repo context (own token, own
+# main, own manifest). It is the release-candidate fleet gate.
+#
+# Fan-out shape: every example repo dispatches its suite under one shared fleet
+# token. Bursting all of them at once tripped transient GitHub API 401/403/500
+# on a rotating repo each run, so the lanes are serialized to hold peak live
+# concurrency near two repos. A gh() transient-retry wrapper inside each suite
+# remains the per-call backstop; this file only fixes the structural burst.
 #
 # Triggers:
 #   workflow_run  of "Release" on completion - the fleet validates the PUBLISHED
@@ -13,7 +19,8 @@
 #                 actually on the releases page. Fleet only fans out once that
 #                 publish succeeded for an rc tag. No runner held open polling.
 #   workflow_dispatch  manual override (bypasses the rc-tag gate intentionally),
-#                 with an optional cascade_version input.
+#                 with an optional cascade_version input and an optional repos
+#                 selector to run a subset of lanes.
 #
 # We key off "Release" rather than the `release:` event because promote-driven
 # API releases do not reliably emit `release: published` (see release.yaml #86);
@@ -36,6 +43,15 @@ on:
           suites is wired but inert until the suites accept the input.
         required: false
         default: ''
+      repos:
+        description: >-
+          Which example repos to run. Default `all` runs the whole fleet. Pass a
+          comma or space separated subset of repo short names (e.g. `4env` or
+          `2env,callbacks`) to run only those lanes; the rest are skipped and the
+          Fleet gate aggregates over just the selected lanes. Intended as a
+          maintainer debug override, not a release path.
+        required: false
+        default: 'all'
 
 permissions:
   contents: read
@@ -47,15 +63,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Eight downstream example repos. primary must finish before its two dependents
-  # (they mutate primary's shared external state); the rest are independent.
   FLEET_OWNER: stablekernel
 
 jobs:
   # Resolve the cascade version under test and re-assert the rc-tag gate as a
-  # job output so every fan-out job can gate on it cheaply.
+  # job output so every fan-out job can gate on it cheaply. Also depends on
+  # plan so it can carry the full_run status (true only for repos=all/default)
+  # across the workflow_run boundary to auto-promote, which gates on it.
   resolve:
     name: Resolve version under test
+    needs: plan
     runs-on: ubuntu-latest
     # Top-level guard: only fan out for a manual dispatch, or a green
     # Release run that was a push of an rc tag. This filters out
@@ -120,23 +137,148 @@ jobs:
             echo "Trigger: \`$EVENT_NAME\`"
             echo "cascade version under test: \`${VERSION:-<empty>}\`"
             echo ""
-            echo "> The repin job pins all 8 example repos to this version"
+            echo "> The repin job pins all example repos to this version"
             echo "> before any suite fans out, so the suites run the binary"
             echo "> named here rather than a stale pinned one."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Hand the resolved version-under-test to auto-promote. A workflow_run
-      # does not inherit the triggering run's dispatch inputs, so auto-promote
-      # reads this artifact as the authoritative version the fleet validated
-      # rather than guessing from head_branch (which is `main` on the
-      # workflow_dispatch path).
-      - name: Upload resolved version-under-test
+      # Write the full_run marker (true only when repos=all/default). Auto-promote
+      # uses this to refuse promotion from selective/partial fleet runs; only a
+      # full validation is a safe release signal.
+      - name: Write fleet validation completeness marker
+        env:
+          FULL_RUN: ${{ needs.plan.outputs.full_run }}
+        run: |
+          printf '%s' "$FULL_RUN" > full-run.txt
+
+      # Hand the resolved version-under-test and run completeness to auto-promote.
+      # A workflow_run does not inherit the triggering run's dispatch inputs, so
+      # auto-promote reads these artifacts as the authoritative version and
+      # validation scope the fleet checked, rather than guessing from head_branch
+      # (which is `main` on the workflow_dispatch path).
+      - name: Upload resolved version-under-test and run status
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: version-under-test
-          path: version-under-test.txt
+          path: |
+            version-under-test.txt
+            full-run.txt
           if-no-files-found: error
           retention-days: 7
+
+  # Plan which lanes run. Parses the `repos` selector once and emits the lane
+  # gates and matrices every fan-out job keys off. This is the ONE obvious place
+  # the fleet roster lives: to add a repo (e.g. cascade-example-rollback-dispatch)
+  # add its short name to the matching list below and it joins that lane.
+  plan:
+    name: Plan selected lanes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      run_primary: ${{ steps.select.outputs.run_primary }}
+      run_dependents: ${{ steps.select.outputs.run_dependents }}
+      run_heavy: ${{ steps.select.outputs.run_heavy }}
+      run_remainder: ${{ steps.select.outputs.run_remainder }}
+      dependents_repos: ${{ steps.select.outputs.dependents_repos }}
+      remainder_repos: ${{ steps.select.outputs.remainder_repos }}
+      full_run: ${{ steps.select.outputs.full_run }}
+    steps:
+      - name: Select lanes from repos input
+        id: select
+        env:
+          # Default `all` on the workflow_run path, where there is no input.
+          REPOS_INPUT: ${{ github.event.inputs.repos }}
+        run: |
+          set -euo pipefail
+
+          # ---- Canonical fleet roster (single source of truth) --------------
+          # PRIMARY runs first; DEPENDENTS mutate primary's shared external
+          # state so they follow it. HEAVY is the heaviest, most fragile repo
+          # and runs alone. REMAINDER is every other light repo, capped at two
+          # in flight. Add a new repo to the list for the lane it belongs to.
+          PRIMARY_REPO="primary"
+          DEPENDENTS="artifact-a artifact-b"
+          HEAVY_REPO="4env"
+          REMAINDER="3env 2env single-env release-only no-env callbacks"
+          # -------------------------------------------------------------------
+
+          RAW="${REPOS_INPUT:-all}"
+          # Normalise commas to spaces and collapse whitespace.
+          SEL=$(printf '%s' "$RAW" | tr ',' ' ' | tr -s '[:space:]' ' ' \
+            | sed -E 's/^ //; s/ $//')
+          ALL=0
+          if [ -z "$SEL" ] || [ "$SEL" = "all" ]; then
+            ALL=1
+          fi
+
+          # want <name>: is this repo selected?
+          want() {
+            [ "$ALL" -eq 1 ] && return 0
+            local c="$1" s
+            for s in $SEL; do
+              [ "$c" = "$s" ] && return 0
+            done
+            return 1
+          }
+
+          # json_array <candidates>: emit a JSON string array of the selected
+          # repos for use as a matrix dimension value (matrix.repo iterates the
+          # strings). Empty when none selected; the lane gate skips it then.
+          json_array() {
+            local cands="$1" first=1 out="[" c
+            for c in $cands; do
+              if want "$c"; then
+                if [ "$first" -eq 1 ]; then first=0; else out="$out,"; fi
+                out="$out\"$c\""
+              fi
+            done
+            printf '%s]' "$out"
+          }
+
+          # any <candidates>: true if at least one is selected.
+          any() {
+            local c
+            for c in $1; do
+              want "$c" && { echo "true"; return; }
+            done
+            echo "false"
+          }
+
+          RUN_PRIMARY=$(want "$PRIMARY_REPO" && echo true || echo false)
+          RUN_HEAVY=$(want "$HEAVY_REPO" && echo true || echo false)
+          RUN_DEPENDENTS=$(any "$DEPENDENTS")
+          RUN_REMAINDER=$(any "$REMAINDER")
+          DEPENDENTS_JSON=$(json_array "$DEPENDENTS")
+          REMAINDER_JSON=$(json_array "$REMAINDER")
+          # full_run is true only when repos input is `all` (or empty/default).
+          # Auto-promote gates on this: a selective fleet run (any subset) never
+          # promotes, even if it passes, because only a full fleet validation is
+          # a safe release signal.
+          FULL_RUN=$([ "$ALL" -eq 1 ] && echo true || echo false)
+
+          {
+            echo "run_primary=$RUN_PRIMARY"
+            echo "run_dependents=$RUN_DEPENDENTS"
+            echo "run_heavy=$RUN_HEAVY"
+            echo "run_remainder=$RUN_REMAINDER"
+            echo "dependents_repos=$DEPENDENTS_JSON"
+            echo "remainder_repos=$REMAINDER_JSON"
+            echo "full_run=$FULL_RUN"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Fleet lane selection"
+            echo ""
+            echo "repos input: \`${RAW}\`"
+            echo ""
+            echo "| Lane | Will run |"
+            echo "|---|---|"
+            echo "| primary | $RUN_PRIMARY |"
+            echo "| dependents | $RUN_DEPENDENTS |"
+            echo "| 4env (heavy) | $RUN_HEAVY |"
+            echo "| remainder | $RUN_REMAINDER |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Repin: pin every example repo to the rc UNDER TEST before any suite fans
   # out. Without this the suites would install whatever version each repo's
@@ -144,7 +286,10 @@ jobs:
   # the "version under test" label would outrun reality. This job downloads the
   # rc binary, regenerates each repo's workflows against it, and pushes the
   # repin to each repo's main (idempotent: no change -> no commit). Every suite
-  # job gates on this job so none can start against a stale pin.
+  # job gates on this job so none can start against a stale pin. Repin always
+  # covers the full roster regardless of the repos selector: pinning is cheap,
+  # idempotent, and sequential (one repo at a time), so it does not add to live
+  # fan-out concurrency.
   repin:
     name: Repin fleet to rc
     needs: resolve
@@ -200,11 +345,12 @@ jobs:
       - name: Repin each example repo to the rc
         run: |
           set -euo pipefail
-          # The 10 example repos. Repinning means: set manifest cli_version to the
-          # rc, replace any other in-repo rc-version refs, regenerate the workflows
-          # with the rc binary, then commit + push only if something changed. This
-          # preserves every hand-written suite feature: regeneration only rewrites
-          # the generated workflows, and we touch nothing else.
+          # The full roster of 10 example repos. Repinning means: set manifest
+          # cli_version to the rc, replace any other in-repo rc-version refs,
+          # regenerate the workflows with the rc binary, then commit + push only
+          # if something changed. This preserves every hand-written suite feature:
+          # regeneration only rewrites the generated workflows, and we touch
+          # nothing else.
           REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks"
 
           # Apply the repin mutation to the checkout in the current directory:
@@ -241,8 +387,7 @@ jobs:
           # MAX_ATTEMPTS, exactly as cascade's state-writer does.
           MAX_ATTEMPTS=5
           repin_repo() {
-            local slug="$1"
-            local workdir manifest attempt status push_out
+            local slug="$1" workdir manifest attempt status push_out
             workdir=$(mktemp -d)
             git clone --depth 1 \
               "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
@@ -341,11 +486,12 @@ jobs:
           fi
           echo "All example repos pinned to ${RC_VERSION}"
 
-  # Stage 1: primary must run and pass before its dependents. Gated on repin so
-  # it never runs against a stale pin.
+  # Lane 1, stage 1: primary must run and pass before its dependents. Gated on
+  # repin so it never runs against a stale pin, and on the plan selector.
   primary:
     name: primary
-    needs: [resolve, repin]
+    needs: [repin, plan]
+    if: needs.plan.outputs.run_primary == 'true' && needs.repin.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -358,11 +504,15 @@ jobs:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-primary
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
 
-  # Stage 2: dependents of primary (mutate primary's shared external state),
-  # so they only start after primary is green.
+  # Lane 1, stage 2: dependents of primary (mutate primary's shared external
+  # state), so they only start after primary is green. Two repos run together,
+  # which is the lane that defines the fleet's ~2 peak. dependents require a
+  # green primary in the same pass; selecting a dependent without primary skips
+  # it (primary sets up the state they mutate).
   dependents:
     name: dependents (${{ matrix.repo }})
-    needs: primary
+    needs: [plan, primary]
+    if: needs.plan.outputs.run_dependents == 'true' && needs.primary.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -370,7 +520,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repo: [artifact-a, artifact-b]
+        repo: ${{ fromJSON(needs.plan.outputs.dependents_repos) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Dispatch and watch
@@ -379,19 +529,44 @@ jobs:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
 
-  # Stage 3: independent suites, run in parallel with no ordering constraint
-  # beyond repin (so they never run against a stale pin).
-  independents:
-    name: independents (${{ matrix.repo }})
-    needs: [resolve, repin]
+  # Lane 2: 4env alone. It is the heaviest and most fragile repo, so it runs in
+  # its own dedicated job with nothing beside it. Sequenced AFTER the dependents
+  # lane (via needs) so the two-repo dependents peak and this lane never stack;
+  # `always()` lets it proceed when the primary/dependents lane was filtered out
+  # by the selector. Still gated on a green repin.
+  heavy:
+    name: 4env (heavy)
+    needs: [repin, plan, dependents]
+    if: always() && needs.plan.outputs.run_heavy == 'true' && needs.repin.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Dispatch and watch 4env
+        uses: ./.github/actions/dispatch-suite
+        with:
+          repo: ${{ env.FLEET_OWNER }}/cascade-example-4env
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+
+  # Lane 3: the light remainder, capped at two repos in flight. Sequenced AFTER
+  # the heavy lane (via needs) so 4env and this capped matrix never overlap;
+  # `always()` lets it proceed when the heavy lane was filtered out. Still gated
+  # on a green repin. max-parallel keeps live API pressure at two repos.
+  remainder:
+    name: remainder (${{ matrix.repo }})
+    needs: [repin, plan, heavy]
+    if: always() && needs.plan.outputs.run_remainder == 'true' && needs.repin.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
-        repo: [4env, 3env, 2env, single-env, release-only, no-env, callbacks]
+        repo: ${{ fromJSON(needs.plan.outputs.remainder_repos) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Dispatch and watch
@@ -400,11 +575,14 @@ jobs:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
 
-  # Fan-in: this job's conclusion is the rc fleet gate. It fails if any upstream
-  # fan-out job failed and emits a per-repo pass/fail table to the summary.
+  # Fan-in: this job's conclusion is the rc fleet gate. It needs EVERY lane so a
+  # green gate means every selected repo passed; auto-promote keys off this
+  # conclusion. A lane that the repos selector skipped reports `skipped` and is
+  # treated as satisfied, so a subset run still produces a meaningful verdict
+  # over exactly the lanes that ran. A real fan-out failure still reds the run.
   aggregate:
     name: Fleet gate
-    needs: [resolve, repin, primary, dependents, independents]
+    needs: [resolve, plan, repin, primary, dependents, heavy, remainder]
     # Only render a verdict when the fleet actually fanned out. On filtered-out
     # completions (merge_group, non-rc tags, dispatch with no rc) resolve is
     # skipped, so this job is skipped too and the run is a clean no-op rather
@@ -420,7 +598,8 @@ jobs:
           R_REPIN: ${{ needs.repin.result }}
           R_PRIMARY: ${{ needs.primary.result }}
           R_DEPENDENTS: ${{ needs.dependents.result }}
-          R_INDEPENDENTS: ${{ needs.independents.result }}
+          R_HEAVY: ${{ needs.heavy.result }}
+          R_REMAINDER: ${{ needs.remainder.result }}
           VERSION: ${{ needs.resolve.outputs.cascade_version }}
         run: |
           set -euo pipefail
@@ -429,28 +608,35 @@ jobs:
             echo ""
             echo "cascade version under test (pinned into every suite): \`${VERSION:-<empty>}\`"
             echo ""
-            echo "| Stage | Result |"
+            echo "| Lane | Result |"
             echo "|---|---|"
             echo "| repin (all 10 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
-            echo "| independents (4env, 3env, 2env, single-env, release-only, no-env, callbacks) | $R_INDEPENDENTS |"
+            echo "| 4env (heavy, alone) | $R_HEAVY |"
+            echo "| remainder (3env, 2env, single-env, release-only, no-env, callbacks) | $R_REMAINDER |"
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
             echo "> the rc tag. The repin step pinned each suite to this rc before"
             echo "> fan-out, so a green gate validates the binary named above."
+            echo "> A lane shown as 'skipped' was not selected by the repos input."
             echo "> rc -> release promotion should consume the latest fleet-e2e"
-            echo "> conclusion for that tag before promoting."
+            echo "> conclusion for that tag before promoting, and only from a"
+            echo "> full (repos=all) run."
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # A lane passes when it succeeded OR was skipped (filtered out by the
+          # repos selector, or - for dependents - skipped because primary was
+          # not selected). Only an actual failure or cancellation reds the gate.
+          # repin is never selector-gated, so a non-success repin always reds.
           fail=0
-          for r in "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_INDEPENDENTS"; do
-            if [ "$r" != "success" ]; then
+          for r in "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               fail=1
             fi
           done
           if [ "$fail" -ne 0 ]; then
-            echo "::error::Fleet E2E failed: one or more suites did not pass"
+            echo "::error::Fleet E2E failed: one or more lanes did not pass"
             exit 1
           fi
-          echo "Fleet E2E passed across all suites"
+          echo "Fleet E2E passed across all selected lanes"
