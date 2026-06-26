@@ -148,6 +148,49 @@ func TestSetup_NewCommit_RunsBuild(t *testing.T) {
 	}
 }
 
+// TestSetup_DryrunTagPresent_DoesNotBreakVersionCalc reproduces the nightly
+// dry-run failure: a vX.Y.Z-dryrun.N exercise tag is cut against the repo and
+// sorts newer (by base version) than the real releases. Version discovery must
+// ignore it so the no-environment version calculation continues from the latest
+// valid release instead of choking on an unparseable tag.
+func TestSetup_DryrunTagPresent_DoesNotBreakVersionCalc(t *testing.T) {
+	repoDir, headSHA := initRepo(t)
+	manifestPath := writeManifest(t, repoDir, headSHA)
+
+	// Real releases plus a higher-sorting dry-run exercise tag and a foreign tag.
+	runGit(t, repoDir, "tag", "v0.5.0")
+	runGit(t, repoDir, "tag", "v0.5.1")
+	runGit(t, repoDir, "tag", "v0.6.0-dryrun.1")
+	runGit(t, repoDir, "tag", "vnightly")
+
+	// The git package reads tags from the process working directory, so run from
+	// inside the fixture repo to exercise its tag set (mirrors how the original
+	// failure surfaced when a -dryrun tag lived in the checked-out repo).
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir repo: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	orch, err := NewOrchestrator(manifestPath, "ci", "prerelease")
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	// Before the fix this failed with "calculating version: invalid version
+	// format: v0.6.0-dryrun.1".
+	if _, err := orch.Setup(headSHA); err != nil {
+		t.Fatalf("Setup with a -dryrun tag present must not fail version calc: %v", err)
+	}
+}
+
 // TestFinalize_RecordsPerBuildSHA verifies that a successful build's SHA is
 // recorded into envState.Builds so the build base ladder can consult it on the
 // next dispatch.

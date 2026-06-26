@@ -5,9 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// versionTagRegex matches cascade's canonical version tags: vX.Y.Z, optionally
+// with an -rc.N prerelease and a nested .hotfix.M segment. It is kept in lockstep
+// with the parser in internal/version (see version.Parse). The git package cannot
+// import internal/version directly because that package depends, transitively
+// through internal/changelog, on this one; TestIsValidVersionTag_InSyncWithVersionParse
+// asserts the two stay in agreement.
+var versionTagRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+)(?:\.hotfix\.(\d+))?)?$`)
+
+// IsValidVersionTag reports whether tag is a well-formed cascade version tag.
+// Tags that do not match (for example a vX.Y.Z-dryrun.N exercise tag, a foreign
+// "nightly" or "latest" tag, or a typo) are invisible to version discovery so
+// they can never be mistaken for the latest released or prereleased version.
+func IsValidVersionTag(tag string) bool {
+	return versionTagRegex.MatchString(tag)
+}
 
 // GetChangedFiles returns the list of files changed between two commits
 func GetChangedFiles(baseSHA, headSHA string) ([]string, error) {
@@ -144,21 +161,25 @@ func GetLatestTag(prefix string) (string, string, error) {
 	}
 
 	tags := parseLines(output)
-	if len(tags) == 0 {
-		return "", "", nil
+
+	// The prefix glob can still match non-version tags (for example a
+	// vX.Y.Z-dryrun.N exercise tag or a "vnightly" alias). Skip anything that is
+	// not a canonical cascade version so it can never be read as the latest one.
+	for _, tag := range tags {
+		if !IsValidVersionTag(tag) {
+			continue
+		}
+
+		// First valid tag is the latest (git sorted descending by version).
+		cmd = exec.Command("git", "rev-list", "-n", "1", tag)
+		output, err = cmd.Output()
+		if err != nil {
+			return tag, "", fmt.Errorf("git rev-list for tag: %w", err)
+		}
+		return tag, strings.TrimSpace(string(output)), nil
 	}
 
-	// First tag is the latest (sorted descending)
-	latestTag := tags[0]
-
-	// Get the SHA for this tag
-	cmd = exec.Command("git", "rev-list", "-n", "1", latestTag)
-	output, err = cmd.Output()
-	if err != nil {
-		return latestTag, "", fmt.Errorf("git rev-list for tag: %w", err)
-	}
-
-	return latestTag, strings.TrimSpace(string(output)), nil
+	return "", "", nil
 }
 
 // ListTags returns every tag in the repository. It returns an empty slice when
@@ -384,8 +405,14 @@ func GetLatestReleaseTag(prefix string) (string, string, error) {
 		return "", "", nil
 	}
 
-	// Find first tag without -rc suffix (published release)
+	// Find the first published release: a valid cascade version with no -rc
+	// suffix. Filtering through IsValidVersionTag keeps non-version tags (such as
+	// a vX.Y.Z-dryrun.N exercise tag, which also lacks an -rc suffix) from being
+	// mistaken for a release.
 	for _, tag := range tags {
+		if !IsValidVersionTag(tag) {
+			continue
+		}
 		if !strings.Contains(tag, "-rc.") {
 			// Get the SHA for this tag
 			cmd = exec.Command("git", "rev-list", "-n", "1", tag)

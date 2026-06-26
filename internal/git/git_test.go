@@ -318,3 +318,96 @@ func TestRemoteBranchSHA(t *testing.T) {
 		})
 	}
 }
+
+// tagHead creates a lightweight tag pointing at the current HEAD.
+func tagHead(t *testing.T, name string) {
+	t.Helper()
+	runGit(t, "tag", name)
+}
+
+func TestGetLatestTag_IgnoresNonVersionTags(t *testing.T) {
+	newScratchRepo(t)
+	commitFile(t, "a.txt", "one", "first commit")
+
+	// Valid version tags plus non-version tags that sort newer by base version.
+	tagHead(t, "v0.5.0")
+	tagHead(t, "v0.5.1")
+	tagHead(t, "v0.6.0-dryrun.1") // higher base version, not a cascade version
+	tagHead(t, "vnightly")        // foreign tag matching the prefix glob
+
+	got, sha, err := GetLatestTag("v")
+	if err != nil {
+		t.Fatalf("GetLatestTag() unexpected error: %v", err)
+	}
+	if got != "v0.5.1" {
+		t.Errorf("GetLatestTag() = %q, want %q (must ignore -dryrun and foreign tags)", got, "v0.5.1")
+	}
+	if sha == "" {
+		t.Errorf("GetLatestTag() returned empty SHA for %q", got)
+	}
+}
+
+func TestGetLatestReleaseTag_IgnoresNonVersionTags(t *testing.T) {
+	newScratchRepo(t)
+	commitFile(t, "a.txt", "one", "first commit")
+
+	tagHead(t, "v0.5.0")
+	tagHead(t, "v0.5.1")
+	tagHead(t, "v0.6.0-dryrun.1") // not an -rc tag, but also not a valid version
+	tagHead(t, "vnightly")
+
+	got, sha, err := GetLatestReleaseTag("v")
+	if err != nil {
+		t.Fatalf("GetLatestReleaseTag() unexpected error: %v", err)
+	}
+	if got != "v0.5.1" {
+		t.Errorf("GetLatestReleaseTag() = %q, want %q (must ignore -dryrun and foreign tags)", got, "v0.5.1")
+	}
+	if sha == "" {
+		t.Errorf("GetLatestReleaseTag() returned empty SHA for %q", got)
+	}
+}
+
+func TestGetLatestReleaseTag_SkipsRCButKeepsValidRelease(t *testing.T) {
+	newScratchRepo(t)
+	commitFile(t, "a.txt", "one", "first commit")
+
+	tagHead(t, "v1.0.0")
+	tagHead(t, "v1.0.1-rc.0") // valid prerelease, must be skipped for "release"
+
+	got, _, err := GetLatestReleaseTag("v")
+	if err != nil {
+		t.Fatalf("GetLatestReleaseTag() unexpected error: %v", err)
+	}
+	if got != "v1.0.0" {
+		t.Errorf("GetLatestReleaseTag() = %q, want %q", got, "v1.0.0")
+	}
+}
+
+func TestIsValidVersionTag(t *testing.T) {
+	tests := []struct {
+		tag  string
+		want bool
+	}{
+		{"v1.2.3", true},
+		{"v0.5.1", true},
+		{"v1.0.1-rc.0", true},
+		{"v1.0.1-rc.4.hotfix.5", true},
+		{"1.2.3", true},        // empty prefix is allowed
+		{"release1.2.3", true}, // alphabetic prefix is allowed
+		{"v0.6.0-dryrun.1", false},
+		{"vnightly", false},
+		{"nightly", false},
+		{"latest", false},
+		{"v1.2", false},
+		{"v1.2.3-rc", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			if got := IsValidVersionTag(tt.tag); got != tt.want {
+				t.Errorf("IsValidVersionTag(%q) = %v, want %v", tt.tag, got, tt.want)
+			}
+		})
+	}
+}
