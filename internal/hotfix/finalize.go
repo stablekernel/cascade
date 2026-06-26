@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/release"
@@ -483,7 +481,7 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 			if err := f.applyHotfixState(fresh, capturedTarget, capturedMerge, capturedVersion, capturedBaseSHA, capturedTimestamp, capturedFixSHAs); err != nil {
 				return nil, err
 			}
-			data, err := yaml.Marshal(map[string]any{key: fresh})
+			data, err := config.WriteManifestState(current, key, fresh.State, fresh.LatestRelease)
 			if err != nil {
 				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
 			}
@@ -716,13 +714,16 @@ func (f *Finalizer) isPrereleaseEnv(cfg *config.TrunkConfig, env string) bool {
 	return env == envs[len(envs)-2]
 }
 
-// writeConfig writes the updated manifest back to disk, wrapped in the manifest
-// key, matching the layout promote's finalize produces.
+// writeConfig writes the updated manifest back to disk, rewriting only the
+// mutable state subtree so any configuration this binary does not model is
+// preserved rather than dropped. It matches the layout promote's finalize
+// produces.
 func (f *Finalizer) writeConfig() error {
-	wrapper := map[string]any{
-		f.manifestKey: f.cicd,
+	current, err := os.ReadFile(f.configPath)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
 	}
-	data, err := yaml.Marshal(wrapper)
+	data, err := config.WriteManifestState(current, f.manifestKey, f.cicd.State, f.cicd.LatestRelease)
 	if err != nil {
 		return fmt.Errorf("marshaling manifest: %w", err)
 	}

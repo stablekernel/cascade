@@ -9,7 +9,6 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
-	"gopkg.in/yaml.v3"
 )
 
 // PromotionMode defines how the promotion operates
@@ -691,6 +690,12 @@ func (p *Promoter) CommitAndPush(message string) error {
 	return git.CommitAndPushWithRetry(p.configPath, message)
 }
 
+// saveConfig writes the in-memory manifest back to disk. It rewrites only the
+// mutable state subtree of the on-disk manifest, so any configuration this binary
+// does not model is preserved rather than dropped on the round-trip. saveConfig
+// only ever mutates State (including the prerelease delete), so handing the parsed
+// LatestRelease through unchanged keeps it intact. This path is dry-run in
+// production promote (preflight) but is reached non-dry-run by cascade simulate.
 func (p *Promoter) saveConfig() error {
 	// Get the manifest key from config (defaults to "ci")
 	key := config.DefaultManifestKey
@@ -698,14 +703,13 @@ func (p *Promoter) saveConfig() error {
 		key = p.cicdFile.Config.ManifestKey
 	}
 
-	// Wrap the CICDFile in the manifest key
-	wrapper := map[string]interface{}{
-		key: p.cicdFile,
-	}
-
-	data, err := yaml.Marshal(wrapper)
+	current, err := os.ReadFile(p.configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read config: %w", err)
+	}
+	data, err := config.WriteManifestState(current, key, p.cicdFile.State, p.cicdFile.LatestRelease)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	return os.WriteFile(p.configPath, data, 0644)
 }

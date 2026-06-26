@@ -9,7 +9,6 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/statewrite"
-	"gopkg.in/yaml.v3"
 )
 
 // getEnv returns the value of an environment variable or a default value.
@@ -310,8 +309,9 @@ func (f *Finalizer) updateState() {
 	}
 }
 
-// WriteConfig writes the updated manifest back to disk.
-// The output is wrapped in the manifest key (default: "ci") to match the expected format.
+// WriteConfig writes the updated manifest back to disk. It rewrites only the
+// mutable state subtree of the on-disk manifest, so any configuration this binary
+// does not model is preserved rather than dropped on the round-trip.
 func (f *Finalizer) WriteConfig() error {
 	// Get the manifest key from config (defaults to "ci")
 	key := config.DefaultManifestKey
@@ -319,12 +319,11 @@ func (f *Finalizer) WriteConfig() error {
 		key = f.cicdFile.Config.ManifestKey
 	}
 
-	// Wrap the CICDFile in the manifest key
-	wrapper := map[string]any{
-		key: f.cicdFile,
+	current, err := os.ReadFile(f.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config: %w", err)
 	}
-
-	data, err := yaml.Marshal(wrapper)
+	data, err := config.WriteManifestState(current, key, f.cicdFile.State, f.cicdFile.LatestRelease)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -415,7 +414,7 @@ func (f *Finalizer) writeStateViaAPI(message string) error {
 				return nil, fmt.Errorf("parsing current manifest: %w", err)
 			}
 			f.overlayOwnedState(into)
-			data, err := yaml.Marshal(map[string]any{key: into})
+			data, err := config.WriteManifestState(current, key, into.State, into.LatestRelease)
 			if err != nil {
 				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
 			}
