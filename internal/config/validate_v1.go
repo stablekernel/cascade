@@ -278,6 +278,11 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 		errs = append(errs, "pin_mode must be one of: tag, sha")
 	}
 
+	// release_trigger must be push or dispatch.
+	if cfg.ReleaseTrigger != "" && cfg.ReleaseTrigger != ReleaseTriggerPush && cfg.ReleaseTrigger != ReleaseTriggerDispatch {
+		errs = append(errs, "release_trigger must be one of: push, dispatch")
+	}
+
 	// dispatch_inputs may not shadow generator-owned reserved names, and choice
 	// inputs need options.
 	for _, name := range sortedKeys(toStringKeyed(cfg.DispatchInputs)) {

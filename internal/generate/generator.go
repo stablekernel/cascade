@@ -597,16 +597,23 @@ func (g *Generator) writeHeader(sb *strings.Builder) {
 func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("name: Orchestrate CI/CD\n\n")
 	sb.WriteString("on:\n")
-	sb.WriteString("  push:\n")
-	fmt.Fprintf(sb, "    branches: [%s]\n", g.config.TrunkBranch)
 
-	// Add paths filter based on all configured triggers
-	// This prevents orchestration from running when no relevant files changed
-	triggers := g.config.GetAllTriggers()
-	if len(triggers) > 0 {
-		sb.WriteString("    paths:\n")
-		for _, trigger := range triggers {
-			fmt.Fprintf(sb, "      - '%s'\n", trigger)
+	// release_trigger: dispatch drops the push: trigger so orchestrate runs only
+	// on workflow_dispatch. A maintainer-owned gate then decides when a release
+	// candidate is cut, instead of every trunk merge producing one. Default
+	// (push) keeps the trunk-push trigger and its paths filter.
+	if !g.config.OrchestrateDispatchOnly() {
+		sb.WriteString("  push:\n")
+		fmt.Fprintf(sb, "    branches: [%s]\n", g.config.TrunkBranch)
+
+		// Add paths filter based on all configured triggers
+		// This prevents orchestration from running when no relevant files changed
+		triggers := g.config.GetAllTriggers()
+		if len(triggers) > 0 {
+			sb.WriteString("    paths:\n")
+			for _, trigger := range triggers {
+				fmt.Fprintf(sb, "      - '%s'\n", trigger)
+			}
 		}
 	}
 
