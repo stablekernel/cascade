@@ -203,8 +203,8 @@ func TestPRPreviewGenerator_ActionRefsPinUnderSHAMode(t *testing.T) {
 	assert.Contains(t, content, "actions/github-script@"+script.sha+" # "+script.shaVersion)
 
 	// No bare major-tag refs for these actions under sha mode.
-	assert.NotContains(t, content, "actions/checkout@v4\n")
-	assert.NotContains(t, content, "actions/github-script@v7\n")
+	assert.NotContains(t, content, "actions/checkout@v7\n")
+	assert.NotContains(t, content, "actions/github-script@v9\n")
 }
 
 func TestPRPreviewGenerator_ValidYAML(t *testing.T) {
