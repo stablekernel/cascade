@@ -370,7 +370,7 @@ jobs:
         run: |
           set -euo pipefail
           # The full roster of 10 example repos. Repinning means: set manifest
-          # cli_version to the rc, replace any other in-repo rc-version refs,
+          # cli_version to the rc, replace any other in-repo prerelease refs (rc/dryrun),
           # regenerate the workflows with the rc binary, then commit + push only
           # if something changed. This preserves every hand-written suite feature:
           # regeneration only rewrites the generated workflows, and we touch
@@ -397,14 +397,15 @@ jobs:
               sed -i -E "s|^([[:space:]]*)cli_version:([[:space:]]*).*$|&\n\1cli_version_sha:\2${RC_SHA}|" "$manifest"
             fi
 
-            # 2. Replace any other in-repo rc-version refs (e.g. an explicit
-            #    setup-cli@v..-rc.. pin a suite hand-wrote) with the rc. Scope
+            # 2. Replace any other in-repo prerelease refs (rc OR dryrun, e.g. an
+            #    explicit setup-cli@v..-rc.. or a stale @v..-dryrun.. pin a suite
+            #    hand-wrote, which a prior dry-run repin may have left) with the rc. Scope
             #    to tracked text files; the regen below rewrites generated
             #    workflows, this catches anything outside them.
             while IFS= read -r f; do
               [ -f "$f" ] || continue
-              sed -i -E "s|v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+|${RC_VERSION}|g" "$f"
-            done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
+              sed -i -E "s#v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+#${RC_VERSION}#g" "$f"
+            done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
 
             # 3. Regenerate the workflows with the rc binary. This rewrites the
             #    generated setup-cli refs to the rc and nothing hand-written.
