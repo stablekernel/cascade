@@ -1108,7 +1108,40 @@ func (r *Runner) assertStep(ctx context.Context, step *Step, preState *Execution
 		allErrs = append(allErrs, errs...)
 	}
 
+	// Assert substrings in the live manifest (verifies a state write preserved
+	// config fields it does not itself touch).
+	if expect.Manifest != nil {
+		errs := r.assertManifest(ctx, expect.Manifest)
+		allErrs = append(allErrs, errs...)
+	}
+
 	return allErrs
+}
+
+// assertManifest reads the live manifest from Gitea and checks its content
+// against the expectation. Returns nil in unit-test mode (no harness). The read
+// sees exactly what the last state-writing step committed, so a Contains entry
+// that names a config field proves the field survived the write.
+func (r *Runner) assertManifest(ctx context.Context, expect *ManifestExpect) []error {
+	if r.harness == nil || r.harness.gitea == nil || r.harness.repo == nil {
+		return nil
+	}
+	content, err := r.harness.gitea.GetFileContent(ctx, r.harness.repo, ".github/manifest.yaml")
+	if err != nil {
+		return []error{fmt.Errorf("read manifest: %w", err)}
+	}
+	var errs []error
+	for _, want := range expect.Contains {
+		if !strings.Contains(content, want) {
+			errs = append(errs, fmt.Errorf("manifest expected to contain %q but did not:\n%s", want, content))
+		}
+	}
+	for _, unwant := range expect.NotContains {
+		if strings.Contains(content, unwant) {
+			errs = append(errs, fmt.Errorf("manifest expected NOT to contain %q but did:\n%s", unwant, content))
+		}
+	}
+	return errs
 }
 
 // assertBranches checks branch existence in Gitea against the expectation.
