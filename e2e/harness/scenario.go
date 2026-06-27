@@ -127,6 +127,16 @@ type Config struct {
 	// manifest so a scenario can assert an overridden uses: ref is honored
 	// regardless of pin mode.
 	ActionPins map[string]string `yaml:"action_pins,omitempty"`
+	// CLIVersion carries the cli_version field through to the generated manifest
+	// so a scenario can fix the setup-cli self-action ref (and, under pin_mode:
+	// sha, the version comment that trails the pinned SHA).
+	CLIVersion string `yaml:"cli_version,omitempty"`
+	// CLIVersionSHA carries the 40-hex commit SHA that cli_version resolves to
+	// through to the generated manifest. Paired with pin_mode: sha it pins every
+	// generated setup-cli self-action ref to an immutable commit, so a scenario
+	// can assert the field survives a routine state write rather than being
+	// dropped on finalize.
+	CLIVersionSHA string `yaml:"cli_version_sha,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published

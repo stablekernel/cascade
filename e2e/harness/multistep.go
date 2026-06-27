@@ -266,6 +266,19 @@ type StepExpect struct {
 	Branches *BranchesExpect `yaml:"branches,omitempty"`
 	// PRs asserts open pull requests in Gitea (live check).
 	PRs *PRsExpect `yaml:"prs,omitempty"`
+	// Manifest asserts substrings present or absent in the live manifest after a
+	// step. It reads .github/manifest.yaml from Gitea, so it sees exactly what a
+	// state-writing step (orchestrate, promote) committed. A scenario uses it to
+	// assert a config field survives a routine state write rather than being
+	// dropped on finalize.
+	Manifest *ManifestExpect `yaml:"manifest,omitempty"`
+}
+
+// ManifestExpect asserts substrings against the live manifest read from Gitea.
+// Contains entries must each appear; NotContains entries must each be absent.
+type ManifestExpect struct {
+	Contains    []string `yaml:"contains,omitempty"`
+	NotContains []string `yaml:"not_contains,omitempty"`
 }
 
 // BranchesExpect asserts branch existence in Gitea. Exist entries must be

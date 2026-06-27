@@ -1,0 +1,59 @@
+name: "SHA pin: cli_version_sha survives a routine state write"
+description: |
+  Guards against a routine state write dropping cli_version_sha from a
+  pin_mode: sha manifest (#390). An earlier binary re-serialized the whole
+  manifest through its typed config struct on finalize, discarding any field
+  the running binary did not model, so the next state commit silently erased
+  the pin and the repo read as permanent drift. The current binary writes
+  state with YAML-node surgery that touches only the state subtree, leaving
+  every sibling config field byte-for-byte intact.
+
+  A pin_mode: sha manifest carries a populated cli_version_sha, so every
+  generated setup-cli self-action ref pins to that immutable commit. After a
+  routine orchestrate run finalizes fresh dev state, the live manifest must
+  still carry both cli_version_sha and pin_mode, and regenerating the
+  workflows from the written manifest must reproduce the same sha-pinned
+  output with no drift (idempotent regeneration).
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  cli_version: v0.6.0
+  cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803
+  pin_mode: sha
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; manifest carries the sha pin"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Routine dev state write must preserve cli_version_sha"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      manifest:
+        contains:
+          - "cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803"
+          - "pin_mode: sha"
+
+  - name: "Regenerate from the written manifest is drift-free and idempotent"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
