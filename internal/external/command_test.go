@@ -102,6 +102,53 @@ other_key: preserved
 	assert.Contains(t, content, "preserved")
 }
 
+// TestWriteManifest_PreservesFullConfig guards the external state write against
+// dropping manifest configuration on the round-trip (issue #372). The write must
+// touch only the mutable state subtree: modeled config fields (cli_version_sha),
+// config keys this binary does not model, and the internal runtime fields
+// (manifest_file/manifest_key) must all be left untouched in the committed file.
+func TestWriteManifest_PreservesFullConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	const sha = "5702d41a1234567890abcdef1234567890abcdef"
+	initial := `ci:
+  config:
+    trunk_branch: main
+    environments: [dev]
+    cli_version: v0.6.0
+    pin_mode: sha
+    cli_version_sha: ` + sha + `
+    future_field: keep-me
+  state:
+    dev:
+      sha: abc123
+`
+	require.NoError(t, os.WriteFile(manifestPath, []byte(initial), 0644))
+
+	// Parse the on-disk manifest, mutate only state, and write it back through
+	// the same path the external update command uses.
+	cicdFile, err := config.ParseManifestFile(manifestPath, "ci")
+	require.NoError(t, err)
+	cicdFile.State["dev"].External = map[string]*config.ExternalDeployState{
+		"cdk": {Repo: "org/cdk-infra", SHA: "cdk123"},
+	}
+
+	require.NoError(t, writeManifest(manifestPath, "ci", cicdFile))
+
+	data, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Contains(t, content, "cdk123", "state not updated")
+	assert.Contains(t, content, "cli_version_sha: "+sha, "cli_version_sha dropped")
+	assert.Contains(t, content, "cli_version: v0.6.0", "cli_version dropped")
+	assert.Contains(t, content, "pin_mode: sha", "pin_mode dropped")
+	assert.Contains(t, content, "future_field: keep-me", "unmodeled config field dropped")
+	assert.NotContains(t, content, "manifest_file:", "internal runtime field leaked")
+	assert.NotContains(t, content, "manifest_key:", "internal runtime field leaked")
+}
+
 func TestUpdateCommand_RequiredFlags(t *testing.T) {
 	cmd := NewCommand()
 

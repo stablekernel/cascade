@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
@@ -280,24 +279,20 @@ func commitWithApplicationRetry(filePath, commitMsg string, maxAttempts int, app
 	return fmt.Errorf("git push failed after %d attempts: %s: %w", maxAttempts, strings.TrimSpace(string(lastPushOut)), lastPushErr)
 }
 
-// writeManifest writes the CICD file back to the manifest under the specified key.
+// writeManifest writes the updated external deploy state back to the manifest
+// under the specified key. It rewrites only the mutable state subtree, so every
+// other manifest key, including config fields this binary does not model (for
+// example cli_version_sha on a SHA-pinned repo running an older cascade) and the
+// internal runtime fields, is preserved verbatim rather than dropped on the
+// round-trip. The external update mutates only state, so a full re-marshal of
+// the typed config is never needed here.
 func writeManifest(path, key string, file *config.CICDFile) error {
-	// Read existing manifest to preserve other keys
-	data, err := os.ReadFile(path)
+	current, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)
 	}
 
-	var manifest map[string]any
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return fmt.Errorf("parsing manifest: %w", err)
-	}
-
-	// Update the CI key
-	manifest[key] = file
-
-	// Write back
-	out, err := yaml.Marshal(manifest)
+	out, err := config.WriteManifestState(current, key, file.State, file.LatestRelease)
 	if err != nil {
 		return fmt.Errorf("marshaling manifest: %w", err)
 	}
