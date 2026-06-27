@@ -21,7 +21,7 @@ config:
   deploys: []
   pin_mode: sha
   action_pins:
-    actions/checkout: "v6"
+    actions/checkout: "v7"
 
 steps:
   - name: "Initial commit; assert the override ref wins over the sha pin"
@@ -37,7 +37,7 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             # the override ref is emitted verbatim, as a mutable-ref opt-in.
-            - "uses: actions/checkout@v6\n"
+            - "uses: actions/checkout@v7\n"
           not_contains:
             # the built-in sha pin must not appear when overridden.
-            - "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
+            - "uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"

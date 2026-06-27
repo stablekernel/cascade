@@ -474,7 +474,7 @@ func TestHotfixGenerator_PinModeSHA(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, content, "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10")
+	assert.Contains(t, content, "uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0")
 	assert.NotContains(t, content, "uses: actions/checkout@v4")
 }
 

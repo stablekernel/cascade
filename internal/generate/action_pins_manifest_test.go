@@ -16,8 +16,8 @@ import (
 // intentional bump (a later PR) changes them.
 func TestDefaultActionPins_MatchesPriorHardcodedTable(t *testing.T) {
 	priorHardcodedTable := map[string]actionPin{
-		actionCheckout:         {tag: "v6", sha: "df4cb1c069e1874edd31b4311f1884172cec0e10", shaVersion: "v6.0.3"},
-		actionGithubScript:     {tag: "v7", sha: "f28e40c7f34bde8b3046d885e986cb6290c5673b", shaVersion: "v7.1.0"},
+		actionCheckout:         {tag: "v7", sha: "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", shaVersion: "v7.0.0"},
+		actionGithubScript:     {tag: "v9", sha: "3a2844b7e9c422d3c10d287c895573f7108da1b3", shaVersion: "v9.0.0"},
 		actionDownloadArtifact: {tag: "v8", sha: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", shaVersion: "v8.0.1"},
 		actionUploadArtifact:   {tag: "v7", sha: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", shaVersion: "v7.0.1"},
 		actionCreateAppToken:   {tag: "v3", sha: "bcd2ba49218906704ab6c1aa796996da409d3eb1", shaVersion: "v3.2.0"},

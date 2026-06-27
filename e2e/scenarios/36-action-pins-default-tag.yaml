@@ -6,7 +6,7 @@ description: |
   against.
 
   Covers:
-  - the default emits actions/checkout@v6 with no sha comment
+  - the default emits actions/checkout@v7 with no sha comment
   - no 40-hex sha pin is emitted for checkout when pin_mode is unset
 
   Generator-output verification only.
@@ -34,7 +34,7 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             # default behavior emits the built-in mutable major tag, no sha comment.
-            - "uses: actions/checkout@v6\n"
+            - "uses: actions/checkout@v7\n"
           not_contains:
             # without pin_mode: sha, no 40-hex sha pin for checkout is emitted.
-            - "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
+            - "uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"

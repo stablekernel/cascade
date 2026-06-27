@@ -158,7 +158,7 @@ func TestDriftCheckGenerator_PinModeSHA(t *testing.T) {
 	comment, err := g.GenerateComment()
 	require.NoError(t, err)
 	assert.Contains(t, comment, "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c")
-	assert.Contains(t, comment, "actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b")
+	assert.Contains(t, comment, "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3")
 }
 
 // TestDriftCheckGenerator_Actionlint runs actionlint over both generated files.
