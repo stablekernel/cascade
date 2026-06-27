@@ -1909,11 +1909,11 @@ func TestGenerator_PassthroughArtifact_NoArtifactNoSteps(t *testing.T) {
 	// not accidentally count that. Check that neither passthrough action appears
 	// outside the finalize/release context by verifying they are absent entirely
 	// (no release config is set, so the finalize job emits no artifact steps either).
-	assert.NotContains(t, result, "actions/upload-artifact@v4",
+	assert.NotContains(t, result, "actions/upload-artifact@v7",
 		"build without artifact: must not emit upload-artifact")
 	// download-artifact only appears in finalize when HasReleaseArtifacts. It is
 	// absent here because no release artifacts are declared and no passthrough is set.
-	assert.NotContains(t, result, "actions/download-artifact@v4",
+	assert.NotContains(t, result, "actions/download-artifact@v8",
 		"build without artifact: must not emit download-artifact")
 }
 
@@ -1947,7 +1947,7 @@ func TestGenerator_PassthroughArtifact_ReusableWorkflowUploadJob(t *testing.T) {
 	// A post-upload job must be emitted.
 	assert.Contains(t, result, "build-compile-upload:",
 		"reusable-workflow build with artifact.upload must emit a post-upload job")
-	assert.Contains(t, result, "uses: actions/upload-artifact@v4",
+	assert.Contains(t, result, "uses: actions/upload-artifact@v7",
 		"post-upload job must use upload-artifact action")
 	assert.Contains(t, result, "name: build-compile",
 		"uploaded artifact must be named build-{build-name}")
@@ -1997,7 +1997,7 @@ func TestGenerator_PassthroughArtifact_ReusableWorkflowDownloadJob(t *testing.T)
 	// A pre-download job must be emitted for the sign callback.
 	assert.Contains(t, result, "build-sign-download:",
 		"reusable-workflow build with artifact.downloads must emit a pre-download job")
-	assert.Contains(t, result, "uses: actions/download-artifact@v4",
+	assert.Contains(t, result, "uses: actions/download-artifact@v8",
 		"pre-download job must use download-artifact action")
 	assert.Contains(t, result, "name: build-compile",
 		"pre-download step must reference the producer's artifact name build-compile")
@@ -2164,7 +2164,7 @@ func TestGenerator_PassthroughArtifact_MatrixUploadCollectsLegs(t *testing.T) {
 	body := uploadJobBody(t, result, "build-image-upload")
 
 	// The post-job must collect the per-leg artifacts first.
-	assert.Contains(t, body, "uses: actions/download-artifact@v4",
+	assert.Contains(t, body, "uses: actions/download-artifact@v8",
 		"matrix upload post-job must download per-leg artifacts before uploading")
 	assert.Contains(t, body, "pattern: image-*",
 		"collect step must use the <build-name>-* convention pattern")
@@ -2225,7 +2225,7 @@ func TestGenerator_PassthroughArtifact_NonMatrixUploadNoCollect(t *testing.T) {
 	body := uploadJobBody(t, result, "build-compile-upload")
 	assert.NotContains(t, body, "actions/download-artifact",
 		"non-matrix upload job must not emit a per-leg collect step")
-	assert.Contains(t, body, "uses: actions/upload-artifact@v4",
+	assert.Contains(t, body, "uses: actions/upload-artifact@v7",
 		"non-matrix upload job must still upload directly")
 }
 
