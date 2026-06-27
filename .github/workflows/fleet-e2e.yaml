@@ -324,23 +324,6 @@ jobs:
           RC_BARE="${RC_VERSION#v}"
           echo "RC_BARE=$RC_BARE" >> "$GITHUB_ENV"
 
-          # Peel the rc tag to its commit SHA so the repin can SHA-pin each
-          # example repo's setup-cli self-action (cli_version_sha). cascade's
-          # release tags are annotated, so refs/tags/<rc> is a tag-object SHA,
-          # not a commit; ^{} dereferences to the underlying commit. A
-          # lightweight tag has no peeled ref, so fall back to the bare ref,
-          # which is already the commit.
-          RC_SHA=$(git ls-remote "https://github.com/${REPO}" "refs/tags/${RC_VERSION}^{}" | awk '{print $1}')
-          if [ -z "$RC_SHA" ]; then
-            RC_SHA=$(git ls-remote "https://github.com/${REPO}" "refs/tags/${RC_VERSION}" | awk '{print $1}')
-          fi
-          if ! printf '%s' "$RC_SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "::error::Could not resolve a commit SHA for tag ${RC_VERSION} (got '${RC_SHA}')"
-            exit 1
-          fi
-          echo "Resolved ${RC_VERSION} to commit ${RC_SHA}"
-          echo "RC_SHA=$RC_SHA" >> "$GITHUB_ENV"
-
           TMPDIR=$(mktemp -d)
           echo "Downloading $RC_VERSION linux/amd64 archive from $REPO"
           gh release download "$RC_VERSION" \
@@ -387,15 +370,14 @@ jobs:
             # 1. Point the manifest cli_version at the rc.
             sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$manifest"
 
-            # 1b. Pair cli_version_sha with the rc tag's peeled commit so the
-            #     regenerated setup-cli self-action ref is SHA-pinned (under
-            #     pin_mode: sha). Update it in place when present, else insert a
-            #     sibling line right after cli_version preserving its indent.
-            if grep -qE "^[[:space:]]*cli_version_sha:" "$manifest"; then
-              sed -i -E "s|^([[:space:]]*cli_version_sha:[[:space:]]*).*$|\1${RC_SHA}|" "$manifest"
-            else
-              sed -i -E "s|^([[:space:]]*)cli_version:([[:space:]]*).*$|&\n\1cli_version_sha:\2${RC_SHA}|" "$manifest"
-            fi
+            # 1b. Keep the example repos tag-pinned for the fleet: drop any
+            #     cli_version_sha so a pin_mode: sha repo regenerates with the
+            #     setup-cli@<cli_version> tag fallback, leaving manifest and
+            #     workflows consistent (no drift). SHA-pinning stays a generator
+            #     capability exercised by unit tests and cascade's own repo. The
+            #     routine state-write dropping cli_version_sha for pin_mode: sha
+            #     repos is tracked separately.
+            sed -i -E '/^[[:space:]]*cli_version_sha:[[:space:]]*/d' "$manifest"
 
             # 2. Replace any other in-repo rc-version refs (e.g. an explicit
             #    setup-cli@v..-rc.. pin a suite hand-wrote) with the rc. Scope
