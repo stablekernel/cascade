@@ -1,0 +1,64 @@
+# Dependabot anchor for cascade's pinned third-party actions.
+#
+# This workflow never runs. It exists only so Dependabot's github-actions
+# updater has one well-known file that references every action cascade pins, and
+# opens its version-bump pull requests against it. The real source of truth is
+# internal/generate/action_pins.yaml, which Dependabot cannot read.
+#
+# How an action gets bumped now:
+#   1. Dependabot bumps a `uses:` line here (and in any hand-written workflow
+#      that uses the same action).
+#   2. CI turns red: the consistency lint (internal/generate,
+#      TestWorkflowsConsistentWithActionPins) and TestActionPinsAnchorCoversManifest
+#      report that the anchor and action_pins.yaml disagree.
+#   3. A maintainer copies the new sha and version into action_pins.yaml, then
+#      runs `cascade generate-workflow --config .github/manifest.yaml --force` to
+#      refresh orchestrate.yaml and promote.yaml from the updated manifest.
+#   4. CI turns green: the pin now agrees across the manifest, this anchor, the
+#      hand-written workflows, and the generated workflows.
+#
+# The generated workflows (orchestrate.yaml, promote.yaml) are excluded from
+# Dependabot in .github/dependabot.yml, so a bump never lands there directly and
+# trips the Workflow Drift Check. They move only through regeneration in step 3.
+#
+# Keep exactly one step per action key in action_pins.yaml.
+# TestActionPinsAnchorCoversManifest fails if this list drifts out of sync.
+name: Action Pins (dependabot anchor)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_anchor:
+        description: 'Leave disabled. This workflow is a Dependabot parse anchor and performs no work.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  anchor:
+    name: Pinned action references (never executes)
+    # Gated off by a default-false dispatch input so the workflow runs no steps
+    # under normal operation. Dependabot parses `uses:` statically and ignores
+    # both the trigger set and this condition, so the bump entrypoint still works
+    # while the job stays inert.
+    if: ${{ inputs.run_anchor }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: return
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: .
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: '0'
+          private-key: ''
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
