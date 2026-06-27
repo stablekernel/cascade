@@ -110,11 +110,11 @@ runs:
         # This loop retries on transient API errors while still failing closed on
         # real run failures and on timeout.
         #
-        # MAX_ATTEMPTS * WATCH_INTERVAL = wall-clock cap (~75 min at 60s each).
+        # MAX_ATTEMPTS * WATCH_INTERVAL = wall-clock cap (~180 min (3h) at 60s each, headroom for queue+run under full-fleet load, well under GitHub's 6h job cap).
         # The 4env suite runs the full lifecycle plus a chained multi-env hotfix
         # and the Step 13 conflict probe, each a serial cascade run, so the cap
         # must clear its 60-minute internal job timeout with headroom.
-        MAX_ATTEMPTS=75
+        MAX_ATTEMPTS=180
         CONSEC_ERRORS=0
         MAX_CONSEC_ERRORS=5
         attempt=0
