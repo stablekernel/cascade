@@ -19,19 +19,60 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -trimpath
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.date={{.CommitDate}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
   - id: archives
-    format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "checksums.txt"
+
+sboms:
+  - artifacts: archive
+    documents:
+      - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.spdx.json"
+
+signs:
+  # cosign keyless signing (OIDC + sigstore)
+  - id: cosign
+    cmd: cosign
+    args:
+      - sign-blob
+      - --output-certificate=${certificate}
+      - --output-signature=${signature}
+      - ${artifact}
+      - --yes
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    output: true
+
+  # GPG signing. The release key has no passphrase (it lives only as a repo
+  # secret, the same trust boundary a passphrase would), so no passphrase
+  # handling is needed.
+  - id: gpg
+    cmd: gpg
+    args:
+      - --batch
+      - --no-tty
+      - --local-user
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - --armor
+      - --output
+      - "${signature}"
+      - --detach-sign
+      - "${artifact}"
+    artifacts: checksum
+    signature: "${artifact}.asc"
+    output: true
 
 changelog:
   use: github
