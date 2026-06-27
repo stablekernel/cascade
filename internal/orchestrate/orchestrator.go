@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/stablekernel/cascade/internal/changelog"
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
@@ -462,9 +460,24 @@ func (o *Orchestrator) calculateChangelogRefs() (string, string) {
 	return initialCommit, ""
 }
 
-// writeConfig writes the updated cicd.yaml file.
+// writeConfig writes the updated manifest back to disk. It rewrites only the
+// mutable state subtree of the on-disk manifest, so the top-level manifest key
+// wrapper and every config key, including ones this binary does not model (for
+// example cli_version_sha on a SHA-pinned repo running an older cascade), are
+// preserved verbatim rather than dropped on the round-trip. Finalize mutates
+// only state, so a full re-marshal of the typed config is never needed here.
 func (o *Orchestrator) writeConfig() error {
-	data, err := yaml.Marshal(o.cicdFile)
+	key := config.DefaultManifestKey
+	if o.cicdFile.Config != nil && o.cicdFile.Config.ManifestKey != "" {
+		key = o.cicdFile.Config.ManifestKey
+	}
+
+	current, err := os.ReadFile(o.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config: %w", err)
+	}
+
+	data, err := config.WriteManifestState(current, key, o.cicdFile.State, o.cicdFile.LatestRelease)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
