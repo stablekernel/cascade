@@ -1,8 +1,12 @@
 package generate
 
 import (
+	_ "embed"
 	"fmt"
+	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/stablekernel/cascade/internal/config"
 )
@@ -30,17 +34,79 @@ type actionPin struct {
 	shaVersion string // precise version the SHA corresponds to, for the trailing comment
 }
 
-// defaultActionPins is the built-in pin table for every third-party action
-// cascade emits. tag mode emits <action>@<tag>; sha mode emits
-// <action>@<sha> # <shaVersion>. The SHAs were resolved from the upstream
-// repositories at the major tags below; action_pins entries in the manifest
-// override any of these without code changes.
-var defaultActionPins = map[string]actionPin{
-	actionCheckout:         {tag: "v6", sha: "df4cb1c069e1874edd31b4311f1884172cec0e10", shaVersion: "v6.0.3"},
-	actionGithubScript:     {tag: "v7", sha: "f28e40c7f34bde8b3046d885e986cb6290c5673b", shaVersion: "v7.1.0"},
-	actionDownloadArtifact: {tag: "v4", sha: "d3f86a106a0bac45b974a628896c90dbdf5c8093", shaVersion: "v4.3.0"},
-	actionUploadArtifact:   {tag: "v4", sha: "ea165f8d65b6e75b540449e92b4886f43607fa02", shaVersion: "v4.6.2"},
-	actionCreateAppToken:   {tag: "v3", sha: "bcd2ba49218906704ab6c1aa796996da409d3eb1", shaVersion: "v3.2.0"},
+// actionPinsManifest is the on-disk shape of action_pins.yaml: every action
+// cascade pins, keyed by action path, with its tag, resolved commit SHA,
+// precise version, and whether the generator emits it.
+type actionPinsManifest struct {
+	Actions map[string]actionPinEntry `yaml:"actions"`
+}
+
+// actionPinEntry is a single action's pin record as authored in the manifest.
+// emit distinguishes the actions the generator renders into user workflows from
+// the maintainer-only actions recorded only to keep the pin set in one place.
+type actionPinEntry struct {
+	Tag     string `yaml:"tag"`
+	SHA     string `yaml:"sha"`
+	Version string `yaml:"version"`
+	Emit    bool   `yaml:"emit"`
+}
+
+// actionPinsYAML is the committed single source of truth for every third-party
+// action version cascade pins. It is parsed once at package init; generation
+// stays a pure offline function of these committed bytes.
+//
+//go:embed action_pins.yaml
+var actionPinsYAML []byte
+
+// commitSHAPattern matches a 40-character lowercase hex commit SHA. A manifest
+// entry whose sha does not match is rejected at init so a malformed pin can
+// never reach generation.
+var commitSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// defaultActionPins is the built-in pin table for every third-party action the
+// generator emits. tag mode emits <action>@<tag>; sha mode emits
+// <action>@<sha> # <shaVersion>. It is parsed from the embedded action_pins.yaml
+// manifest (emit: true entries only) so the values live in one committed file;
+// action_pins entries in a user manifest still override any of these without
+// code changes.
+var defaultActionPins = mustParseActionPins(actionPinsYAML)
+
+// mustParseActionPins parses the embedded manifest into the generator pin table,
+// keeping only emit: true actions (the set the generator renders). It panics on
+// a malformed manifest, a non-40-hex SHA, or a missing generator action so the
+// failure surfaces at init rather than as silently wrong generated output.
+func mustParseActionPins(data []byte) map[string]actionPin {
+	var manifest actionPinsManifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		panic(fmt.Sprintf("generate: parsing action_pins.yaml: %v", err))
+	}
+
+	pins := make(map[string]actionPin, len(manifest.Actions))
+	for name, entry := range manifest.Actions {
+		if !entry.Emit {
+			continue
+		}
+		if !commitSHAPattern.MatchString(entry.SHA) {
+			panic(fmt.Sprintf("generate: action_pins.yaml: %s sha %q is not a 40-char commit SHA", name, entry.SHA))
+		}
+		if entry.Tag == "" || entry.Version == "" {
+			panic(fmt.Sprintf("generate: action_pins.yaml: %s is missing a tag or version", name))
+		}
+		pins[name] = actionPin{tag: entry.Tag, sha: entry.SHA, shaVersion: entry.Version}
+	}
+
+	// Every action the generator references by const must be present and emit:true,
+	// so a manifest edit can never drop a governed action without a build-time panic.
+	for _, name := range []string{
+		actionCheckout, actionGithubScript, actionDownloadArtifact,
+		actionUploadArtifact, actionCreateAppToken,
+	} {
+		if _, ok := pins[name]; !ok {
+			panic(fmt.Sprintf("generate: action_pins.yaml is missing emit:true entry for %s", name))
+		}
+	}
+
+	return pins
 }
 
 // actionRef returns the fully-rendered uses: value for a third-party action
