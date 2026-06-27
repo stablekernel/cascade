@@ -67,6 +67,18 @@ jobs:
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Total coverage: ${COVERAGE}%"
 
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${COVERAGE}%"
+          awk -v cov="$COVERAGE" 'BEGIN {
+            if (cov + 0 < 80) {
+              printf "Coverage %s%% is below the 80%% threshold\n", cov
+              exit 1
+            }
+            printf "Coverage %s%% meets the 80%% threshold\n", cov
+          }'
+
   lint:
     name: Lint
     needs: changes
