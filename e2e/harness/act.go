@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,30 @@ const actStartupTimeout = 5 * time.Minute
 // completes, without hammering the daemon.
 const actStartupPollInterval = 2 * time.Second
 
+// actRunnerImage pins the catthehacker/ubuntu image used BOTH as the act
+// orchestrator container and as the job container act spawns for each generated
+// workflow. It is a DIGEST pin, not the rolling :act-latest tag, so the e2e
+// suite runs on a deterministic runtime instead of whatever the tag happens to
+// point at on a given day. The digest must carry Node >= actRunnerNodeMajorMin
+// because generated workflows run checkout (a Node 24 action) and act executes
+// every JavaScript action with the image's single node binary;
+// assertNodeMajorAtLeast enforces this at startup. catthehacker stopped
+// publishing dated act-latest-YYYYMMDD tags in 2023 (all predate Node 24), so a
+// digest is the only deterministic reference that reaches a Node 24 runtime.
+//
+// To repin: pull ghcr.io/catthehacker/ubuntu:act-latest, confirm
+// `docker run --rm <image> node --version` reports >= actRunnerNodeMajorMin,
+// then record the resolved digest here
+// (`docker inspect --format '{{index .RepoDigests 0}}' <image>`).
+const actRunnerImage = "ghcr.io/catthehacker/ubuntu@sha256:2f22a801c486881e278401813586faf73fac7dd1d016cbe9e01122ef14a57850"
+
+// actRunnerNodeMajorMin is the minimum Node major version the pinned image must
+// provide. checkout v7, github-script v9, and download-artifact v8 are Node 24
+// actions, and act runs every JavaScript action with the image's single node
+// binary, so the image's node must be at least this major or those live
+// scenarios crash with an obscure runtime error instead of a clear signal.
+const actRunnerNodeMajorMin = 24
+
 // NewActRunner starts a new act container
 func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string, net *testcontainers.DockerNetwork) (*ActRunner, error) {
 	var networks []string
@@ -63,7 +88,7 @@ func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string,
 	// network alias directly. Job containers are configured separately
 	// in actrc below.
 	req := testcontainers.ContainerRequest{
-		Image:    "ghcr.io/catthehacker/ubuntu:act-latest",
+		Image:    actRunnerImage,
 		Cmd:      []string{"sleep", "infinity"}, // Keep container running
 		Networks: networks,
 		// The readiness exec ("echo ready") only proves the container is up; it
@@ -107,10 +132,10 @@ func NewActRunner(ctx context.Context, giteaURL, giteaToken, networkName string,
 	// Network override is passed on the CLI as `--network=<name>`. Act's
 	// dedicated flag drives ContainerNetworkMode; --container-options is
 	// appended after docker create and cannot override the network mode.
-	actrc := `mkdir -p /root/.config/act && cat > /root/.config/act/actrc <<'EOF'
--P ubuntu-latest=catthehacker/ubuntu:act-latest
+	actrc := fmt.Sprintf(`mkdir -p /root/.config/act && cat > /root/.config/act/actrc <<'EOF'
+-P ubuntu-latest=%s
 --pull=false
-EOF`
+EOF`, actRunnerImage)
 	_, _, err = container.Exec(ctx, []string{"bash", "-c", actrc})
 	if err != nil {
 		_ = container.Terminate(ctx) // Best-effort cleanup
@@ -126,8 +151,18 @@ EOF`
 	// proxy hiccup), we proceed; act will retry on its own when needed.
 	_, _, _ = container.Exec(ctx, []string{
 		"bash", "-c",
-		`docker pull catthehacker/ubuntu:act-latest >/dev/null 2>&1 || true`,
+		fmt.Sprintf(`docker pull %s >/dev/null 2>&1 || true`, actRunnerImage),
 	})
+
+	// Fail fast if the pinned image's Node runtime regressed below the minimum
+	// the generated workflows require. The orchestrator container and the job
+	// containers act spawns share actRunnerImage, so one cheap exec here proves
+	// the job runtime too. A stale or mis-pinned image surfaces as a clear error
+	// pointing at the pin constant, not as a downstream checkout/action crash.
+	if err := assertNodeMajorAtLeast(ctx, container, actRunnerNodeMajorMin); err != nil {
+		_ = container.Terminate(ctx) // Best-effort cleanup
+		return nil, err
+	}
 
 	return &ActRunner{
 		container:   container,
@@ -209,6 +244,56 @@ func installActWithVerify(ctx context.Context, exec containerExecer, maxAttempts
 	}
 
 	return fmt.Errorf("failed to install act after %d attempt(s): %w", maxAttempts, lastErr)
+}
+
+// assertNodeMajorAtLeast execs `node --version` inside the act container and
+// errors if the reported Node major is below minMajor. The act orchestrator
+// container and the job containers act spawns share actRunnerImage, so checking
+// the orchestrator's node proves the job runtime too with a single cheap exec
+// and no extra container. The reader is requested multiplexed so Docker's
+// per-frame stream headers are stripped (a TTY-less exec on CI Linux would
+// otherwise prefix the version string with header bytes and break parsing).
+func assertNodeMajorAtLeast(ctx context.Context, exec containerExecer, minMajor int) error {
+	code, reader, err := exec.Exec(ctx, []string{"node", "--version"}, tcexec.Multiplexed())
+	if err != nil {
+		return fmt.Errorf("act image node version check exec failed: %w", err)
+	}
+	out := readExecOutput(reader)
+	if code != 0 {
+		return fmt.Errorf("act image node version check exited %d: %s", code, out)
+	}
+
+	major, err := parseNodeMajor(out)
+	if err != nil {
+		return fmt.Errorf("act image %s: %w", actRunnerImage, err)
+	}
+	if major < minMajor {
+		return fmt.Errorf(
+			"act image %s provides Node %d (%q); the e2e suite requires Node >= %d because generated workflows run Node 24 actions. Repin actRunnerImage to a newer catthehacker digest carrying Node >= %d",
+			actRunnerImage, major, out, minMajor, minMajor,
+		)
+	}
+	return nil
+}
+
+// parseNodeMajor extracts the major version from a `node --version` string such
+// as "v24.17.0" (the leading "v" is optional and trailing patch/build metadata
+// is ignored). It returns an error for empty or non-numeric input so a garbled
+// exec result fails loudly rather than silently reading as major 0.
+func parseNodeMajor(version string) (int, error) {
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if v == "" {
+		return 0, fmt.Errorf("empty node version output")
+	}
+	majorStr := v
+	if i := strings.IndexByte(v, '.'); i >= 0 {
+		majorStr = v[:i]
+	}
+	major, err := strconv.Atoi(majorStr)
+	if err != nil {
+		return 0, fmt.Errorf("unparseable node version %q: %w", version, err)
+	}
+	return major, nil
 }
 
 // readExecOutput drains an exec output reader into a trimmed string for error
