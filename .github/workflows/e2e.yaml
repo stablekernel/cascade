@@ -35,6 +35,14 @@ on:
         description: 'Subtest parallelism (lower = slower but more reliable)'
         required: false
         default: '1'
+      shard:
+        description: 'Run only this single shard index 0-4 (blank = full matrix)'
+        required: false
+        default: ''
+      scenario:
+        description: 'Run only scenarios whose subtest name matches this -run pattern (blank = all)'
+        required: false
+        default: ''
 
 # A superseded run on the same ref is cancelled rather than left to burn a full
 # ~27min testcontainers slot. Keyed on github.ref so each branch/PR/tag is its
@@ -77,11 +85,66 @@ jobs:
             echo "code=${{ steps.filter.outputs.code }}" >> "$GITHUB_OUTPUT"
           fi
 
-  e2e:
-    name: E2E Tests
+  plan:
+    name: Plan Shards
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      shards: ${{ steps.compute.outputs.shards }}
+    steps:
+      - id: compute
+        # Build the matrix shard list. A manual `shard` input collapses the
+        # matrix to that single leg for targeted reruns. A `scenario` input
+        # without a shard also collapses to a single leg, because the test code
+        # bypasses sharding when a scenario filter is set and would otherwise run
+        # the same scenarios on every leg. Otherwise the full set of five shards
+        # runs. The shard input is validated to one digit 0-4 so it cannot
+        # inject arbitrary JSON into the matrix expression.
+        env:
+          SHARD_INPUT: ${{ github.event.inputs.shard }}
+          SCENARIO_INPUT: ${{ github.event.inputs.scenario }}
+        run: |
+          if [ -n "$SHARD_INPUT" ]; then
+            case "$SHARD_INPUT" in
+              [0-4])
+                echo "shards=[$SHARD_INPUT]" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              *)
+                echo "Invalid shard input '$SHARD_INPUT'; expected a single index 0-4." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          if [ -n "$SCENARIO_INPUT" ]; then
+            echo 'shards=[0]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'shards=[0,1,2,3,4]' >> "$GITHUB_OUTPUT"
+
+  e2e:
+    # The scenario suite is split across N runners (one matrix leg per shard).
+    # Each leg runs its slice serially (E2E_PARALLEL=1) to keep the per-box
+    # reliability floor, so a single environmental flake fails one short leg
+    # rather than the whole multi-hour suite. E2E_SHARD_TOTAL must match the
+    # length of the shard list below; the Go side reads both values from the
+    # environment and falls back to running everything when they are unset.
+    name: E2E Tests (shard ${{ matrix.shard }})
+    needs: [changes, plan]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      # One shard's flake must not cancel the others; each is independently
+      # rerunnable from the failed matrix leg.
+      fail-fast: false
+      matrix:
+        # Computed by the plan job: the full five-shard set, or a single shard
+        # when the workflow_dispatch `shard` input collapses the matrix.
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -110,12 +173,18 @@ jobs:
           echo "=== Disk ==="
           df -h /
 
+      - name: Install gotestsum
+        # gotestsum drives the rerun-on-failure self-heal: on a failed run it
+        # reruns only the individual failed scenarios (not the whole shard),
+        # giving three total attempts per leg before the shard fails.
+        run: go install gotest.tools/gotestsum@v1.13.0
+
       - name: Run e2e tests
         working-directory: e2e
         env:
-          # Default 60m to give 32 scenarios (4 cores × ~6min ÷ 2 parallel)
-          # enough headroom. Override per-dispatch as needed.
-          E2E_TIMEOUT: ${{ github.event.inputs.timeout || '60m' }}
+          # Each shard runs roughly a fifth of the suite, so 30m of per-package
+          # headroom is ample. Override per-dispatch as needed.
+          E2E_TIMEOUT: ${{ github.event.inputs.timeout || '30m' }}
           # Cap subtest parallelism. The GitHub runner has 4 cores / ~7.9GB
           # RAM. Each scenario spins up gitea + act + N job containers; at
           # the default GOMAXPROCS=4, four scenarios concurrently exhaust
@@ -124,11 +193,29 @@ jobs:
           # load throttles gitea and destabilises act runs, so the default is
           # serial (1); raise it per-dispatch only when chasing wall-clock.
           E2E_PARALLEL: ${{ github.event.inputs.parallel || '1' }}
+          # Scenario sharding. The Go side sorts scenarios by name and selects
+          # those whose position modulo the total equals this index, so the
+          # union of all legs is the whole suite with no overlap. Keep
+          # E2E_SHARD_TOTAL equal to the matrix shard-list length.
+          E2E_SHARD_INDEX: ${{ matrix.shard }}
+          E2E_SHARD_TOTAL: 5
+          # Optional single-scenario filter for manual debugging. The test code
+          # reads it as a regular expression over scenario names and, when set,
+          # bypasses sharding so one leg runs only the matching scenarios. It is
+          # consumed only by the Go test process, never by the shell.
+          E2E_SCENARIO: ${{ github.event.inputs.scenario }}
         run: |
-          go test -v \
+          # --rerun-fails=2 gives three total attempts and reruns only the
+          # scenarios that failed; the leg passes if every scenario passes
+          # within those attempts.
+          gotestsum \
+            --format standard-verbose \
+            --rerun-fails=2 \
+            --rerun-fails-report rerun-report.txt \
+            --packages=./... \
+            -- \
             -timeout "$E2E_TIMEOUT" \
-            -parallel "$E2E_PARALLEL" \
-            ./...
+            -parallel "$E2E_PARALLEL"
 
       # On a retry-exhausted scenario the harness writes the last attempt's raw
       # act stdout/stderr to e2e/_artifacts/<scenario>-attempt<N>.log so the
@@ -141,7 +228,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-crash-evidence
+          # Per-shard name: upload-artifact rejects duplicate names across
+          # matrix legs, so each shard writes its own evidence artifact.
+          name: e2e-crash-evidence-shard-${{ matrix.shard }}
           path: e2e/_artifacts/
           if-no-files-found: ignore
           retention-days: 14
@@ -150,8 +239,11 @@ jobs:
     # This always-run context is the branch-protection required check. It mirrors
     # the heavy E2E result when E2E runs and passes cleanly when E2E is correctly
     # skipped on non-code changes, avoiding the required-but-skipped deadlock.
+    # needs.e2e aggregates every shard in the matrix: its result is success only
+    # when all legs pass and failure if any single shard fails, so this gate
+    # stays the one required-check identity over the whole sharded suite.
     name: Integration Gate
-    needs: [changes, e2e]
+    needs: [changes, plan, e2e]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -160,6 +252,7 @@ jobs:
       - name: Check Integration Status
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           # The detection job must succeed for its `code` output to be trusted.
@@ -167,6 +260,13 @@ jobs:
           # change through on a stale/empty signal.
           if [ "$CHANGES_RESULT" != "success" ]; then
             echo "Integration gate: change-detection result=$CHANGES_RESULT, failing the gate."
+            exit 1
+          fi
+          # The plan job computes the shard matrix. When no code changed it is
+          # correctly skipped (alongside e2e); any other non-success is a real
+          # failure that must not be waved through.
+          if [ "$PLAN_RESULT" != "success" ] && [ "$PLAN_RESULT" != "skipped" ]; then
+            echo "Integration gate: shard-plan result=$PLAN_RESULT, failing the gate."
             exit 1
           fi
           # E2E success means a code change passed the heavy suite. E2E skipped

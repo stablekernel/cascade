@@ -17,6 +17,10 @@ func TestMultiRepoScenarios(t *testing.T) {
 		t.Skip("skipping multi-repo e2e tests in short mode")
 	}
 
+	if pattern := scenarioFilter(); pattern != "" {
+		t.Skipf("%s=%q targets multi-step scenarios; skipping multi-repo suite", envScenarioFilter, pattern)
+	}
+
 	// Find the scenarios directory
 	scenariosDir := filepath.Join("scenarios", "multi-repo")
 	if _, err := os.Stat(scenariosDir); os.IsNotExist(err) {
@@ -26,8 +30,16 @@ func TestMultiRepoScenarios(t *testing.T) {
 	scenarios, err := harness.DiscoverMultiRepoScenarios(scenariosDir)
 	require.NoError(t, err, "failed to discover scenarios")
 
+	// Select only this shard's slice so the heavy per-repo setup runs once
+	// across the matrix rather than once per leg. The default (unset) shard
+	// returns the full set, leaving local runs unchanged. Description embeds
+	// the unique source path, so the round-robin distribution is stable.
+	shard, err := harness.ShardFromEnv()
+	require.NoError(t, err)
+	scenarios = harness.SelectShard(scenarios, multiRepoShardKey, shard)
+
 	if len(scenarios) == 0 {
-		t.Skip("no multi-repo scenarios found")
+		t.Skip("no multi-repo scenarios for this shard")
 	}
 
 	for _, scenario := range scenarios {
@@ -36,6 +48,31 @@ func TestMultiRepoScenarios(t *testing.T) {
 			t.Parallel()
 			runMultiRepoScenario(t, scenario)
 		})
+	}
+}
+
+// multiRepoShardKey returns the stable, collision-free key used to order
+// multi-repo scenarios before they are distributed across CI shards. Discovery
+// sets Description to the unique source path.
+func multiRepoShardKey(s *harness.MultiRepoScenario) string {
+	if s.Description != "" {
+		return s.Description
+	}
+	return s.Name
+}
+
+// requireShardOwns skips a standalone, singly-named heavyweight test unless the
+// active shard owns it. Each test name hashes to exactly one shard, so across
+// the matrix it runs once; the unset default owns everything for local runs.
+func requireShardOwns(t *testing.T) {
+	t.Helper()
+	if pattern := scenarioFilter(); pattern != "" {
+		t.Skipf("%s=%q targets multi-step scenarios; skipping standalone test", envScenarioFilter, pattern)
+	}
+	shard, err := harness.ShardFromEnv()
+	require.NoError(t, err)
+	if !shard.Owns(t.Name()) {
+		t.Skipf("assigned to a different shard (this leg is %d of %d)", shard.Index, shard.Total)
 	}
 }
 
@@ -62,6 +99,7 @@ func TestMultiRepoScenario_SatelliteNotifiesPrimary(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	requireShardOwns(t)
 
 	scenarioPath := filepath.Join("scenarios", "multi-repo", "satellite-notifies-primary.yaml")
 	if _, err := os.Stat(scenarioPath); os.IsNotExist(err) {
@@ -82,6 +120,7 @@ func TestMultiRepoScenario_ExternalStatePromotion(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	requireShardOwns(t)
 
 	scenarioPath := filepath.Join("scenarios", "multi-repo", "external-state-promotion.yaml")
 	if _, err := os.Stat(scenarioPath); os.IsNotExist(err) {
@@ -102,6 +141,7 @@ func TestMultiRepoScenario_MixedDeploys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	requireShardOwns(t)
 
 	scenarioPath := filepath.Join("scenarios", "multi-repo", "mixed-deploys.yaml")
 	if _, err := os.Stat(scenarioPath); os.IsNotExist(err) {

@@ -42,6 +42,7 @@ func TestInitScaffoldOrchestratesAndPromotes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E tests")
 	}
+	requireShardOwns(t)
 
 	const project = "cascade-init-demo"
 	envs := []string{"dev", "prod"}
