@@ -47,10 +47,7 @@ func (g *PromoteGenerator) SetState(state map[string]*config.EnvState) {
 //   - "beta" → "master" branch (explicit opt-in, bleeding edge, may be unstable)
 //   - "vX.Y.Z" → that specific version tag
 func (g *PromoteGenerator) getCLIRef() string {
-	if g.config.CLIVersion == "beta" {
-		return "master" // Explicit opt-in escape hatch to trunk.
-	}
-	return g.config.GetCLIVersion()
+	return cliSetupRef(g.config)
 }
 
 // getReleaseTokenRef returns the token expression for release operations.

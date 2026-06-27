@@ -191,18 +191,13 @@ func (g *Generator) anyAutoCommits() bool {
 	return false
 }
 
-// getCLIRef returns the Git ref to use for the cascade self-action. The default
-// (cli_version unset or "latest") resolves to config.DefaultCLIVersion, an
-// immutable release tag, so consumers never run an unpinned mutable ref.
-// Supported values:
-//   - unset / "latest" → config.DefaultCLIVersion (immutable, pinned default)
-//   - "beta" → "master" branch (explicit opt-in, bleeding edge, may be unstable)
-//   - "vX.Y.Z" → that specific version tag
+// getCLIRef returns the ref emitted after "setup-cli@" for the cascade
+// self-action. It delegates to cliSetupRef, the single policy seam shared by
+// every generator, which resolves cli_version to an immutable release tag (or a
+// 40-hex commit SHA with a version comment under pin_mode: sha) so consumers
+// never run an unpinned mutable ref.
 func (g *Generator) getCLIRef() string {
-	if g.config.CLIVersion == "beta" {
-		return "master" // Explicit opt-in escape hatch to trunk.
-	}
-	return g.config.GetCLIVersion()
+	return cliSetupRef(g.config)
 }
 
 // getReleaseTokenRef returns the token expression for release operations.

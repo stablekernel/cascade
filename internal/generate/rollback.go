@@ -67,10 +67,7 @@ func (g *RollbackGenerator) paramRead(name string) string {
 // escape hatch to the "master" branch; everything else resolves through
 // GetCLIVersion (which pins "" / "latest" to the immutable default).
 func (g *RollbackGenerator) getCLIRef() string {
-	if g.config.CLIVersion == "beta" {
-		return "master" // Explicit opt-in escape hatch to trunk.
-	}
-	return g.config.GetCLIVersion()
+	return cliSetupRef(g.config)
 }
 
 // getReleaseTokenRef returns the token expression for deploy/release operations.

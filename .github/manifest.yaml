@@ -11,6 +11,7 @@ ci:
       - go.mod
       - go.sum
     cli_version: v0.1.0
+    cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803
     pin_mode: sha
     manifest_file: .github/manifest.yaml
     manifest_key: ci

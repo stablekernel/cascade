@@ -99,6 +99,87 @@ func TestActionRef_NilConfigSafe(t *testing.T) {
 	assert.Equal(t, actionCheckout+"@"+defaultActionPins[actionCheckout].tag, actionRef(nil, actionCheckout))
 }
 
+// TestCLISetupRef covers the self-action ref resolution: the version tag in tag
+// mode (today's behavior), the 40-hex commit SHA with a trailing version comment
+// when pin_mode is sha and cli_version_sha is set, graceful fallback to the tag
+// when the SHA is absent, and the beta -> master escape hatch.
+//
+// There is no act+gitea e2e scenario for this feature. The e2e harness localizes
+// cross-repo self-references (stablekernel/cascade/.github/actions/setup-cli@<ref>
+// -> ./.github/actions/setup-cli) before running act, so the pinned ref is erased
+// before the workflow executes and no in-container assertion can observe it. Unit
+// coverage here (cliSetupRef) plus the regenerated cascade orchestrate.yaml /
+// promote.yaml showing @9dc69a1f... # v0.1.0 are the proof of correctness.
+func TestCLISetupRef(t *testing.T) {
+	const sha = "9dc69a1f66753a3865c38c34eca5a931f677c803"
+
+	tests := []struct {
+		name string
+		cfg  *config.TrunkConfig
+		want string
+	}{
+		{
+			name: "tag default when cli_version unset",
+			cfg:  &config.TrunkConfig{},
+			want: config.DefaultCLIVersion,
+		},
+		{
+			name: "explicit tag in tag mode",
+			cfg:  &config.TrunkConfig{CLIVersion: "v1.2.3", PinMode: config.PinModeTag},
+			want: "v1.2.3",
+		},
+		{
+			name: "sha mode with sha set emits sha and version comment",
+			cfg:  &config.TrunkConfig{CLIVersion: "v1.2.3", PinMode: config.PinModeSHA, CLIVersionSHA: sha},
+			want: sha + " # v1.2.3",
+		},
+		{
+			name: "sha mode without sha falls back to tag",
+			cfg:  &config.TrunkConfig{CLIVersion: "v1.2.3", PinMode: config.PinModeSHA},
+			want: "v1.2.3",
+		},
+		{
+			name: "tag mode ignores a set sha",
+			cfg:  &config.TrunkConfig{CLIVersion: "v1.2.3", PinMode: config.PinModeTag, CLIVersionSHA: sha},
+			want: "v1.2.3",
+		},
+		{
+			name: "beta opts into master regardless of pin mode",
+			cfg:  &config.TrunkConfig{CLIVersion: "beta", PinMode: config.PinModeSHA, CLIVersionSHA: sha},
+			want: "master",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, cliSetupRef(tt.cfg))
+		})
+	}
+}
+
+// TestPinPolicy_E2E_SelfActionSHAPinned asserts that when pin_mode is sha and
+// cli_version_sha is set, every generated setup-cli self-action ref in the
+// orchestrate output is pinned to the 40-hex commit with cli_version carried as a
+// trailing comment, and the bare version-tag uses: ref no longer appears. This is
+// the generator-level end-to-end proof; the act+gitea harness cannot observe this
+// because it localizes the cross-repo self-ref before running act (see TestCLISetupRef
+// for a full explanation).
+func TestPinPolicy_E2E_SelfActionSHAPinned(t *testing.T) {
+	const sha = "9dc69a1f66753a3865c38c34eca5a931f677c803"
+	cfg, tmpDir := newPinE2EConfig(t)
+	cfg.CLIVersion = "v0.1.0"
+	cfg.CLIVersionSHA = sha
+
+	out, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	const action = "stablekernel/cascade/.github/actions/setup-cli"
+	assert.Contains(t, out, action+"@"+sha+" # v0.1.0",
+		"self-action must be SHA-pinned with a version comment")
+	assert.NotContains(t, out, "uses: "+action+"@v0.1.0\n",
+		"the bare version tag must not remain as a uses: ref once SHA-pinned")
+}
+
 // newPinE2EConfig builds a manifest exercising the orchestrate, build, deploy,
 // and release emission paths so the generated workflow contains every
 // third-party uses: line the pin policy governs.

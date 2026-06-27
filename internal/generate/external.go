@@ -26,10 +26,7 @@ func NewExternalUpdateGenerator(cfg *config.TrunkConfig, baseDir string) *Extern
 // immutable release tag, so consumers never run an unpinned mutable ref.
 // "beta" is the explicit opt-in escape hatch to the "master" branch.
 func (g *ExternalUpdateGenerator) getCLIRef() string {
-	if g.config.CLIVersion == "beta" {
-		return "master" // Explicit opt-in escape hatch to trunk.
-	}
-	return g.config.GetCLIVersion()
+	return cliSetupRef(g.config)
 }
 
 // getReleaseTokenRef returns the token expression for release operations.

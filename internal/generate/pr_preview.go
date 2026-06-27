@@ -39,10 +39,7 @@ func NewPRPreviewGenerator(cfg *config.TrunkConfig, baseDir string) *PRPreviewGe
 // immutable release tag, so consumers never run an unpinned mutable ref.
 // "beta" is the explicit opt-in escape hatch to the "master" branch.
 func (g *PRPreviewGenerator) getCLIRef() string {
-	if g.config.CLIVersion == "beta" {
-		return "master" // Explicit opt-in escape hatch to trunk.
-	}
-	return g.config.GetCLIVersion()
+	return cliSetupRef(g.config)
 }
 
 // commentEnabled reports whether the preview should also post a PR comment.

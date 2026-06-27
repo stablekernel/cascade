@@ -56,6 +56,9 @@ var validRolloutTypes = map[string]bool{
 // ID and the ${{ }} dereferences that read its outputs.
 var jobIDSafeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// commitSHARe matches a full 40-character lowercase-hex Git commit SHA.
+var commitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 // validateJobIDSafeName rejects a name that would produce an invalid GitHub
 // Actions job ID or break the expression references derived from it. Names are
 // rejected (not sanitized) on purpose: sanitizing distinct names could collapse
@@ -276,6 +279,13 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	// pin_mode must be tag or sha.
 	if cfg.PinMode != "" && cfg.PinMode != PinModeTag && cfg.PinMode != PinModeSHA {
 		errs = append(errs, "pin_mode must be one of: tag, sha")
+	}
+
+	// cli_version_sha, when set, must be a 40-char lowercase-hex commit SHA so it
+	// can be SHA-pinned into the generated setup-cli refs without producing a
+	// broken, unresolvable ref.
+	if cfg.CLIVersionSHA != "" && !commitSHARe.MatchString(cfg.CLIVersionSHA) {
+		errs = append(errs, "cli_version_sha must be a 40-character lowercase hex commit SHA")
 	}
 
 	// release_trigger must be push or dispatch.

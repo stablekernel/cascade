@@ -82,6 +82,30 @@ func actionRef(cfg *config.TrunkConfig, action string) string {
 	return action + "@" + pin.tag
 }
 
+// cliSetupRef returns the ref portion emitted after "setup-cli@" for cascade's
+// own self-action. It returns a 40-hex commit SHA with a trailing "# <version>"
+// comment when pin_mode is sha and cli_version_sha is set, otherwise the
+// cli_version tag (today's behavior). "beta" always opts into the master trunk.
+//
+// Unlike third-party actions (resolved by actionRef against a static pin table),
+// the self-action SHA tracks cli_version, which moves every release, so it is
+// sourced from the manifest (written by the bump automation) rather than a baked
+// constant. Generation stays a pure offline function of the committed manifest.
+//
+// Precedence: beta (master) > (pin_mode sha AND cli_version_sha set) > tag. An
+// empty cli_version_sha under pin_mode sha degrades gracefully to the tag,
+// never a broken ref.
+func cliSetupRef(cfg *config.TrunkConfig) string {
+	if cfg.CLIVersion == "beta" {
+		return "master" // Explicit opt-in escape hatch to trunk.
+	}
+	version := cfg.GetCLIVersion()
+	if cfg.GetPinMode() == config.PinModeSHA && cfg.CLIVersionSHA != "" {
+		return cfg.CLIVersionSHA + " # " + version
+	}
+	return version
+}
+
 // writeActionStep writes a "<indent>- uses: <ref>\n" line for a third-party
 // action, routing the ref through actionRef so the pin policy is applied. Pass
 // the leading indentation (spaces before "- ").

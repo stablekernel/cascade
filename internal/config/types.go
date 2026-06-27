@@ -125,6 +125,12 @@ type TrunkConfig struct {
 	ReleaseTrigger string `yaml:"release_trigger,omitempty" json:"release_trigger,omitempty"`
 	Environments  []string `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
 	CLIVersion    string   `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
+	// CLIVersionSHA is the 40-hex commit SHA that cli_version resolves to. When
+	// set and pin_mode is sha, generated setup-cli self-action refs are pinned to
+	// this commit with cli_version carried as a trailing comment; otherwise the
+	// version tag is emitted (today's behavior). The bump automation peels the
+	// annotated cli_version tag to its commit and writes this.
+	CLIVersionSHA string `yaml:"cli_version_sha,omitempty" json:"cli_version_sha,omitempty"`
 	TagPrefix     string   `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
 	ReleaseToken  string   `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
 	StateToken    string   `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")

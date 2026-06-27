@@ -83,6 +83,7 @@ ci:
 | `trunk_branch` | string | Yes | - | Main branch (e.g., `master`, `main`) |
 | `environments` | list | No | - | Promotion chain. Omit for no-env library/CLI projects. |
 | `cli_version` | string | No | latest | CLI version: `latest`, `beta`, or specific version (e.g., `v2.0.4`) |
+| `cli_version_sha` | string | No | - | 40-hex commit SHA that `cli_version` resolves to. With `pin_mode: sha`, the generated setup-cli ref is pinned to this commit. See [cli_version_sha](#cli_version_sha). |
 | `triggers` | list | No | - | Global path patterns that activate orchestration |
 | `tag_prefix` | string | No | `v` | Version tag prefix |
 | `release_token` | string | No | `state_token` if set, else `${{ secrets.GITHUB_TOKEN }}` | Token expression for release API calls and the rc tag; inherits `state_token` when unset so the rc-to-release chain has a trigger-capable token |
@@ -110,6 +111,18 @@ Controls which CLI version the generated workflows install via setup-cli:
 | `vX.Y.Z` | Specific version (e.g., `v2.0.4`) |
 
 Pin to a specific version for reproducibility. Use `beta` for early access.
+
+### cli_version_sha
+
+When `pin_mode: sha` is set, pair `cli_version` with `cli_version_sha`, the 40-character lowercase-hex commit SHA that the `cli_version` tag resolves to. The generated setup-cli ref is then pinned to that immutable commit, with `cli_version` carried as a trailing comment:
+
+```yaml
+uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.1.0
+```
+
+The `with: version:` input the action reads to select the release asset stays the human-readable tag, so only the action source is pinned to a commit.
+
+This closes the supply-chain gap where the cascade self-action was referenced by a mutable tag while third-party actions were already SHA-pinned. The field is optional and only takes effect under `pin_mode: sha`; leave it unset (or use the default `pin_mode: tag`) to keep the tag-based ref. Set `cli_version_sha` alongside `cli_version` whenever you bump the pinned version. Because cascade release tags are annotated, resolve the underlying commit (not the tag object) with `git ls-remote https://github.com/stablekernel/cascade 'refs/tags/<tag>^{}'`.
 
 ### Token authentication
 
