@@ -371,6 +371,23 @@ Full flag reference: [CLI reference](https://stablekernel.github.io/cascade/cli-
 
 ---
 
+## Project governance
+
+How cascade is run, where it is going, and how it is designed and secured:
+
+| Document | Description |
+|---|---|
+| [Governance](./GOVERNANCE.md) | Roles, decision model, and continuity and succession plan |
+| [Roadmap](./ROADMAP.md) | Public roadmap and direction |
+| [Code of Conduct](./CODE_OF_CONDUCT.md) | Community standards and reporting |
+| [Architecture](https://stablekernel.github.io/cascade/architecture/) | System design, components, and trust boundaries |
+| [Security requirements](./docs/security-requirements.md) | Security goals the project holds itself to |
+| [Assurance case](./docs/assurance-case.md) | Threat model and the argument that cascade is built and operated securely |
+
+For private vulnerability reporting, see [SECURITY.md](./SECURITY.md).
+
+---
+
 ## Roadmap to stable
 
 cascade is functional and self-hosted; its own releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas:
