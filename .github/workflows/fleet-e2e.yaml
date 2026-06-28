@@ -584,6 +584,13 @@ jobs:
         with:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-4env
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          # The heavy lane is the single most race-prone surface (full lifecycle
+          # plus chained multi-env hotfix, conflict, rollback, and merge_queue
+          # against one live repo). Allow one whole-suite re-dispatch so a live
+          # GitHub eventual-consistency blip does not red the lane. Safe because
+          # each suite run self-resets on its first step. Other lanes keep the
+          # default (no retry) so a retry stays a scoped concession here.
+          retry-attempts: '2'
 
   # Lane 3: the light remainder, capped at two repos in flight. Sequenced AFTER
   # the heavy lane (via needs) so 4env and this capped matrix never overlap;

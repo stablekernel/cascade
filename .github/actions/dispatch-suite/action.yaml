@@ -34,6 +34,21 @@ inputs:
       GitHub secondary rate limits when many suites are watched concurrently.
     required: false
     default: '60'
+  retry-attempts:
+    description: >-
+      Total dispatch attempts for this suite. Default 1 keeps the historical
+      behavior (a single dispatch, no retry). Set to 2 or more on the heaviest,
+      most race-prone lane so a whole-suite failure re-dispatches a fresh run.
+      This is safe because every scenario-suite run begins with its own
+      "reset and seed dev" step, so a re-dispatch starts from a clean slate.
+      Only a non-success conclusion (or a run that never became visible)
+      consumes a retry; a successful run returns immediately.
+    required: false
+    default: '1'
+  retry-backoff:
+    description: 'Seconds to sleep between a failed attempt and the next dispatch'
+    required: false
+    default: '30'
 
 runs:
   using: 'composite'
@@ -57,115 +72,158 @@ runs:
         RECOVER_ATTEMPTS: ${{ inputs.recover-attempts }}
         RECOVER_INTERVAL: ${{ inputs.recover-interval }}
         WATCH_INTERVAL: ${{ inputs.watch-interval }}
+        RETRY_ATTEMPTS: ${{ inputs.retry-attempts }}
+        RETRY_BACKOFF: ${{ inputs.retry-backoff }}
       run: |
         set -euo pipefail
 
-        # Capture a UTC timestamp BEFORE dispatching so the recovery filter only
-        # matches runs this action created, not pre-existing ones.
-        DISPATCH_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        echo "Dispatching $TARGET_WORKFLOW in $TARGET_REPO @ $TARGET_REF (since $DISPATCH_TS)"
+        # One full dispatch -> recover -> watch cycle. Returns 0 only when the
+        # recovered run concludes success, and non-zero on a failed/cancelled
+        # run, a recovery miss, or a watch timeout. It never calls `exit`, so the
+        # outer retry loop stays in control of the step's final status.
+        attempt_suite() {
+          # Capture a UTC timestamp BEFORE dispatching so the recovery filter only
+          # matches runs this action created, not pre-existing ones.
+          local DISPATCH_TS
+          DISPATCH_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "Dispatching $TARGET_WORKFLOW in $TARGET_REPO @ $TARGET_REF (since $DISPATCH_TS)"
 
-        # NOTE: do NOT pass -f cascade_version=... here. The suites do not define
-        # that input yet, so an extra input would error with "unexpected inputs".
-        # The version under test is computed and logged by the orchestrator but
-        # is inert until the suites accept the input.
-        gh workflow run "$TARGET_WORKFLOW" \
-          --repo "$TARGET_REPO" \
-          --ref "$TARGET_REF"
-
-        # Recover the run id. Cross-repo dispatch is async; the run may not be
-        # listable immediately, so poll with a bounded retry.
-        RUN_ID=""
-        for attempt in $(seq 1 "$RECOVER_ATTEMPTS"); do
-          RUN_ID=$(gh run list \
+          # NOTE: do NOT pass -f cascade_version=... here. The suites do not define
+          # that input yet, so an extra input would error with "unexpected inputs".
+          # The version under test is computed and logged by the orchestrator but
+          # is inert until the suites accept the input.
+          gh workflow run "$TARGET_WORKFLOW" \
             --repo "$TARGET_REPO" \
-            --workflow "$TARGET_WORKFLOW" \
-            --event workflow_dispatch \
-            --created ">=$DISPATCH_TS" \
-            --limit 20 \
-            --json databaseId,status,conclusion,createdAt \
-            --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')
-          if [ -n "$RUN_ID" ]; then
-            echo "Recovered run id $RUN_ID on attempt $attempt"
-            break
-          fi
-          echo "Run not visible yet (attempt $attempt/$RECOVER_ATTEMPTS); sleeping ${RECOVER_INTERVAL}s"
-          sleep "$RECOVER_INTERVAL"
-        done
+            --ref "$TARGET_REF"
 
-        if [ -z "$RUN_ID" ]; then
-          echo "::error::Could not recover a $TARGET_WORKFLOW run in $TARGET_REPO after dispatch"
-          exit 1
+          # Recover the run id. Cross-repo dispatch is async; the run may not be
+          # listable immediately, so poll with a bounded retry.
+          local RUN_ID="" recover_attempt
+          for recover_attempt in $(seq 1 "$RECOVER_ATTEMPTS"); do
+            RUN_ID=$(gh run list \
+              --repo "$TARGET_REPO" \
+              --workflow "$TARGET_WORKFLOW" \
+              --event workflow_dispatch \
+              --created ">=$DISPATCH_TS" \
+              --limit 20 \
+              --json databaseId,status,conclusion,createdAt \
+              --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')
+            if [ -n "$RUN_ID" ]; then
+              echo "Recovered run id $RUN_ID on attempt $recover_attempt"
+              break
+            fi
+            echo "Run not visible yet (attempt $recover_attempt/$RECOVER_ATTEMPTS); sleeping ${RECOVER_INTERVAL}s"
+            sleep "$RECOVER_INTERVAL"
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Could not recover a $TARGET_WORKFLOW run in $TARGET_REPO after dispatch"
+            return 1
+          fi
+
+          local RUN_URL="https://github.com/$TARGET_REPO/actions/runs/$RUN_ID"
+          echo "Watching $RUN_URL"
+          {
+            echo "- **$TARGET_REPO**: [run $RUN_ID]($RUN_URL)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Block on the recovered run's conclusion via a bounded poll loop.
+          # gh run watch --exit-status fails the whole step on a transient
+          # 401/403/5xx mid-poll, even when the watched run ultimately succeeds.
+          # This loop retries on transient API errors while still failing closed on
+          # real run failures and on timeout.
+          #
+          # MAX_ATTEMPTS * WATCH_INTERVAL = wall-clock cap (~180 min (3h) at 60s each, headroom for queue+run under full-fleet load, well under GitHub's 6h job cap).
+          # The 4env suite runs the full lifecycle plus a chained multi-env hotfix
+          # and the Step 13 conflict probe, each a serial cascade run, so the cap
+          # must clear its 60-minute internal job timeout with headroom.
+          local MAX_ATTEMPTS=180
+          local CONSEC_ERRORS=0
+          local MAX_CONSEC_ERRORS=5
+          local attempt=0
+          local view_output exit_code status conclusion
+
+          while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
+            attempt=$((attempt + 1))
+
+            view_output=$(gh run view "$RUN_ID" \
+              --repo "$TARGET_REPO" \
+              --json status,conclusion 2>&1) && exit_code=0 || exit_code=$?
+
+            if [ "$exit_code" -ne 0 ]; then
+              # Decide whether this looks transient (auth blip, rate-limit, 5xx).
+              if echo "$view_output" | grep -qiE \
+                  'HTTP (401|403|5[0-9]{2})|bad credentials|rate.?limit|temporary|connection|timed? ?out|network'; then
+                echo "Transient API error on attempt $attempt, retrying in ${WATCH_INTERVAL}s..."
+                CONSEC_ERRORS=$((CONSEC_ERRORS + 1))
+              else
+                echo "gh run view failed (attempt $attempt): $view_output"
+                CONSEC_ERRORS=$((CONSEC_ERRORS + 1))
+              fi
+
+              if [ "$CONSEC_ERRORS" -ge "$MAX_CONSEC_ERRORS" ]; then
+                echo "::error::$MAX_CONSEC_ERRORS consecutive gh run view failures - failing closed"
+                return 1
+              fi
+
+              sleep "$WATCH_INTERVAL"
+              continue
+            fi
+
+            # Reset consecutive-error counter on a clean response.
+            CONSEC_ERRORS=0
+
+            status=$(echo "$view_output" | jq -r '.status // empty')
+            conclusion=$(echo "$view_output" | jq -r '.conclusion // empty')
+
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "Run $RUN_ID in $TARGET_REPO completed successfully"
+                return 0
+              else
+                echo "::error::Run $RUN_ID in $TARGET_REPO completed with conclusion: $conclusion"
+                return 1
+              fi
+            fi
+
+            echo "Run $RUN_ID status=$status (attempt $attempt/$MAX_ATTEMPTS), waiting ${WATCH_INTERVAL}s..."
+            sleep "$WATCH_INTERVAL"
+          done
+
+          echo "::error::Timed out waiting for run $RUN_ID in $TARGET_REPO after $MAX_ATTEMPTS attempts"
+          return 1
+        }
+
+        # Outer retry loop. A green first attempt costs nothing; only a
+        # non-success suite run consumes a retry. Each attempt re-dispatches a
+        # fresh run, which is safe because the suite self-resets on its first
+        # step. The default RETRY_ATTEMPTS=1 means no retry, preserving the
+        # historical single-dispatch behavior on every lane that does not opt in.
+        total_attempts="$RETRY_ATTEMPTS"
+        if ! [ "$total_attempts" -ge 1 ] 2>/dev/null; then
+          echo "::warning::retry-attempts '$RETRY_ATTEMPTS' is not a positive integer; defaulting to 1"
+          total_attempts=1
         fi
 
-        RUN_URL="https://github.com/$TARGET_REPO/actions/runs/$RUN_ID"
-        echo "Watching $RUN_URL"
-        {
-          echo "- **$TARGET_REPO**: [run $RUN_ID]($RUN_URL)"
-        } >> "$GITHUB_STEP_SUMMARY"
-
-        # Block on the recovered run's conclusion via a bounded poll loop.
-        # gh run watch --exit-status fails the whole step on a transient
-        # 401/403/5xx mid-poll, even when the watched run ultimately succeeds.
-        # This loop retries on transient API errors while still failing closed on
-        # real run failures and on timeout.
-        #
-        # MAX_ATTEMPTS * WATCH_INTERVAL = wall-clock cap (~180 min (3h) at 60s each, headroom for queue+run under full-fleet load, well under GitHub's 6h job cap).
-        # The 4env suite runs the full lifecycle plus a chained multi-env hotfix
-        # and the Step 13 conflict probe, each a serial cascade run, so the cap
-        # must clear its 60-minute internal job timeout with headroom.
-        MAX_ATTEMPTS=180
-        CONSEC_ERRORS=0
-        MAX_CONSEC_ERRORS=5
-        attempt=0
-
-        while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
-          attempt=$((attempt + 1))
-
-          view_output=$(gh run view "$RUN_ID" \
-            --repo "$TARGET_REPO" \
-            --json status,conclusion 2>&1)
-          exit_code=$?
-
-          if [ "$exit_code" -ne 0 ]; then
-            # Decide whether this looks transient (auth blip, rate-limit, 5xx).
-            if echo "$view_output" | grep -qiE \
-                'HTTP (401|403|5[0-9]{2})|bad credentials|rate.?limit|temporary|connection|timed? ?out|network'; then
-              echo "Transient API error on attempt $attempt, retrying in ${WATCH_INTERVAL}s..."
-              CONSEC_ERRORS=$((CONSEC_ERRORS + 1))
-            else
-              echo "gh run view failed (attempt $attempt): $view_output"
-              CONSEC_ERRORS=$((CONSEC_ERRORS + 1))
-            fi
-
-            if [ "$CONSEC_ERRORS" -ge "$MAX_CONSEC_ERRORS" ]; then
-              echo "::error::$MAX_CONSEC_ERRORS consecutive gh run view failures - failing closed"
-              exit 1
-            fi
-
-            sleep "$WATCH_INTERVAL"
-            continue
+        suite_attempt=1
+        while [ "$suite_attempt" -le "$total_attempts" ]; do
+          echo "::group::Suite attempt $suite_attempt of $total_attempts for $TARGET_REPO"
+          if attempt_suite; then
+            echo "::endgroup::"
+            echo "Suite for $TARGET_REPO passed on attempt $suite_attempt of $total_attempts"
+            exit 0
           fi
+          echo "::endgroup::"
 
-          # Reset consecutive-error counter on a clean response.
-          CONSEC_ERRORS=0
-
-          status=$(echo "$view_output" | jq -r '.status // empty')
-          conclusion=$(echo "$view_output" | jq -r '.conclusion // empty')
-
-          if [ "$status" = "completed" ]; then
-            if [ "$conclusion" = "success" ]; then
-              echo "Run $RUN_ID in $TARGET_REPO completed successfully"
-              exit 0
-            else
-              echo "::error::Run $RUN_ID in $TARGET_REPO completed with conclusion: $conclusion"
-              exit 1
-            fi
+          if [ "$suite_attempt" -lt "$total_attempts" ]; then
+            echo "::warning::Suite attempt $suite_attempt of $total_attempts for $TARGET_REPO did not succeed; re-dispatching after ${RETRY_BACKOFF}s"
+            {
+              echo "- _retry_: **$TARGET_REPO** attempt $suite_attempt of $total_attempts failed; re-dispatching"
+            } >> "$GITHUB_STEP_SUMMARY"
+            sleep "$RETRY_BACKOFF"
           fi
-
-          echo "Run $RUN_ID status=$status (attempt $attempt/$MAX_ATTEMPTS), waiting ${WATCH_INTERVAL}s..."
-          sleep "$WATCH_INTERVAL"
+          suite_attempt=$((suite_attempt + 1))
         done
 
-        echo "::error::Timed out waiting for run $RUN_ID in $TARGET_REPO after $MAX_ATTEMPTS attempts"
+        echo "::error::Suite for $TARGET_REPO failed after $total_attempts attempt(s)"
         exit 1
