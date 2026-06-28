@@ -117,6 +117,14 @@ func TestHotfixGenerator_PlanJobChainOutputs(t *testing.T) {
 
 	assert.Contains(t, planJob, "env_sequence: ${{ steps.plan.outputs.env_sequence }}",
 		"plan job must expose the env_sequence chain order")
+
+	// The single-flight gate and orphan self-heal only run when --repo wires a
+	// real gh-backed checker; the plan job must pass the repository slug and carry
+	// contents: write so the self-heal force-push to origin can land.
+	assert.Contains(t, planJob, `--repo "${{ github.repository }}"`,
+		"plan job must pass --repo so the single-flight gate runs with a real checker")
+	assert.Contains(t, planJob, "contents: write",
+		"plan job must carry contents: write so the orphan self-heal can force-push env/<env>")
 	for _, key := range []string{
 		"commits_test: ${{ steps.plan.outputs.commits_test }}",
 		"no_op_test: ${{ steps.plan.outputs.no_op_test }}",

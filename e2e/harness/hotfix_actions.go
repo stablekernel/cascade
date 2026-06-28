@@ -135,6 +135,19 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 	for name, job := range result.Jobs {
 		r.t.Logf("    - Job '%s': conclusion=%s", name, job.Conclusion)
 	}
+
+	// assert_branch_reset: true is a sharper signal than plan success alone; it
+	// proves the orphan self-heal diagnostic line was emitted, confirming
+	// ResetBranch fired rather than the plan succeeding for another reason
+	// (e.g. branch already at base, branch newly created).
+	if step.AssertBranchReset {
+		const marker = "cascade: orphan"
+		if !strings.Contains(result.Logs, marker) {
+			r.t.Logf("  HotfixPlan workflow logs:\n%s", result.Logs)
+			return fmt.Errorf("assert_branch_reset: expected orphan self-heal diagnostic in plan logs but it was not found")
+		}
+		r.t.Log("  HotfixPlan: orphan self-heal confirmed (branch_reset=true)")
+	}
 	return nil
 }
 

@@ -1,0 +1,117 @@
+name: "Hotfix Orphan Self-Heal"
+description: |
+  Verifies the orphan self-heal path: an env/<env> integration branch left
+  behind by an interrupted hotfix (the branch exists but the environment never
+  recorded divergence) is force-reset back to its recorded base by a later
+  hotfix plan, instead of failing closed on the stale tip.
+
+  The branch is an orphan because the resolution PR was merged but the divergence
+  was never finalized, so state[test] reports no divergence while env/test leads
+  the recorded base. Trunk then advances past that tip. A new hotfix plan for
+  test, with the single-flight gate satisfied (no open resolution PR), proves the
+  branch is an abandoned orphan and resets it to the recorded base so the plan
+  succeeds rather than aborting.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev/test"
+    action: orchestrate
+
+  - name: "Promote to establish a test/prod baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a trunk fix to hotfix into test"
+    action: commit
+    commit:
+      message: "fix: patch for test env"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Apply hotfix onto env/test, seeding the integration branch"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  # Merge the resolution PR so no open cascade-hotfix PR remains, but do NOT
+  # finalize: state[test] never records divergence. env/test now exists and
+  # leads the recorded base while the environment looks healthy. That is the
+  # orphan condition the self-heal targets.
+  - name: "Merge the resolution PR without finalizing divergence"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  # Advance trunk and promote so state[test].SHA moves forward, past the orphan
+  # env/test tip. The recorded base the next hotfix derives now disagrees with
+  # the stale env/test branch.
+  - name: "Advance trunk normally"
+    action: commit
+    commit:
+      message: "chore: trunk advance"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate the advance into dev/test"
+    action: orchestrate
+
+  - name: "Promote so test advances past the orphan tip"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a new trunk fix to hotfix into test"
+    action: commit
+    commit:
+      message: "fix: second patch for test env"
+      files:
+        src/fix2.go: |
+          package main
+          func patch2() {}
+
+  # The plan runs for real (not a dry run). The generated plan job passes --repo,
+  # so the single-flight gate runs with a real checker; finding no open
+  # resolution PR it proves env/test is an abandoned orphan and force-resets it
+  # to the recorded base. Before the self-heal this plan would fail closed on the
+  # stale env/test tip; success proves the heal. assert_branch_reset sharpens
+  # the signal: it checks the diagnostic line emitted when ResetBranch fires,
+  # distinguishing a genuine self-heal from a plan that succeeds for another
+  # reason (branch already at base, branch freshly created, etc.).
+  - name: "Plan hotfix for test self-heals the orphan env branch"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit4
+      assert_branch_reset: true

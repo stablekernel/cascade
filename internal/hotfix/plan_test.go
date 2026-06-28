@@ -255,7 +255,7 @@ func TestPlan_DryRunMutatesNothing(t *testing.T) {
 	}
 }
 
-func TestPlan_ExistingBranchTipMismatch_FailsWithReplayGuidance(t *testing.T) {
+func TestPlan_ExistingBranchTipMismatch_FailsClosedWithoutRealChecker(t *testing.T) {
 	newScratchRepo(t)
 	base := commitFile(t, "a.txt", "one", "first")
 	other := commitFile(t, "b.txt", "two", "other")
@@ -270,13 +270,24 @@ func TestPlan_ExistingBranchTipMismatch_FailsWithReplayGuidance(t *testing.T) {
 		"prod": base,
 	})
 
+	// No PRChecker is injected, so the single-flight gate did not run with a real
+	// checker. The planner must fail closed (never self-heal) even though the env
+	// is not diverged: it cannot prove no resolution PR is open.
 	p := newPlanner(t, manifest)
 	_, err := p.Plan(fix, "test")
 	if err == nil {
 		t.Fatal("expected tip-mismatch error")
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "replay") {
-		t.Errorf("error %q should include replay guidance", err.Error())
+	msg := err.Error()
+	if !strings.Contains(msg, "abandoned hotfix branch") {
+		t.Errorf("error %q should describe the abandoned branch", msg)
+	}
+	if !strings.Contains(msg, "--repo") {
+		t.Errorf("error %q should point at re-running with --repo", msg)
+	}
+	// The local env/test branch must not have been reset to base.
+	if got := gitOut(t, "rev-parse", "env/test"); got != other {
+		t.Errorf("env/test tip = %q, want it left at %q (no naive reset)", got, other)
 	}
 }
 

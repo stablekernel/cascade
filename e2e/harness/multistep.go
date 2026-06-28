@@ -106,10 +106,14 @@ type Step struct {
 // workflow's plan job. CommitRef is the trunk commit to plan a hotfix for and is
 // resolved via the execution context (falling back to a literal SHA).
 type HotfixPlanStep struct {
-	CommitRef     string `yaml:"commit_ref"`
-	TargetEnv     string `yaml:"target_env"`
-	DryRun        bool   `yaml:"dry_run,omitempty"`
-	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
+	CommitRef        string `yaml:"commit_ref"`
+	TargetEnv        string `yaml:"target_env"`
+	DryRun           bool   `yaml:"dry_run,omitempty"`
+	ExpectFailure    bool   `yaml:"expect_failure,omitempty"`
+	// AssertBranchReset, when true, asserts that the plan workflow logged the
+	// orphan self-heal diagnostic line (branch_reset=true), confirming the heal
+	// fired rather than the plan merely succeeding for another reason.
+	AssertBranchReset bool `yaml:"assert_branch_reset,omitempty"`
 }
 
 // HotfixApplyStep defines a hotfix_apply action: a harness-driven cherry-pick of

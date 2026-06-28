@@ -218,6 +218,17 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("    name: Plan Hotfix\n")
 	sb.WriteString("    if: github.event_name == 'workflow_dispatch'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// The plan job runs the single-flight gate via --repo and self-heals an
+	// abandoned env branch by force-pushing it back to its recorded base, so it
+	// needs contents: write. The single-flight lookup lists hotfix PRs, which
+	// requires pull-requests: read on a private repo. actions: read covers
+	// workflow introspection. These writes live on the plan job, not at the
+	// least-privilege top level.
+	writeJobPermissions(sb, "    ", [][2]string{
+		{"contents", "write"},
+		{"pull-requests", "read"},
+		{"actions", "read"},
+	})
 	sb.WriteString("    outputs:\n")
 	sb.WriteString("      branch: ${{ steps.plan.outputs.branch }}\n")
 	sb.WriteString("      fix_sha: ${{ steps.plan.outputs.fix_sha }}\n")
@@ -242,6 +253,9 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Plan hotfix\n")
 	sb.WriteString("        id: plan\n")
 	sb.WriteString("        env:\n")
+	// GH_TOKEN authenticates the single-flight REST API call the planner makes when
+	// --repo is set. Without it the lookup may fail on private repos and the plan aborts.
+	sb.WriteString("          GH_TOKEN: ${{ github.token }}\n")
 	sb.WriteString("          HOTFIX_COMMIT: ${{ github.event.inputs.commit }}\n")
 	sb.WriteString("          HOTFIX_TARGET_ENV: ${{ github.event.inputs.target_env }}\n")
 	sb.WriteString("          HOTFIX_DRY_RUN: ${{ github.event.inputs.dry_run }}\n")
@@ -250,6 +264,10 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
 	sb.WriteString("            --commits \"$HOTFIX_COMMIT\" \\\n")
 	sb.WriteString("            --target-env \"$HOTFIX_TARGET_ENV\" \\\n")
+	// --repo wires the single-flight PR lookup to a real REST-backed checker.
+	// Without it the gate is inert (the no-op checker), which both skips the
+	// single-flight protection and, by design, disables orphan self-heal.
+	sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 	sb.WriteString("            --dry-run=\"$HOTFIX_DRY_RUN\" \\\n")
 	sb.WriteString("            --gha-output\n")
 

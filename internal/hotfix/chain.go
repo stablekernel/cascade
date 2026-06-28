@@ -35,6 +35,12 @@ type EnvPlan struct {
 	// NoOp is true when the whole requested set is already present in this env.
 	NoOp bool `json:"no_op"`
 
+	// BranchReset is true when the remote env/<env> branch existed at a stale tip
+	// but was force-reset back to BaseSHA by the orphan self-heal. It is set only
+	// when the env is not diverged and the single-flight gate ran with a real
+	// checker that found no open resolution PR.
+	BranchReset bool `json:"branch_reset"`
+
 	// ConflictExpected hints whether a cherry-pick is likely to conflict. The
 	// plan verb does not run the cherry-pick, so this is best-effort and false
 	// by default; the workflow is authoritative.
@@ -130,25 +136,39 @@ func commitPresentInEnv(fixSHA, baseSHA string, patches []string) (bool, error) 
 	return already, nil
 }
 
-// verifyRemoteEnvTip fails the plan when the fetched remote env branch tip has
-// diverged from the recorded base SHA. When the remote ref is absent (the env
-// has never been hotfixed, so the apply job will create env/<env> at baseSHA)
-// there is nothing to diverge from and the check passes, leaving the normal
-// path untouched. This mirrors reconcileBranch's local-branch guard but runs
-// against the remote-tracking ref the generated hotfix workflow fetches, which
-// is the only env ref present in CI.
-func (p *Planner) verifyRemoteEnvTip(branch, baseSHA string) error {
+// verifyRemoteEnvTip reconciles the fetched remote env branch tip against the
+// recorded base SHA. When the remote ref is absent (the env has never been
+// hotfixed, so the apply job will create env/<env> at baseSHA) there is nothing
+// to diverge from and the check passes, leaving the normal path untouched. When
+// the tip has drifted it is either self-healed back to baseSHA or the plan
+// aborts fail-closed, following the same orphan-safety rule as reconcileBranch:
+// reset only when the env is not diverged AND the single-flight gate ran with a
+// real checker that found no open resolution PR. This mirrors reconcileBranch's
+// local-branch guard but runs against the remote-tracking ref the generated
+// hotfix workflow fetches, which is the only env ref present in CI.
+//
+// Returns whether the branch was (or, in dry-run, would be) reset.
+func (p *Planner) verifyRemoteEnvTip(branch, baseSHA string, diverged, singleFlightChecked bool) (reset bool, err error) {
 	tip, exists, err := p.gitRunner.RemoteBranchSHA(p.remote, branch)
 	if err != nil {
-		return fmt.Errorf("reading remote tip of %s: %w", branch, err)
+		return false, fmt.Errorf("reading remote tip of %s: %w", branch, err)
 	}
 	if !exists {
-		return nil
+		return false, nil
 	}
 	if tip != baseSHA {
-		return envTipDivergenceError(branch, tip, baseSHA)
+		if !diverged && singleFlightChecked {
+			if p.dryRun {
+				return true, nil
+			}
+			if err := p.gitRunner.ResetBranch(p.remote, branch, baseSHA); err != nil {
+				return false, fmt.Errorf("self-healing orphan %s to %s: %w", branch, short(baseSHA), err)
+			}
+			return true, nil
+		}
+		return false, envTipDivergenceError(branch, tip, baseSHA, diverged)
 	}
-	return nil
+	return false, nil
 }
 
 // PlanChain validates and computes the per-environment plan for elevating a set
@@ -190,20 +210,34 @@ func (p *Planner) PlanChain(refs []string, targetEnv string) (*PlanChainResult, 
 		}
 		baseSHA := state.SHA
 
-		// Guard against a remote env branch that has drifted from recorded state
-		// before deriving a cherry-pick base from it. The base is state.SHA, but
-		// the apply job opens the resolution PR against the live env/<env> branch;
-		// if the fetched remote tip has diverged the cherry-pick lands on a stale
-		// base and the PR is unmergeable, surfacing only as a merge-poll timeout.
-		if err := p.verifyRemoteEnvTip(envBranch(env), baseSHA); err != nil {
+		// Single-flight gate per env, BEFORE the remote-tip reconciliation. The
+		// chain path historically skipped this gate; adding it here is what makes
+		// the per-env self-heal both enabled (a real checker can set
+		// singleFlightChecked) and safe (an open resolution PR aborts the plan
+		// exactly as the single-env path does, so a live hotfix is never reset).
+		diverged := state.IsDiverged()
+		singleFlightChecked, err := p.checkSingleFlight(envBranch(env))
+		if err != nil {
+			return nil, err
+		}
+
+		// Reconcile the remote env branch against recorded state before deriving a
+		// cherry-pick base from it. The base is state.SHA, but the apply job opens
+		// the resolution PR against the live env/<env> branch; if the fetched remote
+		// tip has diverged the cherry-pick lands on a stale base and the PR is
+		// unmergeable, surfacing only as a merge-poll timeout. An abandoned orphan
+		// tip is self-healed; an in-progress hotfix stays fail-closed.
+		reset, err := p.verifyRemoteEnvTip(envBranch(env), baseSHA, diverged, singleFlightChecked)
+		if err != nil {
 			return nil, err
 		}
 
 		ep := EnvPlan{
-			Env:     env,
-			Branch:  envBranch(env),
-			BaseSHA: baseSHA,
-			Commits: make([]string, 0, len(shas)),
+			Env:         env,
+			Branch:      envBranch(env),
+			BaseSHA:     baseSHA,
+			BranchReset: reset,
+			Commits:     make([]string, 0, len(shas)),
 		}
 		for _, sha := range shas {
 			present, err := commitPresentInEnv(sha, baseSHA, state.Patches)
