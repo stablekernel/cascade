@@ -70,6 +70,11 @@ type gitRunner interface {
 	RemoteBranchSHA(remote, name string) (string, bool, error)
 	// CreateBranch creates a branch pointing at sha.
 	CreateBranch(name, sha string) error
+	// ResetBranch force-updates the remote branch <name> on <remote> to point at
+	// sha, then best-effort aligns the local branch of the same name. It is the
+	// self-heal primitive: it rewrites history on the env branch, so callers must
+	// gate it behind the orphan-safety rule (see reconcileBranch).
+	ResetBranch(remote, name, sha string) error
 }
 
 type execGitRunner struct{}
@@ -122,6 +127,22 @@ func (execGitRunner) CreateBranch(name, sha string) error {
 	return nil
 }
 
+func (execGitRunner) ResetBranch(remote, name, sha string) error {
+	// Force-update the remote ref first: the remote env branch is the one the
+	// apply job opens its resolution PR against, so it must carry the corrected
+	// base even if aligning the local branch later fails.
+	pushRef := sha + ":refs/heads/" + name
+	if out, err := exec.Command("git", "push", "--force", remote, pushRef).CombinedOutput(); err != nil {
+		return fmt.Errorf("git push --force %s %s: %w\n%s", remote, pushRef, err, out)
+	}
+	// Align the local branch best-effort. -f creates it when absent, which is
+	// harmless: the local ref is only a convenience for subsequent local steps.
+	if out, err := exec.Command("git", "branch", "-f", name, sha).CombinedOutput(); err != nil {
+		return fmt.Errorf("git branch -f %s %s: %w\n%s", name, sha, err, out)
+	}
+	return nil
+}
+
 // Planner validates and computes a hotfix plan for one environment.
 type Planner struct {
 	cicd      *config.CICDFile
@@ -129,7 +150,12 @@ type Planner struct {
 	dryRun    bool
 	remote    string
 	prChecker PRChecker
-	gitRunner gitRunner
+	// realPRChecker is true only when a non-nil PRChecker was injected via
+	// WithPRChecker. It distinguishes a genuine single-flight lookup from the
+	// no-op default, and gates orphan self-heal: the planner resets an env branch
+	// only when a real checker actually proved no resolution PR is open.
+	realPRChecker bool
+	gitRunner     gitRunner
 }
 
 // PlannerOptions carries the required inputs for NewPlanner.
@@ -154,6 +180,7 @@ func WithPRChecker(c PRChecker) Option {
 	return func(p *Planner) {
 		if c != nil {
 			p.prChecker = c
+			p.realPRChecker = true
 		}
 	}
 }
@@ -212,6 +239,12 @@ type PlanResult struct {
 	// BranchCreated is true when env/<target> was (or, in dry-run, would be)
 	// created at BaseSHA. False when it already existed at the expected tip.
 	BranchCreated bool `json:"branch_created"`
+
+	// BranchReset is true when env/<target> existed at a stale tip but was (or, in
+	// dry-run, would be) force-reset back to BaseSHA by the orphan self-heal. It is
+	// set only when the env is not diverged and the single-flight gate ran with a
+	// real checker that found no open resolution PR.
+	BranchReset bool `json:"branch_reset"`
 
 	// HotfixVersionCandidate is the next free hotfix version over the target
 	// env's current version base (e.g. v1.0.0-rc.1 -> v1.0.0-rc.1.hotfix.1).
@@ -299,69 +332,119 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 
 	// 4. Single-flight: refuse if a hotfix PR already targets env/<target>. This
 	// runs before any branch mutation so a blocked plan leaves no git state.
-	openPRs, err := p.prChecker.OpenHotfixPRs(branch)
+	// singleFlightChecked is true only when a real (non-no-op) checker confirmed
+	// no open resolution PR; it is the precondition for orphan self-heal.
+	singleFlightChecked, err := p.checkSingleFlight(branch)
 	if err != nil {
-		return nil, fmt.Errorf("checking for open hotfix PRs: %w", err)
-	}
-	if len(openPRs) > 0 {
-		pr := openPRs[0]
-		return nil, fmt.Errorf("a hotfix PR (#%d %s) labeled %q already targets %s; resolve and finalize it, then re-dispatch this hotfix",
-			pr.Number, pr.URL, hotfixPRLabel, branch)
+		return nil, err
 	}
 
 	// 5. env/<target> branch reconciliation. Only after the single-flight gate
-	// passes do we create or validate the env branch.
-	created, err := p.reconcileBranch(branch, baseSHA)
+	// passes do we create, validate, or self-heal the env branch.
+	diverged := state.IsDiverged()
+	created, reset, err := p.reconcileBranch(branch, baseSHA, diverged, singleFlightChecked)
 	if err != nil {
 		return nil, err
 	}
 	result.BranchCreated = created
+	result.BranchReset = reset
 
 	return result, nil
 }
 
-// reconcileBranch ensures env/<target> exists at baseSHA. If absent it is
+// checkSingleFlight runs the single-flight open-PR gate for branch. It returns
+// the same abort error as before when a hotfix PR is already open against the
+// branch. Otherwise it returns whether a real checker ran: true only when a
+// non-no-op PRChecker was injected, which is the precondition the orphan
+// self-heal requires before it may reset an env branch.
+func (p *Planner) checkSingleFlight(branch string) (checked bool, err error) {
+	openPRs, err := p.prChecker.OpenHotfixPRs(branch)
+	if err != nil {
+		return false, fmt.Errorf("checking for open hotfix PRs: %w", err)
+	}
+	if len(openPRs) > 0 {
+		pr := openPRs[0]
+		return false, fmt.Errorf("a hotfix PR (#%d %s) labeled %q already targets %s; resolve and finalize it, then re-dispatch this hotfix",
+			pr.Number, pr.URL, hotfixPRLabel, branch)
+	}
+	return p.realPRChecker, nil
+}
+
+// reconcileBranch ensures env/<target> is anchored at baseSHA. If absent it is
 // created at baseSHA (unless dry-run, where creation is only reported). If
-// present its tip must equal baseSHA, otherwise the run is aborted with replay
-// guidance. Returns whether the branch was (or would be) created.
-func (p *Planner) reconcileBranch(branch, baseSHA string) (bool, error) {
+// present and already at baseSHA it is left untouched. If present at a stale tip
+// it is either self-healed back to baseSHA or the run aborts fail-closed.
+//
+// Self-heal safety rule: divergence is recorded ONLY at hotfix finalize, so a
+// live in-flight hotfix (open resolution PR, real work on env/<env>) reports
+// !diverged while its branch legitimately leads baseSHA. Force-resetting that
+// would destroy work. The reset is therefore safe ONLY when the env is not
+// diverged AND the single-flight gate actually ran with a real checker that
+// found no open hotfix PR. That intersection is exactly the OrphanEnvBranches
+// population (an env/* branch with no diverged env behind it) proven not
+// in-flight: an abandoned hotfix branch left by an interrupted run. In every
+// other mismatch case the planner stays fail-closed with envTipDivergenceError.
+//
+// Returns whether the branch was (or would be) created and whether it was (or
+// would be) reset; at most one of the two is true.
+func (p *Planner) reconcileBranch(branch, baseSHA string, diverged, singleFlightChecked bool) (created, reset bool, err error) {
 	exists, err := p.gitRunner.LocalBranchExists(branch)
 	if err != nil {
-		return false, fmt.Errorf("checking branch %s: %w", branch, err)
+		return false, false, fmt.Errorf("checking branch %s: %w", branch, err)
 	}
 
 	if exists {
 		tip, err := p.gitRunner.LocalBranchSHA(branch)
 		if err != nil {
-			return false, fmt.Errorf("reading tip of %s: %w", branch, err)
+			return false, false, fmt.Errorf("reading tip of %s: %w", branch, err)
 		}
 		if tip != baseSHA {
-			return false, envTipDivergenceError(branch, tip, baseSHA)
+			if !diverged && singleFlightChecked {
+				if p.dryRun {
+					return false, true, nil
+				}
+				if err := p.gitRunner.ResetBranch(p.remote, branch, baseSHA); err != nil {
+					return false, false, fmt.Errorf("self-healing orphan %s to %s: %w", branch, short(baseSHA), err)
+				}
+				return false, true, nil
+			}
+			return false, false, envTipDivergenceError(branch, tip, baseSHA, diverged)
 		}
-		return false, nil
+		return false, false, nil
 	}
 
 	// Branch absent: it will be created at baseSHA.
 	if p.dryRun {
-		return true, nil
+		return true, false, nil
 	}
 	if err := p.gitRunner.CreateBranch(branch, baseSHA); err != nil {
-		return false, fmt.Errorf("creating %s at %s: %w", branch, short(baseSHA), err)
+		return false, false, fmt.Errorf("creating %s at %s: %w", branch, short(baseSHA), err)
 	}
-	return true, nil
+	return true, false, nil
 }
 
 // envTipDivergenceError reports that an env branch tip no longer matches the
 // recorded state SHA the cherry-pick base is derived from. It names the env
-// branch and both SHAs and gives the operator the recovery path: replay the
-// hotfix so recorded state matches the branch, or reset the branch back to the
-// recorded SHA. Both the local-branch guard (reconcileBranch) and the chain
-// path's remote-tip guard (verifyRemoteEnvTip) raise this single message so the
-// two divergence checks stay in lockstep.
-func envTipDivergenceError(branch, tip, baseSHA string) error {
+// branch and both SHAs and gives an actionable recovery path that depends on
+// whether the environment has recorded divergence. Both the local-branch guard
+// (reconcileBranch) and the chain path's remote-tip guard (verifyRemoteEnvTip)
+// raise this single message so the two divergence checks stay in lockstep.
+//
+// diverged true means the environment carries an in-progress hotfix (divergence
+// was recorded at finalize), so the branch tip leads the recorded base on
+// purpose and resetting it could discard real work. diverged false means no
+// divergence is recorded, so the branch is an abandoned hotfix branch that
+// cascade can self-heal once a real single-flight check confirms no resolution
+// PR is open.
+func envTipDivergenceError(branch, tip, baseSHA string, diverged bool) error {
+	if diverged {
+		return fmt.Errorf(
+			"branch %s tip %s does not match recorded state SHA %s. This environment carries an in-progress hotfix with recorded divergence, so the branch leads the recorded base on purpose. To recover, finalize or abandon the open resolution PR, or reset %s to %s only after confirming no work is lost, then re-run",
+			branch, short(tip), short(baseSHA), branch, short(baseSHA))
+	}
 	return fmt.Errorf(
-		"branch %s tip %s does not match recorded state SHA %s; this indicates an interrupted hotfix or manual edits: replay the hotfix workflow for the open PR, or reset %s to %s, before re-running",
-		branch, short(tip), short(baseSHA), branch, short(baseSHA))
+		"branch %s tip %s does not match recorded state SHA %s, and no divergence is recorded, so %s is an abandoned hotfix branch. Re-run the hotfix plan with --repo set so cascade can confirm no resolution PR is open and self-heal the branch, or remove it manually by resetting %s to %s. Run cascade status consistency to list orphan env branches",
+		branch, short(tip), short(baseSHA), branch, branch, short(baseSHA))
 }
 
 // hotfixVersionCandidate returns the next free hotfix version over the base of

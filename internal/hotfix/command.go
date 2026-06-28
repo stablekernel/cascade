@@ -3,8 +3,11 @@ package hotfix
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
+	"io"
+	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -166,7 +169,7 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 				WithRemote(remote),
 			}
 			if repo != "" {
-				opts = append(opts, WithPRChecker(newGHPRChecker(repo)))
+				opts = append(opts, WithPRChecker(newRestPRChecker(repo)))
 			}
 
 			planner, err := NewPlanner(PlannerOptions{
@@ -224,7 +227,7 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 	cmd.Flags().StringVar(&targetEnv, "target-env", "", "Environment to hotfix (required)")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the plan (default: $GITHUB_ACTOR)")
 	cmd.Flags().StringVar(&remote, "remote", defaultRemote, "Git remote env branches live on")
-	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo for single-flight PR lookup via gh (default: skip the check)")
+	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo for single-flight PR lookup via the REST API (default: skip the check)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Compute the plan without mutating anything")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output the plan as JSON")
 	cmd.Flags().BoolVar(&ghaOutput, "gha-output", false, "Write outputs to $GITHUB_OUTPUT for workflow consumption")
@@ -236,33 +239,150 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 	return cmd
 }
 
-// ghPRChecker implements PRChecker by shelling out to the gh CLI.
-type ghPRChecker struct {
+// restPRChecker implements PRChecker via the GitHub/Gitea REST API. It calls
+// GET {GITHUB_API_URL}/repos/{owner}/{repo}/pulls?state=open (paginated) and
+// filters client-side by base branch and the cascade-hotfix label. This avoids
+// depending on the gh CLI, which is not present in the pinned act runner image
+// used by the e2e harness, and works identically against both github.com and a
+// gitea server (both expose the same endpoint and response fields).
+type restPRChecker struct {
 	repo string
+	// apiBase and token override the corresponding environment variables when
+	// non-empty, so tests can inject an httptest server URL without setenv.
+	apiBase string
+	token   string
 }
 
-func newGHPRChecker(repo string) *ghPRChecker {
-	return &ghPRChecker{repo: repo}
+// newRestPRChecker creates a PRChecker that queries the REST API for owner/repo.
+// The API base URL is read from GITHUB_API_URL at call time; the authentication
+// token is read from GH_TOKEN (then GITHUB_TOKEN) at call time. Both variables
+// are populated automatically in GitHub Actions and by the act e2e harness.
+func newRestPRChecker(repo string) *restPRChecker {
+	return &restPRChecker{repo: repo}
 }
 
-// OpenHotfixPRs lists open PRs labeled cascade-hotfix whose base is baseBranch.
-func (g *ghPRChecker) OpenHotfixPRs(baseBranch string) ([]OpenPR, error) {
-	out, err := exec.Command("gh", "pr", "list",
-		"--repo", g.repo,
-		"--state", "open",
-		"--base", baseBranch,
-		"--label", hotfixPRLabel,
-		"--json", "number,url",
-	).Output()
-	if err != nil {
-		return nil, fmt.Errorf("gh pr list: %w", err)
+// resolvedAPIBase returns the effective REST API base URL.
+func (c *restPRChecker) resolvedAPIBase() string {
+	if c.apiBase != "" {
+		return c.apiBase
 	}
+	if u := os.Getenv("GITHUB_API_URL"); u != "" {
+		return u
+	}
+	return "https://api.github.com"
+}
 
-	var prs []OpenPR
-	if err := json.Unmarshal(out, &prs); err != nil {
-		return nil, fmt.Errorf("parsing gh pr list output: %w", err)
+// resolvedToken returns the effective authentication token.
+func (c *restPRChecker) resolvedToken() string {
+	if c.token != "" {
+		return c.token
 	}
-	return prs, nil
+	if t := os.Getenv("GH_TOKEN"); t != "" {
+		return t
+	}
+	return os.Getenv("GITHUB_TOKEN")
+}
+
+// prListEntry is the subset of a pull-request REST response the checker needs.
+type prListEntry struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	Base    struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+}
+
+// OpenHotfixPRs lists open PRs labeled cascade-hotfix whose base is
+// baseBranch. It queries the REST API with pagination (following Link rel=next)
+// and filters client-side so the result is correct regardless of which
+// server-side filter parameters a given gitea version supports.
+func (c *restPRChecker) OpenHotfixPRs(baseBranch string) ([]OpenPR, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	token := c.resolvedToken()
+	url := c.resolvedAPIBase() + "/repos/" + c.repo + "/pulls?state=open&per_page=100"
+
+	var result []OpenPR
+	for url != "" {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("building PR list request: %w", err)
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		if token != "" {
+			if i := strings.IndexByte(token, ':'); i >= 0 {
+				// "username:password" basic-auth credential (used by the act e2e
+				// harness, which passes the gitea admin credential as GITHUB_TOKEN).
+				req.SetBasicAuth(token[:i], token[i+1:])
+			} else {
+				req.Header.Set("Authorization", "token "+token)
+			}
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("PR list request to %s: %w", url, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("reading PR list response: %w", readErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("PR list returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		var page []prListEntry
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("parsing PR list response: %w", err)
+		}
+
+		for _, pr := range page {
+			if pr.Base.Ref != baseBranch {
+				continue
+			}
+			for _, l := range pr.Labels {
+				// Both labels indicate an in-flight hotfix that must block the gate:
+				// cascade-hotfix is applied to a clean cherry-pick resolution PR;
+				// cascade-hotfix-conflict is applied when the cherry-pick conflicted
+				// and a human is actively resolving it. Either label means real work
+				// is in progress on env/<branch>; resetting would destroy that work.
+				if l.Name == hotfixPRLabel || l.Name == hotfixConflictPRLabel {
+					result = append(result, OpenPR{Number: pr.Number, URL: pr.HTMLURL})
+					break
+				}
+			}
+		}
+
+		url = nextPageURL(resp.Header.Get("Link"))
+	}
+	return result, nil
+}
+
+// nextPageURL extracts the rel="next" URL from a GitHub/Gitea Link header.
+// It returns the empty string when no next page exists.
+func nextPageURL(link string) string {
+	if link == "" {
+		return ""
+	}
+	for _, part := range strings.Split(link, ",") {
+		part = strings.TrimSpace(part)
+		semi := strings.IndexByte(part, ';')
+		if semi < 0 {
+			continue
+		}
+		rawURL := strings.TrimSpace(part[:semi])
+		rel := strings.TrimSpace(part[semi+1:])
+		if !strings.HasPrefix(rawURL, "<") || !strings.HasSuffix(rawURL, ">") {
+			continue
+		}
+		if rel == `rel="next"` {
+			return rawURL[1 : len(rawURL)-1]
+		}
+	}
+	return ""
 }
 
 func writePlanGHAOutput(result *PlanResult) error {
@@ -273,6 +393,7 @@ func writePlanGHAOutput(result *PlanResult) error {
 	w.Set("base_sha", result.BaseSHA)
 	w.SetBool("no_op", result.NoOp)
 	w.SetBool("branch_created", result.BranchCreated)
+	w.SetBool("branch_reset", result.BranchReset)
 	w.Set("hotfix_version_candidate", result.HotfixVersionCandidate)
 	w.SetBool("conflict_expected", result.ConflictExpected)
 	w.SetBool("dry_run", result.DryRun)
@@ -280,7 +401,17 @@ func writePlanGHAOutput(result *PlanResult) error {
 		return err
 	}
 	w.SetMultiline("protection_suggestions_text", strings.Join(result.ProtectionSuggestions, "\n"))
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	// Emit a diagnostic line when the orphan self-heal fires so the event is
+	// observable in workflow logs without requiring a downstream step to echo
+	// the branch_reset output. The line also serves as the e2e assertion target.
+	if result.BranchReset {
+		fmt.Fprintf(os.Stderr, "cascade: orphan %s branch was reset to recorded base %s\n",
+			result.Branch, short(result.BaseSHA))
+	}
+	return nil
 }
 
 // chainGHAOutputs renders a PlanChainResult into a deterministic, additive set
@@ -293,6 +424,7 @@ func writePlanGHAOutput(result *PlanResult) error {
 //   - commits_<env>: comma-joined fix SHAs still to apply for that env
 //   - no_op_<env>: whether that env's whole requested set is already present
 //   - conflict_expected_<env>: best-effort cherry-pick conflict hint
+//   - reset_<env>: whether the orphan self-heal reset that env branch to its base
 func chainGHAOutputs(result *PlanChainResult) (simple map[string]string, multiline map[string]string) {
 	simple = make(map[string]string)
 	multiline = make(map[string]string)
@@ -303,6 +435,7 @@ func chainGHAOutputs(result *PlanChainResult) (simple map[string]string, multili
 		simple["commits_"+ep.Env] = strings.Join(ep.Commits, ",")
 		simple["no_op_"+ep.Env] = fmt.Sprintf("%v", ep.NoOp)
 		simple["conflict_expected_"+ep.Env] = fmt.Sprintf("%v", ep.ConflictExpected)
+		simple["reset_"+ep.Env] = fmt.Sprintf("%v", ep.BranchReset)
 		simple["base_"+ep.Env] = ep.BaseSHA
 	}
 	simple["env_sequence"] = strings.Join(envNames, ",")
@@ -321,7 +454,18 @@ func writePlanChainGHAOutput(result *PlanChainResult) error {
 	for k, v := range multiline {
 		w.SetMultiline(k, v)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	// Emit a diagnostic line for each env whose orphan branch was self-healed so
+	// the event is observable in workflow logs (mirrors writePlanGHAOutput).
+	for _, ep := range result.Envs {
+		if ep.BranchReset {
+			fmt.Fprintf(os.Stderr, "cascade: orphan %s branch was reset to recorded base %s\n",
+				ep.Branch, short(ep.BaseSHA))
+		}
+	}
+	return nil
 }
 
 // printPlanChain renders the human-readable chain plan: the bottom-up env

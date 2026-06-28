@@ -405,8 +405,14 @@ func TestPlanChain_RemoteEnvTipDiverged_FailsWithGuidance(t *testing.T) {
 		t.Errorf("error %q should report both the branch tip %s and the recorded SHA %s",
 			msg, short7(diverged), short7(base))
 	}
-	if !strings.Contains(strings.ToLower(msg), "replay") {
-		t.Errorf("error %q should give reconcile/replay guidance", msg)
+	// With no real PRChecker injected the single-flight gate did not run, so the
+	// planner must stay fail-closed (no self-heal) and surface actionable
+	// recovery guidance.
+	if !strings.Contains(msg, "abandoned hotfix branch") {
+		t.Errorf("error %q should describe the abandoned branch", msg)
+	}
+	if !strings.Contains(msg, "--repo") {
+		t.Errorf("error %q should point at re-running with --repo", msg)
 	}
 }
 
