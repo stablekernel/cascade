@@ -1,6 +1,7 @@
 package hotfix
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -35,6 +36,30 @@ func OrphanEnvBranches(branches []string, state map[string]*config.EnvState) []s
 		orphans = append(orphans, branch)
 	}
 	return orphans
+}
+
+// HealOrphanEnvBranches deletes every env/* branch that OrphanEnvBranches flags
+// as having no matching divergence, calling del to remove each branch on remote.
+// In production del is git.DeleteRemoteBranch, whose delete of an absent branch
+// is a no-op success, so HealOrphanEnvBranches is idempotent: re-running it, or
+// running it against an orphan that is already gone, deletes nothing further and
+// never errors.
+//
+// Only orphans are deleted. A branch backing a diverged environment is never
+// touched, because the deletion set comes from OrphanEnvBranches, which excludes
+// it by the same IsDiverged() predicate the hotfix preflight and status
+// consistency classify on. The returned slice lists the branches deleted, in
+// input order, and is nil when nothing was orphaned. On the first delete error
+// the heal stops and returns that error with a nil healed slice.
+func HealOrphanEnvBranches(branches []string, state map[string]*config.EnvState, remote string, del func(remote, branch string) error) ([]string, error) {
+	var healed []string
+	for _, branch := range OrphanEnvBranches(branches, state) {
+		if err := del(remote, branch); err != nil {
+			return nil, fmt.Errorf("deleting orphan branch %s on %s: %w", branch, remote, err)
+		}
+		healed = append(healed, branch)
+	}
+	return healed, nil
 }
 
 // HotfixTagsForBase returns the hotfix tags in tags that belong to the rc base
