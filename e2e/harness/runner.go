@@ -3,6 +3,7 @@ package harness
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -137,6 +138,10 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			}
 			if step.Plan.MutatePath != "" && step.Plan.MutateAppend == "" {
 				return fmt.Errorf("step %d (%s): plan mutate_path requires mutate_append", i, step.Name)
+			}
+		case "consistency":
+			if step.Consistency == nil {
+				return fmt.Errorf("step %d (%s): consistency action requires consistency config", i, step.Name)
 			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
@@ -376,6 +381,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeVerify(ctx, step.Verify)
 	case "plan":
 		return r.executePlan(ctx, step.Plan)
+	case "consistency":
+		return r.executeConsistency(ctx, step.Consistency)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -555,6 +562,162 @@ func (r *Runner) executePlan(ctx context.Context, step *PlanStep) error {
 // bash -c command, escaping embedded single quotes.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// consistencyReport mirrors the JSON shape printed by `cascade status
+// consistency --json`. Only the fields the harness asserts on are modeled.
+type consistencyReport struct {
+	OrphanEnvBranches []string `json:"orphan_env_branches"`
+	HealedEnvBranches []string `json:"healed_env_branches"`
+}
+
+// parseConsistencyJSON extracts the report object from command stdout. The
+// command prints a single JSON object; the object spans from the first '{' to
+// the last '}', so any non-JSON preamble the container exec emits is skipped.
+func parseConsistencyJSON(out string) (consistencyReport, error) {
+	start := strings.Index(out, "{")
+	end := strings.LastIndex(out, "}")
+	if start < 0 || end < start {
+		return consistencyReport{}, fmt.Errorf("no JSON object in output")
+	}
+	var report consistencyReport
+	if err := json.Unmarshal([]byte(out[start:end+1]), &report); err != nil {
+		return consistencyReport{}, err
+	}
+	return report, nil
+}
+
+// assertStringSetEqual reports an error when got and want differ as sets,
+// ignoring order. The command emits branches in remote-listing order, which is
+// not contractually stable, so the assertion compares membership.
+func assertStringSetEqual(label string, got, want []string) error {
+	gotSet := make(map[string]struct{}, len(got))
+	for _, g := range got {
+		gotSet[g] = struct{}{}
+	}
+	if len(gotSet) != len(want) {
+		return fmt.Errorf("%s: got %v, want %v", label, got, want)
+	}
+	for _, w := range want {
+		if _, ok := gotSet[w]; !ok {
+			return fmt.Errorf("%s: got %v, want %v", label, got, want)
+		}
+	}
+	return nil
+}
+
+// executeConsistency runs `cascade status consistency` (optionally --fix) in the
+// synced repo whose origin is the Gitea remote, then asserts the JSON report and
+// the live remote branch set. SeedBranches are created on the remote first so
+// the command observes them. With Fix the command deletes each orphan via
+// `git push <remote> --delete`, exercising the real strictly-git deletion path.
+func (r *Runner) executeConsistency(ctx context.Context, step *ConsistencyStep) error {
+	if r.harness == nil || r.harness.act == nil {
+		r.t.Logf("  Would run cascade status consistency (no harness)")
+		return nil
+	}
+
+	// Seed the requested env/* branches on the remote from current trunk HEAD so
+	// the command lists them. CreateBranch starts the branch at the given commit.
+	if len(step.SeedBranches) > 0 {
+		headSHA, err := r.harness.gitea.getHeadSHA(ctx, r.harness.repo)
+		if err != nil {
+			return fmt.Errorf("consistency: get HEAD SHA: %w", err)
+		}
+		for _, b := range step.SeedBranches {
+			if err := r.harness.gitea.CreateBranch(ctx, r.harness.repo, b, headSHA); err != nil {
+				return fmt.Errorf("consistency: seed branch %s: %w", b, err)
+			}
+		}
+	}
+
+	// Sync so /tmp/repo's origin remote-tracking refs include the seeded env/*
+	// branches; the command lists refs/remotes/origin/* via git for-each-ref.
+	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
+		return fmt.Errorf("consistency: failed to sync repo: %w", err)
+	}
+
+	args := "/usr/local/bin/cascade status consistency --json"
+	if step.Fix {
+		args += " --fix"
+	}
+	cmd := []string{"bash", "-c", "cd /tmp/repo && " + args}
+	exitCode, reader, err := r.harness.act.Container().Exec(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("consistency: exec failed: %w", err)
+	}
+	var out bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&out, reader)
+	}
+	r.t.Logf("  Consistency: exit=%d: %s", exitCode, out.String())
+	if exitCode != 0 {
+		return fmt.Errorf("consistency: expected exit 0, got %d: %s", exitCode, out.String())
+	}
+
+	report, err := parseConsistencyJSON(out.String())
+	if err != nil {
+		return fmt.Errorf("consistency: parse JSON (%q): %w", out.String(), err)
+	}
+	if err := assertStringSetEqual("orphan_env_branches", report.OrphanEnvBranches, step.ExpectOrphans); err != nil {
+		return fmt.Errorf("consistency: %w", err)
+	}
+	if step.Fix {
+		if err := assertStringSetEqual("healed_env_branches", report.HealedEnvBranches, step.ExpectHealed); err != nil {
+			return fmt.Errorf("consistency: %w", err)
+		}
+	}
+
+	// Assert the live remote branch set after the run. Query the remote's git
+	// refs directly via ls-remote: this is the same git layer the command lists
+	// and deletes through, and it reflects a just-created or just-deleted ref
+	// immediately, unlike Gitea's higher-level branches API which can lag.
+	if len(step.ExpectBranchesAbsent) > 0 || len(step.ExpectBranchesPresent) > 0 {
+		lsCmd := []string{"bash", "-c", "cd /tmp/repo && git ls-remote --heads origin"}
+		lsExit, lsReader, err := r.harness.act.Container().Exec(ctx, lsCmd)
+		if err != nil {
+			return fmt.Errorf("consistency: ls-remote exec failed: %w", err)
+		}
+		var lsOut bytes.Buffer
+		if lsReader != nil {
+			_, _ = io.Copy(&lsOut, lsReader)
+		}
+		if lsExit != 0 {
+			return fmt.Errorf("consistency: ls-remote failed (exit %d): %s", lsExit, lsOut.String())
+		}
+		present := parseRemoteHeads(lsOut.String())
+		r.t.Logf("  Consistency: remote heads after run: %v", present)
+		for _, b := range step.ExpectBranchesAbsent {
+			if _, ok := present[b]; ok {
+				return fmt.Errorf("consistency: branch %s expected deleted but still present on remote", b)
+			}
+		}
+		for _, b := range step.ExpectBranchesPresent {
+			if _, ok := present[b]; !ok {
+				return fmt.Errorf("consistency: branch %s expected present but missing on remote", b)
+			}
+		}
+	}
+	return nil
+}
+
+// parseRemoteHeads parses `git ls-remote --heads` output into a set of branch
+// names. Each line is "<sha>\trefs/heads/<branch>"; non-matching lines are
+// skipped.
+func parseRemoteHeads(out string) map[string]struct{} {
+	const prefix = "refs/heads/"
+	heads := make(map[string]struct{})
+	for _, line := range strings.Split(out, "\n") {
+		idx := strings.Index(line, prefix)
+		if idx < 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[idx+len(prefix):])
+		if name != "" {
+			heads[name] = struct{}{}
+		}
+	}
+	return heads
 }
 
 // executeCommit creates a commit

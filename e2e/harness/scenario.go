@@ -137,6 +137,12 @@ type Config struct {
 	// can assert the field survives a routine state write rather than being
 	// dropped on finalize.
 	CLIVersionSHA string `yaml:"cli_version_sha,omitempty"`
+	// Components carries the reserved per-component descriptor map (config.components,
+	// #176) through to the generated manifest untouched. A generic map per component
+	// keeps the harness decoupled from the generator's ComponentConfig shape, so a
+	// scenario can declare any reserved component field (path, tag_prefix) without a
+	// harness change. Keyed by component name.
+	Components map[string]map[string]any `yaml:"components,omitempty"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published
@@ -184,10 +190,17 @@ type DeployConfig struct {
 	// manifest untouched. See BuildConfig.Secrets for the accepted forms and the
 	// rationale for the generic value type.
 	Secrets any `yaml:"secrets,omitempty"`
-	// Rollout carries the rollout sub-block (type, canary, blue_green) through to
-	// the generated manifest untouched. A generic map keeps the harness decoupled
-	// from the generator's RolloutConfig shape, so a scenario can declare any
-	// reserved rollout field without the harness needing to know its structure.
+	// Inputs carries the deploy callback's matrix inputs through to the generated
+	// manifest untouched. A non-empty inputs map moves the deploy onto the
+	// matrix-based promote job, which is where the rollout strategy options
+	// (fail-fast, max-parallel) render. A generic value type keeps the harness
+	// decoupled from the generator's input shapes.
+	Inputs map[string]any `yaml:"inputs,omitempty"`
+	// Rollout carries the rollout sub-block (type, canary, blue_green, plus the
+	// strategy knobs max_parallel and fail_fast) through to the generated manifest
+	// untouched. A generic map keeps the harness decoupled from the generator's
+	// RolloutConfig shape, so a scenario can declare any rollout field without the
+	// harness needing to know its structure.
 	Rollout map[string]any `yaml:"rollout,omitempty"`
 }
 

@@ -1,0 +1,53 @@
+name: "Status Consistency Fix Deletes Orphan Env Branch"
+description: |
+  cascade status consistency --fix deletes env/* integration branches that have
+  no matching divergence in the manifest, and never touches a branch backing a
+  genuinely diverged environment. The deletion is strictly git: it lists the
+  remote's branches and runs git push <remote> --delete on each orphan, with no
+  GitHub-API path.
+
+  This scenario seeds two env branches on the remote: env/dev is an orphan
+  (dev has no diverged state) and env/prod is healthy (prod carries a diverged
+  state via a staged integration ref). Running status consistency --fix flags
+  and deletes env/dev while leaving env/prod intact. The JSON report names
+  env/dev as both the orphan and the healed branch, and the live remote ends
+  with env/dev gone and env/prod present.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+setup:
+  state:
+    prod:
+      version: "v0.1.0"
+      ref: env/prod
+
+steps:
+  - name: "Seed a minimal source tree"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "consistency --fix deletes the orphan, spares the diverged env branch"
+    action: consistency
+    consistency:
+      seed_branches: [env/dev, env/prod]
+      fix: true
+      expect_orphans: [env/dev]
+      expect_healed: [env/dev]
+      expect_branches_absent: [env/dev]
+      expect_branches_present: [env/prod]
