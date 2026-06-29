@@ -178,6 +178,11 @@
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/environmentConfig" },
           "description": "Per-environment settings keyed by environment name."
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/componentConfig" },
+          "description": "Reserved per-component descriptor map keyed by component name (#176). Reserved shape only: parse and structural validation, no generator, state, or runtime behavior."
         }
       }
     },
@@ -505,6 +510,15 @@
       "description": "Reserved pointer to the version-intent override-file location. Reserved shape only: parse and structural validation, no generator behavior.",
       "properties": {
         "dir": { "type": "string", "description": "Directory holding override files. Relative, no '..' segments. Empty means the implementation default (reserved)." }
+      }
+    },
+    "componentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reserved per-component descriptor for independently versioned components sharing one manifest (#176). Reserved shape only: parse and structural validation, no generator, state, or runtime behavior.",
+      "properties": {
+        "path": { "type": "string", "description": "Subtree this component owns within the repo (reserved)." },
+        "tag_prefix": { "type": "string", "description": "Per-component version tag prefix (reserved). Empty inherits the manifest-level tag_prefix." }
       }
     },
     "changelogConfig": {

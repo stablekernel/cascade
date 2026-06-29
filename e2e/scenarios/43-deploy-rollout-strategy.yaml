@@ -1,0 +1,68 @@
+name: "Deploy Rollout Strategy Options"
+description: |
+  A matrix-based deploy that sets the rollout strategy knobs max_parallel and
+  fail_fast must render them into the generated promote workflow's deploy job
+  strategy block. The matrix path is taken when the deploy declares inputs. The
+  fail-fast default is false and no max-parallel line is emitted without a
+  rollout, so a deploy that sets fail_fast: true and max_parallel: 2 proves the
+  configured values flow through rather than the historical defaults.
+
+  Generator-output assertion only; no workflow run.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+      inputs:
+        region: us-east-1
+      rollout:
+        max_parallel: 2
+        fail_fast: true
+
+# The deploy callback is staged so it declares the region matrix input the
+# generated promote workflow threads through each rollout wave, keeping the
+# generated reusable-workflow call valid.
+setup_workflows:
+  ".github/workflows/deploy.yaml": |
+    name: deploy
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: false
+            type: string
+          sha:
+            required: false
+            type: string
+          region:
+            required: false
+            type: string
+    jobs:
+      deploy:
+        runs-on: ubuntu-latest
+        steps:
+          - run: echo "deploy ${{ inputs.region }}"
+
+steps:
+  - name: "Seed a minimal source tree; assert the promote strategy block"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "fail-fast: true"
+            - "max-parallel: 2"

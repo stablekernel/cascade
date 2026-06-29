@@ -1,0 +1,44 @@
+name: "Components Reserved Shape"
+description: |
+  Exercises the reserved per-component descriptor map (config.components, #176).
+  Each component carries a path subtree and an optional tag_prefix. This block is
+  reserved and shape-only today: it parses and passes structural validation, but
+  carries no generator, state, or runtime behavior. The scenario declares two
+  components, generates the workflows, then regenerates and proves the output is
+  byte-identical with no drift.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed a minimal source tree"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

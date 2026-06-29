@@ -94,6 +94,11 @@ type Step struct {
 	// a per-file unified diff of committed-vs-planned workflows and always exits 0
 	// on success, exercising plan's informational (non-gate) contract.
 	Plan *PlanStep `yaml:"plan,omitempty"`
+	// Consistency configures a "consistency" action: a `cascade status
+	// consistency` run (optionally --fix) that flags, and with --fix deletes,
+	// orphan env/* branches on the Gitea remote, then asserts the JSON report and
+	// the resulting remote branch set.
+	Consistency *ConsistencyStep `yaml:"consistency,omitempty"`
 	// ExpectFailure marks a step whose workflow is expected to conclude in
 	// failure (for example an orchestrate run whose build exits non-zero). When
 	// set, a failure conclusion is the success path and a success conclusion is
@@ -256,6 +261,22 @@ type PlanStep struct {
 	ExpectExit        int      `yaml:"expect_exit"`
 	ExpectContains    []string `yaml:"expect_contains,omitempty"`
 	ExpectNotContains []string `yaml:"expect_not_contains,omitempty"`
+}
+
+// ConsistencyStep defines a "consistency" action: a `cascade status consistency`
+// run against the synced repo whose origin is the Gitea remote. SeedBranches are
+// created on the remote before the run so the command observes them as remote
+// branches. With Fix the command deletes each orphan via `git push <remote>
+// --delete`, so the step exercises the real, strictly-git deletion path end to
+// end. The Expect* fields assert the JSON report (orphan and healed lists) and
+// the live remote branch set after the run.
+type ConsistencyStep struct {
+	SeedBranches          []string `yaml:"seed_branches,omitempty"`
+	Fix                   bool     `yaml:"fix,omitempty"`
+	ExpectOrphans         []string `yaml:"expect_orphans,omitempty"`
+	ExpectHealed          []string `yaml:"expect_healed,omitempty"`
+	ExpectBranchesAbsent  []string `yaml:"expect_branches_absent,omitempty"`
+	ExpectBranchesPresent []string `yaml:"expect_branches_present,omitempty"`
 }
 
 // StepExpect defines expected outcomes for a step
