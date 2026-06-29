@@ -300,7 +300,7 @@ cascade plan
 
 ### branch-protection
 
-Emit the JSON body an operator applies to GitHub's branch-protection API for a cascade-managed trunk. cascade emits the file; the operator applies it. cascade never calls the GitHub API.
+Produce the branch-protection settings for a cascade-managed trunk. The command has two modes. By default it emits the JSON body for an operator to apply and makes no API call. Pass `--apply` and cascade PUTs the body to GitHub's branch-protection API for you using a caller-supplied scoped token.
 
 ```bash
 cascade branch-protection
@@ -318,13 +318,32 @@ cascade branch-protection | jq .protection | \
   gh api -X PUT repos/my-org/my-app/branches/main/protection --input -
 ```
 
+#### Applying directly with `--apply`
+
+Instead of piping the JSON to `gh`, pass `--apply` and cascade sends the PUT itself. It transmits only the `.protection` object; the `operator_todo` guidance is never part of the request. The default emit behavior is unchanged: without `--apply` cascade still only prints or writes the JSON.
+
+```bash
+cascade branch-protection --apply --repo my-org/my-app --branch main
+```
+
+With `--apply`, `--branch` is the real protection target rather than just a label on the guidance note. cascade resolves the target repository from `--repo`, falling back to the `GITHUB_REPOSITORY` environment variable, and the REST API base from `--api-url`, falling back to `GITHUB_API_URL` and then `https://api.github.com`. A missing token or repository is reported before any network call, and a non-2xx response from GitHub (for example a `403` from an under-scoped token) is surfaced with GitHub's own rejection message.
+
+Applying branch protection requires a token with repo-admin authority (the `Administration: write` permission). The workflow `GITHUB_TOKEN` does not carry that authority, so `--apply` needs a scoped personal access token supplied through `--token` or the `GITHUB_TOKEN` environment variable. Prefer the environment variable over the flag so the token stays out of process arguments and shell history.
+
+```bash
+GITHUB_TOKEN=ghp_your_admin_pat \
+  cascade branch-protection --apply --repo my-org/my-app --branch main
+```
+
+You can also pass `--output` alongside `--apply` to keep the emitted JSON on disk for your records; cascade writes the file first and then applies.
+
 #### What ends up required, and why it is safe
 
 The required status checks contain only the cascade-controlled `Setup` and `Finalize` jobs. These are the orchestrate workflow's two steps jobs; cascade knows their exact check-run names and both run on every pipeline run. Because of that, `.protection` applied as-is never creates a required check that can never report, so it never blocks a pull request on its own.
 
 The reusable-workflow caller jobs (validate, build, deploy) are deliberately left out of the required contexts. cascade knows each caller's display-name prefix (for example `Build (my-app)`) but not the inner job name that GitHub appends to form the real check-run context, which is `<DisplayName> / <inner-job>`. That inner job lives in your reusable workflow, which cascade does not author. Requiring a bare prefix would never match and would block every pull request, so cascade lists those prefixes under `operator_todo.complete_these_contexts` as `<DisplayName> / <inner-job>` placeholders instead. Replace `<inner-job>` with the job name inside each reusable workflow, then add the completed strings to `required_status_checks.contexts` when you want them required.
 
-The `--branch` flag only labels the guidance note. The required contexts are the same across branches and environments because they are the orchestrate-workflow steps jobs, so `--env` would not change them and is not offered.
+In the default emit mode the `--branch` flag only labels the guidance note (with `--apply` it is the real apply target, as described above). Either way the required contexts are the same across branches and environments because they are the orchestrate-workflow steps jobs, so `--env` would not change them and is not offered.
 
 This command complements the hotfix branch-protection advisory (see [Hotfix workflow](/workflows/#hotfix-workflow)): the advisory prints ready-to-run `gh` commands for env branches, while `branch-protection` emits the full PUT body for the trunk.
 
@@ -334,8 +353,12 @@ This command complements the hotfix branch-protection advisory (see [Hotfix work
 |------|------|---------|-------------|
 | `--config`, `-c` | string | auto-detect | Path to manifest file |
 | `--manifest-key` | string | `ci` | Top-level key inside the manifest |
-| `--branch` | string | `main` | Branch the protection targets (labels the guidance note only; does not change the required contexts) |
-| `--output`, `-o` | string | stdout | Write to this path instead of stdout (`-` also means stdout) |
+| `--branch` | string | `main` | Branch the protection targets; with `--apply` this is the real apply target, otherwise it labels the guidance note only and does not change the required contexts |
+| `--output`, `-o` | string | stdout | Write to this path instead of stdout (`-` also means stdout); honored alongside `--apply` to keep the JSON for your records |
+| `--apply` | bool | `false` | PUT the `.protection` body to GitHub instead of emitting JSON (requires a repo-admin token) |
+| `--token` | string | `GITHUB_TOKEN` | Scoped repo-admin token used for `--apply`; falls back to the `GITHUB_TOKEN` environment variable |
+| `--repo` | string | `GITHUB_REPOSITORY` | `owner/repo` the apply targets; falls back to the `GITHUB_REPOSITORY` environment variable |
+| `--api-url` | string | `GITHUB_API_URL` | REST API base for `--apply`; falls back to `GITHUB_API_URL`, then `https://api.github.com` |
 
 ### environments
 
