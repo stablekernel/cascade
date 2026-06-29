@@ -56,6 +56,16 @@ jobs:
       rc_version: ${{ steps.compute.outputs.rc_version }}
       base_version: ${{ steps.compute.outputs.base_version }}
     steps:
+      # Sparse-checkout only the decision script. The resolve job needs no other
+      # repo content, and the script reads its marker files from the workspace
+      # root where download-artifact places them.
+      - name: Check out auto-promote decision script
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github/scripts/auto-promote-resolve.sh
+          sparse-checkout-cone-mode: false
+
       # Primary source of truth: the resolved version the fleet validated and
       # whether it was a full (all repos) or selective (subset) run. Soft failure
       # (continue-on-error) so a missing artifact falls through to the head_branch
@@ -69,78 +79,20 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The decision core (conclusion gate, full_run gate, rc-only gate, suffix
+      # strip) lives in .github/scripts/auto-promote-resolve.sh so it can be unit
+      # tested in isolation. Untrusted workflow_run fields flow in via env and are
+      # only ever read quoted inside the script, never interpolated into a shell.
       - name: Compute base version to promote
         id: compute
         env:
           # PAT for the head_sha -> tag fallback (a same-repo tags read). We
           # standardise on the fleet PAT, matching fleet-e2e's resolve step.
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-
-          # Read the full_run marker (true only for repos=all/default). Selective
-          # fleet runs (any subset) must never promote, even if they pass, because
-          # only full validation is a safe release signal. This gate prevents
-          # accidental promotion from a maintainer's debug run (e.g. repos=4env).
-          FULL_RUN="false"
-          if [ -f full-run.txt ]; then
-            FULL_RUN=$(tr -d '[:space:]' < full-run.txt)
-            echo "::notice::Read full-run marker: '$FULL_RUN'"
-          else
-            echo "::notice::No full-run marker; assuming pre-selector artifact (full run)."
-            FULL_RUN="true"
-          fi
-
-          if [ "$FULL_RUN" != "true" ]; then
-            echo "::notice::Fleet run was selective (repos=subset), not a full validation. Skipping promotion."
-            echo "promote=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Primary: the version-under-test artifact carries the exact resolved
-          # version the fleet pinned every suite to. Authoritative when present.
-          RC=""
-          if [ -f version-under-test.txt ]; then
-            RC=$(tr -d '[:space:]' < version-under-test.txt)
-            echo "::notice::Read version-under-test artifact: '${RC:-<empty>}'"
-          fi
-
-          # Fallback: no artifact (a tag-push-triggered fleet predating this
-          # handoff). Resolve the rc tag the fleet validated the prior way.
-          if [ -z "$RC" ]; then
-            echo "::notice::No version-under-test artifact; falling back to head_branch / head_sha."
-            if printf '%s' "$WR_HEAD_BRANCH" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'; then
-              RC="$WR_HEAD_BRANCH"
-            elif [ -n "$WR_HEAD_SHA" ]; then
-              # Pick the highest rc tag on the head_sha so selection is
-              # deterministic regardless of API ordering.
-              RC=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
-                --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
-                | grep -- '-rc\.' | sort -V -r | head -n 1 || true)
-            else
-              RC=""
-            fi
-          fi
-
-          # Gate: only an rc tag of shape vX.Y.Z-rc.N promotes. Anything else
-          # (a non-rc fleet dispatch, an empty resolve) is a clean no-op.
-          if ! printf '%s' "$RC" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'; then
-            echo "::notice::Fleet run was not for a vX.Y.Z-rc.N tag (got '${RC:-<empty>}'); nothing to promote."
-            echo "promote=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Strip the -rc.N suffix to get the final release version.
-          BASE="${RC%-rc.*}"
-
-          {
-            echo "promote=true"
-            echo "rc_version=$RC"
-            echo "base_version=$BASE"
-          } >> "$GITHUB_OUTPUT"
-          echo "::notice::Green full fleet for $RC -> promoting final $BASE"
+        run: bash .github/scripts/auto-promote-resolve.sh
 
   # Cut the final tag on the rc's commit and drive GoReleaser to publish it.
   promote:
