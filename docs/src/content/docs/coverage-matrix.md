@@ -62,7 +62,7 @@ only under real installation tokens on the fleet, never in the token-free harnes
 
 | Feature | act plus gitea scenario | Live-fleet probe (repo) | Unit | What the layer proves |
 |---|---|---|---|---|
-| Orchestrate trunk build to release candidate | `01`, `02`, `03`, `04`, `34-extra-orchestrate-triggers` | every repo, orchestrate-on-merge (all 11) | `internal/orchestrate` | A trunk merge mints an RC draft and writes state, across every topology, on real Actions |
+| Orchestrate trunk build to release candidate | `01`, `02`, `03`, `04`, `34-extra-orchestrate-triggers` | every repo, orchestrate-on-merge (all 12) | `internal/orchestrate` | A trunk merge mints an RC draft and writes state, across every topology, on real Actions |
 | Default promotion (env to next env) | `04`, `promote/cascade-deploy-enabled` | `promote-staging` (2env, 3env, primary) | `internal/promote` | One promotion step copies source state into the target on a real release object |
 | Cascade-mode promotion (atomic multi-step) | `04-cascade-promotion` | `lifecycle` dev to prod (4env) | `internal/promote` | The full ladder advances through intermediates and publishes at the top |
 | Standalone release lane (draft, prerelease, publish) | `05-publish-callback`, `37`, `38` | dispatch prerelease then release (single-env); `release-only` | `internal/release` | A real release transitions draft to prerelease to published with RC reaping |

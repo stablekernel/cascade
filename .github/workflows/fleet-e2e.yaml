@@ -369,7 +369,7 @@ jobs:
       - name: Repin each example repo to the rc
         run: |
           set -euo pipefail
-          # The full roster of 11 example repos. Repinning means: set manifest
+          # The full roster of 12 example repos. Repinning means: set manifest
           # cli_version to the rc, replace any other in-repo prerelease refs (rc/dryrun),
           # regenerate the workflows with the rc binary, then commit + push only
           # if something changed. This preserves every hand-written suite feature:
@@ -652,7 +652,7 @@ jobs:
             echo ""
             echo "| Lane | Result |"
             echo "|---|---|"
-            echo "| repin (all 11 repos to rc) | $R_REPIN |"
+            echo "| repin (all 12 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
             echo "| 4env (heavy, alone) | $R_HEAVY |"
