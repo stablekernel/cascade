@@ -18,9 +18,9 @@ below explains those choices.
 
 :::tip[Last validated]
 This matrix was last validated against the fully green live-fleet run behind `v0.5.1`:
-all eleven example repos (primary, artifact-a, artifact-b, single-env, 2env, 3env, 4env,
-release-only, no-env, callbacks, rollback-dispatch) passed every probe, and the shared
-fail-closed reconcile gate accounted for every run in each scenario window.
+all twelve example repos (primary, artifact-a, artifact-b, single-env, 2env, 3env, 4env,
+release-only, no-env, callbacks, rollback-dispatch, branch-protection) passed every probe,
+and the shared fail-closed reconcile gate accounted for every run in each scenario window.
 :::
 
 ## Why two layers, restated for this matrix
@@ -77,6 +77,7 @@ only under real installation tokens on the fleet, never in the token-free harnes
 | External update and notify (cross-repo) | `21-cross-repo-callback`, `multi-repo/*` | external-update from artifact-a and artifact-b, concurrent no-loss (primary) | `internal/external` | A satellite deploy writes the primary's shared manifest with no lost update |
 | Manage-release verbs (create, update, lock, prerelease, publish, delete) | `05-publish-callback` | `manage-release-verbs` lock to prerelease, orphan delete (primary); single-env stages | `internal/release` | Each release verb mutates the real release object as specified |
 | State write (Contents API) and retry-on-conflict | `08-state-push-retry` | state read-back after every step (all multi-step repos) | `internal/statewrite`, `internal/promote` | State commits land and survive a concurrent-writer race |
+| Branch-protection JSON generator | | `branch-protection-suite-orchestrate` (cascade-example-branch-protection) | `internal/branchprotection` | Generated JSON accepted by the GitHub classic branch-protection API; required-status-checks, enforce-admins, and PR-review fields match the hardcoded defaults |
 
 ## Guards and registered negatives
 
