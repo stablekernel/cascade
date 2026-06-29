@@ -1,6 +1,7 @@
 package branchprotection
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,22 @@ type Options struct {
 	Branch string
 	// Output is the destination path. Empty or "-" writes to stdout.
 	Output string
+	// Apply opts into calling GitHub: instead of emitting the JSON to stdout,
+	// cascade PUTs the .protection body to the branches protection API. The emit
+	// default (Apply false) is unchanged. When Output is also set, the JSON file
+	// is still written for the operator's records before the apply runs.
+	Apply bool
+	// Token is the credential used for the apply. It should be a scoped PAT the
+	// operator supplies that carries repo-admin; the workflow's GITHUB_TOKEN does
+	// not need admin. Empty falls back to the GITHUB_TOKEN environment variable.
+	Token string
+	// Repo is the owner/repo the apply targets. Empty falls back to the
+	// GITHUB_REPOSITORY environment variable.
+	Repo string
+	// APIURL is the REST API base for the apply. Empty falls back to GITHUB_API_URL
+	// and then https://api.github.com. It exists so the apply is testable against a
+	// mock server.
+	APIURL string
 }
 
 // NewCommand creates the branch-protection command. It emits the JSON body an
@@ -59,7 +76,14 @@ are listed under operator_todo.complete_these_contexts as "<DisplayName> /
 
 The --branch flag only labels the guidance note; the required contexts are the
 same across branches and environments because they are the orchestrate-workflow
-steps jobs.`,
+steps jobs.
+
+By default cascade only emits the JSON; it makes no API call. Pass --apply to PUT
+the .protection body for you. Applying branch protection requires repo-admin, so
+supply a scoped token with --token (or GITHUB_TOKEN) rather than relying on the
+workflow's GITHUB_TOKEN. The --branch here is the real apply target, --repo is the
+owner/repo (default GITHUB_REPOSITORY), and --api-url overrides the API base
+(default GITHUB_API_URL, then https://api.github.com).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return Run(o, cmd.OutOrStdout())
@@ -68,14 +92,22 @@ steps jobs.`,
 
 	cmd.Flags().StringVarP(&o.ConfigPath, "config", "c", "", "Path to config file (default: auto-detect .github/manifest.yaml)")
 	cmd.Flags().StringVar(&o.ManifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
-	cmd.Flags().StringVar(&o.Branch, "branch", "main", "Branch the protection targets (labels the guidance note only; does not change the required contexts)")
+	cmd.Flags().StringVar(&o.Branch, "branch", "main", "Branch the protection targets (with --apply this is the apply target; otherwise it only labels the guidance note)")
 	cmd.Flags().StringVarP(&o.Output, "output", "o", "", "Write to this path instead of stdout ('-' also means stdout)")
+	cmd.Flags().BoolVar(&o.Apply, "apply", false, "Apply the .protection body to GitHub instead of emitting JSON (requires --token with repo-admin)")
+	cmd.Flags().StringVar(&o.Token, "token", "", "Token used for --apply (a scoped repo-admin PAT; default GITHUB_TOKEN)")
+	cmd.Flags().StringVar(&o.Repo, "repo", "", "owner/repo the apply targets (default GITHUB_REPOSITORY)")
+	cmd.Flags().StringVar(&o.APIURL, "api-url", "", "REST API base for --apply (default GITHUB_API_URL, then https://api.github.com)")
 
 	return cmd
 }
 
-// Run resolves the manifest, builds the payload, and writes it. When Options.Output
-// is empty or "-", it writes to stdout (w); otherwise it writes to that file path.
+// Run resolves the manifest and builds the payload, then either emits it or
+// applies it. By default (Options.Apply false) the behavior is unchanged: when
+// Options.Output is empty or "-" it writes the JSON to stdout, otherwise to that
+// file path, and cascade makes no API call. When Options.Apply is set it PUTs the
+// .protection body to GitHub; a non-empty Output still writes the JSON file first
+// for the operator's records.
 func Run(o Options, stdout io.Writer) error {
 	configPath := o.ConfigPath
 	if configPath == "" {
@@ -101,20 +133,56 @@ func Run(o Options, stdout io.Writer) error {
 		branch = "main"
 	}
 
-	out, err := Marshal(Build(cfg, branch))
+	payload := Build(cfg, branch)
+	out, err := Marshal(payload)
 	if err != nil {
 		return err
 	}
 
+	// A real Output path is always honored so an operator can keep the emitted
+	// JSON on disk whether or not they also apply it.
+	if o.Output != "" && o.Output != "-" {
+		if werr := os.WriteFile(o.Output, out, 0o644); werr != nil {
+			return fmt.Errorf("writing branch-protection payload to %s: %w", o.Output, werr)
+		}
+	}
+
+	if o.Apply {
+		return runApply(o, branch, payload.Protection, stdout)
+	}
+
+	// Emit-to-stdout default: unchanged from the original command behavior.
 	if o.Output == "" || o.Output == "-" {
 		if _, werr := stdout.Write(out); werr != nil {
 			return fmt.Errorf("writing branch-protection payload: %w", werr)
 		}
-		return nil
+	}
+	return nil
+}
+
+// runApply resolves the apply inputs, PUTs the protection body to GitHub, and
+// prints a one-line confirmation. A missing token or repository is a usage error
+// surfaced before any network call.
+func runApply(o Options, branch string, protection Protection, stdout io.Writer) error {
+	token := resolveToken(o.Token)
+	if token == "" {
+		return fmt.Errorf("--apply requires a token: pass --token or set GITHUB_TOKEN")
 	}
 
-	if werr := os.WriteFile(o.Output, out, 0o644); werr != nil {
-		return fmt.Errorf("writing branch-protection payload to %s: %w", o.Output, werr)
+	repo := resolveRepo(o.Repo)
+	if repo == "" {
+		return fmt.Errorf("--apply requires a repository: pass --repo owner/repo or set GITHUB_REPOSITORY")
+	}
+
+	apiURL := resolveAPIURL(o.APIURL)
+
+	if err := newApplier(apiURL, token).apply(context.Background(), repo, branch, protection); err != nil {
+		return err
+	}
+
+	_, err := fmt.Fprintf(stdout, "applied branch protection to %s/branches/%s\n", repo, branch)
+	if err != nil {
+		return fmt.Errorf("writing apply confirmation: %w", err)
 	}
 	return nil
 }
