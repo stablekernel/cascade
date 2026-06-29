@@ -40,7 +40,7 @@ Treat these as future work rather than current guarantees:
 
 GitHub and your cloud own these controls; cascade cannot set them for you:
 
-- **Branch protection** on your trunk: require reviews and status checks, restrict who can push, and require signed commits where appropriate.
+- **Branch protection** on your trunk: require reviews and status checks, restrict who can push, and require signed commits where appropriate. The [`branch-protection`](/cli-reference/#branch-protection) command emits the matching settings, or applies them for you with `--apply` given a repo-admin token (the workflow `GITHUB_TOKEN` cannot).
 - **Tag protection or rulesets** so release and version tags cannot be moved or forged.
 - **Environment protection rules** with required reviewers, wait timers, and deployment branch or tag policies on production environments. For reusable deploys, place this gate in the called workflow.
 - **CODEOWNERS on workflow files** (`.github/workflows/**`) so changes to the pipeline itself require owner review.
