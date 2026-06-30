@@ -32,11 +32,14 @@ func NewRollbackGenerator(cfg *config.TrunkConfig, baseDir string) *RollbackGene
 	}
 }
 
-// Enabled reports whether the rollback workflow should be emitted. It is emitted
-// when the manifest declares at least one environment, since a rollback re-points
-// an environment at a prior deployment.
+// Enabled reports whether the rollback workflow should be emitted. It requires
+// at least two environments: a rollback re-points a promoted environment at a
+// prior deployment, and the first environment tracks trunk (it is never promoted
+// into, so it has no rollback history and reverts via a merge to trunk instead).
+// A single-environment project therefore has no rollbackable environment, so the
+// workflow is not emitted, mirroring the hotfix generator.
 func (g *RollbackGenerator) Enabled() bool {
-	return g.config != nil && len(g.config.Environments) >= 1
+	return g.config != nil && len(g.config.Environments) >= 2
 }
 
 // dispatchTrigger returns the configured opt-in repository_dispatch trigger, or
@@ -128,14 +131,21 @@ func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("  workflow_dispatch:\n")
 	sb.WriteString("    inputs:\n")
 
-	// environment: enumerate the configured environments as a choice so the
-	// operator picks from the declared set rather than free-typing.
+	// environment: enumerate the promoted environments as a choice so the operator
+	// picks from the declared set rather than free-typing. The first environment
+	// is excluded: it tracks trunk and is refused by the rollback runtime guard, so
+	// offering it in the dropdown would only surface a guaranteed failure. Enabled
+	// gates emission on at least two environments, so Environments[1:] is non-empty.
 	sb.WriteString("      environment:\n")
 	sb.WriteString("        description: 'Environment to roll back'\n")
 	sb.WriteString("        required: true\n")
 	sb.WriteString("        type: choice\n")
 	sb.WriteString("        options:\n")
-	for _, env := range g.config.Environments {
+	promoted := g.config.Environments
+	if len(promoted) > 0 {
+		promoted = promoted[1:]
+	}
+	for _, env := range promoted {
 		fmt.Fprintf(sb, "          - %s\n", env)
 	}
 

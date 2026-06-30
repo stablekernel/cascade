@@ -354,7 +354,9 @@ For the trunk branch, `cascade branch-protection` emits the full JSON body to PU
 
 ## Rollback
 
-cascade generates a standalone `cascade-rollback.yaml` workflow whenever the manifest declares at least one environment. It re-deploys a prior version or SHA to a target environment, defaulting to the previous version (N-1). A read-only preflight resolves the target, the deploy stage re-runs the configured deploy callbacks keyed on the resolved SHA, and finalize writes the rolled-back state back to trunk.
+cascade generates a standalone `cascade-rollback.yaml` workflow whenever the manifest declares at least two environments. It re-deploys a prior version or SHA to a target environment, defaulting to the previous version (N-1). A read-only preflight resolves the target, the deploy stage re-runs the configured deploy callbacks keyed on the resolved SHA, and finalize writes the rolled-back state back to trunk.
+
+Rollback covers the promoted environments only. The first environment tracks trunk and is never promoted into, so it keeps no deploy history to roll back to: roll it forward by reverting the offending change on the trunk branch instead. The workflow dropdown offers only the promoted environments, and a rollback aimed at the first environment fails fast with that guidance.
 
 By default the workflow is triggered by manual dispatch only (`workflow_dispatch`).
 

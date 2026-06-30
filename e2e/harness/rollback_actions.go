@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // rollbackWorkflowPath is the generated rollback workflow's path inside the repo.
@@ -86,6 +87,13 @@ func (r *Runner) executeRollback(ctx context.Context, rollback *RollbackStep, co
 	// Handle expected failures (mirrors executePromote's ExpectFailure path).
 	if rollback.ExpectFailure {
 		if result.Conclusion == "failure" {
+			// When ExpectLog is set, assert the failure logs carry the expected
+			// marker so the scenario proves the run failed for the intended reason
+			// (for example the first-environment guard) and not an unrelated fault.
+			if rollback.ExpectLog != "" && !strings.Contains(result.Logs, rollback.ExpectLog) {
+				r.t.Logf("  Rollback workflow logs:\n%s", result.Logs)
+				return fmt.Errorf("rollback failed as expected but logs did not contain %q", rollback.ExpectLog)
+			}
 			r.t.Log("  Rollback: workflow failed as expected")
 			return nil
 		}

@@ -27,8 +27,18 @@ func rollbackTestConfig() *config.TrunkConfig {
 	}
 }
 
-func TestRollbackGenerator_Enabled_TrueWithOneEnv(t *testing.T) {
+func TestRollbackGenerator_Enabled_FalseWithOneEnv(t *testing.T) {
+	// A single-environment project's only env is the first (trunk-tracking)
+	// environment, which reverts via a merge to trunk, not a rollback. With no
+	// promoted environment to roll back, the workflow is not emitted, mirroring
+	// the hotfix generator.
 	cfg := &config.TrunkConfig{Environments: []string{"prod"}}
+	g := NewRollbackGenerator(cfg, "")
+	assert.False(t, g.Enabled())
+}
+
+func TestRollbackGenerator_Enabled_TrueWithTwoEnvs(t *testing.T) {
+	cfg := &config.TrunkConfig{Environments: []string{"dev", "prod"}}
 	g := NewRollbackGenerator(cfg, "")
 	assert.True(t, g.Enabled())
 }
@@ -37,6 +47,25 @@ func TestRollbackGenerator_Enabled_FalseWithZeroEnv(t *testing.T) {
 	cfg := &config.TrunkConfig{}
 	g := NewRollbackGenerator(cfg, "")
 	assert.False(t, g.Enabled())
+}
+
+func TestRollbackGenerator_EnvironmentChoices_ExcludeFirstEnv(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev", "staging", "prod"},
+		Deploys: []config.DeployConfig{
+			{Name: "services", Workflow: ".github/workflows/deploy.yaml"},
+		},
+	}
+	content, err := NewRollbackGenerator(cfg, "").Generate()
+	assert.NoError(t, err)
+
+	// The first env tracks trunk and is refused by the runtime guard, so the
+	// dropdown must not offer it. The promoted envs remain selectable.
+	assert.NotContains(t, content, "          - dev\n",
+		"first environment must not be a rollback choice")
+	assert.Contains(t, content, "          - staging\n")
+	assert.Contains(t, content, "          - prod\n")
 }
 
 func TestRollbackGenerator_DispatchInputs(t *testing.T) {
