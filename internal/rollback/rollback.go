@@ -173,6 +173,10 @@ func (r *Rollbacker) Plan(env, to, deployable string) (*Plan, error) {
 		return nil, fmt.Errorf("unknown environment %q (not declared in config.environments and has no recorded state)", env)
 	}
 
+	if err := r.firstEnvErr(env); err != nil {
+		return nil, err
+	}
+
 	current := r.cicdFile.State[env]
 	plan := &Plan{
 		Environment: env,
@@ -390,6 +394,9 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 	if plan == nil {
 		return fmt.Errorf("nil plan")
 	}
+	if err := r.firstEnvErr(plan.Environment); err != nil {
+		return err
+	}
 	if plan.NoOp {
 		return nil
 	}
@@ -480,6 +487,24 @@ func (r *Rollbacker) writeConfig() error {
 	}
 	if err := os.WriteFile(r.configPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write manifest: %w", err)
+	}
+	return nil
+}
+
+// firstEnvErr returns a guard error when env is the first (build target)
+// environment and nil otherwise. The first environment tracks trunk and is
+// never promoted into, so its deploy-history ring is structurally always empty:
+// a rollback there has no recorded prior target and would resolve a silent wrong
+// one from an empty or stale ring. The trunk-native undo for the first
+// environment is a revert merge to the trunk branch, not a rollback. The guard
+// is inert when no parsed config is available to identify the first environment,
+// so a state-only manifest still resolves through the normal path.
+func (r *Rollbacker) firstEnvErr(env string) error {
+	if r.cicdFile == nil || r.cicdFile.Config == nil {
+		return nil
+	}
+	if r.cicdFile.Config.IsFirstEnvironment(env) {
+		return fmt.Errorf("environment %q is the first environment; it tracks trunk and is never promoted into, so it has no rollback history. Revert it with a merge to the trunk branch instead of a rollback", env)
 	}
 	return nil
 }

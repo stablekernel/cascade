@@ -1,0 +1,123 @@
+name: "Rollback refuses the first environment, allows a promoted one"
+description: |
+  Proves the first-environment rollback guard end to end. The first environment
+  tracks trunk and is never promoted into, so it keeps no deploy-history ring to
+  resolve a prior target from. A rollback there must fail fast with an actionable
+  message rather than silently re-point at an empty or stale ring. A promoted
+  environment still rolls back normally.
+
+  dev is the first environment. prod is advanced through two published versions
+  so it has a real prior target. The scenario then dispatches two rollbacks:
+
+    1. Rollback dev (the first env): the preflight refuses it. The run concludes
+       in failure and its logs carry the guard message, asserted via expect_log.
+    2. Rollback prod (a promoted env): resolves N-1 from the previous-deploy ring,
+       re-deploys at that SHA, and lands prod back on the first version.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    # Reusable deploy whose inner job echoes the resolved env/sha, so the deploy
+    # job runs observably under act without a checkout step. act keys it by the
+    # inner job id appdeploy, which the harness assertion targets.
+    - name: app
+      workflow: .github/workflows/deploy-app.yaml
+      triggers: ["**"]
+
+steps:
+  - name: "Commit the first version source"
+    action: commit
+    commit:
+      message: "feat: first version"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+        .github/workflows/deploy-app.yaml: |
+          name: deploy-app
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            appdeploy:
+              runs-on: ubuntu-latest
+              steps:
+                - run: echo "deployed env=${{ inputs.environment }} sha=${{ inputs.sha }}"
+
+  - name: "Orchestrate the first commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+
+  - name: "Promote the first version from dev to prod (establishes the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+
+  - name: "Commit a second version source"
+    action: commit
+    commit:
+      message: "feat: second version"
+      files:
+        src/app.go: |
+          package main
+          func main() { _ = 2 }
+
+  - name: "Orchestrate the second commit into dev"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit2
+
+  - name: "Promote the second version from dev to prod (advances past the prior target)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+    expect:
+      state:
+        prod:
+          sha: commit2
+
+  # Rollback the first environment: the preflight refuses it before resolving any
+  # target. The run concludes in failure and its logs carry the guard message.
+  - name: "Rollback dev (the first environment) fails fast with the guard message"
+    action: rollback
+    rollback:
+      environment: dev
+      expect_failure: true
+      expect_log: "is the first environment"
+
+  # Rollback a promoted environment: resolves N-1 from the previous-deploy ring,
+  # re-deploys at that SHA, and prod state lands back on commit1.
+  - name: "Rollback prod (a promoted environment) succeeds"
+    action: rollback
+    rollback:
+      environment: prod
+    expect:
+      state:
+        prod:
+          sha: commit1
+      jobs:
+        preflight: success
+        appdeploy: success
+        finalize: success

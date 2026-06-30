@@ -212,7 +212,10 @@ type PromoteStep struct {
 // failure (for example a rollback whose preflight cannot resolve a target),
 // mirroring PromoteStep.ExpectFailure. ExpectSource, when non-empty, asserts the
 // resolved-target source label that the preflight job echoes to its job log
-// (one of "state", "previous-ring", or "git-history").
+// (one of "state", "previous-ring", or "git-history"). ExpectLog, when set
+// alongside ExpectFailure, asserts the failing run's logs contain the given
+// substring, so a scenario can prove the run failed for the expected reason (for
+// example the first-environment guard message) rather than an unrelated fault.
 type RollbackStep struct {
 	Environment   string `yaml:"environment"`
 	Target        string `yaml:"target,omitempty"`
@@ -220,6 +223,7 @@ type RollbackStep struct {
 	DryRun        bool   `yaml:"dry_run,omitempty"`
 	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
 	ExpectSource  string `yaml:"expect_source,omitempty"`
+	ExpectLog     string `yaml:"expect_log,omitempty"`
 }
 
 // VerifyStep defines a verify action: a read-only `cascade verify` run in the
