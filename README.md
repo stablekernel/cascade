@@ -19,6 +19,7 @@
 <!-- Row 3: test & validation ladder -->
 <p align="center">
   <a href="https://github.com/stablekernel/cascade/actions/workflows/validate.yaml"><img src="https://github.com/stablekernel/cascade/actions/workflows/validate.yaml/badge.svg?branch=main" alt="Tests & Lint"></a>
+  <a href="https://github.com/stablekernel/cascade/actions"><img src="https://img.shields.io/badge/coverage-82.6%25-brightgreen" alt="Coverage"></a>
   <a href="https://github.com/stablekernel/cascade/actions/workflows/e2e.yaml"><img src="https://github.com/stablekernel/cascade/actions/workflows/e2e.yaml/badge.svg?branch=main" alt="Integration (act + gitea)"></a>
   <a href="https://github.com/stablekernel/cascade/actions/workflows/fleet-e2e.yaml"><img src="https://github.com/stablekernel/cascade/actions/workflows/fleet-e2e.yaml/badge.svg?branch=main" alt="Fleet E2E (live GitHub)"></a>
 </p>
