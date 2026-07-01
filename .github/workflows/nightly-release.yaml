@@ -247,9 +247,86 @@ jobs:
               -m "Dry-run release rehearsal for ${BASE} (no publish)"
             git push origin "refs/tags/${DRYRUN_TAG}"
           fi
-          echo "::notice::Pushed dry-run tag ${DRYRUN_TAG}; Release will build it and the full fleet will validate it. Auto-promote's -rc.-only gate keeps it unpublished. The -dryrun.* tag is excluded from the change-detection base and should be pruned after the run."
+          echo "::notice::Pushed dry-run tag ${DRYRUN_TAG}; Release will build it and the full fleet will validate it. Auto-promote's -rc.-only gate keeps it unpublished. The -dryrun.* tag is excluded from the change-detection base; the sweep-dryrun-tags job prunes older ones once their rehearsal chain settles."
           {
             echo "## Dry-run candidate"
             echo ""
             echo "Cut \`${DRYRUN_TAG}\` (rehearses \`${CANDIDATE}\`). This will run Release + the full fleet but cannot publish."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sweep-dryrun-tags:
+    name: Prune accumulated dry-run tags
+    # Release hygiene, independent of the release decision. A dry run cuts a
+    # vX.Y.Z-dryrun.N tag (and GoReleaser cuts a matching prerelease) that is
+    # never published. That tag is load-bearing only while its own rehearsal
+    # chain (Release -> Fleet E2E -> Auto-promote) is in flight, so a same-job
+    # delete would tear the chain down before it runs. This prunes retention-
+    # based instead: it keeps the newest few dry-run tags (an in-flight
+    # rehearsal is always among the newest) and deletes the older accumulated
+    # ones, so they cannot pile up and pollute version-calc.
+    #
+    # Always on the schedule; on a manual run only when this is not itself a
+    # dry run, so it never races the tag the dispatch job just cut.
+    if: github.event_name == 'schedule' || github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Prune old dry-run tags and their prereleases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Keep this many newest dry-run tags so an in-flight rehearsal (always
+          # among the newest) and a couple more for debugging are never pruned.
+          RETENTION: '3'
+        run: |
+          set -euo pipefail
+
+          # Match ONLY well-formed dry-run prerelease tags: vX.Y.Z-dryrun.N,
+          # anchored start to end. A final release (vX.Y.Z) carries no suffix and
+          # a candidate (vX.Y.Z-rc.N) carries -rc., so neither can ever match;
+          # only pure -dryrun.N tags reach the delete path.
+          dryrun_re='^v[0-9]+\.[0-9]+\.[0-9]+-dryrun\.[0-9]+$'
+
+          git fetch --tags --force --prune --prune-tags --quiet origin
+
+          mapfile -t tags < <(git tag -l | grep -E "$dryrun_re" | sort -V || true)
+
+          count=${#tags[@]}
+          if [ "$count" -le "$RETENTION" ]; then
+            echo "::notice::${count} dry-run tag(s) present; at or under retention (${RETENTION}); nothing to prune."
+            exit 0
+          fi
+
+          prune_count=$((count - RETENTION))
+          echo "::notice::${count} dry-run tag(s); keeping newest ${RETENTION}, pruning ${prune_count} oldest."
+
+          pruned=0
+          # sort -V is ascending, so the oldest tags are first; slice off exactly
+          # the ones beyond retention.
+          for tag in "${tags[@]:0:prune_count}"; do
+            # Defense in depth: re-assert the shape before any delete, even though
+            # the list is already filtered, so no rc or release tag can slip in.
+            if ! printf '%s' "$tag" | grep -Eq "$dryrun_re"; then
+              echo "::warning::Refusing to delete non-dry-run ref ${tag}."
+              continue
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then
+              # Deletes the prerelease and its underlying tag in one call.
+              gh release delete "$tag" --cleanup-tag --yes
+              echo "::notice::Deleted prerelease and tag ${tag}."
+            else
+              git push origin --delete "refs/tags/${tag}"
+              echo "::notice::Deleted tag ${tag} (no release found)."
+            fi
+            pruned=$((pruned + 1))
+          done
+
+          {
+            echo "## Dry-run tag sweep"
+            echo ""
+            echo "Pruned ${pruned} dry-run tag(s); kept the newest ${RETENTION}."
           } >> "$GITHUB_STEP_SUMMARY"
