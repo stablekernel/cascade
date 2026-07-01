@@ -137,6 +137,7 @@ from a general case.
 | Release-only (no deploy environments) | `cascade-example-release-only` | none specific (release lane via `37`, `38`) |
 | No-environment library shape | covered in harness only by design | `01-no-env-repo` |
 | Primary plus artifact satellites (cross-repo graph) | `cascade-example-primary`, `cascade-example-artifact-a`, `cascade-example-artifact-b` | `multi-repo/*`, `21-cross-repo-callback` |
+| Per-callback secrets, permissions, and OIDC posture across reusable and inline callbacks | `cascade-example-callbacks` | `orchestrate/secrets-opt-in`, `orchestrate/callback-permissions-oidc` |
 | External rollback entry point (`repository_dispatch`) | `cascade-example-rollback-dispatch` | `rollback/*` |
 
 The no-environment library shape is covered in the act plus gitea harness; a live
