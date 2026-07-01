@@ -116,8 +116,10 @@ func mustParseActionPins(data []byte) map[string]actionPin {
 // uniformly and no ref is missed.
 //
 // Resolution order:
-//  1. config.action_pins[action]: explicit per-action override (any ref/sha),
-//     applied regardless of pin_mode. Use this for forks or org-mirrored actions.
+//  1. config.action_pins[action]: explicit per-action ref override (a tag or
+//     sha), applied regardless of pin_mode. The override is the bare ref after
+//     "@" for the same action path; it cannot repoint to a different owner/repo.
+//     Use it to hold an action at a known-good commit or tag.
 //  2. pin_mode: sha: emit <action>@<sha> # <version> from the built-in table.
 //  3. pin_mode: tag (default): emit <action>@<tag>, today's behavior, never
 //     @latest for a third-party action.

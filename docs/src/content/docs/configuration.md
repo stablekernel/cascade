@@ -155,17 +155,17 @@ cascade governs how the third-party actions it emits into your workflows (for ex
 
 The default `sha` values come from a single committed pin table (`internal/generate/action_pins.yaml`); no per-repo configuration is needed to adopt SHA pinning beyond setting `pin_mode: sha`.
 
-`action_pins` overrides the built-in table for individual actions, keyed by action path. An override is applied regardless of `pin_mode`, so use it to point at a fork or an org-mirrored action:
+`action_pins` overrides the built-in ref for individual actions, keyed by action path. The map value is the bare ref emitted after `@` for that same action path (a tag or a commit SHA); it cannot repoint an action to a different owner or repository. An override is applied regardless of `pin_mode`, so use it to hold an action at a known-good commit or tag:
 
 ```yaml
 ci:
   config:
     pin_mode: sha
     action_pins:
-      actions/checkout: my-org/checkout@0123456789abcdef0123456789abcdef01234567
+      actions/checkout: 0123456789abcdef0123456789abcdef01234567
 ```
 
-An action that is neither in the built-in table nor overridden is emitted unchanged.
+That emits `uses: actions/checkout@0123456789abcdef0123456789abcdef01234567`. An action that is neither in the built-in table nor overridden is emitted unchanged.
 
 ### Token authentication
 
