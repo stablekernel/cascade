@@ -326,7 +326,7 @@ func tagHead(t *testing.T, name string) {
 }
 
 func TestGetLatestTag_IgnoresNonVersionTags(t *testing.T) {
-	newScratchRepo(t)
+	dir := newScratchRepo(t)
 	commitFile(t, "a.txt", "one", "first commit")
 
 	// Valid version tags plus non-version tags that sort newer by base version.
@@ -335,7 +335,7 @@ func TestGetLatestTag_IgnoresNonVersionTags(t *testing.T) {
 	tagHead(t, "v0.6.0-dryrun.1") // higher base version, not a cascade version
 	tagHead(t, "vnightly")        // foreign tag matching the prefix glob
 
-	got, sha, err := GetLatestTag("v")
+	got, sha, err := GetLatestTag(dir, "v")
 	if err != nil {
 		t.Fatalf("GetLatestTag() unexpected error: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestGetLatestTag_IgnoresNonVersionTags(t *testing.T) {
 }
 
 func TestGetLatestReleaseTag_IgnoresNonVersionTags(t *testing.T) {
-	newScratchRepo(t)
+	dir := newScratchRepo(t)
 	commitFile(t, "a.txt", "one", "first commit")
 
 	tagHead(t, "v0.5.0")
@@ -356,7 +356,7 @@ func TestGetLatestReleaseTag_IgnoresNonVersionTags(t *testing.T) {
 	tagHead(t, "v0.6.0-dryrun.1") // not an -rc tag, but also not a valid version
 	tagHead(t, "vnightly")
 
-	got, sha, err := GetLatestReleaseTag("v")
+	got, sha, err := GetLatestReleaseTag(dir, "v")
 	if err != nil {
 		t.Fatalf("GetLatestReleaseTag() unexpected error: %v", err)
 	}
@@ -375,12 +375,86 @@ func TestGetLatestReleaseTag_SkipsRCButKeepsValidRelease(t *testing.T) {
 	tagHead(t, "v1.0.0")
 	tagHead(t, "v1.0.1-rc.0") // valid prerelease, must be skipped for "release"
 
-	got, _, err := GetLatestReleaseTag("v")
+	got, _, err := GetLatestReleaseTag("", "v")
 	if err != nil {
 		t.Fatalf("GetLatestReleaseTag() unexpected error: %v", err)
 	}
 	if got != "v1.0.0" {
 		t.Errorf("GetLatestReleaseTag() = %q, want %q", got, "v1.0.0")
+	}
+}
+
+// initRepoAt initializes a git repository at dir, commits a file, and creates a
+// lightweight tag pointing at the resulting commit, all via "git -C" so the
+// process working directory is never changed.
+func initRepoAt(t *testing.T, dir, tag string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"-C", dir, "init"},
+		{"-C", dir, "config", "user.email", "test@example.com"},
+		{"-C", dir, "config", "user.name", "Test User"},
+		{"-C", dir, "config", "commit.gpgsign", "false"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	for _, args := range [][]string{
+		{"-C", dir, "add", "f.txt"},
+		{"-C", dir, "commit", "-m", "seed"},
+		{"-C", dir, "tag", tag},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+}
+
+// TestGetLatestTag_ScopesToDir proves the lookup reads the repository at the
+// given dir, not the process working directory. The cwd repo carries a decoy
+// tag that sorts higher; a cwd-scoped lookup would return it.
+func TestGetLatestTag_ScopesToDir(t *testing.T) {
+	newScratchRepo(t) // cwd is a repo with a higher-sorting decoy tag
+	commitFile(t, "a.txt", "one", "first commit")
+	tagHead(t, "v9.9.9")
+
+	target := t.TempDir()
+	initRepoAt(t, target, "v1.2.3")
+
+	got, sha, err := GetLatestTag(target, "v")
+	if err != nil {
+		t.Fatalf("GetLatestTag() unexpected error: %v", err)
+	}
+	if got != "v1.2.3" {
+		t.Errorf("GetLatestTag() = %q, want %q (must read the dir repo, not cwd)", got, "v1.2.3")
+	}
+	if sha == "" {
+		t.Errorf("GetLatestTag() returned empty SHA for %q", got)
+	}
+}
+
+// TestGetLatestReleaseTag_ScopesToDir mirrors TestGetLatestTag_ScopesToDir for
+// the release-tag lookup.
+func TestGetLatestReleaseTag_ScopesToDir(t *testing.T) {
+	newScratchRepo(t)
+	commitFile(t, "a.txt", "one", "first commit")
+	tagHead(t, "v9.9.9")
+
+	target := t.TempDir()
+	initRepoAt(t, target, "v1.2.3")
+
+	got, sha, err := GetLatestReleaseTag(target, "v")
+	if err != nil {
+		t.Fatalf("GetLatestReleaseTag() unexpected error: %v", err)
+	}
+	if got != "v1.2.3" {
+		t.Errorf("GetLatestReleaseTag() = %q, want %q (must read the dir repo, not cwd)", got, "v1.2.3")
+	}
+	if sha == "" {
+		t.Errorf("GetLatestReleaseTag() returned empty SHA for %q", got)
 	}
 }
 
