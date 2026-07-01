@@ -701,6 +701,85 @@ cascade hotfix finalize \
 
 Only successful build and deploy results update the per-build and per-deploy substates. For a prerelease-environment target the hotfix release is promoted to a GitHub prerelease, superseding that environment's current prerelease object; for other environments it stays a draft.
 
+### rollback
+
+Re-promote a prior known-good version or SHA to an environment. Rollback resolves the target from existing deployment state and, when needed, the git history of the manifest, then re-applies that SHA and version using the same state-write path as a normal promotion. There is no separate deploy code path.
+
+`rollback` has a flat operator form plus two subcommands, `preflight` and `finalize`, that the generated rollback workflow drives: a read-only preflight that resolves the target, and a finalize that applies the state write and pushes it back to trunk.
+
+Resolution order for `--to <version|sha>`:
+
+1. The environment's current recorded state (and per-deployable state).
+2. The environment's deploy-history ring, newest first.
+3. The manifest's git history, newest first (recovers a deployment the manifest has already moved past).
+
+When `--to` is omitted, rollback resolves the previous version: the newest deploy-history ring entry that differs from the current state, falling back to the newest distinct prior state from manifest history. A SHA may be given in full or as a short prefix of 7 or more characters. Use `--deployable` to scope the rollback to a single deployable's recorded version.
+
+Without `--dry-run` the flat form writes the re-promotion to the manifest; with `--dry-run` it prints the resolved plan and makes no changes.
+
+```bash
+cascade rollback --env prod --to v1.2.2
+cascade rollback --env prod --to 111aaa --dry-run
+cascade rollback --env prod --to v1.2.2 --deployable services
+```
+
+#### First-environment guard
+
+The first environment in the chain (the build target) tracks trunk and is never promoted into, so its deploy-history ring is structurally empty and it has no prior target to resolve. Rollback fails fast on the first environment rather than resolve a silent wrong target from an empty or stale ring. The trunk-native undo for the first environment is a revert merge to the trunk branch, not a rollback. The guard is inert when no parsed config is available to identify the first environment, so a state-only manifest still resolves through the normal path.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file (default: `.github/manifest.yaml`) |
+| `--key` | string | `ci` | Top-level manifest key |
+| `--env` | string | - | Target environment to roll back (required) |
+| `--to` | string | previous version | Prior version or SHA to re-promote (defaults to the previous version) |
+| `--deployable` | string | - | Scope the rollback to a single deployable |
+| `--actor` | string | `$GITHUB_ACTOR` | Actor recorded on the rollback |
+| `--dry-run` | bool | false | Resolve and print the plan without modifying the manifest |
+| `--json` | bool | false | Output the resolved plan as JSON |
+
+#### rollback preflight
+
+Resolve the rollback target read-only and report it. This is the first stage of the generated rollback workflow. It resolves the target SHA and version (from live state, the deploy-history ring, or manifest history) and, with `--gha-output`, writes `target_env`, `target_sha`, `target_version`, `target_source`, and `can_proceed` to `$GITHUB_OUTPUT` for the deploy and finalize jobs. It writes no manifest state.
+
+```bash
+cascade rollback preflight --env prod --gha-output
+```
+
+##### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file (default: `.github/manifest.yaml`) |
+| `--key` | string | `ci` | Top-level manifest key |
+| `--env` | string | - | Target environment to roll back (required) |
+| `--to` | string | previous version | Prior version or SHA to re-promote (defaults to the previous version) |
+| `--deployable` | string | - | Scope the rollback to a single deployable |
+| `--gha-output` | bool | false | Write the resolved target to `$GITHUB_OUTPUT` |
+| `--json` | bool | false | Print the resolved plan as JSON |
+
+#### rollback finalize
+
+Apply a resolved rollback and persist the updated manifest. This is the final stage of the generated rollback workflow. It resolves the target, applies it to state (marking the environment diverged so forward-promotion guards treat it as off-trunk until a promotion rejoins it), and, with `--commit-push`, commits the manifest back to the trunk branch. The state write is gated on the reported deploy results: if any in-scope deploy reports `failure` or `cancelled`, or no in-scope deploy succeeded, the write is aborted and trunk state is left unchanged.
+
+```bash
+cascade rollback finalize --env prod --commit-push
+```
+
+##### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file (default: `.github/manifest.yaml`) |
+| `--key` | string | `ci` | Top-level manifest key |
+| `--env` | string | - | Target environment to roll back (required) |
+| `--to` | string | previous version | Prior version or SHA to re-promote (defaults to the previous version) |
+| `--deployable` | string | - | Scope the rollback to a single deployable |
+| `--actor` | string | `$GITHUB_ACTOR` | Actor recorded on the rollback |
+| `--commit-push` | bool | false | Commit and push the updated manifest to the trunk branch |
+
 ### next-version
 
 Calculate the next semantic version.
@@ -827,6 +906,105 @@ The following flags are shared by every subcommand.
 | `--json` | bool | `false` | Output result as JSON |
 
 Subcommand-specific flags: `promote` takes `--mode` (`default` or `cascade`) and `--target`; `rollback` takes `--env` (required), `--to`, and `--deployable`; `hotfix` takes `--env` (required), `--fix`, and `--merge-sha`; `release` takes only the shared flags.
+
+### status
+
+Query deployed state recorded in the manifest. Every `status` command is read-only: it loads the manifest and prints recorded state, never writing files or calling GitHub. With no subcommand, `status` summarizes every environment together with `latest_release`.
+
+```bash
+cascade status
+```
+
+#### Persistent Flags
+
+These flags apply to `status` and all its subcommands.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file (default: `.github/manifest.yaml`) |
+| `--key` | string | `ci` | Top-level manifest key |
+| `--json` | bool | false | Output as JSON |
+
+#### status env
+
+Show the version, SHA, and commit metadata recorded for a single environment. Takes the environment name as a positional argument.
+
+```bash
+cascade status env prod
+```
+
+#### status build
+
+Show the build state (SHA, artifact id, built_at, tags) for a build within an environment. Takes the build name as a positional argument.
+
+```bash
+cascade status build app --env prod
+```
+
+##### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--env` | string | - | Environment name (required) |
+
+#### status deploy
+
+Show the deploy state (SHA, deployed_at) for a deploy within an environment. Takes the deploy name as a positional argument.
+
+```bash
+cascade status deploy services --env prod
+```
+
+##### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--env` | string | - | Environment name (required) |
+
+#### status consistency
+
+Flag `env/*` integration branches that have no matching divergence in the manifest. A hotfix creates an `env/<name>` branch that exists only while the environment is diverged; when the environment rejoins trunk the branch is deleted. A leftover `env/<name>` branch with no diverged environment behind it is an orphan from an interrupted hotfix or manual branch creation.
+
+By default the command only reports. With `--fix` it deletes each flagged orphan branch on the remote (default `origin`). A branch that backs a diverged environment is never touched, and deleting an already-absent branch is a no-op, so `--fix` is safe to re-run.
+
+```bash
+cascade status consistency
+cascade status consistency --fix
+```
+
+##### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--fix` | bool | false | Delete the flagged orphan `env/*` branches on the remote |
+| `--remote` | string | `origin` | Remote to inspect and, with `--fix`, delete orphan branches on |
+
+### graph
+
+Render the manifest's generated pipeline as a Mermaid diagram on stdout. GitHub renders Mermaid natively in Markdown, so the output pastes directly into a README or pull request. `graph` is read-only: it never writes files, runs git, or modifies the repository. A missing or invalid manifest is reported as an error.
+
+```bash
+cascade graph
+cascade graph --granularity env
+cascade graph --granularity stages > pipeline.mmd
+```
+
+The `--granularity` flag chooses the projection:
+
+- `jobs` renders the full job dependency graph, with hard dependencies as solid arrows and optional ordering-only ones as dotted arrows.
+- `stages` renders the coarse lifecycle flow from trunk through build, deploy, and promote to release.
+- `env` renders the promotion state machine, including any hotfix divergence and rejoin.
+- `cross-repo` renders the multi-repo flow, a lane per repository with the primary coordinating its dependent satellites and any satellite-to-primary notify edge.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | auto-detect | Path to manifest file (default: auto-detect `.github/manifest.yaml`) |
+| `--manifest-key` | string | `ci` | Top-level key inside the manifest |
+| `--granularity` | string | `jobs` | Pipeline projection to render: `jobs`, `stages`, `env`, or `cross-repo` |
+| `--format` | string | `mermaid` | Diagram output format (supported value: `mermaid`) |
+| `--theme` | string | `cascade` | Diagram theme: `cascade`, `bland`, or a path to a JSON theme file |
 
 ## Environment Variables
 
