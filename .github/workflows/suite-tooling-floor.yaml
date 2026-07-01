@@ -1,0 +1,50 @@
+# Suite Tooling Floor - guards the cascade-example fleet against tooling drift.
+#
+# Every example repo's scenario-suite.yaml bootstraps a cascade CLI through the
+# setup-cli action, pinned by hand to a fixed release. Nothing keeps that pin
+# moving forward, so a suite can drift onto a release that predates a command it
+# now invokes and fail a live fleet run with a cryptic "unknown command". This
+# job runs the floor check daily so the drift surfaces on its own schedule, well
+# before an rc fleet run trips over it. The same check also gates fleet-e2e.yaml
+# before fan-out, so a stale pin is caught at release time too.
+#
+# The floor is the latest published stable cascade release. A suite pinned at or
+# above the floor passes; only a strictly-lower pin fails. A suite that tracks a
+# moving ref (for example @main) carries no semver pin and is never flagged.
+name: Suite Tooling Floor
+
+on:
+  schedule:
+    # Daily, offset from other scheduled jobs to spread live API load.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      floor:
+        description: >-
+          Override the floor version (e.g. v0.7.0). Empty resolves to the latest
+          stable cascade release.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: suite-tooling-floor
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check example-suite tooling pins
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Cross-repo reads of the example repos' suites use the fleet token, the
+      # same credential the fleet itself reads and writes those repos with.
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      FLOOR: ${{ github.event.inputs.floor }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check suite tooling pins against the floor
+        run: ./.github/scripts/check-suite-tooling-floor.sh
