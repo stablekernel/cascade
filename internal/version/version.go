@@ -34,6 +34,38 @@ const (
 // The hotfix segment is only valid nested after an rc segment.
 var semverRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+)(?:\.hotfix\.(\d+))?)?$`)
 
+// baseVersionRegex matches a semver core (vX.Y.Z) with any optional
+// pre-release suffix (for example -rc.4, -dryrun.13, or -beta.1). Only the
+// numeric core and prefix are captured; the suffix is intentionally ignored.
+var baseVersionRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-.+)?$`)
+
+// ParseBase parses the numeric core (prefix and major.minor.patch) of a version
+// string, tolerating and discarding any pre-release suffix such as an -rc.N,
+// -dryrun.N, or other exercise tag that the strict Parse rejects. The returned
+// Version always has no pre-release or hotfix segment. It errors only when the
+// core itself is not a valid vX.Y.Z triple. Version calculations that derive
+// their next version solely from a base can use this so a stray suffixed value
+// recorded as the latest does not abort the whole calculation.
+func ParseBase(s string) (*Version, error) {
+	matches := baseVersionRegex.FindStringSubmatch(s)
+	if matches == nil {
+		return nil, fmt.Errorf("invalid version format: %s", s)
+	}
+
+	major, _ := strconv.Atoi(matches[2])
+	minor, _ := strconv.Atoi(matches[3])
+	patch, _ := strconv.Atoi(matches[4])
+
+	return &Version{
+		Major:      major,
+		Minor:      minor,
+		Patch:      patch,
+		PreRelease: -1,
+		Hotfix:     -1,
+		Prefix:     matches[1],
+	}, nil
+}
+
 // Parse parses a version string into a Version struct
 func Parse(s string) (*Version, error) {
 	matches := semverRegex.FindStringSubmatch(s)
@@ -200,8 +232,13 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 			Prefix:     c.prefix,
 		}
 	} else {
+		// Only the numeric core of the next env's version feeds the
+		// calculation (see BaseVersion below), so tolerate any pre-release
+		// suffix here. A stray -dryrun.N or -rc.N value recorded as the latest
+		// must not abort the calculation, matching the discovery-side filtering
+		// that keeps such exercise tags out of tag lookups.
 		var err error
-		baseVersion, err = Parse(nextEnvVersion)
+		baseVersion, err = ParseBase(nextEnvVersion)
 		if err != nil {
 			return nil, fmt.Errorf("parsing next env version: %w", err)
 		}

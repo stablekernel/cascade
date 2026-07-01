@@ -558,6 +558,85 @@ func TestCalculateNext_NextEnvHoldsHotfixVersion(t *testing.T) {
 	assert.Equal(t, -1, got.Hotfix)
 }
 
+func TestParseBase(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string // Version.String() of the parsed base, or "" when wantErr
+		wantErr bool
+	}{
+		{name: "plain release", input: "v1.2.3", want: "v1.2.3"},
+		{name: "rc suffix dropped", input: "v1.2.3-rc.4", want: "v1.2.3"},
+		{name: "hotfix suffix dropped", input: "v1.4.0-rc.2.hotfix.1", want: "v1.4.0"},
+		{name: "dryrun suffix dropped", input: "v0.6.0-dryrun.13", want: "v0.6.0"},
+		{name: "opaque suffix dropped", input: "v2.0.0-beta.1", want: "v2.0.0"},
+		{name: "no prefix", input: "3.4.5-dryrun.1", want: "3.4.5"},
+		{name: "not a triple", input: "vnightly", wantErr: true},
+		{name: "empty", input: "", wantErr: true},
+		{name: "two segments", input: "v1.2-dryrun.1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseBase(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+			assert.Equal(t, -1, got.PreRelease)
+			assert.Equal(t, -1, got.Hotfix)
+		})
+	}
+}
+
+func TestCalculateNext_NextEnvHoldsDryrunVersion(t *testing.T) {
+	calc := NewCalculator("v")
+
+	commits := []changelog.ConventionalCommit{
+		{Type: "fix", Description: "bug fix"},
+	}
+
+	tests := []struct {
+		name              string
+		currentDevVersion string
+		nextEnvVersion    string
+		want              string
+	}{
+		{
+			// A dry-run vector leaves a v0.6.0-dryrun.13 value in state; a
+			// later real release must still compute the next version from the
+			// v0.6.0 base rather than aborting the whole calculation.
+			name:              "dryrun latest, fresh release",
+			currentDevVersion: "",
+			nextEnvVersion:    "v0.6.0-dryrun.13",
+			want:              "v0.6.1-rc.0",
+		},
+		{
+			name:              "dryrun latest, just promoted",
+			currentDevVersion: "v0.6.0-dryrun.13",
+			nextEnvVersion:    "v0.6.0-dryrun.13",
+			want:              "v0.6.1-rc.0",
+		},
+		{
+			name:              "opaque prerelease suffix tolerated",
+			currentDevVersion: "",
+			nextEnvVersion:    "v1.2.3-beta.4",
+			want:              "v1.2.4-rc.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := calc.CalculateNext(tt.currentDevVersion, tt.nextEnvVersion, commits)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+			assert.Equal(t, -1, got.Hotfix)
+		})
+	}
+}
+
 func TestStripRC_HotfixVersion(t *testing.T) {
 	got, err := StripRC("v1.4.0-rc.2.hotfix.1")
 	require.NoError(t, err)
