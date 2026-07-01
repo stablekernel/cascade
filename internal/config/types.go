@@ -531,7 +531,10 @@ type ValidateConfig struct {
 	Retries        int                               `yaml:"retries,omitempty" json:"retries,omitempty"`
 	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
 
-	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	// Per-callback fields. secrets and permissions are wired into generation:
+	// they are emitted onto this callback's caller job (writeSecretsBlock,
+	// writeCallbackPermissions). runs_on and concurrency are parse and validation
+	// only; both are rejected on a reusable-workflow callback and never emitted.
 	// The validate gate is a singleton, so the spec scopes optional_depends_on
 	// (§2.11) and auto_commits (§5.5) to builds/deploys only; not here.
 	Secrets     *SecretsConfig     `yaml:"secrets,omitempty" json:"secrets,omitempty"`
@@ -557,7 +560,10 @@ type BuildConfig struct {
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 
-	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	// Per-callback fields. secrets and permissions are wired into generation:
+	// they are emitted onto this callback's caller job (writeSecretsBlock,
+	// writeCallbackPermissions). runs_on and concurrency are parse and validation
+	// only; both are rejected on a reusable-workflow callback and never emitted.
 	Secrets             *SecretsConfig       `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Permissions         map[string]string    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	RunsOn              *RunsOn              `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
@@ -617,7 +623,10 @@ type DeployConfig struct {
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 
-	// v1 reserved-shape per-callback fields (parse + structural validation only).
+	// Per-callback fields. secrets and permissions are wired into generation:
+	// they are emitted onto this callback's caller job (writeSecretsBlock,
+	// writeCallbackPermissions). runs_on and concurrency are parse and validation
+	// only; both are rejected on a reusable-workflow callback and never emitted.
 	Secrets             *SecretsConfig       `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Permissions         map[string]string    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	RunsOn              *RunsOn              `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
