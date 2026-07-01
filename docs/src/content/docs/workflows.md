@@ -292,6 +292,16 @@ state:
 
 `cascade status` surfaces `ref`, `base_sha`, and `patches` only when they are set.
 
+### Reconciling a stale env branch
+
+Before staging the cherry-pick, the hotfix plan reconciles the `env/<env>` branch against the environment's recorded state SHA, the trunk anchor it sits at while the environment still tracks trunk. When the branch is absent it is created on demand at that SHA; when its tip already matches, it is left untouched. When the tip has drifted, the plan either self-heals the branch back to the recorded SHA or aborts fail-closed, never cherry-picking onto a base it cannot trust.
+
+An interrupted hotfix run can leave an abandoned `env/<env>` branch whose tip leads the recorded SHA with no divergence recorded behind it. Left in place, a fresh hotfix would cherry-pick onto that stale tip and open a resolution pull request that can never merge cleanly, surfacing only as a merge-poll timeout. The self-heal force-resets such an orphan branch back to the recorded SHA and lets the hotfix proceed.
+
+The reset is gated so it can never destroy live work. Divergence is recorded only at finalize, so a hotfix that is genuinely in flight (an open resolution pull request, real commits on `env/<env>`) also reports as not diverged while its branch legitimately leads the base. The plan therefore resets only when both conditions hold: the environment is not diverged, and a single-flight check has run against a real repository and found no open hotfix pull request. The single-flight check inspects open pull requests whose base is `env/<env>` and matches either the `cascade-hotfix` label (a clean resolution in progress) or the `cascade-hotfix-conflict` label (a human resolving a conflict). If either is open, the plan aborts and asks you to finalize the in-flight hotfix before re-dispatching.
+
+Pass `--repo owner/repo` to enable the single-flight check through `gh`. Without it the check is skipped, so the self-heal cannot fire and any stale tip aborts the run rather than being reset. With `--dry-run` the reset is planned and reported but not performed.
+
 ### Elevating across the chain
 
 A hotfix can carry a set of commits to a target environment higher in the chain. cascade elevates the set bottom-up across every environment from the one above the first up to and including the target, so each environment that must diverge ends up running its base plus the fixes. Per environment, any commit already present (an ancestor of that environment's state SHA, or already in its `patches`) is skipped; an environment whose whole set is already present is a no-op and the chain moves on. Every commit applied to an environment is recorded in that environment's `patches`, so the recorded set reflects every fix applied there, not just the first. The first environment is never a hotfix target: a fix reaches it by merging to trunk, not by hotfix.
