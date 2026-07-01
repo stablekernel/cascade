@@ -287,6 +287,29 @@ jobs:
             echo "| remainder | $RUN_REMAINDER |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Floor check: the repin below points each repo's manifest cli_version at the
+  # rc under test, but it deliberately leaves each suite's OWN setup-cli
+  # bootstrap pin alone (it only rewrites prerelease refs). A suite pinned to a
+  # stable release that predates a command the suite now invokes fails a live
+  # lane with a cryptic "unknown command" mid-fan-out. This job runs the shared
+  # floor check before any repin or fan-out so that drift reds the run up front
+  # with a clear message instead. The suite pin must be at or above the latest
+  # stable release; a pin at or above the floor (including one ahead of it)
+  # passes. The daily Suite Tooling Floor workflow runs the same check off the
+  # release cadence so drift is usually caught before an rc run reaches here.
+  floor-check:
+    name: Check suite tooling pins
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check example-suite tooling pins against the floor
+        run: ./.github/scripts/check-suite-tooling-floor.sh
+
   # Repin: pin every example repo to the rc UNDER TEST before any suite fans
   # out. Without this the suites would install whatever version each repo's
   # manifest is statically pinned to, so a fresh rc would never actually run -
@@ -296,10 +319,11 @@ jobs:
   # job gates on this job so none can start against a stale pin. Repin always
   # covers the full roster regardless of the repos selector: pinning is cheap,
   # idempotent, and sequential (one repo at a time), so it does not add to live
-  # fan-out concurrency.
+  # fan-out concurrency. Gated on floor-check so a below-floor suite pin reds the
+  # run before any live dispatch.
   repin:
     name: Repin fleet to rc
-    needs: resolve
+    needs: [resolve, floor-check]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -624,7 +648,7 @@ jobs:
   # over exactly the lanes that ran. A real fan-out failure still reds the run.
   aggregate:
     name: Fleet gate
-    needs: [resolve, plan, repin, primary, dependents, heavy, remainder]
+    needs: [resolve, plan, floor-check, repin, primary, dependents, heavy, remainder]
     # Only render a verdict when the fleet actually fanned out. On filtered-out
     # completions (merge_group, non-rc tags, dispatch with no rc) resolve is
     # skipped, so this job is skipped too and the run is a clean no-op rather
@@ -637,6 +661,7 @@ jobs:
     steps:
       - name: Aggregate fleet result
         env:
+          R_FLOOR: ${{ needs.floor-check.result }}
           R_REPIN: ${{ needs.repin.result }}
           R_PRIMARY: ${{ needs.primary.result }}
           R_DEPENDENTS: ${{ needs.dependents.result }}
@@ -652,6 +677,7 @@ jobs:
             echo ""
             echo "| Lane | Result |"
             echo "|---|---|"
+            echo "| floor-check (suite tooling pins) | $R_FLOOR |"
             echo "| repin (all 10 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
@@ -670,13 +696,19 @@ jobs:
           # A lane passes when it succeeded OR was skipped (filtered out by the
           # repos selector, or - for dependents - skipped because primary was
           # not selected). Only an actual failure or cancellation reds the gate.
-          # repin is never selector-gated, so a non-success repin always reds.
+          # floor-check and repin are never selector-gated, so a non-success
+          # result from either always reds. A failed floor-check also skips
+          # repin, so it must be checked directly here or the skipped repin would
+          # read as a pass.
           fail=0
-          for r in "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
+          for r in "$R_FLOOR" "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               fail=1
             fi
           done
+          if [ "$R_FLOOR" != "success" ]; then
+            fail=1
+          fi
           if [ "$fail" -ne 0 ]; then
             echo "::error::Fleet E2E failed: one or more lanes did not pass"
             exit 1
