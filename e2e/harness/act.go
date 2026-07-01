@@ -62,7 +62,13 @@ const actStartupPollInterval = 2 * time.Second
 // publishing dated act-latest-YYYYMMDD tags in 2023 (all predate Node 24), so a
 // digest is the only deterministic reference that reaches a Node 24 runtime.
 //
-// To repin: pull ghcr.io/catthehacker/ubuntu:act-latest, confirm
+// The scheduled Act Runner Image Repin workflow
+// (.github/workflows/act-image-repin.yml) re-resolves act-latest to its current
+// digest and opens a repin pull request whenever it moves, so this pin keeps
+// tracking a live, tag-referenced digest ahead of any upstream
+// garbage-collection window. The manual recipe below stays the fallback.
+//
+// To repin by hand: pull ghcr.io/catthehacker/ubuntu:act-latest, confirm
 // `docker run --rm <image> node --version` reports >= actRunnerNodeMajorMin,
 // then record the resolved digest here
 // (`docker inspect --format '{{index .RepoDigests 0}}' <image>`).
