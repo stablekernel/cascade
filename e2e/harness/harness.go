@@ -172,8 +172,8 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config, setupW
 		// A custom changelog workflow is a reusable workflow invoked as a
 		// job-level uses:. Stub it so the generated changelog job resolves and
 		// exposes a changelog output for the release step to consume.
-		if wf, ok := config.Changelog["workflow"].(string); ok && wf != "" {
-			if p := normalizeCallbackStubPath(wf); p != "" {
+		if config.Changelog != nil && config.Changelog.Workflow != "" {
+			if p := normalizeCallbackStubPath(config.Changelog.Workflow); p != "" {
 				files[p] = generateChangelogStubWorkflow(scenarioTag)
 			}
 		}
@@ -182,8 +182,8 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config, setupW
 		// can read the referenced workflow at generation time and emit the validate
 		// gate. Without a seeded stub the generator fails reading validate.yaml,
 		// since the file would otherwise only arrive via a later step commit.
-		if wf, ok := config.Validate["workflow"].(string); ok && wf != "" {
-			if p := normalizeCallbackStubPath(wf); p != "" {
+		if config.Validate != nil && config.Validate.Workflow != "" {
+			if p := normalizeCallbackStubPath(config.Validate.Workflow); p != "" {
 				files[p] = generateValidateStubWorkflow(scenarioTag)
 			}
 		}
