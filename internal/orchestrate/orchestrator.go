@@ -344,7 +344,7 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 
 		// If no state, check for latest RC tag
 		if currentDevVersion == "" {
-			latestTag, _, err := git.GetLatestTag(tagPrefix)
+			latestTag, _, err := git.GetLatestTag(o.baseDir, tagPrefix)
 			if err != nil {
 				log.Warn("Failed to get latest tag: %v", err)
 			} else if latestTag != "" {
@@ -355,7 +355,7 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 
 		// Get latest published release (non-RC) as base version for version calculation
 		// This ensures we continue from v1.0.0 → v1.0.1-rc.0, not restart at v0.1.0-rc.0
-		latestRelease, releaseSHA, err := git.GetLatestReleaseTag(tagPrefix)
+		latestRelease, releaseSHA, err := git.GetLatestReleaseTag(o.baseDir, tagPrefix)
 		if err != nil {
 			log.Warn("Failed to get latest release tag: %v", err)
 		} else if latestRelease != "" {

@@ -149,12 +149,16 @@ func GetInitialCommit() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// GetLatestTag returns the most recent tag matching the given prefix, sorted by semver.
-// Returns empty string if no matching tags found.
-func GetLatestTag(prefix string) (string, string, error) {
+// GetLatestTag returns the most recent tag matching the given prefix, sorted by
+// semver. Tag lookups run against dir so the caller's repository is read even
+// when the process working directory points elsewhere; an empty dir falls back
+// to the process working directory. Returns empty string if no matching tags
+// found.
+func GetLatestTag(dir, prefix string) (string, string, error) {
 	// Get all tags matching prefix, sorted by version descending
 	// --sort=-v:refname sorts by version in descending order
 	cmd := exec.Command("git", "tag", "-l", prefix+"*", "--sort=-v:refname")
+	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("git tag: %w", err)
@@ -172,6 +176,7 @@ func GetLatestTag(prefix string) (string, string, error) {
 
 		// First valid tag is the latest (git sorted descending by version).
 		cmd = exec.Command("git", "rev-list", "-n", "1", tag)
+		cmd.Dir = dir
 		output, err = cmd.Output()
 		if err != nil {
 			return tag, "", fmt.Errorf("git rev-list for tag: %w", err)
@@ -393,8 +398,12 @@ func remoteRefAlreadyGone(out []byte) bool {
 
 // GetLatestReleaseTag returns the most recent non-prerelease tag (no -rc suffix).
 // This is used to find the base version for calculating next release versions.
-func GetLatestReleaseTag(prefix string) (string, string, error) {
+// Tag lookups run against dir so the caller's repository is read even when the
+// process working directory points elsewhere; an empty dir falls back to the
+// process working directory.
+func GetLatestReleaseTag(dir, prefix string) (string, string, error) {
 	cmd := exec.Command("git", "tag", "-l", prefix+"*", "--sort=-v:refname")
+	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("git tag: %w", err)
@@ -416,6 +425,7 @@ func GetLatestReleaseTag(prefix string) (string, string, error) {
 		if !strings.Contains(tag, "-rc.") {
 			// Get the SHA for this tag
 			cmd = exec.Command("git", "rev-list", "-n", "1", tag)
+			cmd.Dir = dir
 			output, err = cmd.Output()
 			if err != nil {
 				return tag, "", fmt.Errorf("git rev-list for tag: %w", err)
