@@ -85,6 +85,9 @@ ci:
 | `cli_version` | string | No | latest | CLI version: `latest`, `beta`, or specific version (e.g., `v2.0.4`) |
 | `cli_version_sha` | string | No | - | 40-hex commit SHA that `cli_version` resolves to. With `pin_mode: sha`, the generated setup-cli ref is pinned to this commit. See [cli_version_sha](#cli_version_sha). |
 | `triggers` | list | No | - | Global path patterns that activate orchestration |
+| `release_trigger` | string | No | `push` | How the orchestrate workflow fires. `push` keeps the push-on-trunk plus `workflow_dispatch` triggers; `dispatch` drops the `push:` trigger so releases run only on manual `workflow_dispatch`. See [Release trigger](#release-trigger). |
+| `pin_mode` | string | No | `tag` | Third-party action pin policy. `tag` emits `<action>@<major-tag>`; `sha` emits `<action>@<commit-sha>` with the version as a trailing comment. See [Action pinning](#action-pinning). |
+| `action_pins` | map | No | - | Per-action ref overrides keyed by action path (e.g. `actions/checkout`), applied regardless of `pin_mode`. See [Action pinning](#action-pinning). |
 | `tag_prefix` | string | No | `v` | Version tag prefix |
 | `release_token` | string | No | `state_token` if set, else `${{ secrets.GITHUB_TOKEN }}` | Token expression for release API calls and the rc tag; inherits `state_token` when unset so the rc-to-release chain has a trigger-capable token |
 | `state_token` | string | No | `${{ secrets.GITHUB_TOKEN }}` | Token expression for writing manifest state to the trunk branch |
@@ -123,6 +126,46 @@ uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca
 The `with: version:` input the action reads to select the release asset stays the human-readable tag, so only the action source is pinned to a commit.
 
 This closes the supply-chain gap where the cascade self-action was referenced by a mutable tag while third-party actions were already SHA-pinned. The field is optional and only takes effect under `pin_mode: sha`; leave it unset (or use the default `pin_mode: tag`) to keep the tag-based ref. Set `cli_version_sha` alongside `cli_version` whenever you bump the pinned version. Because cascade release tags are annotated, resolve the underlying commit (not the tag object) with `git ls-remote https://github.com/stablekernel/cascade 'refs/tags/<tag>^{}'`.
+
+### Release trigger
+
+`release_trigger` selects how the generated orchestrate workflow fires. It is opt-in; repos that leave it unset keep the push triggers.
+
+| Value | Behavior |
+|-------|----------|
+| `push` | Default. Orchestrate fires on trunk pushes (filtered by `triggers:`) plus `workflow_dispatch`. |
+| `dispatch` | Drops the `push:` trigger so orchestrate runs only on `workflow_dispatch`, letting a maintainer-owned gate decide when a release candidate is cut. |
+
+```yaml
+ci:
+  config:
+    release_trigger: dispatch
+```
+
+### Action pinning
+
+cascade governs how the third-party actions it emits into your workflows (for example `actions/checkout` and `actions/github-script`) are referenced. Two fields control the policy.
+
+`pin_mode` sets the reference style for every third-party action cascade emits:
+
+| Value | Behavior |
+|-------|----------|
+| `tag` | Default. Emits `<action>@<major-tag>` (for example `actions/checkout@v4`). Never `@latest`. |
+| `sha` | Emits `<action>@<commit-sha> # <version>`, pinning each action to an immutable commit with the human-readable version as a trailing comment. Under `sha`, pair `cli_version` with [`cli_version_sha`](#cli_version_sha) so the cascade self-action ref is pinned too. |
+
+The default `sha` values come from a single committed pin table (`internal/generate/action_pins.yaml`); no per-repo configuration is needed to adopt SHA pinning beyond setting `pin_mode: sha`.
+
+`action_pins` overrides the built-in table for individual actions, keyed by action path. An override is applied regardless of `pin_mode`, so use it to point at a fork or an org-mirrored action:
+
+```yaml
+ci:
+  config:
+    pin_mode: sha
+    action_pins:
+      actions/checkout: my-org/checkout@0123456789abcdef0123456789abcdef01234567
+```
+
+An action that is neither in the built-in table nor overridden is emitted unchanged.
 
 ### Token authentication
 
@@ -553,6 +596,40 @@ Behavior:
 - **Guarded to real GitHub.** Every Deployments API step carries an `if: ${{ github.server_url == 'https://github.com' }}` guard, so on act or gitea (which have no Deployments API) the steps are skipped and the workflow stays runnable.
 - **Least-privilege scope.** The toggle adds `deployments: write` to the workflow's top-level permissions only when enabled; the OFF-state output is unchanged.
 - **Opt-in and additive.** Omit `deployments` and nothing is emitted. The field did not bump `schema_version`.
+
+### Validate-check workflow (opt-in)
+
+Set `validate_check.enabled: true` and `generate-workflow` emits a lightweight `pull_request` workflow (`.github/workflows/cascade-validate.yaml`) that runs [`cascade parse-config`](/cli-reference/#parse-config) against the manifest and fails the check when the configuration is invalid, so a malformed manifest cannot merge to trunk.
+
+```yaml
+ci:
+  config:
+    validate_check:
+      enabled: true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | false | Emit the manifest-validation PR check (`.github/workflows/cascade-validate.yaml`) |
+
+The check validates cascade's own configuration only. It does not run the repository's build or test suites, requests `contents: read` alone, and has no dry-run or comment side effects.
+
+### Merge-queue workflow (opt-in)
+
+Set `merge_queue.enabled: true` and cascade emits a `merge_group`-triggered workflow (`.github/workflows/cascade-merge-queue.yaml`) that validates the prospective trunk commit: it runs `cascade parse-config` as a validity gate and a dry-run `cascade orchestrate setup` to preview the build and deploy decisions against the merge-group candidate ref.
+
+```yaml
+ci:
+  config:
+    merge_queue:
+      enabled: true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | false | Emit the merge-queue validation lane (`.github/workflows/cascade-merge-queue.yaml`) |
+
+The lane is read-only: no state writes, no releases, no deploys. It reports a status the merge queue can require. This generator owns the lane behavior; the raw `merge_group` trigger itself is expressible separately under `extra_triggers.merge_group`, and the two are intentionally distinct.
 
 ## State Section
 
