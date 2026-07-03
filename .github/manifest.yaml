@@ -25,7 +25,7 @@ ci:
       contributors: true
   state:
     prerelease:
-      sha: 9554b8dcbc234ed3f14c4d71381ff7d6bcc5adec
-      version: v0.8.0-rc.1
-      committed_at: "2026-07-02T08:50:26Z"
+      sha: 82062adc207025005e038ebb9cde5e70796b052b
+      version: v0.8.0-rc.2
+      committed_at: "2026-07-03T08:50:05Z"
       committed_by: joshua-temple
