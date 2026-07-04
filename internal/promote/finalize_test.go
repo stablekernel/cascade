@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stretchr/testify/require"
@@ -320,6 +321,48 @@ func TestFinalize_DeployResultWithoutPromotionResult(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
 	require.NoError(t, err)
 	require.NotNil(t, cicdFile)
+}
+
+// TestFinalize_WithClockInjectsDeterministicTimestamps verifies that an
+// injected clock supplies the audit timestamps stamped into state, so tests and
+// golden output can assert an exact value rather than a loose "recent" bound.
+func TestFinalize_WithClockInjectsDeterministicTimestamps(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, test]
+  state:
+    dev:
+      sha: abc123
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	wantTS := fixed.Format(time.RFC3339)
+
+	fin, err := NewFinalizer(configPath, "test", WithClock(func() time.Time { return fixed }))
+	require.NoError(t, err)
+
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "test",
+			SHA:         "abc123",
+			Version:     "v1.0.0",
+		}},
+	})
+
+	err = fin.Run()
+	require.NoError(t, err)
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	testState := cicdFile.State["test"]
+	require.NotNil(t, testState)
+	require.Equal(t, wantTS, testState.CommittedAt, "CommittedAt should come from the injected clock")
 }
 
 // TestFinalize_WithCIKeyManifest tests that finalize correctly parses

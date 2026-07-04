@@ -40,6 +40,11 @@ type Finalizer struct {
 	// pendingRejoins collects the diverged environments that rejoined trunk during
 	// the in-memory state update, to be cleaned up after the manifest is written.
 	pendingRejoins []rejoinEvent
+
+	// now supplies the wall clock used to stamp the audit timestamps written to
+	// state. It defaults to time.Now; tests and deterministic golden output can
+	// override it through WithClock so the emitted timestamps are exact.
+	now func() time.Time
 }
 
 // NewFinalizer creates a new Finalizer instance.
@@ -68,6 +73,7 @@ func NewFinalizerWithKey(configPath, targetEnv, manifestKey string, opts ...Fina
 		deployResults: make(map[string]string),
 		actor:         actor,
 		cleaner:       noopLifecycleCleaner{},
+		now:           time.Now,
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -158,7 +164,7 @@ func (f *Finalizer) runLifecycleCleanup() error {
 // updateState performs the in-memory state updates.
 // This is separated from Run() to allow dry-run mode.
 func (f *Finalizer) updateState() {
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	timestamp := f.now().UTC().Format(time.RFC3339)
 
 	// Ensure state maps exist
 	if f.cicdFile.State == nil {

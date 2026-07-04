@@ -3,6 +3,7 @@ package promote
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/hotfix"
@@ -58,6 +59,18 @@ func WithLifecycleCleaner(c LifecycleCleaner) FinalizeOption {
 	return func(f *Finalizer) {
 		if c != nil {
 			f.cleaner = c
+		}
+	}
+}
+
+// WithClock injects the wall clock used to stamp the audit timestamps written
+// to state during finalization. The default is time.Now; supplying a fixed
+// clock makes the emitted CommittedAt/DeployedAt/ReleasedOn values deterministic
+// for tests and golden output. A nil argument is ignored so the default stands.
+func WithClock(now func() time.Time) FinalizeOption {
+	return func(f *Finalizer) {
+		if now != nil {
+			f.now = now
 		}
 	}
 }
