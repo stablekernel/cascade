@@ -59,6 +59,15 @@ var jobIDSafeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // commitSHARe matches a full 40-character lowercase-hex Git commit SHA.
 var commitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// dispatchInputOptionRe matches a choice dispatch-input option that is safe to
+// emit verbatim as a YAML block-sequence item under workflow_dispatch's
+// inputs.<name>.options. cascade renders each option unquoted, so the accepted
+// set is constrained to characters that need no escaping and cannot break the
+// surrounding document: an empty option, a space, a colon, or a ${{ }} fragment
+// would otherwise produce a workflow that fails actionlint or GitHub's parser.
+// Dots are allowed so version-like options (v1.2.3) remain expressible.
+var dispatchInputOptionRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
 // validateJobIDSafeName rejects a name that would produce an invalid GitHub
 // Actions job ID or break the expression references derived from it. Names are
 // rejected (not sanitized) on purpose: sanitizing distinct names could collapse
@@ -293,19 +302,30 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 		errs = append(errs, "release_trigger must be one of: push, dispatch")
 	}
 
-	// dispatch_inputs may not shadow generator-owned reserved names, and choice
-	// inputs need options.
+	// dispatch_inputs may not shadow generator-owned reserved names, must carry a
+	// name safe to emit as a workflow_dispatch input key (and referenced via
+	// ${{ inputs.<name> }}), and choice inputs need options that are safe to emit
+	// verbatim. Every sibling identifier is charset-validated; the dispatch input
+	// name and its choice options reach raw YAML the same way, so they are guarded
+	// here rather than left to fail at actionlint or GitHub parse time.
 	for _, name := range sortedKeys(toStringKeyed(cfg.DispatchInputs)) {
 		di := cfg.DispatchInputs[name]
 		if reservedDispatchInputNames[name] {
 			errs = append(errs, fmt.Sprintf("dispatch_inputs.%s shadows a reserved dispatch input name", name))
 		}
+		errs = append(errs, validateJobIDSafeName("dispatch_inputs", name)...)
 		switch di.Type {
 		case "", DispatchInputTypeString, DispatchInputTypeBoolean, DispatchInputTypeEnvironment, DispatchInputTypeNumber:
 			// ok
 		case DispatchInputTypeChoice:
 			if len(di.Options) == 0 {
 				errs = append(errs, fmt.Sprintf("dispatch_inputs.%s is a choice input but has no options", name))
+			}
+			for _, opt := range di.Options {
+				if !dispatchInputOptionRe.MatchString(opt) {
+					errs = append(errs, fmt.Sprintf(
+						"dispatch_inputs.%s option %q must contain only letters, digits, dots, hyphens, and underscores", name, opt))
+				}
 			}
 		default:
 			errs = append(errs, fmt.Sprintf("dispatch_inputs.%s.type must be one of: string, boolean, choice, environment, number", name))
