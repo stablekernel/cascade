@@ -39,6 +39,25 @@ var semverRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d
 // numeric core and prefix are captured; the suffix is intentionally ignored.
 var baseVersionRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-.+)?$`)
 
+// rcSuffixRegex captures the rc number from a version whose core is immediately
+// followed by an -rc.N segment, tolerating any trailing exercise suffix (for
+// example -rc.4.hotfix.5 or -rc.4.dryrun.1). It is anchored only at the start so
+// a foreign suffix such as -beta.1 or -dryrun.4 simply yields no match.
+var rcSuffixRegex = regexp.MustCompile(`^[a-zA-Z]*\d+\.\d+\.\d+-rc\.(\d+)`)
+
+// extractRC returns the rc number embedded in a version string, or -1 when the
+// string has no -rc.N segment directly after its numeric core. It tolerates
+// trailing suffixes the strict Parse rejects so a recorded dev version can still
+// advance its rc counter instead of silently resetting to rc.0.
+func extractRC(s string) int {
+	matches := rcSuffixRegex.FindStringSubmatch(s)
+	if matches == nil {
+		return -1
+	}
+	rc, _ := strconv.Atoi(matches[1])
+	return rc
+}
+
 // ParseBase parses the numeric core (prefix and major.minor.patch) of a version
 // string, tolerating and discarding any pre-release suffix such as an -rc.N,
 // -dryrun.N, or other exercise tag that the strict Parse rejects. The returned
@@ -267,16 +286,23 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 		// After promotion or first release - start at RC 0
 		newVersion.PreRelease = 0
 	} else {
-		// Parse current dev version to check if we should increment RC
-		currentDev, err := Parse(currentDevVersion)
-		if err != nil {
-			// Can't parse current - start fresh
+		// Compare on the numeric base and extract any rc number explicitly so a
+		// foreign prerelease or exercise suffix the strict Parse rejects (for
+		// example -beta.1, -dryrun.4, or -rc.4.dryrun.1) does not silently reset
+		// the rc counter and collide with an already-published rc tag. This
+		// mirrors the tolerant handling applied to nextEnvVersion above.
+		currentBase, err := ParseBase(currentDevVersion)
+		switch {
+		case err != nil:
+			// Base itself is unparseable, so start fresh.
 			newVersion.PreRelease = 0
-		} else if newVersion.Equal(currentDev) {
-			// Same base version - increment RC
-			newVersion.PreRelease = currentDev.PreRelease + 1
-		} else {
-			// Different version - start at RC 0
+		case newVersion.Equal(currentBase):
+			// Same base version, so increment off the recorded rc. extractRC
+			// returns -1 when the dev version has no rc segment, yielding a
+			// fresh rc.0.
+			newVersion.PreRelease = extractRC(currentDevVersion) + 1
+		default:
+			// Different base version, so start at rc.0.
 			newVersion.PreRelease = 0
 		}
 	}
