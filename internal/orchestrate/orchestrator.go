@@ -574,46 +574,15 @@ func indexOf(slice []string, item string) int {
 	return -1
 }
 
-// matchGlob performs simple glob matching (supports * and **).
+// matchGlob reports whether path matches the glob pattern. It delegates to the
+// shared config.MatchGlobPattern evaluator so CLI-side change detection agrees
+// with the emitted GitHub Actions paths filter, which is generated verbatim from
+// the same pattern list. That evaluator anchors single "*" within one segment
+// (it does not cross "/") and expands "**" across any number of segments, so a
+// recursive glob such as "**/*.go" or "pkg/**/*.ts" matches files at any depth.
 func matchGlob(path, pattern string) bool {
-	// Simple implementation - handle common cases
 	if pattern == "" {
 		return false
 	}
-
-	// Handle ** (recursive match)
-	if strings.Contains(pattern, "**") {
-		parts := strings.Split(pattern, "**")
-		if len(parts) == 2 {
-			prefix := strings.TrimSuffix(parts[0], "/")
-			suffix := strings.TrimPrefix(parts[1], "/")
-			if prefix != "" && !strings.HasPrefix(path, prefix) {
-				return false
-			}
-			if suffix != "" && !strings.HasSuffix(path, suffix) {
-				return false
-			}
-			return true
-		}
-	}
-
-	// Handle single * (match any characters except /)
-	if strings.Contains(pattern, "*") {
-		parts := strings.Split(pattern, "*")
-		pos := 0
-		for _, part := range parts {
-			if part == "" {
-				continue
-			}
-			idx := strings.Index(path[pos:], part)
-			if idx < 0 {
-				return false
-			}
-			pos += idx + len(part)
-		}
-		return true
-	}
-
-	// Exact match
-	return path == pattern
+	return config.MatchGlobPattern(pattern, path)
 }
