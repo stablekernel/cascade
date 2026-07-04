@@ -347,6 +347,97 @@ func TestRemoteBranchSHA(t *testing.T) {
 	}
 }
 
+// gitAt runs a git command in dir via "git -C" and fails the test on error. An
+// empty dir runs git without -C (in the process working directory).
+func gitAt(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	full := args
+	if dir != "" {
+		full = append([]string{"-C", dir}, args...)
+	}
+	if out, err := exec.Command("git", full...).CombinedOutput(); err != nil {
+		t.Fatalf("git -C %s %s: %v\n%s", dir, strings.Join(args, " "), err, out)
+	}
+}
+
+// configRepo sets the identity and disables signing for a working clone so
+// commits succeed deterministically in the test environment.
+func configRepo(t *testing.T, dir string) {
+	t.Helper()
+	gitAt(t, dir, "config", "user.email", "test@example.com")
+	gitAt(t, dir, "config", "user.name", "Test User")
+	gitAt(t, dir, "config", "commit.gpgsign", "false")
+}
+
+// TestCommitAndPushWithRetry_AbortsRebaseOnConflict proves that when the retry
+// loop's "git pull --rebase" hits a conflict, the helper aborts the rebase and
+// returns the error instead of looping into a guaranteed-failing push and
+// leaving the repository in a conflicted mid-rebase state.
+func TestCommitAndPushWithRetry_AbortsRebaseOnConflict(t *testing.T) {
+	origin := t.TempDir()
+	if out, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+
+	// Seed origin/main with a base version of the shared state file.
+	seed := t.TempDir()
+	gitAt(t, "", "clone", origin, seed)
+	configRepo(t, seed)
+	if err := os.WriteFile(filepath.Join(seed, "state.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	gitAt(t, seed, "add", "state.txt")
+	gitAt(t, seed, "commit", "-m", "seed state")
+	gitAt(t, seed, "push", "origin", "main")
+
+	// A local clone at the base state; this is where the helper runs.
+	local := t.TempDir()
+	gitAt(t, "", "clone", origin, local)
+	configRepo(t, local)
+
+	// Another writer advances origin/main with a conflicting change to the
+	// same file, so the local push will be rejected and the rebase will
+	// conflict.
+	other := t.TempDir()
+	gitAt(t, "", "clone", origin, other)
+	configRepo(t, other)
+	if err := os.WriteFile(filepath.Join(other, "state.txt"), []byte("remote change\n"), 0o600); err != nil {
+		t.Fatalf("write other file: %v", err)
+	}
+	gitAt(t, other, "add", "state.txt")
+	gitAt(t, other, "commit", "-m", "remote change")
+	gitAt(t, other, "push", "origin", "main")
+
+	// Run the helper from the local clone.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(local); err != nil {
+		t.Fatalf("chdir local: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.WriteFile(filepath.Join(local, "state.txt"), []byte("local change\n"), 0o600); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+
+	err = CommitAndPushWithRetry("state.txt", "local change")
+	if err == nil {
+		t.Fatal("CommitAndPushWithRetry() with a conflicting remote: expected error, got nil")
+	}
+
+	// The repository must not be left mid-rebase.
+	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+		if _, statErr := os.Stat(filepath.Join(local, ".git", name)); statErr == nil {
+			t.Fatalf("repository left mid-rebase: .git/%s still present", name)
+		}
+	}
+}
+
 // tagHead creates a lightweight tag pointing at the current HEAD.
 func tagHead(t *testing.T, name string) {
 	t.Helper()
