@@ -37,6 +37,7 @@ jobs:
     permissions:
       pull-requests: write
       actions: read
+      checks: read
     steps:
       - name: Download drift result
         id: download
@@ -265,6 +266,8 @@ jobs:
               for (const [action, v] of pinEdits) {
                 lines.push(`- \`${action}\`: set sha to \`${v.sha}\`, version to \`${v.version}\``);
               }
+              lines.push('',
+                'This assumes the Dependabot bump direction (adopting the governed `got` SHA into the manifest); a manifest-first hand edit would point the other way.');
               lines.push('',
                 'On a same-repo Dependabot PR the auto-fix job pushes this automatically; ' +
                 'on a fork PR apply the edit by hand.');
