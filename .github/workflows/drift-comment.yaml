@@ -1,17 +1,25 @@
-# Posts the workflow-drift result as a sticky PR comment.
+# Posts a sticky PR comment reporting failing PR Validation checks and their
+# root cause, and self-clears the comment on a green run.
 #
 # Fork-safe by design. The PR Validation workflow runs on pull_request, so for
-# fork PRs it gets a read-only token and no secrets and cannot comment. It
-# uploads the drift result as an artifact instead. This workflow runs on
-# workflow_run in the BASE repo context, where it has a write token, and only
-# downloads that artifact (data only) and posts a comment. It NEVER checks out
-# or executes PR head code, so the write token is never handed to fork code.
+# fork PRs it gets a read-only token and no secrets and cannot comment. This
+# workflow runs on workflow_run in the BASE repo context, where it has a write
+# token, and reads only DATA from the triggering run (the uploaded drift-result
+# artifact plus job metadata, annotations, and log tails via the read-scoped
+# actions token). It NEVER checks out or executes PR head code, so the write
+# token is never handed to fork code.
 #
 # The target PR number is derived ONLY from trusted workflow_run metadata
 # (the source run's pull_requests array, or a head-SHA lookup for fork PRs),
 # never from the artifact, so a fork cannot redirect the comment at another PR.
-# The artifact supplies only the advisory comment body and exit flag.
-name: Drift Comment
+# All fork-supplied text (log tails, annotations) is rendered inside a fenced
+# code block sized to the content, so a crafted log line cannot break out of the
+# block or inject markdown into the comment body.
+#
+# This is the single companion for PR Validation completions. A second
+# workflow_run workflow keyed to the same "PR Validation" completion would race
+# and double-comment, so all reporting lives here.
+name: PR Failure Report
 
 on:
   workflow_run:
@@ -21,8 +29,8 @@ on:
 permissions: {}
 
 jobs:
-  comment:
-    name: Comment on drift
+  report:
+    name: Report PR check failures
     runs-on: ubuntu-latest
     # Only act on PR-triggered source runs.
     if: github.event.workflow_run.event == 'pull_request'
@@ -41,14 +49,17 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Post or update sticky comment
-        if: steps.download.outcome == 'success'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- cascade-drift-check -->';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run = context.payload.workflow_run;
+            const green = run.conclusion === 'success';
 
-            // Read artifact files (data only; never executed).
+            // Read a drift-result artifact file (data only; never executed).
             const read = (name) => {
               try {
                 return fs.readFileSync(`drift-result/${name}`, 'utf8');
@@ -57,19 +68,16 @@ jobs:
               }
             };
 
-            // Resolve the target PR ONLY from trusted workflow_run metadata.
-            // The artifact is produced by the (possibly fork) source run and is
-            // attacker-controlled, so it must never decide which PR we touch.
-            const run = context.payload.workflow_run;
+            // Resolve the target PR ONLY from trusted workflow_run metadata. The
+            // artifact and the triggering run's logs are attacker-controlled on a
+            // fork PR, so they must never decide which PR we touch.
             let prNumber;
             if (run.pull_requests && run.pull_requests.length > 0) {
-              // Same-repo PRs populate this array directly.
               prNumber = run.pull_requests[0].number;
             } else {
-              // Fork PRs leave it empty; resolve via the head SHA instead.
               const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner,
+                repo,
                 commit_sha: run.head_sha,
               });
               const match = associated.data.find((pr) => pr.head.sha === run.head_sha);
@@ -82,31 +90,123 @@ jobs:
               return;
             }
 
-            const exitRaw = read('drift-exit.txt').trim();
-            const drift = exitRaw !== '0';
-            const report = read('drift-report.txt');
+            // head_sha guard: an out-of-order workflow_run completion for a
+            // superseded commit must not overwrite the comment for a newer head.
+            // If the PR head has moved past the run we are reacting to, skip the
+            // write entirely so a stale red run cannot clobber a fresh green one
+            // (or vice versa). Best-effort: proceed if the lookup fails.
+            try {
+              const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+              if (pr.data.head.sha && pr.data.head.sha !== run.head_sha) {
+                core.info(`Run head ${run.head_sha} is superseded by PR head ${pr.data.head.sha}; skipping.`);
+                return;
+              }
+            } catch (e) {
+              core.info(`head_sha guard skipped: ${e.message}`);
+            }
+
+            // Fence untrusted text in a code block sized longer than any backtick
+            // run it contains, so fork-supplied logs cannot break out of the block.
+            const fence = (text) => {
+              const t = String(text || '');
+              let max = 0;
+              let cur = 0;
+              for (const ch of t) {
+                if (ch === '`') { cur += 1; if (cur > max) max = cur; } else { cur = 0; }
+              }
+              const ticks = '`'.repeat(Math.max(3, max + 1));
+              return `${ticks}\n${t}\n${ticks}`;
+            };
+
+            // Detect the action-pins consistency-guard failure and parse the exact
+            // manifest edit from its "file:line action want <sha> # <ver> got <sha>
+            // # <ver>" rows. The fix adopts each governed "got" value (the bumped
+            // ref) into internal/generate/action_pins.yaml.
+            const parsePinGuard = (text) => {
+              const t = String(text || '');
+              const hit =
+                t.includes('governed uses: refs diverge from internal/generate/action_pins.yaml') ||
+                t.includes('dependabot anchor refs diverge from action_pins.yaml');
+              if (!hit) { return null; }
+              const re = /([\w./-]+):(\d+)\s+(\S+)\s+want\s+(\S+)\s+#\s+(\S+)\s+got\s+(\S+)\s+#\s+(\S+)/g;
+              const edits = new Map();
+              let m;
+              while ((m = re.exec(t)) !== null) {
+                edits.set(m[3], { sha: m[6], version: m[7] });
+              }
+              return edits.size > 0 ? edits : null;
+            };
+
+            // Last ~30 non-empty lines of a failed job's log.
+            const logTail = async (jobId) => {
+              try {
+                const res = await github.rest.actions.downloadJobLogsForWorkflowRun({
+                  owner, repo, job_id: jobId,
+                });
+                const lines = String(res.data || '').split('\n').filter((l) => l.trim().length > 0);
+                return lines.slice(-30).join('\n');
+              } catch (e) {
+                return '';
+              }
+            };
+
+            // Check-run annotations for a failed job (structured, no log download).
+            // A workflow job's id doubles as its check-run id for this endpoint.
+            const annotationsFor = async (jobId) => {
+              try {
+                const anns = await github.paginate(github.rest.checks.listAnnotations, {
+                  owner, repo, check_run_id: jobId,
+                });
+                return anns
+                  .filter((a) => a.annotation_level === 'failure' || a.annotation_level === 'warning')
+                  .map((a) => `${a.path}:${a.start_line} ${a.annotation_level}: ${a.title || ''} ${a.message || ''}`.trim())
+                  .join('\n');
+              } catch (e) {
+                return '';
+              }
+            };
 
             // Find an existing sticky comment by the hidden marker.
             const comments = await github.paginate(
               github.rest.issues.listComments,
-              { owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber }
+              { owner, repo, issue_number: prNumber }
             );
             const existing = comments.find((c) => c.body && c.body.includes(marker));
 
-            // Build the body in JS from the file contents. The report is plain
-            // text from cascade verify; it is fenced, never evaluated.
-            let body;
+            const post = async (body) => {
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+              }
+            };
+
+            // Green run: clear the sticky if one exists, then stop.
+            if (green) {
+              if (!existing) {
+                core.info('Run passed and no existing comment; nothing to do.');
+                return;
+              }
+              await post([marker, 'All PR Validation checks passed.'].join('\n'));
+              return;
+            }
+
+            // Failure path. Build one comment covering the failed jobs.
+            const sections = [];
+            let pinEdits = null;
+
+            // Preserve the tailored workflow-drift guidance from the artifact.
+            const exitRaw = read('drift-exit.txt').trim();
+            const drift = exitRaw !== '' && exitRaw !== '0';
+            const driftReport = read('drift-report.txt');
             if (drift) {
-              const trimmed = report.length > 60000
-                ? report.slice(0, 60000) + '\n... (truncated)'
-                : report;
-              body = [
-                marker,
-                '## Workflow drift detected',
+              const trimmed = driftReport.length > 20000
+                ? driftReport.slice(0, 20000) + '\n... (truncated)'
+                : driftReport;
+              sections.push([
+                '### Workflow drift',
                 '',
-                'The generated workflows are out of sync with the manifest.',
-                '',
-                'To fix, run and commit the result:',
+                'The generated workflows are out of sync with the manifest. Run and commit:',
                 '',
                 '```',
                 'cascade generate-workflow --config .github/manifest.yaml --force',
@@ -114,32 +214,76 @@ jobs:
                 '',
                 '<details><summary>cascade verify output</summary>',
                 '',
-                '```',
-                trimmed,
-                '```',
+                fence(trimmed),
                 '',
                 '</details>',
-              ].join('\n');
-            } else {
-              if (!existing) {
-                core.info('No drift and no existing comment; nothing to do.');
-                return;
-              }
-              body = [marker, 'No workflow drift detected.'].join('\n');
+              ].join('\n'));
             }
 
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
+            // General failed-job extraction: annotations first, then a bounded log
+            // tail. Cover the first few failed jobs.
+            let failed = [];
+            try {
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner, repo, run_id: run.id, per_page: 100,
               });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
+              failed = jobs.filter((j) => j.conclusion === 'failure');
+            } catch (e) {
+              core.info(`Could not list jobs: ${e.message}`);
             }
+
+            let covered = 0;
+            for (const job of failed) {
+              // The drift job already has a tailored section above.
+              if (drift && job.name === 'Workflow Drift Check') { continue; }
+              if (covered >= 3) { break; }
+              covered += 1;
+
+              const failingStep = (job.steps || []).find((s) => s.conclusion === 'failure');
+              const annText = await annotationsFor(job.id);
+              const tail = await logTail(job.id);
+              const scan = `${annText}\n${tail}`;
+              pinEdits = pinEdits || parsePinGuard(scan);
+
+              const parts = [`### Job: ${job.name}`];
+              if (failingStep) { parts.push('', `Failing step: ${failingStep.name}`); }
+              if (annText) {
+                parts.push('', 'Annotations:', '', fence(annText));
+              }
+              if (tail) {
+                parts.push('', '<details><summary>log tail</summary>', '', fence(tail), '', '</details>');
+              }
+              if (job.html_url) { parts.push('', `[Full job log](${job.html_url})`); }
+              sections.push(parts.join('\n'));
+            }
+
+            // Action-pins guard special case: print the exact manifest edit so the
+            // reader never has to open the logs.
+            if (pinEdits) {
+              const lines = ['### Action-pins consistency guard failed', '',
+                'Apply this edit to `internal/generate/action_pins.yaml` (adopt the bumped ref):', ''];
+              for (const [action, v] of pinEdits) {
+                lines.push(`- \`${action}\`: set sha to \`${v.sha}\`, version to \`${v.version}\``);
+              }
+              lines.push('',
+                'On a same-repo Dependabot PR the auto-fix job pushes this automatically; ' +
+                'on a fork PR apply the edit by hand.');
+              // Surface the remediation first.
+              sections.unshift(lines.join('\n'));
+            }
+
+            if (sections.length === 0) {
+              sections.push('One or more PR Validation checks failed. See the run for details.');
+            }
+
+            let body = [
+              marker,
+              '## PR Validation checks failed',
+              '',
+              ...sections.flatMap((s) => [s, '']),
+            ].join('\n');
+            if (body.length > 60000) {
+              body = body.slice(0, 60000) + '\n... (truncated)';
+            }
+
+            await post(body);
