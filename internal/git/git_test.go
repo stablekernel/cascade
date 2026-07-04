@@ -132,6 +132,34 @@ func TestParseCommits(t *testing.T) {
 	}
 }
 
+// TestGetCommits_UnknownBaseSHAReturnsError proves a git failure (a bad or
+// unknown base SHA) is surfaced as an error rather than swallowed as an empty
+// commit range. Swallowing it would let the caller silently recompute the same
+// version with no bump, cutting a wrong version with no warning.
+func TestGetCommits_UnknownBaseSHAReturnsError(t *testing.T) {
+	newScratchRepo(t)
+	head := commitFile(t, "a.txt", "one", "first commit")
+
+	if _, err := GetCommits("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", head, nil); err == nil {
+		t.Fatal("GetCommits() with an unknown base SHA: expected error, got nil")
+	}
+}
+
+// TestGetCommits_EmptyRangeIsNotAnError proves a legitimately empty range
+// (base == head, git exits 0) returns no commits and no error.
+func TestGetCommits_EmptyRangeIsNotAnError(t *testing.T) {
+	newScratchRepo(t)
+	head := commitFile(t, "a.txt", "one", "first commit")
+
+	commits, err := GetCommits(head, head, nil)
+	if err != nil {
+		t.Fatalf("GetCommits() empty range: unexpected error: %v", err)
+	}
+	if len(commits) != 0 {
+		t.Fatalf("GetCommits() empty range: got %d commits, want 0", len(commits))
+	}
+}
+
 func TestParseLines(t *testing.T) {
 	tests := []struct {
 		name string

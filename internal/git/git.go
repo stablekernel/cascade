@@ -82,10 +82,11 @@ func GetCommits(baseSHA, headSHA string, excludePaths []string) ([]Commit, error
 	cmd := exec.Command("git", args...)
 	output, err := cmd.Output()
 	if err != nil {
-		// No commits in range is not an error
-		if len(output) == 0 {
-			return nil, nil
-		}
+		// A non-zero exit means git failed (a bad or unknown base SHA, a
+		// shallow clone missing the base commit, or "not a git repository").
+		// A legitimately empty range exits 0 and returns no commits via
+		// parseCommits below, so any error here is a real failure and must be
+		// surfaced rather than masked as "no commits."
 		return nil, fmt.Errorf("git log: %w", err)
 	}
 
