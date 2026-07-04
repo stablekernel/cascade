@@ -2,6 +2,8 @@ module github.com/stablekernel/cascade
 
 go 1.25
 
+toolchain go1.26.4
+
 require (
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

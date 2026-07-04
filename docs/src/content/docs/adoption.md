@@ -18,7 +18,7 @@ The flow in one line: you write a manifest plus callback workflows, run `cascade
 - **GitHub Actions enabled** on the repository, with trunk-based development (a single primary branch).
 - **Conventional Commits are required.** cascade derives the semver bump, the changelog, and breaking-change detection entirely from Conventional Commit messages. This is not optional. Commits that do not follow the convention are not processed correctly and version derivation can fail. See [Versioning and schema compatibility](/cascade/versioning/).
 - **GitHub setup**: environments for each deploy stage, branch and tag protection, the secrets your callbacks consume, and scoped tokens. The [Security and Hardening](/cascade/security/hardening/) checklist is the authoritative list; wire it up before your first production promotion.
-- The `cascade` CLI for local generation (Go 1.25+ to `go install`; in Actions, the setup action installs it for you). See [Getting Started](/cascade/getting-started/).
+- The `cascade` CLI for local generation (Go 1.26.4+ to `go install`; in Actions, the setup action installs it for you). See [Getting Started](/cascade/getting-started/).
 
 ## Build a pipeline from scratch
 

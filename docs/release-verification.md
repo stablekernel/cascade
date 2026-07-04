@@ -81,7 +81,7 @@ cd cascade
 git checkout v0.X.Y
 ```
 
-2. Ensure Go 1.25 is installed (the version used for official releases).
+2. Ensure Go 1.26.4 or newer is installed (the toolchain pinned in `go.mod` via the `toolchain` directive, used for official releases).
 
 3. Build with the same flags used in the release workflow:
 
