@@ -286,6 +286,42 @@ func TestFinalize_HandlesNoPromotionResult(t *testing.T) {
 	require.NotNil(t, cicdFile)
 }
 
+// TestFinalize_DeployResultWithoutPromotionResult reproduces the nil-pointer
+// dereference that occurs when a deploy result is recorded but no promotion
+// result was set. The per-deploy state update reads
+// f.promotionResult.Promotions, so it must be skipped (not panic) when the
+// promotion result is absent. The exported SetDeployResult/Run API permits this
+// ordering even though the CLI always sets a promotion result first.
+func TestFinalize_DeployResultWithoutPromotionResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, test]
+  state:
+    dev:
+      sha: abc123
+`
+	err := os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	fin, err := NewFinalizer(configPath, "test")
+	require.NoError(t, err)
+
+	// Record a successful deploy result but never set a promotion result.
+	fin.SetDeployResult("app", "success")
+
+	require.NotPanics(t, func() {
+		require.NoError(t, fin.Run())
+	})
+
+	// Config should still be valid and unchanged in its deploy state.
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+	require.NotNil(t, cicdFile)
+}
+
 // TestFinalize_WithCIKeyManifest tests that finalize correctly parses
 // manifest files with the required ci: key at top level.
 func TestFinalize_WithCIKeyManifest(t *testing.T) {
