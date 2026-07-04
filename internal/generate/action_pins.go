@@ -163,7 +163,13 @@ func actionRef(cfg *config.TrunkConfig, action string) string {
 // Precedence: beta (master) > (pin_mode sha AND cli_version_sha set) > tag. An
 // empty cli_version_sha under pin_mode sha degrades gracefully to the tag,
 // never a broken ref.
+//
+// A nil cfg degrades to the immutable default CLI version, matching actionRef's
+// nil tolerance so both self- and third-party ref resolvers share one contract.
 func cliSetupRef(cfg *config.TrunkConfig) string {
+	if cfg == nil {
+		return config.DefaultCLIVersion
+	}
 	if cfg.CLIVersion == "beta" {
 		return "master" // Explicit opt-in escape hatch to trunk.
 	}

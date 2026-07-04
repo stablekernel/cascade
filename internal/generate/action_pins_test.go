@@ -99,6 +99,15 @@ func TestActionRef_NilConfigSafe(t *testing.T) {
 	assert.Equal(t, actionCheckout+"@"+defaultActionPins[actionCheckout].tag, actionRef(nil, actionCheckout))
 }
 
+func TestCLISetupRef_NilConfigSafe(t *testing.T) {
+	// actionRef already tolerates a nil config (see TestActionRef_NilConfigSafe);
+	// cliSetupRef sits behind the same call sites and must share that contract
+	// instead of panicking on a nil dereference. A nil config degrades to the
+	// immutable default CLI version, the same ref a zero-value config yields.
+	assert.NotPanics(t, func() { cliSetupRef(nil) })
+	assert.Equal(t, config.DefaultCLIVersion, cliSetupRef(nil))
+}
+
 // TestCLISetupRef covers the self-action ref resolution: the version tag in tag
 // mode (today's behavior), the 40-hex commit SHA with a trailing version comment
 // when pin_mode is sha and cli_version_sha is set, graceful fallback to the tag
