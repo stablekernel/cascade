@@ -648,6 +648,95 @@ dispatch_inputs:
 			t.Fatalf("expected choice options rejection, got %v", errs)
 		}
 	})
+	t.Run("dispatch input name with space rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  "bad name":
+    type: string
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, `dispatch_inputs "bad name" must contain only`) {
+			t.Fatalf("expected dispatch input name rejection, got %v", errs)
+		}
+	})
+	t.Run("dispatch input name with dot rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  "region.primary":
+    type: string
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, `dispatch_inputs "region.primary" must contain only`) {
+			t.Fatalf("expected dispatch input name rejection, got %v", errs)
+		}
+	})
+	t.Run("dispatch input name with expression fragment rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  "x${{ secrets.TOKEN }}":
+    type: string
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "must contain only") {
+			t.Fatalf("expected dispatch input name rejection, got %v", errs)
+		}
+	})
+	t.Run("safe dispatch input name accepted", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  target_region:
+    type: string
+`)
+		if errs := Validate(cfg); hasErrContaining(errs, "must contain only") {
+			t.Fatalf("expected safe dispatch input name to pass, got %v", errs)
+		}
+	})
+	t.Run("choice option with space rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  region:
+    type: choice
+    options:
+      - "us east 1"
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, `dispatch_inputs.region option "us east 1" must contain only`) {
+			t.Fatalf("expected choice option rejection, got %v", errs)
+		}
+	})
+	t.Run("choice option with expression fragment rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  region:
+    type: choice
+    options:
+      - "${{ github.token }}"
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "dispatch_inputs.region option") {
+			t.Fatalf("expected choice option rejection, got %v", errs)
+		}
+	})
+	t.Run("empty choice option rejected", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  region:
+    type: choice
+    options:
+      - ""
+`)
+		if errs := Validate(cfg); !hasErrContaining(errs, "dispatch_inputs.region option") {
+			t.Fatalf("expected empty choice option rejection, got %v", errs)
+		}
+	})
+	t.Run("dotted and hyphenated choice options accepted", func(t *testing.T) {
+		cfg := parseInline(t, `
+dispatch_inputs:
+  region:
+    type: choice
+    options:
+      - us-east-1
+      - v1.2.3
+`)
+		if errs := Validate(cfg); hasErrContaining(errs, "option") {
+			t.Fatalf("expected dotted/hyphenated options to pass, got %v", errs)
+		}
+	})
 	t.Run("environment_config unknown env rejected", func(t *testing.T) {
 		cfg := parseInline(t, `
 environments: [dev]
