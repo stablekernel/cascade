@@ -93,11 +93,11 @@ jobs:
           cache: true
 
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@0782b76014f15f24e22a438f30f308df42899ba1 ./...  # v1.3.0
 
       - name: Run govulncheck (e2e module)
         working-directory: e2e
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@0782b76014f15f24e22a438f30f308df42899ba1 ./...  # v1.3.0
 
   validate:
     name: Validation Gate
