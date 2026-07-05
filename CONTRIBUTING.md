@@ -36,8 +36,9 @@ golangci-lint run ./...
 2. Branch from `main`.
 3. Keep changes focused. One logical change per pull request.
 4. Add or update tests. New manifest fields and generator features need an `e2e/` scenario, not just a unit test on generated output.
-5. Run `go test ./...` and `golangci-lint run ./...` before pushing.
-6. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages (`feat:`, `fix:`, `docs:`, `chore:`, ...). cascade derives changelogs and version bumps from them.
+5. If a change alters which operations are valid on which environments (for example, which environments are eligible for rollback or promotion), update the fleet example-repo suites that exercise those operations in the same change. A generator or CLI eligibility rule and the fleet suite that asserts against it are one coupled unit; letting them drift hides the mismatch until a later fleet run exercises the now invalid path.
+6. Run `go test ./...` and `golangci-lint run ./...` before pushing.
+7. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages (`feat:`, `fix:`, `docs:`, `chore:`, ...). cascade derives changelogs and version bumps from them.
 
 ## API design
 
