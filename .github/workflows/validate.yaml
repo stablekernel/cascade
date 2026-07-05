@@ -95,6 +95,10 @@ jobs:
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
 
+      - name: Run govulncheck (e2e module)
+        working-directory: e2e
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
+
   validate:
     name: Validation Gate
     needs: [test, lint, vuln]
