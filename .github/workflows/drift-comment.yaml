@@ -119,6 +119,7 @@ jobs:
               return `${ticks}\n${t}\n${ticks}`;
             };
 
+            // ----- pure-helpers-start (extracted verbatim by the node unit test) -----
             // Detect the action-pins consistency-guard failure and parse the exact
             // manifest edit from its "file:line action want <sha> # <ver> got <sha>
             // # <ver>" rows. The fix adopts each governed "got" value (the bumped
@@ -138,16 +139,46 @@ jobs:
               return edits.size > 0 ? edits : null;
             };
 
-            // Last ~30 non-empty lines of a failed job's log.
-            const logTail = async (jobId) => {
+            // Extract the failure-relevant slice of a job log for display. A Go
+            // test failure (and its want/got rows) prints in the MIDDLE of the log;
+            // the trailing lines are post-job git-config and credential cleanup that
+            // end at "Cleaning up orphan processes". Anchoring on the first failure
+            // signature and windowing forward keeps the region on the failing test
+            // output instead of that cleanup tail. Falls back to the trailing lines
+            // when no signature is present (a non-test failure).
+            const extractFailRegion = (text) => {
+              const lines = String(text || '').split('\n');
+              const signatures = [
+                '--- FAIL',
+                'governed uses: refs diverge from internal/generate/action_pins.yaml',
+                'dependabot anchor refs diverge from action_pins.yaml',
+                '\tFAIL\t',
+              ];
+              let anchor = -1;
+              for (let i = 0; i < lines.length; i += 1) {
+                if (signatures.some((s) => lines[i].includes(s))) { anchor = i; break; }
+              }
+              const nonEmpty = (arr) => arr.filter((l) => l.trim().length > 0);
+              if (anchor < 0) {
+                return nonEmpty(lines).slice(-30).join('\n');
+              }
+              const start = Math.max(0, anchor - 5);
+              return nonEmpty(lines.slice(start)).slice(0, 60).join('\n');
+            };
+            // ----- pure-helpers-end -----
+
+            // Download a failed job's log once. Returns the full decoded text (for
+            // signature parsing, never rendered) plus a bounded, failure-anchored
+            // region for display.
+            const logFor = async (jobId) => {
               try {
                 const res = await github.rest.actions.downloadJobLogsForWorkflowRun({
                   owner, repo, job_id: jobId,
                 });
-                const lines = String(res.data || '').split('\n').filter((l) => l.trim().length > 0);
-                return lines.slice(-30).join('\n');
+                const full = String(res.data || '');
+                return { full, region: extractFailRegion(full) };
               } catch (e) {
-                return '';
+                return { full: '', region: '' };
               }
             };
 
@@ -242,17 +273,20 @@ jobs:
 
               const failingStep = (job.steps || []).find((s) => s.conclusion === 'failure');
               const annText = await annotationsFor(job.id);
-              const tail = await logTail(job.id);
-              const scan = `${annText}\n${tail}`;
-              pinEdits = pinEdits || parsePinGuard(scan);
+              const jobLog = await logFor(job.id);
+              // Parse the pin guard against the FULL log, not the display region:
+              // the guard signature and its want/got rows print in the middle of
+              // the log, so a trailing slice would miss them and drop the manifest
+              // remediation entirely.
+              pinEdits = pinEdits || parsePinGuard(`${annText}\n${jobLog.full}`);
 
               const parts = [`### Job: ${job.name}`];
               if (failingStep) { parts.push('', `Failing step: ${failingStep.name}`); }
               if (annText) {
                 parts.push('', 'Annotations:', '', fence(annText));
               }
-              if (tail) {
-                parts.push('', '<details><summary>log tail</summary>', '', fence(tail), '', '</details>');
+              if (jobLog.region) {
+                parts.push('', '<details><summary>log tail</summary>', '', fence(jobLog.region), '', '</details>');
               }
               if (job.html_url) { parts.push('', `[Full job log](${job.html_url})`); }
               sections.push(parts.join('\n'));
