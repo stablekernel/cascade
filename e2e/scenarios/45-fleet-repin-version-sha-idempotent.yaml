@@ -1,0 +1,58 @@
+name: "Fleet repin: version+sha pin regenerates drift-free and idempotent"
+description: |
+  Covers the CLI-level contract the shared fleet-repin composite action relies
+  on. The action sets a manifest's cli_version to the dispatched rc tag, pairs
+  cli_version_sha with the tag's peeled commit under pin_mode: sha, runs
+  cascade generate-workflow --force, and pushes the result. This scenario proves
+  the generator invariant underneath that: a manifest already carrying a
+  cli_version + cli_version_sha pair emits sha-mode workflows, regenerating with
+  --force produces no drift (idempotent), and both pin fields survive intact so
+  a lane that re-dispatches over an already-pinned repo is a clean no-op.
+
+  The act+gitea harness localizes cross-repo setup-cli self-refs before running
+  act, so the sha-pinned self ref cannot be asserted in the committed workflow
+  directly. A third-party ref (actions/checkout) proves sha mode is active, and
+  the manifest read-back proves the version+sha pair is retained.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  cli_version: v0.6.0
+  cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803
+  pin_mode: sha
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; sha mode pins refs and the manifest carries the version+sha pair"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # sha mode pins checkout to its 40-hex SHA with a version comment.
+            - "uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0"
+          not_contains:
+            # the mutable major tag must not appear once sha-pinned.
+            - "uses: actions/checkout@v7\n"
+      manifest:
+        contains:
+          - "cli_version: v0.6.0"
+          - "cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803"
+          - "pin_mode: sha"
+
+  - name: "generate-workflow --force over the pinned manifest is drift-free and idempotent"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
