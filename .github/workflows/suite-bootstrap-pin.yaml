@@ -2,16 +2,13 @@
 # cascade-example repo's committed scenario-suite.yaml bootstrap pin onto it, so
 # each suite bootstraps the current CLI instead of drifting on an older tag.
 #
-# Trigger choice: the reliable "a final release just published" signal in this
-# repo is the Release workflow completing for the published tag. The promote
-# flow's finalize job publishes vX.Y.Z through the releases API and then
-# dispatches Release against that exact tag (see promote.yaml "Trigger Release
-# Build"), so the Release run carries head_branch == vX.Y.Z. Event-based release
-# triggers (release: published / released) do not fire reliably for those
-# API-managed releases (#86), so we key off Release completion instead and gate
-# on a final-tag head ref. An rc (vX.Y.Z-rc.N) or dryrun (vX.Y.Z-dryrun.N) tag
-# builds Release too, but its head ref carries the prerelease suffix and is
-# filtered out below, so this never moves a committed pin onto a candidate tag.
+# Trigger choice: the Release workflow completes for every pushed tag
+# (both push and workflow_dispatch paths). The resolve job detects final tags by
+# looking at head_branch (primary path) or by resolving tags via the API from
+# head_sha (fallback when dispatch puts head_branch as empty/main). This mirrors
+# the fleet-e2e.yaml resolve logic and ensures we never bump on a candidate tag
+# (rc/dryrun), even on the dispatch path. Event-based release triggers are
+# unreliable for API-managed releases (#86), so workflow_run is preferred.
 #
 # Why a [skip ci] direct commit is safe: the fleet already validated this exact
 # version across every example repo before the release published, so a bump PR's
@@ -29,8 +26,8 @@ on:
     inputs:
       version:
         description: >-
-          Final release tag to pin (vX.Y.Z). Empty uses the tag the completed
-          Release run built. Must be a final (non-prerelease) tag.
+          Final release tag to pin (vX.Y.Z). Empty resolves from the Release
+          run that triggered this dispatch. Must be a final (non-prerelease) tag.
         required: false
         default: ''
 
@@ -45,16 +42,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bump:
-    name: Bump example-suite bootstrap pins
-    # Fire only for a successful Release run that built a FINAL tag, or a manual
-    # dispatch (which supplies its own version, validated in-script).
+  resolve:
+    name: Resolve final release tag
+    # Accept both workflow_run trigger types (push and workflow_dispatch).
+    # A manual workflow_dispatch without a Release source (event.workflow_run
+    # empty) is valid if inputs.version is provided; otherwise wait for an
+    # actual Release completion.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       startsWith(github.event.workflow_run.head_branch, 'v') &&
-       !contains(github.event.workflow_run.head_branch, '-rc.') &&
-       !contains(github.event.workflow_run.head_branch, '-dryrun.'))
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      final_version: ${{ steps.compute.outputs.final_version }}
+    env:
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      EVENT_NAME: ${{ github.event_name }}
+      INPUT_VERSION: ${{ github.event.inputs.version }}
+      WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Compute final release tag
+        id: compute
+        run: |
+          set -euo pipefail
+
+          # Manual workflow_dispatch with explicit version takes priority.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [ -n "$WR_HEAD_BRANCH" ] && printf '%s' "$WR_HEAD_BRANCH" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # Primary path: head_branch is a final tag (no -rc. or -dryrun. suffix).
+            # A tag in this form on workflow_run is trustworthy.
+            VERSION="$WR_HEAD_BRANCH"
+          elif [ -n "$WR_HEAD_SHA" ]; then
+            # Fallback: head_branch is empty or not a clean tag (e.g. "main" on
+            # dispatch). Look up tags pointing at this commit and filter to final
+            # tags. Accept the highest by semver sort (in case a sha carries
+            # multiple tags) but reject any rc or dryrun.
+            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+              --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
+              | grep -vE '-(rc|dryrun)\.' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V -r | head -n 1 || true)
+          else
+            VERSION=""
+          fi
+
+          # Guard the output and guard against passing an invalid tag forward.
+          if [ -z "$VERSION" ]; then
+            echo "::notice::no final release tag found; bump job will be skipped"
+            echo "final_version=" >> "$GITHUB_OUTPUT"
+          elif printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::notice::resolved final release tag: $VERSION"
+            echo "final_version=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::resolved tag '${VERSION}' is not a final release tag (vX.Y.Z format)"
+            exit 1
+          fi
+
+  bump:
+    name: Bump example-suite bootstrap pins
+    needs: resolve
+    # Only run if resolve found a final tag. A no-op resolve (no tag found, or
+    # dispatch without version on no Release source) gates this job cleanly.
+    if: needs.resolve.outputs.final_version != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,24 +118,9 @@ jobs:
       # write + workflow scope).
       GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
       STATE_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
-      DISPATCH_VERSION: ${{ github.event.inputs.version }}
-      RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      TARGET_VERSION: ${{ needs.resolve.outputs.final_version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Resolve target version
-        id: target
-        run: |
-          set -euo pipefail
-          # The workflow_dispatch input wins when given; otherwise the completed
-          # Release run's head ref is the published final tag.
-          VERSION="${DISPATCH_VERSION:-$RUN_HEAD_BRANCH}"
-          if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::resolved version '${VERSION}' is not a final release tag (vX.Y.Z)"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Target release: $VERSION"
 
       - name: Configure git identity
         run: |
@@ -91,7 +130,7 @@ jobs:
 
       - name: Bump each example repo's committed bootstrap pin
         env:
-          TARGET_VERSION: ${{ steps.target.outputs.version }}
+          TARGET_VERSION: ${{ needs.resolve.outputs.final_version }}
         run: |
           set -euo pipefail
 

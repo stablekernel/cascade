@@ -71,9 +71,16 @@ fi
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
+# Rewrite both pins only within a setup-cli step block (scoped by YAML indentation).
+# The address range /setup-cli@.../,/^      - name:/ matches from a setup-cli
+# line to the next step marker (a list item at the same indentation), ensuring
+# version: rewrites only the setup-cli input's version field, not any unrelated
+# semver value elsewhere in the file.
 sed -E \
-  -e "s#(setup-cli@)v[0-9]+\.[0-9]+\.[0-9]+#\1${target}#g" \
-  -e "s#(version:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+#\1${target}#g" \
+  '/setup-cli@v[0-9]+\.[0-9]+\.[0-9]+/,/^      - name:/{
+    s#(setup-cli@)v[0-9]+\.[0-9]+\.[0-9]+#\1'"${target}"'#g
+    s#(version:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+#\1'"${target}"'#g
+  }' \
   "$suite" > "$tmp"
 
 # Overwrite only when content actually changed, preserving the original file's

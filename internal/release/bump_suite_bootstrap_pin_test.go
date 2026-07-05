@@ -131,6 +131,28 @@ func TestBumpSuiteBootstrapPin_RejectsPrereleaseTarget(t *testing.T) {
 	}
 }
 
+func TestBumpSuiteBootstrapPin_IgnoresUnrelatedVersionFields(t *testing.T) {
+	before := "" +
+		"jobs:\n" +
+		"  configure:\n" +
+		"    steps:\n" +
+		"      - name: Setup CLI\n" +
+		"        uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0\n" +
+		"        with:\n" +
+		"          version: v0.1.0\n" +
+		"      - name: Configure something else\n" +
+		"        with:\n" +
+		"          version: v1.2.3\n" +
+		"          other_config: value\n"
+
+	code, out, after := runBumpPin(t, before, "v0.8.0")
+
+	require.Equal(t, 0, code, "script should succeed; output: %s", out)
+	require.Contains(t, after, "setup-cli@v0.8.0", "setup-cli action ref should be bumped")
+	require.Contains(t, after, "version: v0.8.0", "setup-cli version input should be bumped")
+	require.Contains(t, after, "version: v1.2.3", "unrelated version field must NOT be changed")
+}
+
 func TestBumpSuiteBootstrapPin_MissingFile(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
