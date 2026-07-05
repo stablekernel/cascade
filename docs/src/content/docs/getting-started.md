@@ -7,7 +7,7 @@ This guide walks through setting up `cascade` in your repository. For the big pi
 
 ## Prerequisites
 
-- Go 1.25+ (for the CLI)
+- Go 1.26.4+ (for the CLI)
 - A GitHub repository with Actions enabled
 - Trunk-based development (single primary branch)
 
