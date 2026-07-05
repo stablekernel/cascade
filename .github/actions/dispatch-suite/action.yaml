@@ -105,10 +105,11 @@ runs:
           DISPATCH_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "Dispatching $TARGET_WORKFLOW in $TARGET_REPO @ $TARGET_REF (since $DISPATCH_TS)"
 
-          # NOTE: cascade_version / cascade_version_sha are only forwarded when
-          # non-empty. No caller passes them today, so this stays inert: the
-          # suites do not define those inputs yet, and an undeclared input would
-          # error with "unexpected inputs" if passed unconditionally.
+          # NOTE: cascade_version / cascade_version_sha are forwarded to the
+          # target suite only when non-empty, so a suite that has not declared
+          # those inputs is unaffected (an undeclared input passed
+          # unconditionally would error with "unexpected inputs"). When present,
+          # they tell the suite which version and peeled commit to self-repin to.
           local -a EXTRA_ARGS=()
           if [ -n "$CASCADE_VERSION" ]; then
             EXTRA_ARGS+=(-f "cascade_version=$CASCADE_VERSION")

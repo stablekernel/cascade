@@ -18,8 +18,8 @@
 # Callers detect "did anything change" from git status, so the script itself
 # only reports argument or IO failure through its exit code.
 #
-# The two rewritten shapes mirror exactly what check-suite-tooling-floor.sh reads
-# back, so a bump here clears the floor check for the same repo.
+# Both shapes are the suite's bootstrap tooling pin, so a bump here moves the
+# committed pin onto the freshly published release for the same repo.
 #
 # Usage:
 #   bump-suite-bootstrap-pin.sh <suite-file> <target-version>
@@ -66,8 +66,8 @@ fi
 #   2. the version input:        version: vX.Y.Z
 # Only bare semver pins are matched, so a moving ref (@main) or an unrelated
 # non-semver value is never touched. A `version:` line carrying a vX.Y.Z value
-# is the suite's setup-cli input; this mirrors the floor check's own extraction,
-# which treats a `version: vX.Y.Z` line as the tooling pin.
+# is the suite's setup-cli input, so a `version: vX.Y.Z` line is treated as the
+# tooling pin alongside the action ref.
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
