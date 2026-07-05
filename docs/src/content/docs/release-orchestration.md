@@ -70,6 +70,18 @@ committed bootstrap pin onto it. Because the fleet already validated that exact 
 across every repository before it published, the bump is a proven no-op check rather than
 a gate that can block a release.
 
+### Changelog range on a final release
+
+Auto-promote tags the newest candidate's exact commit as the final `vX.Y.Z`, so a final
+release and its last candidate (for example `v0.8.0` and `v0.8.0-rc.7`) point at the same
+commit. Left to auto-detect the previous tag, GoReleaser would pick that candidate and
+compare a tag against itself, so the final release would publish an empty changelog. The
+Release workflow avoids this: for a final tag it resolves the previous stable release with
+[`previous-stable-tag.sh`](https://github.com/stablekernel/cascade/blob/main/.github/scripts/previous-stable-tag.sh)
+and passes it as `GORELEASER_PREVIOUS_TAG`, so a final changelog spans the whole candidate
+cycle (for example `v0.7.0..v0.8.0`). Candidate and dry-run tags leave the value unset and
+keep their existing incremental changelogs.
+
 ## Running a single lane with the repos selector
 
 A full fan-out is the right gate for a release, but it is heavy for developing one

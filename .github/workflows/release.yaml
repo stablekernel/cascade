@@ -86,6 +86,36 @@ jobs:
       - name: Install syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
+      # Auto-promote tags the newest candidate's exact commit as the final
+      # vX.Y.Z, so a final tag and its last candidate (for example v0.8.0 and
+      # v0.8.0-rc.7) share one commit. GoReleaser, given only the current tag,
+      # auto-detects the previous tag as that candidate and produces an empty
+      # compare range, hence an empty changelog on the final release. For a
+      # final tag we pin GORELEASER_PREVIOUS_TAG to the previous stable release
+      # so the changelog spans the whole candidate cycle (v0.7.0..v0.8.0). For a
+      # candidate or dry-run tag we leave it unset so GoReleaser keeps its
+      # existing incremental changelog.
+      - name: Resolve previous stable tag for final changelog
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag="$REF_NAME"
+          case "$tag" in
+            *-rc.*|*-dryrun.*)
+              echo "prerelease tag ${tag}; leaving GORELEASER_PREVIOUS_TAG unset"
+              ;;
+            *)
+              git fetch --tags --force
+              prev="$(.github/scripts/previous-stable-tag.sh "$tag")"
+              if [ -n "$prev" ]; then
+                echo "final tag ${tag}; changelog spans ${prev}..${tag}"
+                echo "GORELEASER_PREVIOUS_TAG=${prev}" >> "$GITHUB_ENV"
+              else
+                echo "final tag ${tag}; no previous stable, leaving GORELEASER_PREVIOUS_TAG unset"
+              fi
+              ;;
+          esac
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -94,6 +124,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          GORELEASER_PREVIOUS_TAG: ${{ env.GORELEASER_PREVIOUS_TAG }}
           GPG_FINGERPRINT: ${{ secrets.CASCADE_RELEASE_GPG_FINGERPRINT }}
 
       - name: Attest build provenance
