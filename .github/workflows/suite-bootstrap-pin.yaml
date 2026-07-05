@@ -1,0 +1,282 @@
+# Maintainer CI. When cascade publishes a FINAL release (vX.Y.Z), move every
+# cascade-example repo's committed scenario-suite.yaml bootstrap pin onto it, so
+# each suite bootstraps the current CLI instead of drifting on an older tag.
+#
+# Trigger choice: the Release workflow completes for every pushed tag
+# (both push and workflow_dispatch paths). The resolve job detects final tags by
+# looking at head_branch (primary path) or by resolving tags via the API from
+# head_sha (fallback when dispatch puts head_branch as empty/main). This mirrors
+# the fleet-e2e.yaml resolve logic and ensures we never bump on a candidate tag
+# (rc/dryrun), even on the dispatch path. Event-based release triggers are
+# unreliable for API-managed releases (#86), so workflow_run is preferred.
+#
+# Why a [skip ci] direct commit is safe: the fleet already validated this exact
+# version across every example repo before the release published, so a bump PR's
+# own CI would only repeat a proven check. Nothing downstream triggers on a push
+# to these repos' main for this purpose. The fleet dispatches suites on demand
+# through workflow_dispatch rather than on push, so [skip ci] costs nothing and
+# the commit codifies an already-proven version.
+name: Suite Bootstrap Pin
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Final release tag to pin (vX.Y.Z). Empty resolves from the Release
+          run that triggered this dispatch. Must be a final (non-prerelease) tag.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # One bump at a time, and do not cancel an in-flight bump: each targets a
+  # specific release and pushes to eleven external repos, so a later release
+  # queues behind an earlier one rather than interrupting it mid-fan-out.
+  group: suite-bootstrap-pin
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve final release tag
+    # Accept both workflow_run trigger types (push and workflow_dispatch).
+    # A manual workflow_dispatch without a Release source (event.workflow_run
+    # empty) is valid if inputs.version is provided; otherwise wait for an
+    # actual Release completion.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      final_version: ${{ steps.compute.outputs.final_version }}
+    env:
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      EVENT_NAME: ${{ github.event_name }}
+      INPUT_VERSION: ${{ github.event.inputs.version }}
+      WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Compute final release tag
+        id: compute
+        run: |
+          set -euo pipefail
+
+          # Manual workflow_dispatch with explicit version takes priority.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [ -n "$WR_HEAD_BRANCH" ] && printf '%s' "$WR_HEAD_BRANCH" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # Primary path: head_branch is a final tag (no -rc. or -dryrun. suffix).
+            # A tag in this form on workflow_run is trustworthy.
+            VERSION="$WR_HEAD_BRANCH"
+          elif [ -n "$WR_HEAD_SHA" ]; then
+            # Fallback: head_branch is empty or not a clean tag (e.g. "main" on
+            # dispatch). Look up tags pointing at this commit and filter to final
+            # tags. Accept the highest by semver sort (in case a sha carries
+            # multiple tags) but reject any rc or dryrun.
+            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+              --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
+              | grep -vE '-(rc|dryrun)\.' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V -r | head -n 1 || true)
+          else
+            VERSION=""
+          fi
+
+          # Guard the output and guard against passing an invalid tag forward.
+          if [ -z "$VERSION" ]; then
+            echo "::notice::no final release tag found; bump job will be skipped"
+            echo "final_version=" >> "$GITHUB_OUTPUT"
+          elif printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::notice::resolved final release tag: $VERSION"
+            echo "final_version=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::resolved tag '${VERSION}' is not a final release tag (vX.Y.Z format)"
+            exit 1
+          fi
+
+  bump:
+    name: Bump example-suite bootstrap pins
+    needs: resolve
+    # Only run if resolve found a final tag. A no-op resolve (no tag found, or
+    # dispatch without version on no Release source) gates this job cleanly.
+    if: needs.resolve.outputs.final_version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Cross-repo reads and writes of the example repos use the fleet PAT, the
+      # same credential the fleet reads and writes those repos with (contents
+      # write + workflow scope).
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      STATE_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      TARGET_VERSION: ${{ needs.resolve.outputs.final_version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config --global user.name "cascade-fleet-bot"
+          git config --global user.email "cascade-fleet-bot@users.noreply.github.com"
+
+      - name: Bump each example repo's committed bootstrap pin
+        env:
+          TARGET_VERSION: ${{ needs.resolve.outputs.final_version }}
+        run: |
+          set -euo pipefail
+
+          # The full roster of eleven example repos. Every repo whose suite
+          # bootstraps a pinned cascade CLI belongs here; keep it in sync with
+          # the fleet repin roster in fleet-e2e.yaml.
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch"
+
+          # Repos whose main rejects a direct push (branch protection requires a
+          # PR). These take the PR path up front. Any OTHER repo that
+          # unexpectedly rejects a direct push also falls back to a PR, so this
+          # list is a fast path, not the only guard.
+          PR_ONLY="2env"
+
+          OWNER="stablekernel"
+          SUITE_PATH=".github/workflows/scenario-suite.yaml"
+          SCRIPT="$PWD/.github/scripts/bump-suite-bootstrap-pin.sh"
+          MAX_ATTEMPTS=5
+
+          # True when a whitespace-separated list contains an exact word.
+          contains_word() {
+            case " $1 " in
+              *" $2 "*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          # Open a PR that carries the already-committed bump, for a repo whose
+          # main rejects a direct push. The fleet already proved this version on
+          # this repo, so the PR's own CI only repeats a proven check; enable
+          # auto-merge best-effort and never fail the job if the platform
+          # declines it. Re-running for a version whose PR is already open is a
+          # no-op.
+          open_pr() {
+            local slug="$1" branch url
+            branch="chore/bump-bootstrap-pin-${TARGET_VERSION}"
+            git checkout -b "$branch"
+            git push --force origin "HEAD:${branch}"
+            if url=$(gh pr create --repo "$slug" \
+                --head "$branch" --base main \
+                --title "chore: bump setup-cli bootstrap pin to ${TARGET_VERSION}" \
+                --body "Move the committed scenario-suite bootstrap pin to ${TARGET_VERSION}. The fleet validated this version across every example repo before the release published, so this only refreshes the committed pin." 2>&1); then
+              echo "opened PR for ${slug}: ${url}"
+              if gh pr merge --repo "$slug" --squash --auto "$url" >/dev/null 2>&1; then
+                echo "auto-merge enabled for ${slug}"
+              else
+                echo "auto-merge not enabled for ${slug} (left open)"
+              fi
+              return 0
+            fi
+            if echo "$url" | grep -qi 'already exists'; then
+              echo "PR already open for ${slug}; nothing to do"
+              return 0
+            fi
+            echo "::error::failed to open PR for ${slug}: ${url}"
+            return 1
+          }
+
+          # Bump one repo. Clone fresh main, rewrite the suite pin, commit, and
+          # push. A no-op (already current) does nothing. PR_ONLY repos, and any
+          # repo whose direct push is rejected by a protection rule, fall back to
+          # a PR. On a non-fast-forward push (a concurrent write landed) reset
+          # onto the fresh remote tip and re-apply, mirroring the fleet repin.
+          bump_repo() {
+            local slug="$1" name="$2" workdir attempt status push_out
+            workdir=$(mktemp -d)
+            git clone --depth 1 \
+              "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
+              "$workdir" || return 1
+            cd "$workdir" || return 1
+
+            if [ ! -f "$SUITE_PATH" ]; then
+              echo "::error::${slug} has no ${SUITE_PATH}"
+              return 1
+            fi
+
+            if contains_word "$PR_ONLY" "$name"; then
+              "$SCRIPT" "$SUITE_PATH" "$TARGET_VERSION" || return 1
+              if [ -z "$(git status --porcelain)" ]; then
+                echo "${slug} already pins ${TARGET_VERSION}; nothing to bump"
+                return 0
+              fi
+              git add -A
+              git -c commit.gpgsign=false commit --no-gpg-sign -s \
+                -m "chore: bump setup-cli bootstrap pin to ${TARGET_VERSION} [skip ci]" || return 1
+              echo "${slug} is PR-only; opening a PR"
+              open_pr "$slug"
+              return
+            fi
+
+            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+              "$SCRIPT" "$SUITE_PATH" "$TARGET_VERSION" || return 1
+
+              if [ -z "$(git status --porcelain)" ]; then
+                echo "${slug} already pins ${TARGET_VERSION}; nothing to bump"
+                return 0
+              fi
+
+              git add -A
+              # CI has no GPG key, so DCO sign-off only (-s) with signing
+              # disabled. [skip ci] keeps this push from triggering the repo's
+              # own workflows.
+              git -c commit.gpgsign=false commit --no-gpg-sign -s \
+                -m "chore: bump setup-cli bootstrap pin to ${TARGET_VERSION} [skip ci]" || return 1
+
+              set +e
+              push_out=$(git push origin HEAD:main 2>&1)
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ]; then
+                echo "${slug} bumped to ${TARGET_VERSION} (attempt ${attempt})"
+                return 0
+              fi
+              echo "push attempt ${attempt}/${MAX_ATTEMPTS} for ${slug} failed:"
+              echo "$push_out"
+
+              # A protection rule that requires a PR (not a transient race) falls
+              # back to a PR from the commit we just made, rather than burning
+              # every attempt against a rule that cannot fast-forward away.
+              if echo "$push_out" | grep -qiE 'protected branch|not allowed|required status|pull request'; then
+                echo "${slug} rejects direct push; falling back to a PR"
+                open_pr "$slug"
+                return
+              fi
+
+              # Non-fast-forward: reset onto the fresh remote tip and re-apply on
+              # the next iteration, exactly as cascade's state-writer does.
+              git fetch origin main || return 1
+              git reset --hard origin/main || return 1
+              sleep "$attempt"
+            done
+
+            echo "::error::${slug} push rejected after ${MAX_ATTEMPTS} attempts (last output above)"
+            return 1
+          }
+
+          failed=""
+          for name in $REPOS; do
+            slug="${OWNER}/cascade-example-${name}"
+            echo "::group::${slug}"
+            ( bump_repo "$slug" "$name" ) || failed="${failed} ${name}"
+            echo "::endgroup::"
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::bootstrap pin bump failed for:${failed}"
+            exit 1
+          fi
+          echo "All example-repo bootstrap pins are at ${TARGET_VERSION}."
