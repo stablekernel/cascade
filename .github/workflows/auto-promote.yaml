@@ -329,8 +329,13 @@ jobs:
 
       # Verify the published release matches expectations: not a draft, not a
       # prerelease (GoReleaser's prerelease:auto must classify a non-rc tag as a
-      # final release), exactly 5 assets (4 archives + checksums.txt), and that
-      # vX.Y.Z is the repo's latest release.
+      # final release), that vX.Y.Z is the repo's latest release, and that the
+      # required signing and checksum assets are attached. The presence checks
+      # assert assets by name (checksums.txt plus its cosign .bundle and GPG
+      # .asc signatures) and require at least four archive tarballs, rather than
+      # a brittle exact asset count. GoReleaser also attaches per-archive SBOMs,
+      # so the total asset count grows over time; asserting the load-bearing
+      # assets by name keeps this gate stable as the artifact set expands.
       - name: Verify published release
         if: steps.idem.outputs.skip != 'true'
         env:
@@ -344,10 +349,23 @@ jobs:
             --json isDraft,isPrerelease,assets)
           IS_DRAFT=$(printf '%s' "$DATA" | jq -r '.isDraft')
           IS_PRERELEASE=$(printf '%s' "$DATA" | jq -r '.isPrerelease')
-          ASSET_COUNT=$(printf '%s' "$DATA" | jq -r '.assets | length')
+          ARCHIVE_COUNT=$(printf '%s' "$DATA" | jq -r \
+            '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
 
           LATEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
             --jq '.tag_name')
+
+          # Named assets that a signed final release must carry: the checksum
+          # manifest plus the cosign (.bundle) and GPG (.asc) signatures over it.
+          REQUIRED_ASSETS="checksums.txt checksums.txt.bundle checksums.txt.asc"
+          MIN_ARCHIVES=4
+
+          has_asset() {
+            printf '%s' "$DATA" | jq -e --arg n "$1" \
+              '.assets | any(.name == $n)' >/dev/null
+          }
+
+          fail=0
 
           {
             echo "## Auto-promote: $BASE_VERSION"
@@ -356,17 +374,30 @@ jobs:
             echo "|---|---|---|"
             echo "| draft | $IS_DRAFT | false |"
             echo "| prerelease | $IS_PRERELEASE | false |"
-            echo "| assets | $ASSET_COUNT | 5 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for name in $REQUIRED_ASSETS; do
+            if has_asset "$name"; then
+              present="yes"
+            else
+              present="no"
+              echo "::error::$BASE_VERSION is missing required asset $name."
+              fail=1
+            fi
+            echo "| asset: $name | $present | present |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          {
+            echo "| archive tarballs (*.tar.gz) | $ARCHIVE_COUNT | >= $MIN_ARCHIVES |"
             echo "| latest release | $LATEST | $BASE_VERSION |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          fail=0
           [ "$IS_DRAFT" = "false" ] || { echo "::error::$BASE_VERSION is a draft."; fail=1; }
           [ "$IS_PRERELEASE" = "false" ] || { echo "::error::$BASE_VERSION is marked prerelease; GoReleaser misclassified a non-rc tag."; fail=1; }
-          [ "$ASSET_COUNT" = "5" ] || { echo "::error::$BASE_VERSION has $ASSET_COUNT assets, expected 5."; fail=1; }
+          [ "$ARCHIVE_COUNT" -ge "$MIN_ARCHIVES" ] || { echo "::error::$BASE_VERSION has $ARCHIVE_COUNT archive tarballs, expected at least $MIN_ARCHIVES."; fail=1; }
           [ "$LATEST" = "$BASE_VERSION" ] || { echo "::error::latest release is $LATEST, expected $BASE_VERSION."; fail=1; }
 
           if [ "$fail" -ne 0 ]; then
             exit 1
           fi
-          echo "::notice::$BASE_VERSION published as latest, non-prerelease, with 5 assets."
+          echo "::notice::$BASE_VERSION published as latest, non-prerelease, with the required checksum and signature assets and $ARCHIVE_COUNT archive tarballs."
