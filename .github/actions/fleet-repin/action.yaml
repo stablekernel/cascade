@@ -34,6 +34,13 @@ inputs:
       .github/workflows files onto a protected main, so it needs workflow scope
       in addition to contents write.
     required: true
+  cascade_repo:
+    description: >-
+      The repo that publishes the cascade CLI releases. The action installs the
+      dispatched rc from here, not from the example repo it runs in (the example
+      repos publish their own project releases, not the cascade binary).
+    required: false
+    default: 'stablekernel/cascade'
 
 runs:
   using: 'composite'
@@ -50,6 +57,7 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         REPIN_TOKEN: ${{ inputs.token }}
         SELF_REPO: ${{ github.repository }}
+        CASCADE_REPO: ${{ inputs.cascade_repo }}
       run: |
         set -euo pipefail
 
@@ -82,13 +90,15 @@ runs:
         # self-report comparison.
         RC_BARE="${RC_VERSION#v}"
 
-        # 3. Install the dispatched rc CLI from THIS repo and assert it reports
-        #    exactly the dispatched version BEFORE mutating anything. A bad or
-        #    unpublished rc tag reds here, not deep inside a scenario.
+        # 3. Install the dispatched rc CLI from the cascade repo and assert it
+        #    reports exactly the dispatched version BEFORE mutating anything. The
+        #    binary is published by cascade_repo, not by the example repo this
+        #    action runs in. A bad or unpublished rc tag reds here, not deep
+        #    inside a scenario.
         TMPDIR=$(mktemp -d)
-        echo "fleet-repin: downloading ${RC_VERSION} linux/amd64 archive from ${SELF_REPO}"
+        echo "fleet-repin: downloading ${RC_VERSION} linux/amd64 archive from ${CASCADE_REPO}"
         gh release download "$RC_VERSION" \
-          --repo "$SELF_REPO" \
+          --repo "$CASCADE_REPO" \
           --pattern '*linux_amd64*' \
           --dir "$TMPDIR"
         tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
