@@ -119,7 +119,6 @@ jobs:
               return `${ticks}\n${t}\n${ticks}`;
             };
 
-            // ----- pure-helpers-start (extracted verbatim by the node unit test) -----
             // Detect the action-pins consistency-guard failure and parse the exact
             // manifest edit from its "file:line action want <sha> # <ver> got <sha>
             // # <ver>" rows. The fix adopts each governed "got" value (the bumped
@@ -165,7 +164,6 @@ jobs:
               const start = Math.max(0, anchor - 5);
               return nonEmpty(lines.slice(start)).slice(0, 60).join('\n');
             };
-            // ----- pure-helpers-end -----
 
             // Download a failed job's log once. Returns the full decoded text (for
             // signature parsing, never rendered) plus a bounded, failure-anchored
