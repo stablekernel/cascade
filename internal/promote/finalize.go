@@ -40,6 +40,11 @@ type Finalizer struct {
 	// pendingRejoins collects the diverged environments that rejoined trunk during
 	// the in-memory state update, to be cleaned up after the manifest is written.
 	pendingRejoins []rejoinEvent
+
+	// now supplies the wall clock used to stamp the audit timestamps written to
+	// state. It defaults to time.Now; tests and deterministic golden output can
+	// override it through WithClock so the emitted timestamps are exact.
+	now func() time.Time
 }
 
 // NewFinalizer creates a new Finalizer instance.
@@ -68,6 +73,7 @@ func NewFinalizerWithKey(configPath, targetEnv, manifestKey string, opts ...Fina
 		deployResults: make(map[string]string),
 		actor:         actor,
 		cleaner:       noopLifecycleCleaner{},
+		now:           time.Now,
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -158,7 +164,7 @@ func (f *Finalizer) runLifecycleCleanup() error {
 // updateState performs the in-memory state updates.
 // This is separated from Run() to allow dry-run mode.
 func (f *Finalizer) updateState() {
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	timestamp := f.now().UTC().Format(time.RFC3339)
 
 	// Ensure state maps exist
 	if f.cicdFile.State == nil {
@@ -234,52 +240,61 @@ func (f *Finalizer) updateState() {
 	// reflect the new SHA so subsequent change-detection compares against
 	// the right base. Without this, state[intermediateEnv].deploys[name]
 	// stays empty and the next promotion re-runs the deploy unnecessarily.
-	for name, result := range f.deployResults {
-		if result != "success" {
-			continue
-		}
-
-		// Check if this is an external deploy
-		if f.isExternalDeploy(name) {
-			f.updateExternalDeployState(name, timestamp)
-			continue
-		}
-
-		for _, promo := range f.promotionResult.Promotions {
-			if promo.Environment == "" || promo.Environment == "release" {
-				// Skip the release marker; it tracks publish state, not deploys.
+	//
+	// Guarded on a non-nil promotion result: the per-deploy update reads
+	// f.promotionResult.Promotions (and external deploys resolve their SHA
+	// from the promotion path), so with no promotion result there is nothing
+	// to record. This mirrors the guard on the env-promotion block above and
+	// keeps the exported SetDeployResult/Run API from panicking when a deploy
+	// result is set without a promotion result.
+	if f.promotionResult != nil {
+		for name, result := range f.deployResults {
+			if result != "success" {
 				continue
 			}
-			if promo.SHA == "" {
+
+			// Check if this is an external deploy
+			if f.isExternalDeploy(name) {
+				f.updateExternalDeployState(name, timestamp)
 				continue
 			}
-			if f.cicdFile.State[promo.Environment] == nil {
-				f.cicdFile.State[promo.Environment] = &config.EnvState{}
-			}
-			if f.cicdFile.State[promo.Environment].Deploys == nil {
-				f.cicdFile.State[promo.Environment].Deploys = make(map[string]*config.DeployState)
-			}
-			if f.cicdFile.State[promo.Environment].Deploys[name] == nil {
-				f.cicdFile.State[promo.Environment].Deploys[name] = &config.DeployState{}
-			}
 
-			ds := f.cicdFile.State[promo.Environment].Deploys[name]
-			if f.overrideSHA != "" {
-				ds.SHA = f.overrideSHA
-			} else {
-				ds.SHA = promo.SHA
+			for _, promo := range f.promotionResult.Promotions {
+				if promo.Environment == "" || promo.Environment == "release" {
+					// Skip the release marker; it tracks publish state, not deploys.
+					continue
+				}
+				if promo.SHA == "" {
+					continue
+				}
+				if f.cicdFile.State[promo.Environment] == nil {
+					f.cicdFile.State[promo.Environment] = &config.EnvState{}
+				}
+				if f.cicdFile.State[promo.Environment].Deploys == nil {
+					f.cicdFile.State[promo.Environment].Deploys = make(map[string]*config.DeployState)
+				}
+				if f.cicdFile.State[promo.Environment].Deploys[name] == nil {
+					f.cicdFile.State[promo.Environment].Deploys[name] = &config.DeployState{}
+				}
+
+				ds := f.cicdFile.State[promo.Environment].Deploys[name]
+				if f.overrideSHA != "" {
+					ds.SHA = f.overrideSHA
+				} else {
+					ds.SHA = promo.SHA
+				}
+				// Record the version this deployable deployed, mirroring the
+				// env-level Version write above. This is what lets state answer
+				// "which version of <name> is live in <env>" per deployable,
+				// independent of the env-level version (the data foundation for
+				// per-deployable rollback). Empty promo.Version leaves the prior
+				// value untouched so non-versioned promotions stay non-breaking.
+				if promo.Version != "" {
+					ds.Version = promo.Version
+				}
+				ds.DeployedAt = timestamp
+				ds.DeployedBy = f.actor
 			}
-			// Record the version this deployable deployed, mirroring the
-			// env-level Version write above. This is what lets state answer
-			// "which version of <name> is live in <env>" per deployable,
-			// independent of the env-level version (the data foundation for
-			// per-deployable rollback). Empty promo.Version leaves the prior
-			// value untouched so non-versioned promotions stay non-breaking.
-			if promo.Version != "" {
-				ds.Version = promo.Version
-			}
-			ds.DeployedAt = timestamp
-			ds.DeployedBy = f.actor
 		}
 	}
 

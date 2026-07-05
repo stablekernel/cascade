@@ -226,7 +226,15 @@ func CommitAndPushWithRetry(filePath, message string) error {
 		}
 
 		cmd = exec.Command("git", "pull", "--rebase")
-		_, _ = cmd.CombinedOutput() // ignore error - best effort
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// A failed rebase (typically a conflict) leaves the repository
+			// mid-rebase. Abort it so we neither leave a conflicted state
+			// behind nor loop into a guaranteed-failing push, and surface the
+			// real error instead of the generic "push failed" summary.
+			abort := exec.Command("git", "rebase", "--abort")
+			_, _ = abort.CombinedOutput() // best effort; nothing to abort is fine
+			return fmt.Errorf("git pull --rebase failed: %s: %w", string(out), err)
+		}
 		time.Sleep(2 * time.Second)
 	}
 

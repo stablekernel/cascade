@@ -637,6 +637,57 @@ func TestCalculateNext_NextEnvHoldsDryrunVersion(t *testing.T) {
 	}
 }
 
+func TestCalculateNext_CurrentDevHoldsForeignSuffix(t *testing.T) {
+	calc := NewCalculator("v")
+
+	commits := []changelog.ConventionalCommit{
+		{Type: "fix", Description: "bug fix"},
+	}
+
+	tests := []struct {
+		name              string
+		currentDevVersion string
+		nextEnvVersion    string
+		want              string
+	}{
+		{
+			// The dev version carries a real rc plus a trailing exercise
+			// suffix the strict Parse rejects. The rc counter must still
+			// increment off the recorded rc rather than silently restarting
+			// at rc.0 and colliding with an already-published rc tag.
+			name:              "rc with trailing exercise suffix increments",
+			currentDevVersion: "v1.2.3-rc.4.dryrun.1",
+			nextEnvVersion:    "v1.2.2",
+			want:              "v1.2.3-rc.5",
+		},
+		{
+			// A foreign prerelease with no rc segment and a base matching the
+			// computed version starts a fresh rc.0 without aborting.
+			name:              "foreign prerelease without rc starts fresh",
+			currentDevVersion: "v1.2.3-beta.1",
+			nextEnvVersion:    "v1.2.2",
+			want:              "v1.2.3-rc.0",
+		},
+		{
+			// A foreign-suffixed dev version whose base differs from the
+			// computed version starts a fresh rc.0.
+			name:              "foreign suffix different base starts fresh",
+			currentDevVersion: "v1.1.0-dryrun.7",
+			nextEnvVersion:    "v1.2.2",
+			want:              "v1.2.3-rc.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := calc.CalculateNext(tt.currentDevVersion, tt.nextEnvVersion, commits)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+			assert.Equal(t, -1, got.Hotfix)
+		})
+	}
+}
+
 func TestStripRC_HotfixVersion(t *testing.T) {
 	got, err := StripRC("v1.4.0-rc.2.hotfix.1")
 	require.NoError(t, err)
