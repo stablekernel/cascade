@@ -75,23 +75,33 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     # Top-level guard: only fan out for a manual dispatch, or a green
-    # Release run that was a push of a candidate tag. This filters out
-    # non-candidate tag publishes and any non-success completions.
+    # Release run for a candidate tag. This filters out non-candidate tag
+    # publishes and any non-success completions.
     #
     # A candidate is an rc tag (vX.Y.Z-rc.N) or a dry-run tag
     # (vX.Y.Z-dryrun.N). Accepting -dryrun. lets a nightly dry run fan out
     # across the full staged fleet exactly like a real rc; auto-promote's
     # unchanged -rc.-only gate still keeps a dry run from ever publishing.
     #
+    # We accept the source Release whether it was started by a tag push OR by an
+    # explicit workflow_dispatch against the tag. The tag-push trigger is
+    # unreliable when the candidate tag points at a state commit whose message
+    # suppresses CI, so orchestrate dispatches Release explicitly against the
+    # tag; that path arrives here as event == 'workflow_dispatch' and must fan
+    # the fleet out exactly like the push path. A Release dispatched against a
+    # non-candidate ref (e.g. the final vX.Y.Z tag auto-promote publishes, or
+    # main) still fails the head_branch candidate check below and does not fan out.
+    #
     # workflow_run.head_branch carries the short ref name of whatever triggered
-    # the source run. For a tag push that is the tag's short name (e.g.
-    # v1.2.0-rc.1). We gate on it here AND, in the compute step below, resolve
-    # the tag from head_sha as a fallback in case head_branch is ever empty for
-    # a tag-triggered source run.
+    # the source run. For a tag push or a tag-ref dispatch that is the tag's
+    # short name (e.g. v1.2.0-rc.1). We gate on it here AND, in the compute step
+    # below, resolve the tag from head_sha as a fallback in case head_branch is
+    # ever empty for a tag-triggered source run.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch') &&
        startsWith(github.event.workflow_run.head_branch, 'v') &&
        (contains(github.event.workflow_run.head_branch, '-rc.') ||
         contains(github.event.workflow_run.head_branch, '-dryrun.')))
@@ -649,18 +659,26 @@ jobs:
   aggregate:
     name: Fleet gate
     needs: [resolve, plan, floor-check, repin, primary, dependents, heavy, remainder]
-    # Only render a verdict when the fleet actually fanned out. On filtered-out
-    # completions (merge_group, non-rc tags, dispatch with no rc) resolve is
-    # skipped, so this job is skipped too and the run is a clean no-op rather
-    # than a false-red. A genuine fan-out failure still reds the run because
-    # resolve succeeded and the result checks below catch the failed stage.
-    if: always() && needs.resolve.result == 'success'
+    # Always run so the gate renders a verdict rather than inheriting a skip.
+    # A skipped aggregate reads as success (skipped != failed), so if this job
+    # were gated on resolve succeeding, a fleet that resolved no rc and ran no
+    # lanes would conclude green having validated nothing (a false green). The
+    # step below fails closed instead: in a context that was OBLIGATED to
+    # validate a candidate, it requires a resolved rc and at least one lane run
+    # to a real conclusion, else it reds. A context with nothing to validate
+    # (e.g. a non-candidate Release completion) stays a clean green no-op.
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - name: Aggregate fleet result
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          WR_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          R_RESOLVE: ${{ needs.resolve.result }}
           R_FLOOR: ${{ needs.floor-check.result }}
           R_REPIN: ${{ needs.repin.result }}
           R_PRIMARY: ${{ needs.primary.result }}
@@ -677,6 +695,7 @@ jobs:
             echo ""
             echo "| Lane | Result |"
             echo "|---|---|"
+            echo "| resolve (version under test) | $R_RESOLVE |"
             echo "| floor-check (suite tooling pins) | $R_FLOOR |"
             echo "| repin (all 10 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
@@ -693,13 +712,48 @@ jobs:
             echo "> full (repos=all) run."
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # A lane passes when it succeeded OR was skipped (filtered out by the
-          # repos selector, or - for dependents - skipped because primary was
-          # not selected). Only an actual failure or cancellation reds the gate.
-          # floor-check and repin are never selector-gated, so a non-success
-          # result from either always reds. A failed floor-check also skips
-          # repin, so it must be checked directly here or the skipped repin would
-          # read as a pass.
+          # Was this run obligated to validate a candidate? Mirror the resolve
+          # job's own gate: a manual fleet dispatch, or a green Release (push or
+          # explicit dispatch) for an rc/dryrun tag. Anything else genuinely has
+          # nothing to validate and is a clean green no-op.
+          should_validate=0
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            should_validate=1
+          elif [ "$WR_CONCLUSION" = "success" ] &&
+               { [ "$WR_EVENT" = "push" ] || [ "$WR_EVENT" = "workflow_dispatch" ]; } &&
+               case "$WR_HEAD_BRANCH" in v*) true ;; *) false ;; esac &&
+               case "$WR_HEAD_BRANCH" in *-rc.*|*-dryrun.*) true ;; *) false ;; esac; then
+            should_validate=1
+          fi
+
+          if [ "$should_validate" -ne 1 ]; then
+            echo "Not an rc validation context (event=$EVENT_NAME, source=$WR_EVENT, ref=${WR_HEAD_BRANCH:-<none>}); nothing to validate."
+            exit 0
+          fi
+
+          # Fail closed on a no-op in a context that SHOULD have validated. A
+          # resolve that did not succeed, an empty version under test, or zero
+          # lanes run means the fleet validated nothing and must never read as a
+          # green release signal. This mirrors the reconcile require-ledger guard.
+          if [ "$R_RESOLVE" != "success" ]; then
+            echo "::error::Fleet E2E validated nothing: resolve did not succeed (result=$R_RESOLVE) in a candidate context. Failing closed."
+            exit 1
+          fi
+          case "$VERSION" in
+            v*-rc.*|v*-dryrun.*) : ;;
+            *)
+              echo "::error::Fleet E2E validated nothing: no candidate version under test (got '${VERSION:-<empty>}'). Failing closed."
+              exit 1
+              ;;
+          esac
+
+          # A validation lane passes when it succeeded OR was skipped (filtered
+          # out by the repos selector, or - for dependents - skipped because
+          # primary was not selected). Only an actual failure or cancellation
+          # reds the gate. floor-check and repin are never selector-gated, so a
+          # non-success result from either always reds. A failed floor-check also
+          # skips repin, so it must be checked directly here or the skipped repin
+          # would read as a pass.
           fail=0
           for r in "$R_FLOOR" "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
@@ -713,4 +767,20 @@ jobs:
             echo "::error::Fleet E2E failed: one or more lanes did not pass"
             exit 1
           fi
+
+          # Positive assertion: at least one validation lane must have actually
+          # run to success. If repin/floor-check passed but every fan-out lane
+          # was skipped, the fleet exercised no example repo and cannot count as
+          # a green validation of the candidate.
+          ran=0
+          for r in "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
+            if [ "$r" = "success" ]; then
+              ran=1
+            fi
+          done
+          if [ "$ran" -ne 1 ]; then
+            echo "::error::Fleet E2E validated nothing: no fan-out lane ran to success. Failing closed."
+            exit 1
+          fi
+
           echo "Fleet E2E passed across all selected lanes"
