@@ -39,8 +39,9 @@ on:
       cascade_version:
         description: >-
           cascade version to validate (e.g. v1.2.0-rc.1). Default empty resolves
-          to the rc tag on the workflow_run path. NOTE: passing this to the
-          suites is wired but inert until the suites accept the input.
+          to the rc tag on the workflow_run path. resolve peels this to its
+          commit sha and each lane forwards both to its suite, which self-repins
+          to them before running.
         required: false
         default: ''
       repos:
@@ -110,6 +111,7 @@ jobs:
       actions: read
     outputs:
       cascade_version: ${{ steps.compute.outputs.cascade_version }}
+      cascade_version_sha: ${{ steps.compute.outputs.cascade_version_sha }}
     steps:
       - name: Compute cascade version under test
         id: compute
@@ -144,6 +146,27 @@ jobs:
           fi
 
           echo "cascade_version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Peel the resolved rc tag to its underlying commit sha centrally so
+          # each suite can SHA-pin its setup-cli self-action (cli_version_sha) to
+          # the exact commit. cascade's release tags are annotated, so
+          # refs/tags/<rc> is a tag-object sha; ^{} dereferences to the commit.
+          # A lightweight tag has no peeled ref, so fall back to the bare ref,
+          # which is already the commit. An empty VERSION (a dispatch with no
+          # input) stays a clean no-op: no tag, no sha.
+          VERSION_SHA=""
+          if [ -n "$VERSION" ]; then
+            VERSION_SHA=$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/${VERSION}^{}" | awk '{print $1}')
+            if [ -z "$VERSION_SHA" ]; then
+              VERSION_SHA=$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/${VERSION}" | awk '{print $1}')
+            fi
+            if ! printf '%s' "$VERSION_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+              echo "::error::Could not resolve a commit sha for tag ${VERSION} (got '${VERSION_SHA}')"
+              exit 1
+            fi
+            echo "Resolved ${VERSION} to commit ${VERSION_SHA}"
+          fi
+          echo "cascade_version_sha=$VERSION_SHA" >> "$GITHUB_OUTPUT"
           # Persist the resolved version so it can cross the workflow_run
           # boundary into auto-promote. This is the exact value every suite is
           # pinned to, so a green fleet and the promoted base never disagree.
@@ -154,9 +177,9 @@ jobs:
             echo "Trigger: \`$EVENT_NAME\`"
             echo "cascade version under test: \`${VERSION:-<empty>}\`"
             echo ""
-            echo "> The repin job pins all example repos to this version"
-            echo "> before any suite fans out, so the suites run the binary"
-            echo "> named here rather than a stale pinned one."
+            echo "> Each suite self-repins to this version when its lane"
+            echo "> dispatches it, so the suite runs the binary named here"
+            echo "> rather than a stale pinned one."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Write the full_run marker (true only when repos=all/default). Auto-promote
@@ -297,270 +320,13 @@ jobs:
             echo "| remainder | $RUN_REMAINDER |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Floor check: the repin below points each repo's manifest cli_version at the
-  # rc under test, but it deliberately leaves each suite's OWN setup-cli
-  # bootstrap pin alone (it only rewrites prerelease refs). A suite pinned to a
-  # stable release that predates a command the suite now invokes fails a live
-  # lane with a cryptic "unknown command" mid-fan-out. This job runs the shared
-  # floor check before any repin or fan-out so that drift reds the run up front
-  # with a clear message instead. The suite pin must be at or above the latest
-  # stable release; a pin at or above the floor (including one ahead of it)
-  # passes. The daily Suite Tooling Floor workflow runs the same check off the
-  # release cadence so drift is usually caught before an rc run reaches here.
-  floor-check:
-    name: Check suite tooling pins
-    needs: resolve
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Check example-suite tooling pins against the floor
-        run: ./.github/scripts/check-suite-tooling-floor.sh
-
-  # Repin: pin every example repo to the rc UNDER TEST before any suite fans
-  # out. Without this the suites would install whatever version each repo's
-  # manifest is statically pinned to, so a fresh rc would never actually run -
-  # the "version under test" label would outrun reality. This job downloads the
-  # rc binary, regenerates each repo's workflows against it, and pushes the
-  # repin to each repo's main (idempotent: no change -> no commit). Every suite
-  # job gates on this job so none can start against a stale pin. Repin always
-  # covers the full roster regardless of the repos selector: pinning is cheap,
-  # idempotent, and sequential (one repo at a time), so it does not add to live
-  # fan-out concurrency. Gated on floor-check so a below-floor suite pin reds the
-  # run before any live dispatch.
-  repin:
-    name: Repin fleet to rc
-    needs: [resolve, floor-check]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      RC_VERSION: ${{ needs.resolve.outputs.cascade_version }}
-      STATE_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
-      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
-    steps:
-      - name: Download the rc cascade binary
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [ -z "${RC_VERSION:-}" ]; then
-            echo "::error::No cascade version resolved; cannot repin the fleet"
-            exit 1
-          fi
-          # GoReleaser strips the leading v from the embedded version, so
-          # `cascade version` prints the tag WITHOUT it. Keep both forms: the
-          # v-prefixed tag for release/manifest refs, the bare form for the
-          # binary self-report comparison.
-          RC_BARE="${RC_VERSION#v}"
-          echo "RC_BARE=$RC_BARE" >> "$GITHUB_ENV"
-
-          # Peel the rc tag to its commit SHA so the repin can SHA-pin each
-          # example repo's setup-cli self-action (cli_version_sha). cascade's
-          # release tags are annotated, so refs/tags/<rc> is a tag-object SHA,
-          # not a commit; ^{} dereferences to the underlying commit. A
-          # lightweight tag has no peeled ref, so fall back to the bare ref,
-          # which is already the commit.
-          RC_SHA=$(git ls-remote "https://github.com/${REPO}" "refs/tags/${RC_VERSION}^{}" | awk '{print $1}')
-          if [ -z "$RC_SHA" ]; then
-            RC_SHA=$(git ls-remote "https://github.com/${REPO}" "refs/tags/${RC_VERSION}" | awk '{print $1}')
-          fi
-          if ! printf '%s' "$RC_SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "::error::Could not resolve a commit SHA for tag ${RC_VERSION} (got '${RC_SHA}')"
-            exit 1
-          fi
-          echo "Resolved ${RC_VERSION} to commit ${RC_SHA}"
-          echo "RC_SHA=$RC_SHA" >> "$GITHUB_ENV"
-
-          TMPDIR=$(mktemp -d)
-          echo "Downloading $RC_VERSION linux/amd64 archive from $REPO"
-          gh release download "$RC_VERSION" \
-            --repo "$REPO" \
-            --pattern '*linux_amd64*' \
-            --dir "$TMPDIR"
-          tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
-          install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
-          rm -rf "$TMPDIR"
-
-          INSTALLED=$(cascade version 2>/dev/null | head -n 1 | awk '{print $2}')
-          # Tolerate a leading v in the self-report so the check tracks the
-          # release tag rather than a future ldflags formatting choice.
-          echo "Installed cascade version: $INSTALLED (expected $RC_BARE)"
-          if [ "${INSTALLED#v}" != "$RC_BARE" ]; then
-            echo "::error::Downloaded binary reports '$INSTALLED' but expected '$RC_BARE'"
-            exit 1
-          fi
-
-      - name: Configure git identity
-        run: |
-          set -euo pipefail
-          git config --global user.name "cascade-fleet-bot"
-          git config --global user.email "cascade-fleet-bot@users.noreply.github.com"
-
-      - name: Repin each example repo to the rc
-        run: |
-          set -euo pipefail
-          # The full roster of 10 example repos. Repinning means: set manifest
-          # cli_version to the rc, replace any other in-repo prerelease refs (rc/dryrun),
-          # regenerate the workflows with the rc binary, then commit + push only
-          # if something changed. This preserves every hand-written suite feature:
-          # regeneration only rewrites the generated workflows, and we touch
-          # nothing else.
-          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch"
-
-          # Apply the repin mutation to the checkout in the current directory:
-          # point cli_version at the rc, rewrite any other in-repo rc refs, then
-          # regenerate the generated workflows. Re-runnable, because the retry
-          # loop resets the tree to the fetched remote tip and re-applies this on
-          # top of it (mirroring cascade's commitWithApplicationRetry).
-          apply_repin() {
-            local manifest="$1"
-            # 1. Point the manifest cli_version at the rc.
-            sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$manifest"
-
-            # 1b. Pair cli_version_sha with the rc tag's peeled commit so the
-            #     regenerated setup-cli self-action ref is SHA-pinned (under
-            #     pin_mode: sha). Update it in place when present, else insert a
-            #     sibling line right after cli_version preserving its indent.
-            if grep -qE "^[[:space:]]*cli_version_sha:" "$manifest"; then
-              sed -i -E "s|^([[:space:]]*cli_version_sha:[[:space:]]*).*$|\1${RC_SHA}|" "$manifest"
-            else
-              sed -i -E "s|^([[:space:]]*)cli_version:([[:space:]]*).*$|&\n\1cli_version_sha:\2${RC_SHA}|" "$manifest"
-            fi
-
-            # 2. Replace any other in-repo prerelease refs (rc OR dryrun, e.g. an
-            #    explicit setup-cli@v..-rc.. or a stale @v..-dryrun.. pin a suite
-            #    hand-wrote, which a prior dry-run repin may have left) with the rc. Scope
-            #    to tracked text files; the regen below rewrites generated
-            #    workflows, this catches anything outside them.
-            while IFS= read -r f; do
-              [ -f "$f" ] || continue
-              sed -i -E "s#v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+#${RC_VERSION}#g" "$f"
-            done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
-
-            # 3. Regenerate the workflows with the rc binary. This rewrites the
-            #    generated setup-cli refs to the rc and nothing hand-written.
-            cascade generate-workflow --force -c "$manifest"
-          }
-
-          # Repin one repo. Returns non-zero on any regen or push failure so the
-          # caller can record it and red the job. The example repos' main is
-          # protected, but the fleet token has write access (the suites' own
-          # state-writes to the same main succeed). A force push is rejected by
-          # the ruleset; a NORMAL fast-forward push is not. We clone fresh main,
-          # so the first push is a fast-forward. On a non-fast-forward rejection
-          # (a concurrent write landed) we fetch/reset/re-apply/retry, up to
-          # MAX_ATTEMPTS, exactly as cascade's state-writer does.
-          MAX_ATTEMPTS=5
-          repin_repo() {
-            local slug="$1" workdir manifest attempt status push_out
-            workdir=$(mktemp -d)
-            git clone --depth 1 \
-              "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
-              "$workdir" || return 1
-            cd "$workdir" || return 1
-
-            manifest=".github/manifest.yaml"
-            if [ ! -f "$manifest" ]; then
-              echo "::error::${slug} has no ${manifest}"
-              return 1
-            fi
-
-            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-              apply_repin "$manifest" || return 1
-
-              # No diff means the remote already matches the rc: nothing to push.
-              if [ -z "$(git status --porcelain)" ]; then
-                echo "${slug} already at ${RC_VERSION}; nothing to repin"
-                return 0
-              fi
-
-              git add -A
-              # CI has no GPG key, so DCO sign-off only (-s) with signing
-              # explicitly disabled. The example repos are not GPG-gated.
-              # [skip ci] keeps this push from triggering the repo's own
-              # orchestrate workflow.
-              git -c commit.gpgsign=false commit --no-gpg-sign -s \
-                -m "chore: repin to ${RC_VERSION} [skip ci]" || return 1
-
-              # NORMAL push (no --force). Capture the exit status explicitly so a
-              # ruleset rejection fails the repo rather than being swallowed.
-              set +e
-              push_out=$(git push origin HEAD:main 2>&1)
-              status=$?
-              set -e
-              if [ "$status" -eq 0 ]; then
-                echo "${slug} repinned to ${RC_VERSION} (attempt ${attempt})"
-                return 0
-              fi
-              echo "push attempt ${attempt}/${MAX_ATTEMPTS} for ${slug} failed:"
-              echo "$push_out"
-
-              # Recover from a non-fast-forward rejection: reset onto the freshly
-              # fetched remote tip and re-apply on the next iteration. A genuine
-              # write-access (ruleset) rejection cannot fast-forward away, so it
-              # surfaces here and on the final attempt reds the repo.
-              git fetch origin main || return 1
-              git reset --hard origin/main || return 1
-              sleep "$attempt"
-            done
-
-            echo "::error::${slug} push rejected after ${MAX_ATTEMPTS} attempts (last output above)"
-            return 1
-          }
-
-          # Confirm the repo's main actually carries the rc cli_version after the
-          # push. Belt-and-suspenders: a silent no-op (push that landed nothing)
-          # can never report green because this reads the published main back.
-          # The contents API can serve stale cached bytes for a few seconds after
-          # a push, so retry the read-back with linear backoff (matching the push
-          # loop) rather than redding the fleet on a single lagged read.
-          verify_pinned() {
-            local slug="$1" actual attempt
-            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-              actual=$(gh api "repos/${slug}/contents/.github/manifest.yaml" \
-                --jq '.content' | base64 -d \
-                | grep -E "^[[:space:]]*cli_version:" | head -n 1 \
-                | sed -E 's|^[[:space:]]*cli_version:[[:space:]]*||' | tr -d '"' | tr -d "'") || actual=""
-              if [ "$actual" = "$RC_VERSION" ]; then
-                echo "${slug} main verified at ${RC_VERSION} (attempt ${attempt})"
-                return 0
-              fi
-              echo "verify attempt ${attempt}/${MAX_ATTEMPTS} for ${slug}: read '${actual}', want '${RC_VERSION}'"
-              sleep "$attempt"
-            done
-            echo "::error::${slug} main cli_version is '${actual}', expected '${RC_VERSION}' after ${MAX_ATTEMPTS} attempts"
-            return 1
-          }
-
-          failed=""
-          for name in $REPOS; do
-            slug="${FLEET_OWNER}/cascade-example-${name}"
-            echo "::group::repin ${slug} -> ${RC_VERSION}"
-            ok=1
-            ( repin_repo "$slug" ) || ok=0
-            if [ "$ok" -eq 1 ]; then
-              verify_pinned "$slug" || ok=0
-            fi
-            [ "$ok" -eq 1 ] || failed="${failed} ${slug}"
-            echo "::endgroup::"
-          done
-
-          if [ -n "$failed" ]; then
-            echo "::error::Repin failed for:${failed}"
-            exit 1
-          fi
-          echo "All example repos pinned to ${RC_VERSION}"
-
   # Lane 1, stage 1: primary must run and pass before its dependents. Gated on
-  # repin so it never runs against a stale pin, and on the plan selector.
+  # the plan selector; the suite self-repins to the version under test on
+  # dispatch, so it never runs against a stale pin.
   primary:
     name: primary
-    needs: [repin, plan]
-    if: needs.plan.outputs.run_primary == 'true' && needs.repin.result == 'success'
+    needs: [resolve, plan]
+    if: needs.plan.outputs.run_primary == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -572,6 +338,8 @@ jobs:
         with:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-primary
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          cascade_version: ${{ needs.resolve.outputs.cascade_version }}
+          cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
 
   # Lane 1, stage 2: dependents of primary (mutate primary's shared external
   # state), so they only start after primary is green. Two repos run together,
@@ -580,7 +348,7 @@ jobs:
   # it (primary sets up the state they mutate).
   dependents:
     name: dependents (${{ matrix.repo }})
-    needs: [plan, primary]
+    needs: [resolve, plan, primary]
     if: needs.plan.outputs.run_dependents == 'true' && needs.primary.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -597,16 +365,18 @@ jobs:
         with:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          cascade_version: ${{ needs.resolve.outputs.cascade_version }}
+          cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
 
   # Lane 2: 4env alone. It is the heaviest and most fragile repo, so it runs in
   # its own dedicated job with nothing beside it. Sequenced AFTER the dependents
   # lane (via needs) so the two-repo dependents peak and this lane never stack;
   # `always()` lets it proceed when the primary/dependents lane was filtered out
-  # by the selector. Still gated on a green repin.
+  # by the selector. The suite self-repins to the version under test on dispatch.
   heavy:
     name: 4env (heavy)
-    needs: [repin, plan, dependents]
-    if: always() && needs.plan.outputs.run_heavy == 'true' && needs.repin.result == 'success'
+    needs: [resolve, plan, dependents]
+    if: always() && needs.plan.outputs.run_heavy == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -618,6 +388,8 @@ jobs:
         with:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-4env
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          cascade_version: ${{ needs.resolve.outputs.cascade_version }}
+          cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
           # The heavy lane is the single most race-prone surface (full lifecycle
           # plus chained multi-env hotfix, conflict, rollback, and merge_queue
           # against one live repo). Allow one whole-suite re-dispatch so a live
@@ -628,12 +400,12 @@ jobs:
 
   # Lane 3: the light remainder, capped at two repos in flight. Sequenced AFTER
   # the heavy lane (via needs) so 4env and this capped matrix never overlap;
-  # `always()` lets it proceed when the heavy lane was filtered out. Still gated
-  # on a green repin. max-parallel keeps live API pressure at two repos.
+  # `always()` lets it proceed when the heavy lane was filtered out. Each suite
+  # self-repins on dispatch. max-parallel keeps live API pressure at two repos.
   remainder:
     name: remainder (${{ matrix.repo }})
-    needs: [repin, plan, heavy]
-    if: always() && needs.plan.outputs.run_remainder == 'true' && needs.repin.result == 'success'
+    needs: [resolve, plan, heavy]
+    if: always() && needs.plan.outputs.run_remainder == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -650,6 +422,8 @@ jobs:
         with:
           repo: ${{ env.FLEET_OWNER }}/cascade-example-${{ matrix.repo }}
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          cascade_version: ${{ needs.resolve.outputs.cascade_version }}
+          cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
 
   # Fan-in: this job's conclusion is the rc fleet gate. It needs EVERY lane so a
   # green gate means every selected repo passed; auto-promote keys off this
@@ -658,7 +432,7 @@ jobs:
   # over exactly the lanes that ran. A real fan-out failure still reds the run.
   aggregate:
     name: Fleet gate
-    needs: [resolve, plan, floor-check, repin, primary, dependents, heavy, remainder]
+    needs: [resolve, plan, primary, dependents, heavy, remainder]
     # Always run so the gate renders a verdict rather than inheriting a skip.
     # A skipped aggregate reads as success (skipped != failed), so if this job
     # were gated on resolve succeeding, a fleet that resolved no rc and ran no
@@ -679,8 +453,6 @@ jobs:
           WR_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           R_RESOLVE: ${{ needs.resolve.result }}
-          R_FLOOR: ${{ needs.floor-check.result }}
-          R_REPIN: ${{ needs.repin.result }}
           R_PRIMARY: ${{ needs.primary.result }}
           R_DEPENDENTS: ${{ needs.dependents.result }}
           R_HEAVY: ${{ needs.heavy.result }}
@@ -696,16 +468,14 @@ jobs:
             echo "| Lane | Result |"
             echo "|---|---|"
             echo "| resolve (version under test) | $R_RESOLVE |"
-            echo "| floor-check (suite tooling pins) | $R_FLOOR |"
-            echo "| repin (all 10 repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
             echo "| 4env (heavy, alone) | $R_HEAVY |"
             echo "| remainder (3env, 2env, single-env, release-only, no-env, callbacks, rollback-dispatch) | $R_REMAINDER |"
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
-            echo "> the rc tag. The repin step pinned each suite to this rc before"
-            echo "> fan-out, so a green gate validates the binary named above."
+            echo "> the rc tag. Each suite self-repins to this rc when its lane"
+            echo "> dispatches it, so a green gate validates the binary named above."
             echo "> A lane shown as 'skipped' was not selected by the repos input."
             echo "> rc -> release promotion should consume the latest fleet-e2e"
             echo "> conclusion for that tag before promoting, and only from a"
@@ -750,28 +520,22 @@ jobs:
           # A validation lane passes when it succeeded OR was skipped (filtered
           # out by the repos selector, or - for dependents - skipped because
           # primary was not selected). Only an actual failure or cancellation
-          # reds the gate. floor-check and repin are never selector-gated, so a
-          # non-success result from either always reds. A failed floor-check also
-          # skips repin, so it must be checked directly here or the skipped repin
-          # would read as a pass.
+          # reds the gate.
           fail=0
-          for r in "$R_FLOOR" "$R_REPIN" "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
+          for r in "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               fail=1
             fi
           done
-          if [ "$R_FLOOR" != "success" ]; then
-            fail=1
-          fi
           if [ "$fail" -ne 0 ]; then
             echo "::error::Fleet E2E failed: one or more lanes did not pass"
             exit 1
           fi
 
           # Positive assertion: at least one validation lane must have actually
-          # run to success. If repin/floor-check passed but every fan-out lane
-          # was skipped, the fleet exercised no example repo and cannot count as
-          # a green validation of the candidate.
+          # run to success. If every fan-out lane was skipped, the fleet
+          # exercised no example repo and cannot count as a green validation of
+          # the candidate.
           ran=0
           for r in "$R_PRIMARY" "$R_DEPENDENTS" "$R_HEAVY" "$R_REMAINDER"; do
             if [ "$r" = "success" ]; then
