@@ -1,0 +1,226 @@
+name: 'Fleet repin to rc'
+description: >-
+  Repin THIS repository's checkout to a dispatched cascade rc: install the rc
+  CLI, set the manifest cli_version + cli_version_sha pair, regenerate the
+  workflows, push the result to main, and read main back to confirm the pin
+  landed. Unlike the fleet-e2e parent job (which clones each repo fresh), this
+  action mutates the job's EXISTING checkout in place and leaves the workspace
+  at the pushed commit, so later steps in the same job read the repinned
+  manifest. Fail-closed by design: a half-set version pair, a bad rc tag, a
+  rejected push, or a read-back mismatch all red the step. Callers MUST NOT wrap
+  this in continue-on-error; every failure mode here is load-bearing for the
+  integrity of the version under test, and swallowing one would let a suite run
+  against a stale pin while reporting the rc's label.
+
+inputs:
+  cascade_version:
+    description: >-
+      The dispatched rc tag (e.g. v1.2.3-rc.4). Empty is the standalone or
+      scheduled path: the action logs a no-op and succeeds without touching the
+      repo. Must be set together with cascade_version_sha; setting one without
+      the other is a wiring bug and hard-fails.
+    required: false
+    default: ''
+  cascade_version_sha:
+    description: >-
+      The 40-hex commit that cascade_version peels to, pinned into the
+      regenerated setup-cli self-action refs under pin_mode: sha. Must be set
+      together with cascade_version.
+    required: false
+    default: ''
+  token:
+    description: >-
+      Token used for BOTH the git push and gh. It pushes regenerated
+      .github/workflows files onto a protected main, so it needs workflow scope
+      in addition to contents write.
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    # The whole repin runs in a single bash step so the fail-closed early
+    # returns (empty pair -> no-op success; half-set pair -> hard fail) cannot be
+    # bypassed by an intermediate step's own status, and the push/verify retry
+    # loops share one shell.
+    - name: Repin this checkout to the rc
+      shell: bash
+      env:
+        CASCADE_VERSION: ${{ inputs.cascade_version }}
+        CASCADE_VERSION_SHA: ${{ inputs.cascade_version_sha }}
+        GH_TOKEN: ${{ inputs.token }}
+        REPIN_TOKEN: ${{ inputs.token }}
+        SELF_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        RC_VERSION="${CASCADE_VERSION:-}"
+        RC_SHA="${CASCADE_VERSION_SHA:-}"
+
+        # 1. Both empty is the explicit standalone/scheduled no-op. Log loudly so
+        #    a silent skip is never mistaken for a repin, then succeed without
+        #    touching anything.
+        if [ -z "$RC_VERSION" ] && [ -z "$RC_SHA" ]; then
+          echo "fleet-repin: no cascade_version supplied; standalone/scheduled path, nothing to repin."
+          exit 0
+        fi
+
+        # 2. Exactly one of the pair set is a wiring bug. Do not silently re-peel
+        #    the missing half; fail closed so the caller fixes the dispatch.
+        if [ -z "$RC_VERSION" ] || [ -z "$RC_SHA" ]; then
+          echo "::error::fleet-repin: cascade_version and cascade_version_sha must be set together (got version='${RC_VERSION}', sha='${RC_SHA}')"
+          exit 1
+        fi
+
+        if ! printf '%s' "$RC_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+          echo "::error::fleet-repin: cascade_version_sha must be a 40-hex commit (got '${RC_SHA}')"
+          exit 1
+        fi
+
+        # GoReleaser strips the leading v from the embedded version, so
+        # `cascade version` prints the tag WITHOUT it. Keep both forms: the
+        # v-prefixed tag for release/manifest refs, the bare form for the binary
+        # self-report comparison.
+        RC_BARE="${RC_VERSION#v}"
+
+        # 3. Install the dispatched rc CLI from THIS repo and assert it reports
+        #    exactly the dispatched version BEFORE mutating anything. A bad or
+        #    unpublished rc tag reds here, not deep inside a scenario.
+        TMPDIR=$(mktemp -d)
+        echo "fleet-repin: downloading ${RC_VERSION} linux/amd64 archive from ${SELF_REPO}"
+        gh release download "$RC_VERSION" \
+          --repo "$SELF_REPO" \
+          --pattern '*linux_amd64*' \
+          --dir "$TMPDIR"
+        tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
+        install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
+        rm -rf "$TMPDIR"
+
+        INSTALLED=$(cascade version 2>/dev/null | head -n 1 | awk '{print $2}')
+        # Tolerate a leading v in the self-report so the check tracks the release
+        # tag rather than a future ldflags formatting choice.
+        echo "fleet-repin: installed cascade version ${INSTALLED} (expected ${RC_BARE})"
+        if [ "${INSTALLED#v}" != "$RC_BARE" ]; then
+          echo "::error::fleet-repin: installed binary reports '${INSTALLED}' but expected '${RC_BARE}'"
+          exit 1
+        fi
+
+        MANIFEST=".github/manifest.yaml"
+        if [ ! -f "$MANIFEST" ]; then
+          echo "::error::fleet-repin: ${SELF_REPO} has no ${MANIFEST} in the checkout"
+          exit 1
+        fi
+
+        # Identity for the repin commit. CI has no GPG key, so the commit is DCO
+        # sign-off only; the example repos are not GPG-gated.
+        git config user.name "cascade-fleet-bot"
+        git config user.email "cascade-fleet-bot@users.noreply.github.com"
+
+        # Push and read-back share the same bounded linear-backoff retry budget.
+        MAX_ATTEMPTS=5
+
+        # Apply the repin mutation to the manifest in the current checkout, then
+        # regenerate. Re-runnable: the push loop resets the tree to the fetched
+        # remote tip and re-applies this on top, mirroring cascade's own
+        # commitWithApplicationRetry.
+        apply_repin() {
+          # Point cli_version at the rc.
+          sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$MANIFEST"
+
+          # Pair cli_version_sha with the rc tag's peeled commit so the
+          # regenerated setup-cli self-action ref is SHA-pinned (pin_mode: sha).
+          # Update in place when present, else insert a sibling line right after
+          # cli_version preserving its indent.
+          if grep -qE "^[[:space:]]*cli_version_sha:" "$MANIFEST"; then
+            sed -i -E "s|^([[:space:]]*cli_version_sha:[[:space:]]*).*$|\1${RC_SHA}|" "$MANIFEST"
+          else
+            sed -i -E "s|^([[:space:]]*)cli_version:([[:space:]]*).*$|&\n\1cli_version_sha:\2${RC_SHA}|" "$MANIFEST"
+          fi
+
+          # Rewrite any other in-repo prerelease refs (rc OR dryrun, e.g. an
+          # explicit setup-cli@v..-rc.. or a stale @v..-dryrun.. pin a suite
+          # hand-wrote, which a prior dry-run repin may have left) to the rc.
+          # Scoped to tracked YAML; the regen below rewrites generated workflows,
+          # this catches anything outside them.
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            sed -i -E "s#v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+#${RC_VERSION}#g" "$f"
+          done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
+
+          # Regenerate the workflows with the rc binary. This rewrites the
+          # generated setup-cli refs to the rc and nothing hand-written.
+          cascade generate-workflow --force -c "$MANIFEST"
+        }
+
+        # Push the repinned checkout to main with a fetch/reset/re-apply retry.
+        # The example repos' main is protected, but the token has write access
+        # (the suites' own state-writes to the same main succeed). A force push is
+        # rejected by the ruleset; a NORMAL fast-forward push is not. On a
+        # non-fast-forward rejection (a concurrent write landed) we fetch, reset
+        # to the remote tip, re-apply, and retry, exactly as cascade's
+        # state-writer does. A genuine write-access rejection cannot fast-forward
+        # away, so it surfaces on the final attempt and reds the step.
+        push_url="https://x-access-token:${REPIN_TOKEN}@github.com/${SELF_REPO}.git"
+        repin_push() {
+          local attempt status push_out
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            apply_repin
+
+            # Empty diff means the checkout already matches the rc: nothing to
+            # push. Lane retries re-dispatch, so a second pass over an
+            # already-pinned repo must succeed cleanly.
+            if [ -z "$(git status --porcelain)" ]; then
+              echo "fleet-repin: ${SELF_REPO} already at ${RC_VERSION}; nothing to push"
+              return 0
+            fi
+
+            git add -A
+            git -c commit.gpgsign=false commit --no-gpg-sign -s \
+              -m "chore: repin to ${RC_VERSION} [skip ci]"
+
+            set +e
+            push_out=$(git push "$push_url" HEAD:main 2>&1)
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "fleet-repin: ${SELF_REPO} repinned to ${RC_VERSION} (attempt ${attempt})"
+              return 0
+            fi
+            echo "fleet-repin: push attempt ${attempt}/${MAX_ATTEMPTS} for ${SELF_REPO} failed:"
+            echo "$push_out"
+
+            git fetch origin main
+            git reset --hard FETCH_HEAD
+            sleep "$attempt"
+          done
+
+          echo "::error::fleet-repin: ${SELF_REPO} push rejected after ${MAX_ATTEMPTS} attempts (last output above)"
+          return 1
+        }
+
+        # Confirm main actually carries the rc cli_version after the push.
+        # Belt-and-suspenders: a silent no-op can never report green because this
+        # reads the published main back. The contents API can serve stale cached
+        # bytes for a few seconds after a push, so retry with the same linear
+        # backoff rather than redding on a single lagged read.
+        verify_pinned() {
+          local actual attempt
+          actual=""
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            actual=$(gh api "repos/${SELF_REPO}/contents/.github/manifest.yaml" \
+              --jq '.content' | base64 -d \
+              | grep -E "^[[:space:]]*cli_version:" | head -n 1 \
+              | sed -E 's|^[[:space:]]*cli_version:[[:space:]]*||' | tr -d '"' | tr -d "'") || actual=""
+            if [ "$actual" = "$RC_VERSION" ]; then
+              echo "fleet-repin: ${SELF_REPO} main verified at ${RC_VERSION} (attempt ${attempt})"
+              return 0
+            fi
+            echo "fleet-repin: verify attempt ${attempt}/${MAX_ATTEMPTS} for ${SELF_REPO}: read '${actual}', want '${RC_VERSION}'"
+            sleep "$attempt"
+          done
+          echo "::error::fleet-repin: ${SELF_REPO} main cli_version is '${actual}', expected '${RC_VERSION}' after ${MAX_ATTEMPTS} attempts"
+          return 1
+        }
+
+        repin_push
+        verify_pinned
+        echo "fleet-repin: ${SELF_REPO} pinned to ${RC_VERSION}"
