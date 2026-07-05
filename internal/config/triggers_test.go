@@ -93,6 +93,38 @@ func TestIsNegationPattern(t *testing.T) {
 	}
 }
 
+// TestMatchGlobPattern_SlashBoundary locks in the slash-native matching
+// semantics that path.Match provides: a single "*" matches within one path
+// segment and never crosses a "/", matching the GitHub Actions paths filter
+// grammar this evaluator is meant to mirror. These cases pass on Linux/macOS
+// under either path.Match or filepath.Match (the separator is "/" on both),
+// so they are guard/documentation tests that would catch a future regression
+// to a matcher whose separator is platform-dependent; the Windows behavioral
+// delta (filepath.Match treating "/" as an ordinary character) cannot be
+// exercised on Linux CI.
+func TestMatchGlobPattern_SlashBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		file    string
+		want    bool
+	}{
+		{"single star does not cross slash", "a/*/b", "a/x/y/b", false},
+		{"single star matches one segment", "a/*/b", "a/x/b", true},
+		{"dir star does not descend", "dir/*", "dir/sub/file", false},
+		{"dir star matches direct child", "dir/*", "dir/file", true},
+		{"doublestar still matches nested files", "**/*.go", "a/b/c.go", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchGlobPattern(tt.pattern, tt.file); got != tt.want {
+				t.Errorf("MatchGlobPattern(%q, %q) = %v, want %v", tt.pattern, tt.file, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMatchGlobPattern_StripsNegation(t *testing.T) {
 	// The bare-glob helper matches whether the glob (negation stripped) matches.
 	if !MatchGlobPattern("!**/*.md", "docs/README.md") {
