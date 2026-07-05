@@ -8,20 +8,19 @@ Cascade uses keyless cosign signing via Sigstore, which does not require key man
 
 1. Install cosign (https://github.com/sigstore/cosign/releases).
 
-2. Download the release artifacts and signatures from the GitHub release page (checksums.txt, checksums.txt.sig, checksums.txt.pem, and the archives).
+2. Download the release artifacts and the signature bundle from the GitHub release page (checksums.txt, checksums.txt.bundle, and the archives). The bundle packages the signature and the signing certificate together in the Sigstore bundle format.
 
 3. Verify the checksums file signature:
 
 ```bash
 cosign verify-blob \
-  --certificate=checksums.txt.pem \
-  --signature=checksums.txt.sig \
+  --bundle=checksums.txt.bundle \
   --certificate-identity-regexp='^https://github.com/stablekernel/cascade' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   checksums.txt
 ```
 
-The certificate is issued by Sigstore's public certificate authority. cosign automatically verifies the certificate chain and confirms the signature was created by GitHub Actions during the release workflow run.
+The bundle contains the signature and the certificate issued by Sigstore's public certificate authority. cosign automatically verifies the certificate chain and confirms the signature was created by GitHub Actions during the release workflow run.
 
 4. Verify the checksums match the downloaded binaries:
 

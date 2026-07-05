@@ -41,18 +41,19 @@ sboms:
       - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.spdx.json"
 
 signs:
-  # cosign keyless signing (OIDC + sigstore)
+  # cosign keyless signing (OIDC + sigstore). cosign v3 defaults to the
+  # Sigstore bundle format and no longer supports the separate
+  # --output-signature/--output-certificate outputs, so the signature and
+  # certificate are packaged together in a single .bundle artifact.
   - id: cosign
     cmd: cosign
     args:
       - sign-blob
-      - --output-certificate=${certificate}
-      - --output-signature=${signature}
+      - --bundle=${signature}
       - ${artifact}
       - --yes
     artifacts: checksum
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.bundle"
     output: true
 
   # GPG signing. The release key has no passphrase (it lives only as a repo
