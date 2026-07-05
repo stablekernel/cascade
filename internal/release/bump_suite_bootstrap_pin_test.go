@@ -153,6 +153,31 @@ func TestBumpSuiteBootstrapPin_IgnoresUnrelatedVersionFields(t *testing.T) {
 	require.Contains(t, after, "version: v1.2.3", "unrelated version field must NOT be changed")
 }
 
+func TestBumpSuiteBootstrapPin_SkipsUnnamedStepsFollowingSetupCli(t *testing.T) {
+	before := "" +
+		"jobs:\n" +
+		"  scenario:\n" +
+		"    steps:\n" +
+		"      - name: Setup CLI\n" +
+		"        uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0\n" +
+		"        with:\n" +
+		"          version: v0.1.0\n" +
+		"      - run: echo hi\n" +
+		"        with:\n" +
+		"          version: v1.2.3\n" +
+		"      - uses: actions/checkout@v4\n" +
+		"        with:\n" +
+		"          version: v3.4.5\n"
+
+	code, out, after := runBumpPin(t, before, "v0.8.0")
+
+	require.Equal(t, 0, code, "script should succeed; output: %s", out)
+	require.Contains(t, after, "setup-cli@v0.8.0", "setup-cli action ref should be bumped")
+	require.Contains(t, after, "version: v0.8.0", "setup-cli version input should be bumped")
+	require.Contains(t, after, "- run: echo hi\n        with:\n          version: v1.2.3", "unnamed run step following setup-cli must NOT have version rewritten")
+	require.Contains(t, after, "version: v3.4.5", "unnamed uses step following setup-cli must NOT have version rewritten")
+}
+
 func TestBumpSuiteBootstrapPin_MissingFile(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {

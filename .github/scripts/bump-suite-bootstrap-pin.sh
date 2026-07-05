@@ -72,12 +72,13 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 # Rewrite both pins only within a setup-cli step block (scoped by YAML indentation).
-# The address range /setup-cli@.../,/^      - name:/ matches from a setup-cli
-# line to the next step marker (a list item at the same indentation), ensuring
+# The address range /setup-cli@.../,/^      - / matches from a setup-cli line
+# to the next step marker (any list item at the same indentation), ensuring
 # version: rewrites only the setup-cli input's version field, not any unrelated
-# semver value elsewhere in the file.
+# semver value elsewhere in the file. Matches both named (- name:) and unnamed
+# (- run:, - uses:) steps.
 sed -E \
-  '/setup-cli@v[0-9]+\.[0-9]+\.[0-9]+/,/^      - name:/{
+  '/setup-cli@v[0-9]+\.[0-9]+\.[0-9]+/,/^      - /{
     s#(setup-cli@)v[0-9]+\.[0-9]+\.[0-9]+#\1'"${target}"'#g
     s#(version:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+#\1'"${target}"'#g
   }' \
