@@ -1,7 +1,7 @@
 package config
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -81,18 +81,18 @@ func MatchAnyTrigger(patterns []string, changedFiles []string) bool {
 // level by MatchTrigger. Supports "*" (single segment), "**" (any number of
 // segments) and "?" (single character), matching the grammar used by the
 // emitted GitHub Actions paths filter.
-func MatchGlobPattern(pattern, path string) bool {
-	return matchGlobPattern(stripNegation(pattern), path)
+func MatchGlobPattern(pattern, filePath string) bool {
+	return matchGlobPattern(stripNegation(pattern), filePath)
 }
 
 // matchGlobPattern matches a file path against a single (already
 // negation-stripped) glob pattern.
-func matchGlobPattern(pattern, path string) bool {
+func matchGlobPattern(pattern, filePath string) bool {
 	if strings.Contains(pattern, "**") {
-		return matchDoublestarPattern(pattern, path)
+		return matchDoublestarPattern(pattern, filePath)
 	}
 
-	matched, _ := filepath.Match(pattern, path)
+	matched, _ := path.Match(pattern, filePath)
 	return matched
 }
 
@@ -103,10 +103,10 @@ func matchDoublestarPattern(pattern, path string) bool {
 	return matchGlobParts(patternParts, pathParts)
 }
 
-func matchGlobParts(pattern, path []string) bool {
+func matchGlobParts(pattern, pathParts []string) bool {
 	pi, ppi := 0, 0
 
-	for pi < len(pattern) && ppi < len(path) {
+	for pi < len(pattern) && ppi < len(pathParts) {
 		if pattern[pi] == "**" {
 			if pi == len(pattern)-1 {
 				// "**" at the end matches everything remaining.
@@ -114,15 +114,15 @@ func matchGlobParts(pattern, path []string) bool {
 			}
 
 			// Try matching the remaining pattern at each subsequent position.
-			for i := ppi; i <= len(path); i++ {
-				if matchGlobParts(pattern[pi+1:], path[i:]) {
+			for i := ppi; i <= len(pathParts); i++ {
+				if matchGlobParts(pattern[pi+1:], pathParts[i:]) {
 					return true
 				}
 			}
 			return false
 		}
 
-		matched, _ := filepath.Match(pattern[pi], path[ppi])
+		matched, _ := path.Match(pattern[pi], pathParts[ppi])
 		if !matched {
 			return false
 		}
@@ -139,5 +139,5 @@ func matchGlobParts(pattern, path []string) bool {
 		pi++
 	}
 
-	return ppi == len(path)
+	return ppi == len(pathParts)
 }
