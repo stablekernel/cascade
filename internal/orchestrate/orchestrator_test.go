@@ -134,15 +134,31 @@ func TestMatchGlob(t *testing.T) {
 		{"exact match", "src/main.go", "src/main.go", true},
 		{"exact no match", "src/main.go", "src/other.go", false},
 
-		// Single star patterns
-		{"star extension", "src/main.go", "*.go", true},
+		// Single star patterns. A single "*" matches within one path segment and
+		// does not cross "/", matching the emitted GitHub Actions paths filter.
+		{"star extension root only", "main.go", "*.go", true},
+		{"star extension does not cross slash", "src/main.go", "*.go", false},
 		{"star extension no match", "src/main.go", "*.ts", false},
 		{"star prefix", "test_main.go", "test_*", true},
+		{"star single segment", "a/x/b", "a/*/b", true},
+		{"star single segment no cross slash", "a/x/y/b", "a/*/b", false},
 
-		// Double star patterns (our implementation handles prefix/** patterns)
+		// F12: a single "*" match is anchored, not an unanchored substring search.
+		{"star anchored no leading garbage", "xfooybar", "foo*bar", false},
+		{"star anchored match", "fooybar", "foo*bar", true},
+
+		// Double star patterns.
 		{"double star", "src/pkg/main.go", "src/**", true},
 		{"double star nested", "src/a/b/c/main.go", "src/**", true},
 		{"double star no match", "docs/readme.md", "src/**", false},
+
+		// F01: a leading "**/" recursive glob followed by a segment glob must
+		// match files at any depth, not only the literal suffix.
+		{"recursive glob extension", "internal/foo.go", "**/*.go", true},
+		{"recursive glob extension deep", "a/b/c/foo.go", "**/*.go", true},
+		{"recursive glob extension no match", "internal/foo.ts", "**/*.go", false},
+		{"recursive glob mid pattern", "pkg/a/b/c.ts", "pkg/**/*.ts", true},
+		{"recursive glob mid pattern wrong prefix", "src/a/b/c.ts", "pkg/**/*.ts", false},
 
 		// Common CI/CD patterns
 		{"infra pattern", "infra/cdk/stack.ts", "infra/**", true},
