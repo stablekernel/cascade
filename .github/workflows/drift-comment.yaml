@@ -284,7 +284,7 @@ jobs:
                 parts.push('', 'Annotations:', '', fence(annText));
               }
               if (jobLog.region) {
-                parts.push('', '<details><summary>log tail</summary>', '', fence(jobLog.region), '', '</details>');
+                parts.push('', '<details><summary>log excerpt</summary>', '', fence(jobLog.region), '', '</details>');
               }
               if (job.html_url) { parts.push('', `[Full job log](${job.html_url})`); }
               sections.push(parts.join('\n'));
