@@ -50,6 +50,7 @@ func TestActionPinsManifest_EmitFlags(t *testing.T) {
 		actionDownloadArtifact:          true,
 		actionUploadArtifact:            true,
 		actionCreateAppToken:            true,
+		"actions/cache":                 false,
 		"actions/setup-go":              false,
 		"actions/setup-node":            false,
 		"actions/upload-pages-artifact": false,
