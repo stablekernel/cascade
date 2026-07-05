@@ -20,6 +20,21 @@ inputs:
     description: "Target ref to dispatch against (must be the target's default branch)"
     required: false
     default: 'main'
+  cascade_version:
+    description: >-
+      The rc tag under test, forwarded to the target suite's workflow_dispatch
+      as its cascade_version input. Only passed when non-empty, so suites that
+      have not declared this input are unaffected. Empty by default.
+    required: false
+    default: ''
+  cascade_version_sha:
+    description: >-
+      The peeled commit sha behind the rc tag under test, forwarded to the
+      target suite's workflow_dispatch as its cascade_version_sha input. Only
+      passed when non-empty, so suites that have not declared this input are
+      unaffected. Empty by default.
+    required: false
+    default: ''
   recover-attempts:
     description: 'How many times to poll for the dispatched run before giving up'
     required: false
@@ -69,6 +84,8 @@ runs:
         TARGET_REPO: ${{ inputs.repo }}
         TARGET_WORKFLOW: ${{ inputs.workflow }}
         TARGET_REF: ${{ inputs.ref }}
+        CASCADE_VERSION: ${{ inputs.cascade_version }}
+        CASCADE_VERSION_SHA: ${{ inputs.cascade_version_sha }}
         RECOVER_ATTEMPTS: ${{ inputs.recover-attempts }}
         RECOVER_INTERVAL: ${{ inputs.recover-interval }}
         WATCH_INTERVAL: ${{ inputs.watch-interval }}
@@ -88,13 +105,22 @@ runs:
           DISPATCH_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "Dispatching $TARGET_WORKFLOW in $TARGET_REPO @ $TARGET_REF (since $DISPATCH_TS)"
 
-          # NOTE: do NOT pass -f cascade_version=... here. The suites do not define
-          # that input yet, so an extra input would error with "unexpected inputs".
-          # The version under test is computed and logged by the orchestrator but
-          # is inert until the suites accept the input.
+          # NOTE: cascade_version / cascade_version_sha are only forwarded when
+          # non-empty. No caller passes them today, so this stays inert: the
+          # suites do not define those inputs yet, and an undeclared input would
+          # error with "unexpected inputs" if passed unconditionally.
+          local -a EXTRA_ARGS=()
+          if [ -n "$CASCADE_VERSION" ]; then
+            EXTRA_ARGS+=(-f "cascade_version=$CASCADE_VERSION")
+          fi
+          if [ -n "$CASCADE_VERSION_SHA" ]; then
+            EXTRA_ARGS+=(-f "cascade_version_sha=$CASCADE_VERSION_SHA")
+          fi
+
           gh workflow run "$TARGET_WORKFLOW" \
             --repo "$TARGET_REPO" \
-            --ref "$TARGET_REF"
+            --ref "$TARGET_REF" \
+            "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
           # Recover the run id. Cross-repo dispatch is async; the run may not be
           # listable immediately, so poll with a bounded retry.
