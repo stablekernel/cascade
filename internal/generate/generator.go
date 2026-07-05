@@ -1392,6 +1392,9 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 			g.writeArtifactDownloadStep(sb)
 		}
 		g.writeReleaseStep(sb)
+		// Explicitly fire the configured release workflow against the candidate
+		// tag when the trunk is dispatch-driven (see the step comment).
+		g.writeCandidateDispatchStep(sb)
 		// Upload artifacts to release after it's created
 		if g.config.HasReleaseArtifacts() {
 			g.writeArtifactUploadStep(sb)
@@ -1886,6 +1889,45 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 	}
 	sb.WriteString("          previous_tag: ${{ needs.setup.outputs.previous_tag }}\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
+}
+
+// writeCandidateDispatchStep fires the configured release workflow against the
+// freshly-cut candidate tag when the trunk runs in dispatch mode.
+//
+// The finalize job cuts the candidate tag on the setup head SHA, which in steady
+// state is a prior state commit whose message carries a CI-skip marker. GitHub
+// evaluates that marker on the tagged commit and suppresses every workflow the
+// tag push would otherwise start, so the tag-push trigger that builds and
+// publishes the candidate never fires. Dispatching the configured release
+// workflow explicitly against the tag is the dependable path.
+//
+// Emitted only when the release is framework-managed, a release workflow is
+// configured, and release_trigger is dispatch. Restricting it to dispatch-mode
+// trunks keeps it from racing the native tag-push trigger a push-mode trunk
+// relies on, so no candidate is ever built twice.
+func (g *Generator) writeCandidateDispatchStep(sb *strings.Builder) {
+	if g.config.HasExternalRelease() {
+		return
+	}
+	if g.config.Release == nil || g.config.Release.Workflow == "" {
+		return
+	}
+	if !g.config.OrchestrateDispatchOnly() {
+		return
+	}
+	sb.WriteString("      - name: Dispatch Release Candidate Build\n")
+	// Real GitHub only: the act/gitea e2e harness has no workflow-dispatch API.
+	sb.WriteString("        if: ${{ github.server_url == 'https://github.com' }}\n")
+	sb.WriteString("        env:\n")
+	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
+	sb.WriteString("          TAG: ${{ needs.setup.outputs.version }}\n")
+	sb.WriteString("        run: |\n")
+	sb.WriteString("          # The tag-push trigger is unreliable here: the candidate tag can\n")
+	sb.WriteString("          # point at a state commit whose message suppresses CI, so an explicit\n")
+	sb.WriteString("          # dispatch against the tag is the dependable way to build the candidate.\n")
+	sb.WriteString("          gh workflow run " + normalizeWorkflowPath(g.config.Release.Workflow) + " \\\n")
+	sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
+	sb.WriteString("            --ref \"$TAG\"\n")
 }
 
 func (g *Generator) writeArtifactDownloadStep(sb *strings.Builder) {

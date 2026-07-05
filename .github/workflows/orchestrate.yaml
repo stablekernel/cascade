@@ -140,6 +140,18 @@ jobs:
           changelog: ${{ steps.changelog.outputs.changelog }}
           previous_tag: ${{ needs.setup.outputs.previous_tag }}
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
+      - name: Dispatch Release Candidate Build
+        if: ${{ github.server_url == 'https://github.com' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+          TAG: ${{ needs.setup.outputs.version }}
+        run: |
+          # The tag-push trigger is unreliable here: the candidate tag can
+          # point at a state commit whose message suppresses CI, so an explicit
+          # dispatch against the tag is the dependable way to build the candidate.
+          gh workflow run ./.github/workflows/release.yaml \
+            --repo "${{ github.repository }}" \
+            --ref "$TAG"
       - name: Update Manifest
         env:
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}

@@ -517,9 +517,12 @@ ci:
 |-------|------|---------|-------------|
 | `disabled` | bool | false | Disable framework release management |
 | `tag` | string | - | callback.output reference for an external release tool |
+| `workflow` | string | - | Release workflow dispatched against a release tag to build and attach binaries. See the dispatch note below. |
 | `version_overrides` | object | - | Reserved pointer (`dir:`) to maintainer-committed version-intent override files. Reserved shape only; see [Versioning](/versioning/#reserved-shape-version-intent-overrides). |
 
 Omit this section to use framework defaults (creates releases with conventional commit changelogs).
+
+When `workflow` is set, cascade dispatches it (via `gh workflow run --ref <tag>`) rather than relying only on the tag-push trigger. GitHub does not reliably start a tag-push workflow when the tagged commit carries a CI-skip marker, and release tags routinely point at a state commit that does. The explicit dispatch fires in two places: the promote flow dispatches it against the final tag when a release publishes, and, when `release_trigger: dispatch` is set, the orchestrate finalize job dispatches it against the release-candidate tag as soon as the candidate is cut. Restricting the candidate dispatch to dispatch-mode trunks keeps it from racing the native tag-push trigger a push-mode trunk relies on, so a candidate is never built twice.
 
 ### changelog Section
 
