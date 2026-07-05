@@ -1,6 +1,7 @@
 # Build cascade CLI
 # Called by orchestrate workflow - no direct triggers
 # Distribution: Use `go install github.com/stablekernel/cascade/cmd/cascade@latest`
+# End-to-end coverage is the required PR gate (e2e.yaml); it does not run here.
 name: Build CLI
 
 on:
@@ -13,7 +14,7 @@ on:
     outputs:
       result:
         description: 'Build result (success/failure)'
-        value: ${{ jobs.e2e-tests.result }}
+        value: ${{ jobs.build.result }}
 
 permissions:
   contents: read
@@ -41,65 +42,3 @@ jobs:
           ./cascade detect-changes --help
           ./cascade generate-changelog --help
           ./cascade generate-workflow --help
-
-  e2e-tests:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    needs: [build]
-    # The act + gitea scenarios run serially (-parallel 1, see the test step),
-    # which trades wall-clock for reliability, so the job needs more than the
-    # default headroom. 70m covers the 60m go test budget plus checkout, Go
-    # install, and container teardown.
-    timeout-minutes: 70
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          # This job runs the e2e module; install the Go it declares so `go test`
-          # doesn't hard-fail under GOTOOLCHAIN=local. The root build job above
-          # uses the root go.mod's version (1.25).
-          go-version-file: e2e/go.mod
-          cache: true
-          cache-dependency-path: e2e/go.sum
-
-      - name: Widen Docker network address pool
-        # Each scenario creates its own docker network, and the daemon's
-        # default address pool is small. Even with synchronous per-scenario
-        # network teardown, brief cleanup lag under serial load can leave the
-        # pool short and fail a later scenario at setup with "all predefined
-        # address pools have been fully subnetted". Carving /24 subnets out of
-        # a 10.99.0.0/16 base yields 256 networks of headroom, well above the
-        # handful in flight at once, so cleanup lag can never exhaust the pool.
-        run: |
-          sudo mkdir -p /etc/docker
-          echo '{"default-address-pools":[{"base":"10.99.0.0/16","size":24}]}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
-          # Wait for the daemon to come back before the tests start.
-          timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'
-
-      - name: Run E2E tests
-        working-directory: e2e
-        # Run scenarios serially (-parallel 1). The 4-core / ~7.9GB runner is
-        # OOM-killed at 4 (silent FAIL, see #104), and even at 2 the concurrent
-        # act + gitea container load throttles gitea (405 "try again later") and
-        # destabilises act runs, producing intermittent failures unrelated to
-        # the product. Serial execution removes that contention; the longer
-        # 60m timeout covers the resulting slower wall-clock.
-        run: go test -v -parallel 1 -timeout 60m ./...
-
-      # On a retry-exhausted scenario the harness writes the last attempt's raw
-      # act stdout/stderr to e2e/_artifacts/<scenario>-attempt<N>.log so the
-      # stack-trace origin survives the CI log retention window. Upload it on
-      # every run (always()) so the evidence is recoverable whether the job
-      # failed or a flake was absorbed. The directory may not exist when no
-      # scenario exhausted its retries; if-no-files-found: ignore keeps that a
-      # clean no-op rather than a warning.
-      - name: Upload e2e crash evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: e2e-crash-evidence
-          path: e2e/_artifacts/
-          if-no-files-found: ignore
-          retention-days: 14
