@@ -85,6 +85,27 @@ changelog:
       - "^chore:"
       - "Merge pull request"
       - "Merge branch"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      order: 2
+    - title: Refactors
+      regexp: '^.*?refactor(\(.+\))??!?:.+$'
+      order: 3
+    - title: Dependencies
+      regexp: '^.*?\(deps\)!?:.+$'
+      order: 4
+    - title: CI & Build
+      regexp: '^.*?(ci|build)(\(.+\))??!?:.+$'
+      order: 5
+    - title: Other
+      order: 999
 
 release:
   github:
