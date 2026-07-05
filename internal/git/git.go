@@ -199,19 +199,73 @@ func ListTags() ([]string, error) {
 	return parseLines(output), nil
 }
 
+// pushRetryAttempts is the number of times a rejected push is retried behind a
+// rebase before the operation is declared failed.
+const pushRetryAttempts = 3
+
+// defaultPushBackoff is the delay between push retries when no backoff is set via
+// WithBackoff. It gives a concurrent state writer time to settle before the next
+// attempt.
+const defaultPushBackoff = 2 * time.Second
+
+// pushOptions holds the tunable behaviour of the rebase-retry push helpers. Its
+// zero value reproduces the historical behaviour: git runs in the process working
+// directory and retries wait defaultPushBackoff apart.
+type pushOptions struct {
+	dir     string
+	backoff time.Duration
+}
+
+// Option configures the rebase-retry push helpers. Options are additive: a call
+// with no options behaves exactly as the original positional API did.
+type Option func(*pushOptions)
+
+// WithDir runs the git commands with cmd.Dir set to dir instead of the process
+// working directory. An empty dir (the default) leaves the process working
+// directory in effect. This lets a caller drive a repository other than the one
+// the process was launched in.
+func WithDir(dir string) Option {
+	return func(o *pushOptions) { o.dir = dir }
+}
+
+// WithBackoff sets the delay between push retries. A zero duration (the default)
+// selects defaultPushBackoff. Tests pass a tiny value to keep the retry loop fast.
+func WithBackoff(d time.Duration) Option {
+	return func(o *pushOptions) { o.backoff = d }
+}
+
+func newPushOptions(opts []Option) pushOptions {
+	var o pushOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.backoff == 0 {
+		o.backoff = defaultPushBackoff
+	}
+	return o
+}
+
 // CommitAndPushWithRetry stages filePath, commits it with message, and pushes
 // to the current branch's upstream, retrying the push up to three times behind a
 // pull --rebase. A "nothing to commit" state is treated as success (no-op). This
 // is the manifest state-write path shared by promote and hotfix finalize: an
 // API-created commit on real GitHub goes through a different path, so this is the
 // plain-git fallback used when committing locally.
-func CommitAndPushWithRetry(filePath, message string) error {
+//
+// Optional behaviour is supplied through Options: WithDir runs the commands in a
+// specific repository, and WithBackoff tunes the retry delay. With no options the
+// call behaves identically to the original positional signature.
+func CommitAndPushWithRetry(filePath, message string, opts ...Option) error {
+	o := newPushOptions(opts)
+
 	cmd := exec.Command("git", "add", filePath)
+	cmd.Dir = o.dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add failed: %s: %w", string(out), err)
 	}
 
 	cmd = exec.Command("git", "commit", "-m", message)
+	cmd.Dir = o.dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if strings.Contains(string(out), "nothing to commit") {
 			return nil
@@ -219,26 +273,51 @@ func CommitAndPushWithRetry(filePath, message string) error {
 		return fmt.Errorf("git commit failed: %s: %w", string(out), err)
 	}
 
-	for i := 0; i < 3; i++ {
-		cmd = exec.Command("git", "push")
+	return pushWithRebaseRetry(o)
+}
+
+// PushWithRebaseRetry pushes the current branch to its upstream, retrying up to
+// three times behind a "git pull --rebase" when the push is rejected (for example
+// a non-fast-forward caused by a concurrent state writer landing on trunk between
+// checkout and push). It is the push half of CommitAndPushWithRetry, exposed for
+// callers that stage and commit through their own flow and only need the shared
+// rebase-retry behaviour. On a rebase conflict it aborts the rebase and returns
+// the wrapped error rather than leaving the repository mid-rebase.
+func PushWithRebaseRetry(opts ...Option) error {
+	return pushWithRebaseRetry(newPushOptions(opts))
+}
+
+// pushWithRebaseRetry is the single rebase-retry loop shared by
+// CommitAndPushWithRetry and PushWithRebaseRetry. Keeping one implementation
+// means the rebase-abort-on-conflict fix lives in exactly one place.
+func pushWithRebaseRetry(o pushOptions) error {
+	for i := 0; i < pushRetryAttempts; i++ {
+		cmd := exec.Command("git", "push")
+		cmd.Dir = o.dir
 		if _, err := cmd.CombinedOutput(); err == nil {
 			return nil
 		}
 
+		if i == pushRetryAttempts-1 {
+			break
+		}
+
 		cmd = exec.Command("git", "pull", "--rebase")
+		cmd.Dir = o.dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			// A failed rebase (typically a conflict) leaves the repository
 			// mid-rebase. Abort it so we neither leave a conflicted state
 			// behind nor loop into a guaranteed-failing push, and surface the
 			// real error instead of the generic "push failed" summary.
 			abort := exec.Command("git", "rebase", "--abort")
+			abort.Dir = o.dir
 			_, _ = abort.CombinedOutput() // best effort; nothing to abort is fine
 			return fmt.Errorf("git pull --rebase failed: %s: %w", string(out), err)
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(o.backoff)
 	}
 
-	return fmt.Errorf("git push failed after 3 retries")
+	return fmt.Errorf("git push failed after %d retries", pushRetryAttempts)
 }
 
 // CurrentBranch returns the name of the currently checked-out branch.

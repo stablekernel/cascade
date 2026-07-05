@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newScratchRepo initializes a git repository in a temp directory, changes the
@@ -436,6 +437,106 @@ func TestCommitAndPushWithRetry_AbortsRebaseOnConflict(t *testing.T) {
 			t.Fatalf("repository left mid-rebase: .git/%s still present", name)
 		}
 	}
+}
+
+// sharedRemoteClones builds a bare remote plus two working clones tracking it.
+// The seed clone commits and pushes seedFile; the other clone then advances the
+// remote with otherFile so a subsequent push from seed is rejected as
+// non-fast-forward. When otherFile equals seedFile the advance conflicts on the
+// same path, setting up a genuine rebase conflict. Both clones have signing
+// disabled and an identity configured.
+func sharedRemoteClones(t *testing.T, seedFile, seedBody, otherFile, otherBody string) (seed, other string) {
+	t.Helper()
+
+	origin := t.TempDir()
+	if out, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+
+	seed = t.TempDir()
+	gitAt(t, "", "clone", origin, seed)
+	configRepo(t, seed)
+	if err := os.WriteFile(filepath.Join(seed, seedFile), []byte(seedBody), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	gitAt(t, seed, "add", seedFile)
+	gitAt(t, seed, "commit", "-m", "seed state")
+	gitAt(t, seed, "push", "origin", "main")
+
+	other = t.TempDir()
+	gitAt(t, "", "clone", origin, other)
+	configRepo(t, other)
+	if err := os.WriteFile(filepath.Join(other, otherFile), []byte(otherBody), 0o600); err != nil {
+		t.Fatalf("write other file: %v", err)
+	}
+	gitAt(t, other, "add", otherFile)
+	gitAt(t, other, "commit", "-m", "concurrent write")
+	gitAt(t, other, "push", "origin", "main")
+
+	return seed, other
+}
+
+// TestPushWithRebaseRetry_RetriesNonFastForward proves the exported push half of
+// the shared helper rebases onto an advanced upstream and retries when the first
+// push is rejected non-fast-forward. WithDir drives the seed clone without
+// changing the process working directory, and WithBackoff keeps the retry fast.
+func TestPushWithRebaseRetry_RetriesNonFastForward(t *testing.T) {
+	// The concurrent writer touches an unrelated file so the rebase replays
+	// cleanly rather than conflicting.
+	seed, _ := sharedRemoteClones(t, "state.txt", "base\n", "OTHER.md", "concurrent\n")
+
+	// A local, committed change on the seed clone whose base is now behind trunk.
+	if err := os.WriteFile(filepath.Join(seed, "state.txt"), []byte("local change\n"), 0o600); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	gitAt(t, seed, "add", "state.txt")
+	gitAt(t, seed, "commit", "-m", "local change")
+
+	if err := PushWithRebaseRetry(WithDir(seed), WithBackoff(time.Millisecond)); err != nil {
+		t.Fatalf("PushWithRebaseRetry should rebase and retry a non-fast-forward push, got: %v", err)
+	}
+
+	log := runGitOut(t, seed, "log", "--oneline", "origin/main")
+	for _, want := range []string{"seed state", "concurrent write", "local change"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected origin/main history to contain %q after retry, got:\n%s", want, log)
+		}
+	}
+}
+
+// TestPushWithRebaseRetry_AbortsRebaseOnConflict proves the exported push helper
+// aborts the rebase and returns the wrapped error, leaving no mid-rebase state,
+// when the pull --rebase conflicts. WithDir targets the seed clone directly.
+func TestPushWithRebaseRetry_AbortsRebaseOnConflict(t *testing.T) {
+	// The concurrent writer changes the same file, so the rebase conflicts.
+	seed, _ := sharedRemoteClones(t, "state.txt", "base\n", "state.txt", "remote change\n")
+
+	if err := os.WriteFile(filepath.Join(seed, "state.txt"), []byte("local change\n"), 0o600); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	gitAt(t, seed, "add", "state.txt")
+	gitAt(t, seed, "commit", "-m", "local change")
+
+	if err := PushWithRebaseRetry(WithDir(seed), WithBackoff(time.Millisecond)); err == nil {
+		t.Fatal("PushWithRebaseRetry with a conflicting remote: expected error, got nil")
+	}
+
+	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+		if _, statErr := os.Stat(filepath.Join(seed, ".git", name)); statErr == nil {
+			t.Fatalf("repository left mid-rebase: .git/%s still present", name)
+		}
+	}
+}
+
+// runGitOut runs a git command in dir and returns its trimmed stdout, failing the
+// test on error.
+func runGitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		t.Fatalf("git -C %s %s: %v", dir, strings.Join(args, " "), err)
+	}
+	return string(out)
 }
 
 // tagHead creates a lightweight tag pointing at the current HEAD.

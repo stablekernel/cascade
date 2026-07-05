@@ -24,20 +24,10 @@ type Orchestrator struct {
 	cicdFile    *config.CICDFile
 	baseDir     string
 	// pushBackoff is the delay between state-write push retries. A zero value
-	// selects the default (defaultPushBackoff); tests override it to keep the
-	// retry loop fast.
+	// selects the shared git package default; tests override it to keep the retry
+	// loop fast. It is threaded into git.PushWithRebaseRetry via git.WithBackoff.
 	pushBackoff time.Duration
 }
-
-// State-write push retry policy. commitAndPush retries a rejected (for example
-// non-fast-forward) push behind a rebase so a concurrent state writer or a
-// "[skip ci]" commit that advances trunk between checkout and push does not fail
-// the run outright. This mirrors git.CommitAndPushWithRetry, the plain-git retry
-// path the promote and hotfix finalizers use for the manifest state write.
-const (
-	pushMaxAttempts    = 3
-	defaultPushBackoff = 2 * time.Second
-)
 
 // DefaultStateKey is used for state tracking when no environments are configured.
 const DefaultStateKey = "prerelease"
@@ -537,41 +527,16 @@ func (o *Orchestrator) commitAndPush(version string) error {
 // pushStateWithRetry pushes the committed state change, rebasing onto the
 // upstream and retrying when the push is rejected (for example a non-fast-forward
 // caused by a concurrent state writer or a "[skip ci]" commit landing on trunk
-// between checkout and push). It mirrors git.CommitAndPushWithRetry so the
-// orchestrator state write and the promote/hotfix finalize state write share the
-// same optimistic push behaviour.
+// between checkout and push). It delegates to git.PushWithRebaseRetry, the single
+// rebase-retry implementation the promote and hotfix finalizers also use, run
+// against the orchestrator's base directory so both state-write paths share one
+// rebase-abort-on-conflict behaviour.
 func (o *Orchestrator) pushStateWithRetry() error {
-	backoff := o.pushBackoff
-	if backoff == 0 {
-		backoff = defaultPushBackoff
+	if err := git.PushWithRebaseRetry(git.WithDir(o.baseDir), git.WithBackoff(o.pushBackoff)); err != nil {
+		return err
 	}
-
-	var lastErr error
-	for attempt := 0; attempt < pushMaxAttempts; attempt++ {
-		lastErr = o.gitRun("push")
-		if lastErr == nil {
-			log.Info("Committed and pushed state changes")
-			return nil
-		}
-
-		if attempt == pushMaxAttempts-1 {
-			break
-		}
-
-		// Integrate the advanced upstream and replay the state commit on top,
-		// then retry the push.
-		if err := o.gitRun("pull", "--rebase"); err != nil {
-			// A failed rebase (typically a conflict) leaves the repository
-			// mid-rebase. Abort it so we neither leave a conflicted state
-			// behind nor loop into a guaranteed-failing push, and surface the
-			// real error instead of a generic push-failed summary.
-			_ = o.gitRun("rebase", "--abort") // best effort; nothing to abort is fine
-			return fmt.Errorf("git pull --rebase before push retry failed: %w", err)
-		}
-		time.Sleep(backoff)
-	}
-
-	return fmt.Errorf("failed to push state changes after %d attempts: %w", pushMaxAttempts, lastErr)
+	log.Info("Committed and pushed state changes")
+	return nil
 }
 
 // gitOutput runs a git command and returns stdout.
