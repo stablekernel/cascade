@@ -323,3 +323,17 @@ func TestPinPolicy_E2E_TagModeDefaultUnchanged(t *testing.T) {
 			"tag mode must not emit a SHA for %s", action)
 	}
 }
+
+// TestActionRef_OverridePreservesVersionComment locks the seam a reconciled sha
+// adoption relies on: an action_pins override already emits verbatim as
+// "<action>@<override>", so writing "<sha> # <version>" into action_pins keeps
+// the version comment with no generator change. Charset validation (see
+// validateActionPins in internal/config) is what makes this raw splice safe.
+func TestActionRef_OverridePreservesVersionComment(t *testing.T) {
+	cfg := &config.TrunkConfig{ActionPins: map[string]string{
+		"actions/checkout": "abc123def4567890abc123def4567890abc12345 # v5.1.0",
+	}}
+	require.Equal(t,
+		"actions/checkout@abc123def4567890abc123def4567890abc12345 # v5.1.0",
+		actionRef(cfg, "actions/checkout"))
+}
