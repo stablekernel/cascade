@@ -10,21 +10,25 @@ import (
 // decodedActionPins is the minimal shape needed to assert what a standard
 // (comment-stripping) yaml.Unmarshal actually sees after a surgical edit, which
 // is the guarantee that matters: a sha-plus-version adoption must survive a
-// real re-parse, not just look right as raw bytes.
+// real re-parse, not just look right as raw bytes. It mirrors the real
+// manifest schema, where every ci field lives under a nested "config" key.
 type decodedActionPins struct {
 	CI struct {
-		ActionPins map[string]string `yaml:"action_pins"`
+		Config struct {
+			ActionPins map[string]string `yaml:"action_pins"`
+		} `yaml:"config"`
 	} `yaml:"ci"`
 }
 
 func TestSetActionPinSurgical_PreservesCommentsAndOrder(t *testing.T) {
 	doc := []byte("" +
 		"ci:\n" +
-		"  pin_mode: sha\n" +
-		"  # keep this comment\n" +
-		"  action_pins:\n" +
-		"    actions/checkout: oldsha # v5.0.0\n" +
-		"    actions/upload-artifact: keepme # v4.0.0\n")
+		"  config:\n" +
+		"    pin_mode: sha\n" +
+		"    # keep this comment\n" +
+		"    action_pins:\n" +
+		"      actions/checkout: oldsha # v5.0.0\n" +
+		"      actions/upload-artifact: keepme # v4.0.0\n")
 
 	out, err := SetActionPinSurgical(doc, "actions/checkout", "newsha # v6.0.0")
 	require.NoError(t, err)
@@ -39,26 +43,26 @@ func TestSetActionPinSurgical_PreservesCommentsAndOrder(t *testing.T) {
 
 	var got decodedActionPins
 	require.NoError(t, yaml.Unmarshal(out, &got))
-	require.Equal(t, "newsha # v6.0.0", got.CI.ActionPins["actions/checkout"],
+	require.Equal(t, "newsha # v6.0.0", got.CI.Config.ActionPins["actions/checkout"],
 		"the adopted sha must keep its version comment through a real re-parse")
-	require.Equal(t, "keepme", got.CI.ActionPins["actions/upload-artifact"],
+	require.Equal(t, "keepme", got.CI.Config.ActionPins["actions/upload-artifact"],
 		"the untouched entry's trailing text was always a plain comment, not adopted data")
 }
 
 func TestSetActionPinSurgical_AddsMissingKey(t *testing.T) {
-	doc := []byte("ci:\n  action_pins:\n    actions/checkout: a # v5\n")
+	doc := []byte("ci:\n  config:\n    action_pins:\n      actions/checkout: a # v5\n")
 	out, err := SetActionPinSurgical(doc, "actions/upload-artifact", "b # v4")
 	require.NoError(t, err)
 	require.Contains(t, string(out), "actions/upload-artifact: 'b # v4'")
 
 	var got decodedActionPins
 	require.NoError(t, yaml.Unmarshal(out, &got))
-	require.Equal(t, "b # v4", got.CI.ActionPins["actions/upload-artifact"])
-	require.Equal(t, "a", got.CI.ActionPins["actions/checkout"], "untouched key is preserved")
+	require.Equal(t, "b # v4", got.CI.Config.ActionPins["actions/upload-artifact"])
+	require.Equal(t, "a", got.CI.Config.ActionPins["actions/checkout"], "untouched key is preserved")
 }
 
 func TestSetActionPinSurgical_PlainTagStaysUnquoted(t *testing.T) {
-	doc := []byte("ci:\n  action_pins:\n    actions/checkout: v5\n")
+	doc := []byte("ci:\n  config:\n    action_pins:\n      actions/checkout: v5\n")
 	out, err := SetActionPinSurgical(doc, "actions/checkout", "v6")
 	require.NoError(t, err)
 	require.Contains(t, string(out), "actions/checkout: v6\n",
@@ -66,11 +70,17 @@ func TestSetActionPinSurgical_PlainTagStaysUnquoted(t *testing.T) {
 }
 
 func TestSetActionPinSurgical_CreatesMissingActionPinsMapping(t *testing.T) {
-	doc := []byte("ci:\n  pin_mode: sha\n")
+	doc := []byte("ci:\n  config:\n    pin_mode: sha\n")
 	out, err := SetActionPinSurgical(doc, "actions/checkout", "v6")
 	require.NoError(t, err)
 
 	var got decodedActionPins
 	require.NoError(t, yaml.Unmarshal(out, &got))
-	require.Equal(t, "v6", got.CI.ActionPins["actions/checkout"])
+	require.Equal(t, "v6", got.CI.Config.ActionPins["actions/checkout"])
+}
+
+func TestSetActionPinSurgical_RejectsMissingConfigMapping(t *testing.T) {
+	doc := []byte("ci:\n  state: {}\n")
+	_, err := SetActionPinSurgical(doc, "actions/checkout", "v6")
+	require.Error(t, err)
 }

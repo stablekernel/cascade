@@ -28,6 +28,12 @@ type PlanOptions struct {
 	ActionFolder      string
 	OutputPath        string
 	PromoteOutputPath string
+	// PinOverridesPath, when non-empty, names an on-disk action_pins.yaml whose
+	// pins overlay cfg.ActionPins (via ApplyDiskPinOverrides) before any
+	// generator runs. A version-pinned reconcile binary uses this to regenerate
+	// against a repo's current pins instead of the binary's stale compiled-in
+	// defaultActionPins copy; an explicit user action_pins override still wins.
+	PinOverridesPath string
 }
 
 // Plan resolves the manifest and returns the complete set of files the generate
@@ -50,6 +56,12 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	cfg, err := config.ParseWithKey(configPath, opts.ManifestKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	if opts.PinOverridesPath != "" {
+		if err := ApplyDiskPinOverrides(cfg, opts.PinOverridesPath); err != nil {
+			return nil, fmt.Errorf("applying pin overrides: %w", err)
+		}
 	}
 
 	// Parse the full manifest (including state) so generators can resolve

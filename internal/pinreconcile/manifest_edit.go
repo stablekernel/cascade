@@ -11,13 +11,13 @@ import (
 // two-space indent cascade's own manifests are written with.
 const manifestIndent = 2
 
-// SetActionPinSurgical changes a single action's value under ci.action_pins in
-// a user manifest's raw bytes, touching nothing else. It walks the document as
-// a yaml.Node tree rather than round-tripping through a typed struct, so every
-// unrelated key, comment, and the document's key order survive byte for byte.
-// A missing action_pins mapping (or a missing key inside it) is created rather
-// than treated as an error, so a manifest that has never carried an override
-// still adopts cleanly.
+// SetActionPinSurgical changes a single action's value under
+// ci.config.action_pins in a user manifest's raw bytes, touching nothing else.
+// It walks the document as a yaml.Node tree rather than round-tripping through
+// a typed struct, so every unrelated key, comment, and the document's key
+// order survive byte for byte. A missing action_pins mapping (or a missing key
+// inside it) is created rather than treated as an error, so a manifest that
+// has never carried an override still adopts cleanly.
 func SetActionPinSurgical(doc []byte, action, ref string) ([]byte, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(doc, &root); err != nil {
@@ -32,10 +32,15 @@ func SetActionPinSurgical(doc []byte, action, ref string) ([]byte, error) {
 		return nil, fmt.Errorf("manifest has no top-level %q mapping", "ci")
 	}
 
-	pinsMapping := mappingValue(ciMapping, "action_pins")
+	configMapping := mappingValue(ciMapping, "config")
+	if configMapping == nil {
+		return nil, fmt.Errorf("manifest has no %q mapping under %q", "config", "ci")
+	}
+
+	pinsMapping := mappingValue(configMapping, "action_pins")
 	if pinsMapping == nil {
 		pinsMapping = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		ciMapping.Content = append(ciMapping.Content,
+		configMapping.Content = append(configMapping.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "action_pins"},
 			pinsMapping,
 		)
