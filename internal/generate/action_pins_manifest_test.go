@@ -8,31 +8,46 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestDefaultActionPins_MatchesPriorHardcodedTable is the value-preserving
-// contract for extracting the pin table into action_pins.yaml. It pins the
-// EXACT values the hardcoded defaultActionPins map carried before the manifest
-// existed; if parsing the embedded YAML produces anything different the refactor
-// has changed behavior and this test fails. Update the values here only when an
-// intentional bump (a later PR) changes them.
-func TestDefaultActionPins_MatchesPriorHardcodedTable(t *testing.T) {
-	priorHardcodedTable := map[string]actionPin{
-		actionCheckout:         {tag: "v7", sha: "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", shaVersion: "v7.0.0"},
-		actionGithubScript:     {tag: "v9", sha: "3a2844b7e9c422d3c10d287c895573f7108da1b3", shaVersion: "v9.0.0"},
-		actionDownloadArtifact: {tag: "v8", sha: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", shaVersion: "v8.0.1"},
-		actionUploadArtifact:   {tag: "v7", sha: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", shaVersion: "v7.0.1"},
-		actionCreateAppToken:   {tag: "v3", sha: "bcd2ba49218906704ab6c1aa796996da409d3eb1", shaVersion: "v3.2.0"},
+// TestDefaultActionPins_OnlyEmitTrueEntriesWellFormed guards the shape of the
+// parsed generator table, not frozen pin values. action_pins.yaml is the
+// single source of truth for tag/sha/version, and it legitimately changes
+// over time (Dependabot bumps, and the self-heal reconcile companion adopting
+// a new governed pin); a test that freezes exact values fails on every such
+// legitimate change, which is exactly the failure this test replaces.
+//
+// What it still checks:
+//  1. defaultActionPins contains exactly the manifest's emit:true actions,
+//     nothing more and nothing less, so no emit:false entry leaks into the
+//     table the generator renders and no emit:true action is dropped.
+//  2. Every entry is well-formed: a non-empty tag, a non-empty shaVersion,
+//     and a sha matching commitSHAPattern (40-char lowercase hex).
+func TestDefaultActionPins_OnlyEmitTrueEntriesWellFormed(t *testing.T) {
+	var manifest actionPinsManifest
+	require.NoError(t, yaml.Unmarshal(actionPinsYAML, &manifest))
+
+	wantEmitTrue := make(map[string]bool)
+	for action, entry := range manifest.Actions {
+		if entry.Emit {
+			wantEmitTrue[action] = true
+		}
 	}
 
-	// The parsed generator table must contain exactly the prior emit:true set,
-	// value-for-value, with no extra keys leaking in from emit:false entries.
-	assert.Len(t, defaultActionPins, len(priorHardcodedTable),
-		"parsed table must hold exactly the prior emit:true actions")
-	for action, want := range priorHardcodedTable {
-		got, ok := defaultActionPins[action]
-		require.Truef(t, ok, "parsed table is missing %s", action)
-		assert.Equalf(t, want.tag, got.tag, "tag for %s", action)
-		assert.Equalf(t, want.sha, got.sha, "sha for %s", action)
-		assert.Equalf(t, want.shaVersion, got.shaVersion, "shaVersion for %s", action)
+	assert.Lenf(t, defaultActionPins, len(wantEmitTrue),
+		"parsed table must hold exactly the manifest's emit:true actions")
+
+	for action := range wantEmitTrue {
+		pin, ok := defaultActionPins[action]
+		require.Truef(t, ok, "parsed table is missing emit:true action %s", action)
+
+		assert.NotEmptyf(t, pin.tag, "tag for %s", action)
+		assert.NotEmptyf(t, pin.shaVersion, "shaVersion for %s", action)
+		assert.Truef(t, commitSHAPattern.MatchString(pin.sha),
+			"sha for %s must be a 40-char lowercase hex commit sha, got %q", action, pin.sha)
+	}
+
+	for action := range defaultActionPins {
+		assert.Truef(t, wantEmitTrue[action],
+			"defaultActionPins contains %s, which is not emit:true in action_pins.yaml", action)
 	}
 }
 
