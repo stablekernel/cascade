@@ -75,3 +75,31 @@ func TestRun_AdoptsShaBumpAndRegeneratesClean(t *testing.T) {
 	mismatches := generate.ScanUsesForPinDrift("orchestrate.yaml", string(orchestrate), want)
 	require.Empty(t, mismatches, "regenerated orchestrate.yaml must carry the adopted pin cleanly")
 }
+
+// TestRun_IdempotentSecondPass proves a converged tree is a safe no-op: running
+// Run again against a manifest that already carries the adopted pin reports no
+// change and leaves the manifest byte-identical, which is the loop-termination
+// guarantee a reconcile companion relies on to avoid committing forever.
+func TestRun_IdempotentSecondPass(t *testing.T) {
+	dir := writeReconcileTestRepo(t)
+
+	changed := "dependabot-bump.yaml"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, changed),
+		[]byte("      - uses: actions/checkout@"+testNewCheckoutSHA+" # v6.0.0\n"), 0o644))
+
+	ok, err := Run(Options{Root: dir, ChangedFiles: []string{changed}})
+	require.NoError(t, err)
+	require.True(t, ok, "the first pass must adopt the bump")
+
+	manifestPath := filepath.Join(dir, ".github", "manifest.yaml")
+	afterFirst, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+
+	ok, err = Run(Options{Root: dir, ChangedFiles: []string{changed}})
+	require.NoError(t, err)
+	require.False(t, ok, "a converged tree must report no change")
+
+	afterSecond, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	require.Equal(t, afterFirst, afterSecond, "a no-op pass must not rewrite the manifest")
+}
