@@ -27,6 +27,21 @@ on:
 permissions:
   contents: read
 
+# Single-flight: at most one Release run holds the pipeline at a time. The
+# redundant triggers above are deliberate (a pushed candidate tag emits a real
+# push event while orchestrate/promote/auto-promote also dispatch explicitly, so
+# an API-created or CI-skipped tag still builds), but a pushed tag can fire two
+# runs at once. A constant group, not one keyed on the tag, enforces the hard
+# invariant that no two releases are ever in flight together. cancel-in-progress
+# is false so an active publish always finishes; a queued duplicate then runs and
+# no-ops through the idempotency guard in the release job. A pending duplicate can
+# be superseded by a newer trigger, which is safe: the release job is idempotent
+# and every dispatcher watches its run and can redispatch, so a final publish is
+# never silently dropped.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   # Integration protection: because Integration now gates merge to main via branch
   # protection, any commit on main already passed Integration. A tag cut from main
@@ -67,15 +82,41 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Idempotency guard for the deliberate double-trigger. When a candidate tag
+      # is both pushed and dispatched, two Release runs start; the single-flight
+      # concurrency group serialises them, and the loser lands here after the
+      # winner has published. If a live (non-draft) release with its checksum
+      # manifest already exists for this tag, skip the build and no-op green
+      # rather than driving GoReleaser into a 422 and leaving a stray draft. The
+      # decision core lives in a script so it is unit tested in isolation and
+      # reused by the post-GoReleaser belt below.
+      - name: Skip if already published
+        id: idem
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          SKIP="$(.github/scripts/release-idempotency.sh "$TAG")"
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          if [ "$SKIP" = "true" ]; then
+            echo "::notice::$TAG is already published with its checksum manifest; skipping the build (idempotent no-op)."
+          else
+            echo "$TAG not yet published; proceeding with the release build."
+          fi
+
       - name: Set up Go
+        if: steps.idem.outputs.skip != 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
       - name: Install cosign
+        if: steps.idem.outputs.skip != 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Import GPG key
+        if: steps.idem.outputs.skip != 'true'
         env:
           GPG_KEY_MATERIAL: ${{ secrets.CASCADE_RELEASE_GPG_KEY }}
         run: |
@@ -84,6 +125,7 @@ jobs:
           echo "$GPG_KEY_MATERIAL" | gpg --batch --import
 
       - name: Install syft
+        if: steps.idem.outputs.skip != 'true'
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
       # Auto-promote tags the newest candidate's exact commit as the final
@@ -96,6 +138,7 @@ jobs:
       # candidate or dry-run tag we leave it unset so GoReleaser keeps its
       # existing incremental changelog.
       - name: Resolve previous stable tag for final changelog
+        if: steps.idem.outputs.skip != 'true'
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -116,7 +159,14 @@ jobs:
               ;;
           esac
 
+      # continue-on-error tolerates the one benign GoReleaser failure: two runs
+      # that both clear the pre-check and publish the same tag at once, so the
+      # loser hits `422 already_exists`. The next step converts that specific
+      # race into success and fails the job on any other error.
       - name: Run GoReleaser
+        id: goreleaser
+        if: steps.idem.outputs.skip != 'true'
+        continue-on-error: true
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: latest
@@ -127,7 +177,35 @@ jobs:
           GORELEASER_PREVIOUS_TAG: ${{ env.GORELEASER_PREVIOUS_TAG }}
           GPG_FINGERPRINT: ${{ secrets.CASCADE_RELEASE_GPG_FINGERPRINT }}
 
+      # Belt for the rare simultaneous double-publish that the pre-check cannot
+      # catch: if GoReleaser succeeded we are done; if it failed only because a
+      # concurrent run already published this tag with its checksum manifest, the
+      # 422 is benign and the job succeeds; any other GoReleaser failure is real
+      # and fails the job.
+      - name: Confirm release published
+        if: steps.idem.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          GORELEASER_OUTCOME: ${{ steps.goreleaser.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$GORELEASER_OUTCOME" = "success" ]; then
+            echo "GoReleaser published $TAG."
+            exit 0
+          fi
+          if [ "$(.github/scripts/release-idempotency.sh "$TAG")" = "true" ]; then
+            echo "::notice::GoReleaser failed but $TAG is already published by a concurrent run; treating as an idempotent no-op success."
+            exit 0
+          fi
+          echo "::error::GoReleaser failed and no published release exists for $TAG."
+          exit 1
+
+      # Skip when the release was already published (idem no-op) or when this run
+      # lost the publish race, since only a successful GoReleaser leaves dist/*
+      # to attest and the winning run attested its own build.
       - name: Attest build provenance
+        if: steps.idem.outputs.skip != 'true' && steps.goreleaser.outcome == 'success'
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: "dist/*"
