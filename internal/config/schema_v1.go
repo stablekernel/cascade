@@ -276,6 +276,34 @@ type DriftCheckConfig struct {
 	Comment bool `yaml:"comment,omitempty" json:"comment,omitempty"`
 }
 
+// ReconcileConfig is the opt-in emitted pin-reconcile lane (#443). When
+// Enabled, the generator emits the PR detector plus the workflow_run reconcile
+// companion that adopts an external governed-pin change back into the
+// manifest.
+type ReconcileConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Source names the change source this companion recognizes. The engine
+	// core is source-agnostic; Source keeps the config adapter-shaped from the
+	// start so a second source (Renovate, a manual dispatch, a hand-edit) is
+	// another adapter value, not a rewrite. "dependabot" is the first adapter
+	// and the default.
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	// Commit routes the same-repo adoption commit: "append" (default) onto the
+	// triggering PR, or "followup" as a separate PR for automerge-without-review.
+	Commit string `yaml:"commit,omitempty" json:"commit,omitempty"`
+}
+
+// Reconcile source-adapter constants.
+const (
+	ReconcileSourceDependabot = "dependabot"
+)
+
+// Reconcile commit-routing mode constants.
+const (
+	ReconcileCommitAppend   = "append"
+	ReconcileCommitFollowup = "followup"
+)
+
 // DeploymentsConfig configures opt-in GitHub Deployments API integration.
 // When enabled, the finalize job creates a Deployment per target environment
 // and reports in_progress then success/failure status after each deploy.
