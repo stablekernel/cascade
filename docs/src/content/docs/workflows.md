@@ -408,6 +408,27 @@ gh api repos/my-org/my-repo/dispatches \
 
 The event type must match one of the configured `types`. Because the trigger fires the same N-1 rollback the manual path performs, the dispatching system needs no rollback logic of its own.
 
+## Reconcile companion
+
+Set `reconcile.enabled: true` (see [Reconcile companion](/configuration/#reconcile-companion-opt-in) in the configuration reference) and cascade emits an opt-in, fork-safe lane that watches for an external governed action-pin change and adopts it back into the manifest.
+
+`cascade-reconcile-check.yaml` is the detector: a `pull_request` job that runs with `contents: read` only, so a fork pull request gets a read-only token and no secrets. It runs the real `cascade reconcile --check` command against the pull request's changed workflow files, which decides relevance and writes the changed governed refs to a data-only `pin-reconcile-result` artifact. It never pushes or comments.
+
+`cascade-reconcile-companion.yaml` is the base-definition companion: an `on: workflow_run` job that fires once the detector completes, running in the base repository's context with a scoped `contents: write` / `pull-requests: write` token rather than whatever posture the (possibly fork) pull request carries. Its steps:
+
+1. **Trusted PR resolution.** The target pull request is derived only from the triggering `workflow_run`'s own metadata (its `pull_requests` array, or a head-SHA lookup for a fork pull request), then re-fetched fresh from the API. The companion never trusts the detector's artifact for the pull request number, and it aborts rather than reconciling stale data if the pull request's head has moved since the source run started.
+2. **Relevance trigger.** The companion downloads the detector's artifact as data and no-ops when it reports no governed change, so an irrelevant pull request costs nothing beyond the read-only detector.
+3. **Head-as-data checkout.** The pull request's head is fetched via the trusted `refs/pull/<n>/head` ref on the base repository, never a direct checkout of a fork's own repository, so nothing from a fork's own configuration is ever executed.
+4. **Pinned-binary execution.** The companion installs a pinned release build of the cascade CLI (the same `setup-cli` action every generated workflow uses) rather than building or running off the repository's own source, so a pull request cannot smuggle in a modified reconcile implementation.
+5. **Real, idempotent adoption.** It runs the actual `cascade reconcile` command against the changed files, the same command a maintainer could run by hand, so a converged tree is a real no-op rather than a scripted approximation.
+6. **Commit routing.** `commit: append` (the default) pushes the adoption commit directly onto the pull request's own branch, but only when that pull request is not a fork; a fork pull request always falls back to a sticky comment naming the refs to adopt by hand, since cascade has no push access to a fork's branch. `commit: followup` never touches the original branch at all: it commits to a cascade-owned `cascade-reconcile/pr-<n>` branch and opens (or updates) a separate pull request against the same base, which is the recommended posture for a repository that automerges once checks pass.
+
+Three loop-termination guards keep the companion from ever looping on itself: it pushes only when the real reconcile command actually changed something (a converged tree pushes nothing), it re-checks the branch's fresh tip immediately before pushing and aborts rather than overwriting commits made since the run started, and it never force-pushes onto a branch it does not own.
+
+**Token requirement.** The common case needs only `Contents: write` on the token that pushes the adoption commit, because the triggering pull request already updated the generated workflow byte for byte and only the manifest's `action_pins` entry changes underneath it. `Workflows: write` is needed only when a regenerate must also push updated `.github/workflows/*.yaml` files, which is the same token headroom the [Action pinning](/configuration/#action-pinning) section describes.
+
+**Honest automerge caveat.** Enabling this companion turns what would have been a red drift check into a green one: an external pin bump that used to require a human to intervene is instead adopted and pushed automatically. A repository that automerges once checks pass can therefore merge a pin bump unattended. Prefer `commit: followup` if that matters to you; it opens the adoption as its own pull request so a human still reviews the change before it merges.
+
 ## Workflow Permissions
 
 Generated workflows include the necessary permissions:
