@@ -3,7 +3,6 @@
 <!-- Row 1: identity & quality -->
 <p align="center">
   <a href="https://pkg.go.dev/github.com/stablekernel/cascade"><img src="https://pkg.go.dev/badge/github.com/stablekernel/cascade.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/stablekernel/cascade"><img src="https://goreportcard.com/badge/github.com/stablekernel/cascade" alt="Go Report Card"></a>
   <a href="./go.mod"><img src="https://img.shields.io/github/go-mod/go-version/stablekernel/cascade" alt="Go Version"></a>
   <a href="https://stablekernel.github.io/cascade/"><img src="https://img.shields.io/badge/docs-cascade-36D0C4" alt="Docs"></a>
 </p>
@@ -36,128 +35,17 @@
 
 ---
 
+cascade is a compiler, not a control plane. You describe your environments, builds, deploys, and release policy in one manifest. cascade compiles that manifest into GitHub Actions workflows and then gets out of the way: the generated workflows run on GitHub's own runners, with no external service, agent, or daemon watching your repository.
+
 ## How it works
 
-The **manifest** (`.github/manifest.yaml`) is the single source of truth:
+The manifest (`.github/manifest.yaml`) holds both the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once to compile it into GitHub Actions workflows, and commit those alongside your code. From then on the generated workflows own their own execution: a merge to trunk builds and deploys to the first environment, and a `workflow_dispatch` promotes the same built artifact through the rest of the chain without rebuilding it.
 
-- It holds both the pipeline configuration and the live deployment state for every environment.
-- You run `cascade generate-workflow` once.
-- After that, the generated workflows own their own execution.
-
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
-flowchart TD
-    M["<b>.github/manifest.yaml</b><br/>config + live state"] --> G["<b>cascade generate-workflow</b>"]
-    G --> WF["Generated GitHub Actions<br/>orchestrate.yaml + promote.yaml"]
-
-    WF -- "merge to trunk" --> O
-
-    subgraph O["Orchestrate (on merge)"]
-        direction LR
-        O1["Setup"] --> O2["Validate"] --> O3["Build"] --> O4["Deploy first env"] --> O5["Finalize"]
-    end
-
-    O -- "workflow_dispatch · same artifacts, never rebuilt" --> P
-
-    subgraph P["Promote (cascade through environments)"]
-        direction LR
-        dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
-    end
-
-    P --> R
-
-    subgraph R["Release lifecycle"]
-        direction LR
-        draft["draft"] --> pre["prerelease"] --> pub["published<br/>RC tags cleaned"]
-    end
-
-    classDef accent fill:#B87333,stroke:#E8702A,color:#FFF7F0;
-    class M accent;
-```
+Read [How Cascade works](https://stablekernel.github.io/cascade/start/how-it-works/) for the full mental model, including the release boundary and the hotfix and rollback off-ramps.
 
 ---
 
-## Cross-repo artifact tracking
-
-A primary repo can own the environment chain for artifacts that are built and versioned in other repos:
-
-- Each external repo dispatches the primary's generated `external-update.yaml`.
-- That workflow writes `{sha, version}` into `state.<env>.external.<name>` of the one shared manifest.
-- Concurrent updates serialize on that manifest, then the primary cascades every source through its own environments.
-- A callback can also pull in an external repo's workflow synchronously via `uses:` during the primary's run.
-
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
-flowchart TD
-    subgraph EXT["External artifact repos"]
-        direction LR
-        A["<b>artifact-a</b><br/>builds its own artifact"]
-        B["<b>artifact-b</b><br/>builds its own artifact"]
-    end
-
-    A -- "workflow_dispatch<br/>source_repo · deploy_name · environment<br/>sha · version · artifacts" --> EU
-    B -- "workflow_dispatch<br/>source_repo · deploy_name · environment<br/>sha · version · artifacts" --> EU
-
-    subgraph PRIMARY["Primary repo"]
-        direction TB
-        EU["<b>external-update.yaml</b><br/>cascade external update"]
-        EU -- "writes {sha, version}" --> ST["<b>.github/manifest.yaml</b><br/>state.&lt;env&gt;.external.&lt;name&gt;<br/>concurrent updates serialize"]
-        ST --> PR
-        subgraph PR["Promote (cascade through environments)"]
-            direction LR
-            dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
-        end
-    end
-
-    CB["Primary build / deploy callback"] -. "sync uses:<br/>org/artifact-repo/.github/workflows/&lt;name&gt;.yaml@ref" .-> SYNC["External workflow<br/>invoked inline"]
-
-    classDef accent fill:#B87333,stroke:#E8702A,color:#FFF7F0;
-    class ST accent;
-```
-
----
-
-## Hotfix any environment
-
-Most pipelines can only hotfix the tip, which in practice means production. cascade hotfixes **any** environment:
-
-- It stages the fix or set of fixes on a per-environment integration branch.
-- A hotfix can carry a set of commits and elevate them across the chain up to the target environment.
-- It deploys the diverged environments with a clean `-rc.N.hotfix.M` version.
-- It rejoins trunk the next time a trunk SHA that already contains the fixes is promoted.
-
-The example below lands a fix on **staging** while dev, test, and prod stay exactly where they are.
-
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'ui-sans-serif, system-ui, sans-serif','primaryColor':'#0E8B82','primaryBorderColor':'#36D0C4','primaryTextColor':'#F4FBFA','lineColor':'#1F9B92','clusterBkg':'transparent','clusterBorder':'#36D0C4','tertiaryColor':'#B87333'}}}%%
-flowchart TD
-    T["<b>trunk tip</b><br/>fix already merged (roll forward first)"]
-
-    subgraph LADDER["Environments"]
-        direction LR
-        dev["dev"] --> test["test"] --> staging["staging"] --> prod["prod"]
-    end
-
-    T -- "cherry-pick fix onto env/staging<br/>at staging's recorded base_sha" --> CP["<b>hotfix/staging/&lt;short-sha&gt;</b><br/>base + fix, nothing else"]
-    CP --> RPR["<b>resolution PR</b> (base env/staging)<br/>cascade-hotfix · auto-merge on env checks"]
-    RPR -- "on merge: build -> deploy staging only -> finalize" --> DS
-
-    subgraph DS["staging diverged"]
-        direction TB
-        SV["<b>v1.4.0-rc.2.hotfix.1</b><br/>ref: env/staging<br/>base_sha: trunk SHA · patches: [fix]"]
-    end
-
-    DS -. "targets staging" .-> staging
-
-    DS == "later promotion of a trunk SHA containing the fix<br/>clears divergence (patch-containment guard)" ==> staging
-
-    classDef accent fill:#B87333,stroke:#E8702A,color:#FFF7F0;
-    class SV accent;
-```
-
----
-
-## Is cascade right for your repo?
+## Is cascade for you?
 
 cascade earns its keep when you promote a built artifact through a chain of environments. It is a strong fit when most of these hold:
 
@@ -168,222 +56,129 @@ cascade earns its keep when you promote a built artifact through a chain of envi
 
 It is likely overkill for a single environment with a plain build-and-release on push. A repo with no deployments at all is a different case: the no-environment mode is a supported shape that still gives you conventional-commit versioning and releases.
 
-**Not trunk-based yet?** cascade promotes *from trunk*:
-
-- You merge to one trunk branch and cascade promotes that line through your environments.
-- If you run release branches or a GitFlow model today, adopting cascade means moving promotion onto a trunk-based flow.
-- That is a deliberate shift, and cascade is a practical vehicle for it: your existing build and deploy steps become reusable-workflow callbacks, and cascade takes over the promotion, state, and release wiring on top of them.
-
-### What adopting looks like
-
-Adoption involves a few steps:
-
-- Keep the build and deploy logic you already have, and wrap each as a `workflow_call` reusable workflow.
-- Describe your environments and callbacks in the manifest.
-- Let cascade generate the orchestration.
-- Keep the tooling you rely on: point cascade's changelog or release step at your own workflow, or switch it off, while cascade owns the promotion cascade.
-
-See the **[Adoption guide](https://stablekernel.github.io/cascade/adoption/)** for the full walkthrough on migrating an existing pipeline and wiring in tooling you already use. For reference: the [Getting Started guide](https://stablekernel.github.io/cascade/getting-started/), the [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) for the inputs cascade passes your workflows, and the [hardening guide](https://stablekernel.github.io/cascade/security/hardening/) for the GitHub setup (branch protection, environments, scoped tokens).
+Already running a pipeline? See the [adoption guide](https://stablekernel.github.io/cascade/guides/adopt/) for migrating without a rewrite.
 
 ---
 
-## Quick start
-
-### 1. Install the CLI
+## Quickstart
 
 ```bash
 go install github.com/stablekernel/cascade/cmd/cascade@latest
-# or pin a specific version:
-go install github.com/stablekernel/cascade/cmd/cascade@v0.1.0
 ```
 
-> **Fastest path:** run `cascade init` to scaffold a working starter (manifest with a pinned `cli_version`, build and deploy callback stubs, a `CODEOWNERS`, and an AWS OIDC trust-policy example), then edit two values and push. Pick a shape with `--topology` (`no-env` for a CLI/library, or `two-env`/`three-env`/`four-env` for a promotion pipeline). The scaffold is a verifying starter: `cascade init` then `cascade generate-workflow` leaves `cascade verify` clean. The steps below build the same manifest by hand if you prefer.
+See [Getting started](https://stablekernel.github.io/cascade/start/getting-started/) for the pinned-version install and the `setup-cli` action, both of which most teams should use instead of a bare `@latest` install.
 
-### 2. Create the manifest
+Write a manifest, write your build and deploy callbacks, then generate. Callbacks must exist first: the generator reads their `workflow_call` outputs to wire the rest.
 
 ```yaml
 # .github/manifest.yaml
 ci:
   config:
+    schema_version: 1
     trunk_branch: main
-    cli_version: v0.1.0
-
-    environments: [dev, test, uat, prod]
-
+    cli_version: v0.9.1
+    environments: [dev, staging, prod]
     builds:
       - name: app
         workflow: .github/workflows/build-app.yaml
-        triggers: [src/**, go.mod]
-
-    deploys:
-      - name: infra
-        workflow: .github/workflows/deploy-infra.yaml
-        triggers: [cdk/**]
-      - name: app
-        workflow: .github/workflows/deploy-app.yaml
-        depends_on: [app]   # waits for build-app to succeed
-
-    changelog:
-      contributors: true
 ```
-
-### 3. Generate the workflows
 
 ```bash
+# 1. Write .github/manifest.yaml (above)
+# 2. Write your build/deploy callback workflows (they must exist first)
+# 3. Generate the orchestration workflows
 cascade generate-workflow --config .github/manifest.yaml
-# Creates: .github/workflows/orchestrate.yaml
-#          .github/workflows/promote.yaml
+# 4. Commit everything and push to trunk to run the first pipeline
 ```
 
-Commit the generated files. cascade re-generates them whenever you update the manifest; the `-f` flag overwrites in place.
+The full walkthrough, including `cascade init` scaffolding and the four topology shapes, lives in [Getting started](https://stablekernel.github.io/cascade/start/getting-started/).
 
-### 4. Write your callbacks
+---
 
-cascade calls your workflows via `workflow_call` and passes standard inputs. You own the build and deploy logic.
+## What cascade generates
 
-```yaml
-# .github/workflows/build-app.yaml
-on:
-  workflow_call:
-    inputs:
-      environment:
-        type: string
-        required: true
-      sha:
-        type: string
-        required: true
-    outputs:
-      artifact_id:
-        description: 'Immutable artifact identifier (e.g., Docker image digest)'
-        value: ${{ jobs.build.outputs.artifact_id }}
-```
+A `generate-workflow` run emits, unconditionally:
 
-cascade is a metadata courier. You construct the registry and deploy operations yourself.
+| File | Purpose |
+|---|---|
+| `.github/workflows/orchestrate.yaml` | Runs on merge to trunk: validate, build, deploy to the first environment, finalize state. |
+| `.github/workflows/promote.yaml` | Manually dispatched: cascades the same built artifact through the rest of the environment chain. |
+| `.github/workflows/cascade-hotfix.yaml` | Patches a single environment out of band without touching the others. |
+| `.github/workflows/cascade-rollback.yaml` | Rolls an environment back to its previous deployed version. |
+| `.github/actions/manage-release/action.yaml` | Composite action that creates, updates, and publishes the GitHub release. |
+
+Opt-in companions (drift-check, PR-preview, pin-reconcile) are emitted only when their manifest block is present. See [Generated workflows](https://stablekernel.github.io/cascade/reference/generated-workflows/) for the full anatomy of each file.
 
 ---
 
 ## Capabilities
 
-cascade generates workflows that handle the orchestration layer. Your callback workflows handle the domain logic. The manifest gives you control over:
-
-- **Change detection**: builds and deploys run only when their declared `triggers` match changed paths.
-- **Dependency ordering**: `depends_on` chains builds and deploys in the right order.
-- **Matrix builds**: fan out a single build over a matrix of inputs.
-- **Per-job runner selection**: set `runs_on` at the config or per-build/deploy level.
-- **Concurrency control**: configurable group and cancel-in-progress on orchestrate, promote, release, and external-update workflows.
-- **Extra triggers**: attach `schedule`, `repository_dispatch`, `workflow_run`, and `merge_group` events to orchestration.
-- **Dispatch inputs**: expose operator-facing manual-run inputs on the generated `workflow_dispatch`.
-- **PR plan preview**: a comment on each PR shows which builds and deploys would run.
-- **Merge queue lane**: a dedicated gate job runs before merge to protect trunk.
-- **Action pinning**: `pin_mode: sha` emits pinned SHA references for all cascade-managed action calls. Override individual actions via `action_pins`. cascade owns the action pins in the workflows it generates, and the opt-in `reconcile` companion reconciles an external bump (for example a merged Dependabot update) back into the manifest so ownership stays in one place.
-- **Breaking-change gate**: `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless you override them.
-- **Artifact passing**: the `artifact_id` output from build callbacks is stored in state and forwarded to deploys and the publish callback.
-- **Publish callback**: once a release is published, a separate workflow call lets you retag RC artifacts in your registry.
-- **Schema version enforcement**: every CLI invocation checks `schema_version` on the manifest and rejects incompatible manifests with a clear error.
-
-For a no-environment project (library or CLI), omit `environments` entirely. Commits produce RC pre-releases; a `promote` dispatch publishes the final release.
-
----
-
-## Promotion
-
-<!-- Promote flow described textually; see docs/images/promote-flow.png for a visual -->
-
-Promotions are triggered via `workflow_dispatch` on the generated `promote.yaml`.
-
-| Mode | Behavior |
+| Capability | What it does |
 |---|---|
-| `default` | Advance the chain one logical step |
-| `dev-to-test` | Promote dev to test |
-| `dev-to-uat` | Cascade: dev → test → uat (all intermediates updated atomically) |
-| `dev-to-prod` | Full cascade through all environments |
-| `uat-to-prod` | Partial cascade from uat onward |
+| Change detection | Builds and deploys run only when their declared `triggers` match changed paths. |
+| Dependency ordering | `depends_on` and `optional_depends_on` chain builds and deploys in the right order. |
+| Matrix builds | Fan a single build out over a matrix of `dimensions`, with `max_parallel` and `fail_fast`. |
+| Concurrency control | Configurable group and `cancel_in_progress` on orchestrate, promote, hotfix, rollback, release, and external-update workflows. |
+| Extra triggers | Attach `schedule`, `repository_dispatch`, `workflow_run`, and `merge_group` events to orchestration. |
+| Least-privilege permissions | Per-callback `permissions:` blocks scope each caller job, including OIDC `id-token: write`. |
+| Action pinning | `pin_mode: tag` (default) or `sha`, with an embedded action-pins manifest and an opt-in reconcile companion. |
+| PR plan preview | An opt-in comment on each PR shows which builds and deploys would run. |
+| Breaking-change gate | `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless overridden. |
+| Artifact passing | The `artifact_id` output from a build is stored in state and forwarded to deploys and publish. |
+| GitHub Environments | The `environments` command emits per-environment config (`required_reviewers`, `wait_timer`, `branch_policy`) for you to apply. |
+| Schema enforcement | Every CLI invocation checks `schema_version` and rejects incompatible manifests with a clear error. |
 
-These modes are generated from your configured environment names (`dev`, `test`, `uat`, `prod` shown here as an example); roles are positional, with the last environment as the release stage.
-
-The same artifacts built on the first merge are promoted through the chain; nothing is rebuilt.
-
----
-
-## State
-
-The manifest tracks deployment state automatically. The `state:` section is managed by cascade; do not edit it by hand.
+A manifest that puts a few of these to work: `web` builds only after `api`, and each build and deploy runs only when its `triggers` match the changed paths.
 
 ```yaml
+# .github/manifest.yaml
 ci:
-  state:
-    dev:
-      sha: abc123
-      version: v1.2.0-rc.3
-      committed_at: "2025-01-15T10:30:00Z"
-      committed_by: github-actions[bot]
-      builds:
-        app:
-          sha: abc123
-          artifact_id: sha256:def456
-          built_at: "2025-01-15T10:30:00Z"
-      deploys:
-        infra:
-          sha: abc123
-          deployed_at: "2025-01-15T10:31:00Z"
-    release:
-      sha: abc000
-      version: v1.1.0
-  latest_release:
-    version: v1.1.0
-    sha: abc000
+  config:
+    schema_version: 1
+    trunk_branch: main
+    cli_version: v0.9.1
+    environments: [dev, staging, prod]
+    builds:
+      - name: api
+        workflow: .github/workflows/build-api.yaml
+        triggers: ["api/**"]
+      - name: web
+        workflow: .github/workflows/build-web.yaml
+        triggers: ["web/**"]
+        depends_on: [api]
+    deploys:
+      - name: services
+        workflow: .github/workflows/deploy.yaml
+        triggers: ["api/**", "web/**"]
 ```
 
----
-
-## CLI reference
-
-| Command | Description |
-|---|---|
-| `generate-workflow` | Generate `orchestrate.yaml` and `promote.yaml` |
-| `orchestrate setup` | Detect changes, compute version, plan execution |
-| `orchestrate finalize` | Update state, manage release, commit manifest |
-| `promote preflight` | Validate, compute promotions, check breaking changes |
-| `promote finalize` | Update state after promotion deploys complete |
-| `generate-changelog` | Create changelog from conventional commits |
-| `manage-release` | Create, update, or publish GitHub releases |
-| `next-version` | Calculate next semantic version |
-| `detect-changes` | Determine which builds/deploys a file change triggers |
-| `parse-config` | Validate and print the parsed manifest (with schema warnings) |
-| `reset` | Wipe releases and state (for testing or a fresh start) |
-
-Full flag reference: [CLI reference](https://stablekernel.github.io/cascade/cli-reference/).
+Full field-by-field detail lives in the [manifest reference](https://stablekernel.github.io/cascade/reference/manifest/).
 
 ---
 
 ## Documentation
 
-| Document | Description |
+| Start here | |
 |---|---|
-| [Stage Graph](https://stablekernel.github.io/cascade/stage-graph/) | The mental model. Start here to see how the stages fit together |
-| [Getting Started](https://stablekernel.github.io/cascade/getting-started/) | Step-by-step setup guide |
-| [Configuration](https://stablekernel.github.io/cascade/configuration/) | Full manifest reference |
-| [Workflows](https://stablekernel.github.io/cascade/workflows/) | Orchestrate and Promote explained |
-| [CLI Reference](https://stablekernel.github.io/cascade/cli-reference/) | All commands and flags |
-| [Callback Contract](https://stablekernel.github.io/cascade/callback-contract/) | How to write build/deploy/publish workflows |
-| [Architecture](https://stablekernel.github.io/cascade/architecture/) | System design and internals |
-| [Schema Versioning](https://stablekernel.github.io/cascade/versioning/) | Compatibility policy and migration guide |
+| [Why Cascade](https://stablekernel.github.io/cascade/start/why-cascade/) | What cascade is, when to use it, and how it compares to adjacent tools. |
+| [How Cascade works](https://stablekernel.github.io/cascade/start/how-it-works/) | The mental model: trunk, environment chain, release boundary. |
+| [Getting started](https://stablekernel.github.io/cascade/start/getting-started/) | Install, scaffold or hand-write a manifest, and run your first pipeline. |
 
----
+| Task guides | |
+|---|---|
+| [Adopt an existing pipeline](https://stablekernel.github.io/cascade/guides/adopt/) | Migrate without a rewrite; coexist with tools you already use. |
+| [Promote a release](https://stablekernel.github.io/cascade/guides/promote/) | Trigger and watch a promotion. |
+| [Run a hotfix](https://stablekernel.github.io/cascade/guides/hotfix/) | Patch one environment without touching the others. |
+| [Roll back an environment](https://stablekernel.github.io/cascade/guides/rollback/) | Revert an environment to its previous version. |
 
-## Roadmap to stable
+| Reference | |
+|---|---|
+| [Manifest](https://stablekernel.github.io/cascade/reference/manifest/) | Every manifest field, its emission status, and its default. |
+| [CLI](https://stablekernel.github.io/cascade/reference/cli/) | Every command, flag, environment variable, and exit code. |
+| [Callback contract](https://stablekernel.github.io/cascade/reference/callbacks/) | The inputs and outputs your build/deploy/publish workflows exchange with cascade. |
+| [Generated workflows](https://stablekernel.github.io/cascade/reference/generated-workflows/) | The exact file set and the anatomy of each generated workflow. |
 
-cascade is functional and self-hosted; its own releases page shows the full pipeline running end to end. The remaining work before the v1.0.0 schema freeze falls into two areas:
-
-- **Schema coverage.** A few GitHub Actions capabilities are modeled in the manifest shape but not yet emitted by the generator: environment gates, OIDC token configuration, and per-environment runner overrides. These sit on the direct path to v1.0.0.
-- **Hardening.** This covers schema version enforcement (shipped), compatibility docs ([schema versioning](https://stablekernel.github.io/cascade/versioning/)), and more e2e coverage. The added tests confirm that the generated workflows behave correctly under edge cases such as empty builds, cross-repo coordination, and rollback to N-1.
-
-Schema stability:
-
-- The manifest schema field shapes were frozen in v0.1.0 as the v1 contract baseline.
-- Minor versions between now and v1.0.0 may add new optional fields; no existing fields will be removed or renamed before v1.0.0.
-
-Open work is tracked in [GitHub Issues](https://github.com/stablekernel/cascade/issues).
+See the [full sidebar](https://stablekernel.github.io/cascade/) for the rest, including security and internals.
 
 ---
 

@@ -3,7 +3,7 @@ title: Feature coverage matrix
 description: A feature-by-feature map of how cascade is verified. Every capability is traced to its hermetic act plus gitea scenario, its live-fleet probe, and its unit coverage, with one line on what each layer proves and why both layers exist.
 ---
 
-The [How cascade is tested](/cascade/testing/) page explains the two validation
+The [How Cascade is tested](/cascade/internals/testing/) page explains the two validation
 layers and the reconcile gate that makes the live layer trustworthy. This page is
 the detailed companion: a feature-by-feature table that traces each cascade
 capability to the exact place it is exercised.
@@ -106,6 +106,8 @@ only under real installation tokens on the fleet, never in the token-free harnes
 | Callback retry wrapper | | retry-wrapper jobs present (callbacks); retry shim jobs (3env gen-time) | `internal/generate` | The retry jobs are emitted and wired for `retries: N` |
 | Signed auto-commit identity (`auto_commits`) | `03-three-env-repo` | auto_commits author and message (3env) | `internal/promote/auto_commit_sha*.go` | The state commit carries the configured author and message |
 
+See [the `auto_commits` field](/cascade/reference/manifest/) in the manifest reference for what a callback must do to trigger this capture.
+
 ## Manifest schema and emitted shape
 
 These are about what the generator emits. Several are asserted at the emission
@@ -190,3 +192,8 @@ across the layers, with a documented ceiling. Every lifecycle and guard behavior
 that can run live runs live in the fleet; every emission and synthesized-condition
 behavior is asserted in the act plus gitea harness; every piece of pure logic is
 covered by unit tests; and the platform ceiling is validated by design.
+
+## Wayfinding
+
+**Prerequisite**: [How Cascade is tested](/cascade/internals/testing/) for the two layers this matrix traces against.
+**Next**: [Release orchestration](/cascade/internals/release-orchestration/) for how the fleet fits into cascade's own release chain.

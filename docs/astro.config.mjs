@@ -68,27 +68,40 @@ export default defineConfig({
           attrs: { name: 'twitter:card', content: 'summary_large_image' },
         },
       ],
-      // Sidebar order mirrors the previous MkDocs nav, with the decision-aid
-      // "Why Cascade" page first so readers can self-qualify before onboarding.
+      // Sidebar mirrors the journey: orient (Why Cascade), start (mental model +
+      // tutorial), task guides (operator how-tos), reference (exhaustive lookup),
+      // security, then internals (contributor depth). Every label pairs with its
+      // page's `title` frontmatter.
       sidebar: [
-        { label: 'Why Cascade', link: '/comparison/' },
-        { label: 'Stage Graph', link: '/stage-graph/' },
-        { label: 'Getting Started', link: '/getting-started/' },
-        { label: 'Adoption Guide', link: '/adoption/' },
-        { label: 'Manifest Reference', link: '/configuration/' },
-        { label: 'Callback Contract', link: '/callback-contract/' },
-        {
-          label: 'Workflows',
-          items: [{ label: 'Overview', link: '/workflows/' }],
-        },
-        { label: 'CLI Reference', link: '/cli-reference/' },
-        { label: 'Local Simulation', link: '/simulate/' },
-        { label: 'Architecture', link: '/architecture/' },
-        { label: 'How it is tested', link: '/testing/' },
-        { label: 'Feature coverage matrix', link: '/coverage-matrix/' },
-        { label: 'Release orchestration', link: '/release-orchestration/' },
-        { label: 'Security & Hardening', link: '/security/hardening/' },
-        { label: 'Versioning & Schema', link: '/versioning/' },
+        { label: 'Why Cascade', link: '/start/why-cascade/' },
+        { label: 'Start here', items: [
+            { label: 'How Cascade works', link: '/start/how-it-works/' },
+            { label: 'Getting started',   link: '/start/getting-started/' },
+        ]},
+        { label: 'Task guides', items: [
+            { label: 'Adopt an existing pipeline', link: '/guides/adopt/' },
+            { label: 'Add or change environments', link: '/guides/environments/' },
+            { label: 'Promote a release',          link: '/guides/promote/' },
+            { label: 'Run a hotfix',               link: '/guides/hotfix/' },
+            { label: 'Roll back an environment',   link: '/guides/rollback/' },
+            { label: 'Simulate and verify',        link: '/guides/simulate-and-verify/' },
+            { label: 'Coordinate multiple repos',  link: '/guides/multi-repo/' },
+            { label: 'Visualize the pipeline',     link: '/guides/visualize/' },
+        ]},
+        { label: 'Reference', items: [
+            { label: 'Manifest',            link: '/reference/manifest/' },
+            { label: 'Callback contract',   link: '/reference/callbacks/' },
+            { label: 'CLI',                 link: '/reference/cli/' },
+            { label: 'Generated workflows', link: '/reference/generated-workflows/' },
+            { label: 'Versioning & schema', link: '/reference/versioning/' },
+        ]},
+        { label: 'Security & hardening', link: '/security/' },
+        { label: 'Internals', items: [
+            { label: 'Architecture',            link: '/internals/architecture/' },
+            { label: 'How Cascade is tested',   link: '/internals/testing/' },
+            { label: 'Feature coverage matrix', link: '/internals/coverage-matrix/' },
+            { label: 'Release orchestration',   link: '/internals/release-orchestration/' },
+        ]},
       ],
     }),
   ],
