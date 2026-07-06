@@ -1,0 +1,50 @@
+name: "Release plain generation is unaffected by own-repo mode"
+description: |
+  Regression guard paired with scenario 46 (release own-repo tag-only): the
+  SAME config block, generated WITHOUT --own-repo (own_repo omitted, defaulting
+  false), must produce exactly the pre-existing plain output. Own-repo mode is
+  a CLI flag, not a manifest field, so there is no way for a downstream
+  manifest to reach it; this scenario proves that byte-for-byte for the
+  specific fields own-repo mode touches.
+
+  Covers:
+  - the finalize Manage Release step carries no tag_only line at all
+  - that step keeps the configured release token, not GITHUB_TOKEN
+  - the composite action carries no trace of tag_only: no input, no env var,
+    no --tag-only forwarding
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  release_trigger: dispatch
+  release_token: ${{ secrets.CASCADE_STATE_TOKEN }}
+  release:
+    workflow: .github/workflows/release.yaml
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert plain orchestrate keeps the release token and no tag_only"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "          token: ${{ secrets.CASCADE_STATE_TOKEN }}"
+          not_contains:
+            - "tag_only"
+        - path: ".github/actions/manage-release/action.yaml"
+          not_contains:
+            - "tag_only"
+            - "--tag-only"

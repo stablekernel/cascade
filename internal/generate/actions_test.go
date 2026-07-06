@@ -14,7 +14,7 @@ import (
 func TestRenderLocalActions_RejectsUnsafeActionFolder(t *testing.T) {
 	t.Parallel()
 	cfg := &config.TrunkConfig{ActionFolder: "../../etc/foo"}
-	_, err := RenderLocalActions(t.TempDir(), cfg)
+	_, err := RenderLocalActions(t.TempDir(), cfg, false)
 	require.Error(t, err)
 }
 
@@ -23,7 +23,7 @@ func TestRenderLocalActions_RejectsUnsafeActionFolder(t *testing.T) {
 func TestGenerateLocalActions_RejectsUnsafeActionFolder(t *testing.T) {
 	t.Parallel()
 	cfg := &config.TrunkConfig{ActionFolder: "a/b"}
-	err := GenerateLocalActions(t.TempDir(), cfg)
+	err := GenerateLocalActions(t.TempDir(), cfg, false)
 	require.Error(t, err)
 }
 
@@ -32,6 +32,6 @@ func TestGenerateLocalActions_RejectsUnsafeActionFolder(t *testing.T) {
 func TestRenderLocalActions_AllowsDefaultActionFolder(t *testing.T) {
 	t.Parallel()
 	cfg := &config.TrunkConfig{}
-	_, err := RenderLocalActions(t.TempDir(), cfg)
+	_, err := RenderLocalActions(t.TempDir(), cfg, false)
 	require.NoError(t, err)
 }

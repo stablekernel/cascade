@@ -71,6 +71,13 @@ type Options struct {
 	// reports cascade-owned workflow files that the manifest no longer plans as
 	// drift; when true, those files are ignored and never affect the exit code.
 	AllowOrphans bool
+	// OwnRepo plans cascade's own-repo release-plumbing variant of the
+	// orchestrate workflow and the manage-release composite action, matching
+	// generate-workflow --own-repo. Cascade's own manifest is generated in that
+	// mode, so its committed orchestrate.yaml and action.yaml are drift-locked to
+	// the own-repo output; without this, verify would compute the plain variant
+	// and report the deliberate own-repo differences as spurious drift.
+	OwnRepo bool
 }
 
 // Run compares every file the manifest would generate against the bytes
@@ -95,6 +102,7 @@ func Run(o Options, stdout, stderr io.Writer) error {
 		ActionFolder:      o.ActionFolder,
 		OutputPath:        o.OutputPath,
 		PromoteOutputPath: o.PromoteOutputPath,
+		OwnRepo:           o.OwnRepo,
 	})
 	if err != nil {
 		return operational(fmt.Errorf("planning workflows: %w", err))

@@ -37,6 +37,7 @@ verify is read-only: it never writes files, runs git, or modifies the repo.`,
 	cmd.Flags().StringVar(&o.PromoteOutputPath, "promote-output", ".github/workflows/promote.yaml", "Path of the promote workflow")
 	cmd.Flags().BoolVarP(&o.Quiet, "quiet", "q", false, "Suppress the per-file report body; only set the exit code")
 	cmd.Flags().BoolVar(&o.AllowOrphans, "allow-orphans", false, "Do not report cascade-owned workflow files that are no longer in the plan as drift")
+	cmd.Flags().BoolVar(&o.OwnRepo, "own-repo", false, "Verify against cascade's own-repo release-plumbing variant (tag-only manage-release, non-triggering tag-create). Maintainer-only; never used by a downstream manifest.")
 
 	return cmd
 }

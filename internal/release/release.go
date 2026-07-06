@@ -92,6 +92,15 @@ type Options struct {
 	NewTag      string // New tag for publish (semver) - replaces short-sha tag
 	DeleteTag   string // Tag to delete after publish (short-sha cleanup)
 	CreateTag   bool   // Whether to create the git tag (for initial release)
+	// TagOnly makes create/update materialize the git tag only and skip the
+	// draft-release POST. It exists for a self-publishing release pipeline (for
+	// example GoReleaser) that is the sole creator of the release object: when a
+	// separate release workflow publishes its own release for the same tag, a
+	// draft pre-created here would never be reconciled and would orphan. In
+	// tag-only mode the tag is still created when CreateTag is set, but no release
+	// object is created or mutated, so a published release the release workflow
+	// already made is never touched.
+	TagOnly bool
 	// KnownReleaseID is the GitHub release ID returned by a preceding ActionCreate
 	// in the same workflow step. When set, ActionPrerelease and ActionLock use it
 	// directly instead of re-discovering the release by tag, eliminating the
@@ -331,6 +340,21 @@ func (m *Manager) listTags() ([]string, error) {
 }
 
 func (m *Manager) create(opts Options) (*Result, error) {
+	// Tag-only mode: the configured release workflow (for example GoReleaser) is
+	// the sole creator of the release object, so materialize the git tag and skip
+	// the draft-release POST entirely. Pre-creating a draft here would orphan when
+	// the release workflow publishes its own release for the same tag, and the
+	// draft would never be reconciled. No stale-draft sweep runs because tag-only
+	// mode never creates drafts to accumulate.
+	if opts.TagOnly {
+		if opts.CreateTag {
+			if err := m.createGitTag(opts.Tag, opts.SHA); err != nil {
+				return nil, fmt.Errorf("creating git tag: %w", err)
+			}
+		}
+		return &Result{}, nil
+	}
+
 	// Clean up any existing draft releases for this environment first
 	// This prevents accumulation of stale drafts when new commits are pushed
 	if err := m.cleanupStaleDrafts(opts.Environment, opts.Tag); err != nil {
@@ -528,6 +552,14 @@ func (m *Manager) listDraftReleases() ([]GitHubRelease, error) {
 }
 
 func (m *Manager) update(opts Options) (*Result, error) {
+	// Tag-only mode never resolves or mutates a release object. Delegating to
+	// create keeps the tag-create-and-return logic in one place and, critically,
+	// skips the findRelease lookup so an unrelated release the self-publishing
+	// workflow already made (matched by tag or target SHA) is never PATCHed.
+	if opts.TagOnly {
+		return m.create(opts)
+	}
+
 	existing, err := m.findRelease(opts.Tag, opts.SHA)
 	if err != nil {
 		return nil, err

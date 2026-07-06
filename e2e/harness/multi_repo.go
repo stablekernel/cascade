@@ -196,7 +196,7 @@ func (h *MultiRepoHarness) CreateRepo(ctx context.Context, setup MultiRepoSetup)
 	// prepareRepoInActContainer before running anything.
 	if setup.Config != nil && h.base != nil && h.act != nil {
 		h.base.repo = repoCtx.Repo
-		if err := h.base.GenerateWorkflows(ctx); err != nil {
+		if err := h.base.GenerateWorkflows(ctx, false); err != nil {
 			return nil, fmt.Errorf("failed to generate workflows for %s: %w", setup.Name, err)
 		}
 		// Refresh HEAD: GenerateWorkflows pushed a workflows commit.

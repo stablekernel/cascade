@@ -140,17 +140,50 @@ type Generator struct {
 	// ${{ state.<env>.<field> }} references in callback inputs at generation
 	// time. Optional: nil when no state is threaded (e.g. unit tests).
 	state map[string]*config.EnvState
+	// ownRepo switches the generator into cascade's own-repo release-plumbing
+	// mode, set only via WithOwnRepoRelease. See that option for the full
+	// rationale.
+	ownRepo bool
 }
 
-// NewGenerator creates a new workflow generator
-func NewGenerator(cfg *config.TrunkConfig, baseDir string) *Generator {
-	return &Generator{
+// GeneratorOption customizes a Generator. Options are the additive, variadic
+// tail of NewGenerator so new behavior never changes the two-argument
+// signature callers already depend on.
+type GeneratorOption func(*Generator)
+
+// WithOwnRepoRelease switches the orchestrate generator into cascade's own-repo
+// release-plumbing mode instead of the plain output every downstream manifest
+// produces. Cascade self-publishes its own rc cut through GoReleaser
+// (dispatched via the configured release.workflow), so cascade's own finalize
+// job cuts the candidate tag only, without pre-creating a draft release, and
+// creates that tag with the non-triggering GITHUB_TOKEN so the tag push does
+// not also fire the release workflow alongside the explicit dispatch. A
+// downstream user's manage-release (this same generator, without the option)
+// still needs the draft cascade's own release-build workflow can PATCH, since
+// most downstream repos have no self-publishing release workflow of their own.
+// This is not a manifest field: own-repo mode is selected only by the
+// generate-workflow/verify --own-repo CLI flag, never by config a downstream
+// manifest could set, mirroring WithOwnRepo on the reconcile companion
+// generator (a distinct name is required in the same package; Go does not
+// allow two functions named WithOwnRepo with different signatures).
+func WithOwnRepoRelease() GeneratorOption {
+	return func(g *Generator) { g.ownRepo = true }
+}
+
+// NewGenerator creates a new workflow generator. Optional behavior is supplied
+// through the variadic GeneratorOption tail.
+func NewGenerator(cfg *config.TrunkConfig, baseDir string, opts ...GeneratorOption) *Generator {
+	g := &Generator{
 		config:         cfg,
 		baseDir:        baseDir,
 		outputs:        make(map[string][]string),
 		inputs:         make(map[string][]string),
 		requiredInputs: make(map[string][]string),
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // getStateTokenRef returns the token expression used to write manifest state to
@@ -222,6 +255,27 @@ func (g *Generator) getCLIRef() string {
 // Users configure the full expression via release_token config option.
 func (g *Generator) getReleaseTokenRef() string {
 	return resolveReleaseTokenRef(g.config)
+}
+
+// nonTriggeringGitHubToken is the default GITHUB_TOKEN expression. Actions taken
+// with it deliberately do not create new workflow runs (with the exception of
+// workflow_dispatch and repository_dispatch), so creating a tag with it does not
+// fire a push: tags trigger. Cascade's own-repo release mode uses it for the
+// tag-create step and dispatches the release workflow separately with the
+// release token.
+const nonTriggeringGitHubToken = "${{ secrets.GITHUB_TOKEN }}"
+
+// getTagCreateTokenRef returns the token expression for the manage-release step
+// that cuts the version tag. In cascade's own-repo release mode the tag must be
+// created with the non-triggering GITHUB_TOKEN so the tag push does not start a
+// second release run alongside the explicit dispatch; otherwise (every
+// downstream manifest) the configured release token is used, since a push-mode
+// trunk relies on that push to trigger its release workflow.
+func (g *Generator) getTagCreateTokenRef() string {
+	if g.ownRepo {
+		return nonTriggeringGitHubToken
+	}
+	return g.getReleaseTokenRef()
 }
 
 // getManifestFilePath returns the manifest file path for use in generated scripts.
@@ -1886,6 +1940,13 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		sb.WriteString("          action: update\n")
 		sb.WriteString("          tag: ${{ needs.setup.outputs.version }}\n")
 		sb.WriteString("          create_tag: 'true'\n")
+		// Cascade's own-repo release mode: cut the candidate tag but do not
+		// pre-create a draft release. The configured release workflow (dispatched
+		// below) is the sole creator of the release object, so a draft here would
+		// orphan.
+		if g.ownRepo {
+			sb.WriteString("          tag_only: 'true'\n")
+		}
 	}
 
 	// Only include environment if there are environments configured
@@ -1906,7 +1967,10 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		}
 	}
 	sb.WriteString("          previous_tag: ${{ needs.setup.outputs.previous_tag }}\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
+	// The tag-create token switches to the non-triggering GITHUB_TOKEN in
+	// tag-only mode so the candidate tag push does not fire the release workflow
+	// alongside the explicit dispatch emitted by writeCandidateDispatchStep.
+	fmt.Fprintf(sb, "          token: %s\n", g.getTagCreateTokenRef())
 }
 
 // writeCandidateDispatchStep fires the configured release workflow against the

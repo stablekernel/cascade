@@ -15,6 +15,14 @@ type MultiStepScenario struct {
 	Config      Config      `yaml:"config"`
 	Setup       *SetupState `yaml:"setup,omitempty"` // Optional initial state
 	Steps       []Step      `yaml:"steps"`
+	// OwnRepo runs generation in cascade's own-repo mode (`cascade generate-workflow
+	// --own-repo`), the variant cascade's own manifest uses for its rc-cut release
+	// plumbing (tag-only manage-release + the non-triggering GITHUB_TOKEN
+	// tag-create). It is not a manifest field: own-repo mode is selected by CLI
+	// flag, never by config a downstream user's manifest could set, so a scenario
+	// opts into it here rather than through Config. Defaults to false, matching
+	// every existing scenario's plain generation.
+	OwnRepo bool `yaml:"own_repo,omitempty"`
 	// SetupWorkflows seeds reusable callback workflow files into the setup commit
 	// BEFORE workflow generation runs, keyed by repository path (for example
 	// ".github/workflows/deploy-app.yaml"). The harness generates a generic

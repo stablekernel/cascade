@@ -129,7 +129,7 @@ jobs:
       - name: Check for workflow drift
         run: |
           set +e
-          /tmp/cascade verify --config .github/manifest.yaml > drift-report.txt 2>&1
+          /tmp/cascade verify --own-repo --config .github/manifest.yaml > drift-report.txt 2>&1
           echo $? > drift-exit.txt
           set -e
           cat drift-report.txt
@@ -187,7 +187,7 @@ jobs:
           CODE=$(cat drift-exit.txt)
           if [ "$CODE" != "0" ]; then
             echo "Workflows are out of sync with the manifest."
-            echo "Run: cascade generate-workflow --config .github/manifest.yaml --force"
+            echo "Run: cascade generate-workflow --own-repo --config .github/manifest.yaml --force"
             echo "Then commit the regenerated workflows."
           fi
           exit "$CODE"

@@ -1,25 +1,30 @@
 name: Release
 
 on:
-  # Fires when a tag is pushed via git (e.g. manual hotfix tag or
-  # tag-pushed-by-release-action workflows).
+  # Fires when a tag is pushed via git with a workflow-triggering identity.
+  # This covers the hotfix tag and a human ad-hoc `git push vX.Y.Z`: both are
+  # push-only and have no dispatcher, so push: tags is their build path.
+  #
+  # The machine rc and final-release paths do NOT rely on this trigger. The
+  # orchestrate rc cut (generated in cascade's own-repo mode, see
+  # generate-workflow --own-repo) and the auto-promote final publish create
+  # their tag with the default GITHUB_TOKEN, whose actions deliberately do not
+  # start a workflow run, and then dispatch this workflow explicitly (below)
+  # with the release PAT. That keeps exactly one Release run per machine-cut
+  # tag while still cascading to fleet-e2e via workflow_run.
   push:
     tags:
       - "v*"
-  # Fires when the promote workflow's manage-release step transitions a
-  # draft release to non-draft via the GitHub API. API-only releases
-  # don't emit `push: tags`, so without this the binaries wouldn't be
-  # built and downstream `setup-cli` calls would 404 on assets.
-  #
-  # Both listed but neither fires reliably from promote-driven API
-  # releases (#86). The promote workflow explicitly dispatches via
-  # workflow_dispatch instead. Kept as belt-and-suspenders for any
-  # future path that creates releases outside the promote flow.
+  # Backstop only: a release published outside the machine flow (for example a
+  # human publishing from the UI, or a PAT-created release) still builds and
+  # attaches assets. GoReleaser publishes with the default GITHUB_TOKEN, which
+  # does not re-fire this trigger, so it never loops on the machine path.
   release:
     types: [published, released]
-  # Explicitly triggered by the promote workflow's finalize job after
-  # publishing. This is the reliable path; event-based triggers don't
-  # fire when releases are managed via API calls in a workflow run.
+  # Canonical trigger for every machine path. orchestrate and auto-promote
+  # dispatch this workflow against the cut tag with the release PAT; this is
+  # immune to a CI-skip state commit on the tagged commit and to the
+  # API-release events GitHub does not reliably fire (#86).
   workflow_dispatch:
 
 # Least-privilege default: read-only at the top level. Only the release job,

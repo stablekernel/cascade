@@ -239,7 +239,7 @@ jobs:
                 'The generated workflows are out of sync with the manifest. Run and commit:',
                 '',
                 '```',
-                'cascade generate-workflow --config .github/manifest.yaml --force',
+                'cascade generate-workflow --own-repo --config .github/manifest.yaml --force',
                 '```',
                 '',
                 '<details><summary>cascade verify output</summary>',

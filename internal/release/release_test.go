@@ -228,6 +228,126 @@ func TestManager_Create(t *testing.T) {
 	assert.Equal(t, 2, callCount) // GET for cleanup + POST for create
 }
 
+// tagOnlyRecordingServer returns an httptest server that records every request
+// method+path it sees, answering the tag-create (POST /git/refs) with 201 and
+// any release-list or release POST/GET with an empty-but-valid response. The
+// recorded slice lets a test assert exactly which endpoints a manage-release
+// call touched.
+func tagOnlyRecordingServer(t *testing.T, seen *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*seen = append(*seen, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]GitHubRelease{})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/releases"):
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{ID: 123})
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{})
+		}
+	}))
+}
+
+func containsPathSuffix(seen []string, method, suffix string) bool {
+	for _, s := range seen {
+		if strings.HasPrefix(s, method+" ") && strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestManager_Create_TagOnly asserts that tag-only mode materializes the git tag
+// but never POSTs a draft release, so a self-publishing release workflow (for
+// example GoReleaser) is the sole creator of the release object and no draft is
+// orphaned. The default (non-tag-only) path is asserted alongside as a scoping
+// regression guard: it must still create the draft.
+func TestManager_Create_TagOnly(t *testing.T) {
+	tests := []struct {
+		name        string
+		tagOnly     bool
+		wantTagPost bool
+		wantDraft   bool
+	}{
+		{name: "tag-only skips the draft POST", tagOnly: true, wantTagPost: true, wantDraft: false},
+		{name: "default still creates the draft", tagOnly: false, wantTagPost: true, wantDraft: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen []string
+			server := tagOnlyRecordingServer(t, &seen)
+			defer server.Close()
+
+			manager := &Manager{
+				client:  server.Client(),
+				baseURL: server.URL + "/github", // host substring marks it as GitHub
+				token:   "test-token",
+				repo:    "owner/repo",
+				sleepFn: func(time.Duration) {},
+			}
+
+			_, err := manager.Manage(Options{
+				Action:      ActionCreate,
+				Environment: "prerelease",
+				SHA:         "abc123",
+				Tag:         "v1.2.0-rc.0",
+				CreateTag:   true,
+				TagOnly:     tt.tagOnly,
+			})
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantTagPost, containsPathSuffix(seen, http.MethodPost, "/git/refs"),
+				"git tag creation expectation not met; saw %v", seen)
+			assert.Equal(t, tt.wantDraft, containsPathSuffix(seen, http.MethodPost, "/releases"),
+				"draft release POST expectation not met; saw %v", seen)
+		})
+	}
+}
+
+// TestManager_Update_TagOnly asserts that action=update in tag-only mode (the
+// shape cascade's orchestrate finalize uses) cuts the tag and returns without
+// looking up or PATCHing any release object. Skipping the findRelease lookup is
+// load-bearing: it guarantees a published release the self-publishing workflow
+// already created (matched by tag or target SHA) is never mutated.
+func TestManager_Update_TagOnly(t *testing.T) {
+	var seen []string
+	server := tagOnlyRecordingServer(t, &seen)
+	defer server.Close()
+
+	manager := &Manager{
+		client:  server.Client(),
+		baseURL: server.URL + "/github",
+		token:   "test-token",
+		repo:    "owner/repo",
+		sleepFn: func(time.Duration) {},
+	}
+
+	_, err := manager.Manage(Options{
+		Action:      ActionUpdate,
+		Environment: "prerelease",
+		SHA:         "abc123",
+		Tag:         "v1.2.0-rc.0",
+		CreateTag:   true,
+		TagOnly:     true,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, containsPathSuffix(seen, http.MethodPost, "/git/refs"),
+		"expected the git tag to be created; saw %v", seen)
+	assert.False(t, containsPathSuffix(seen, http.MethodPost, "/releases"),
+		"tag-only update must not POST a draft release; saw %v", seen)
+	for _, s := range seen {
+		assert.NotContains(t, s, "/releases/tags/",
+			"tag-only update must not look up a release by tag; saw %v", seen)
+	}
+}
+
 func TestManager_Update_ExistingRelease(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

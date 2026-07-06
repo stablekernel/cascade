@@ -126,33 +126,50 @@ a full run. Only a complete fleet validation is a safe release signal.
 ## Release runs once per tag
 
 Every publish path drives the same [`release.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/release.yaml)
-Release workflow, and it is triggered redundantly on purpose. A candidate tag pushed
-with the state token emits a real push event, while orchestrate, promote, and
-auto-promote each also dispatch Release explicitly against the tag. The explicit
-dispatch is the dependable path: a tag created through the API, or one whose commit
-message carries a CI-skip token, does not reliably emit push or release events, so
-without the dispatch the assets would never build. The fallback stays in place for
-exactly that reason.
+Release workflow. Each machine path fires it exactly once, through an explicit
+`workflow_dispatch`. Orchestrate (the rc cut) and auto-promote (the final publish) create
+their tag with the default `GITHUB_TOKEN`, whose actions deliberately do not start a
+workflow run, so the tag push does not fire the `push: tags` trigger. They then dispatch
+Release explicitly against that tag with the release token. The dispatch is the canonical
+trigger: it is immune both to a CI-skip token on the tagged commit and to the API-release
+events GitHub does not reliably fire, which would otherwise leave assets unbuilt. Because
+the dispatch carries the release token rather than the default token, the resulting
+Release run still cascades to `fleet-e2e` through `workflow_run`.
 
-The cost of the redundancy is that a pushed candidate tag can start two Release runs at
-the same instant. Two guards make the duplicate harmless:
+Cascade also generates a `promote.yaml` (every manifest with more than one environment
+gets one), but it plays no part in cascade's own release path: cascade has no
+intermediate environments to promote between, and its actual final publish is
+auto-promote's hand-authored chain. `promote.yaml` sits unused, generated in its plain
+(non-own-repo) form like any downstream repository's would be.
 
-- A single-flight `concurrency` group named `release`, constant rather than keyed on the
-  tag, holds the hard invariant that no two releases are ever in flight together. With
-  `cancel-in-progress: false`, an active publish always finishes and the duplicate simply
-  queues behind it.
-- An idempotency check at the head of the release job. It skips the build and finishes
-  green when a live, non-draft release already carries its `checksums.txt` manifest for
-  the tag, so the queued duplicate no-ops instead of driving GoReleaser into a
-  `422 already_exists` and leaving a stray draft. A belt after GoReleaser covers the rare
-  case where two runs publish at once: a `422` is treated as success only when the tag is
-  already published, and any other failure still fails the job. The decision core lives in
-  `.github/scripts/release-idempotency.sh` and is unit tested in isolation.
+The `push: tags` trigger stays in place for the two paths that have no dispatcher: the
+hotfix tag and a human ad-hoc `git push vX.Y.Z`. Both are push-only, and their tag is
+pushed with a workflow-triggering identity, so `push: tags` is their build path. The
+machine paths never rely on it.
 
-Because the group can supersede a still-pending duplicate when a newer trigger arrives, no
-publish is ever silently dropped: the release job is idempotent and every dispatcher
-watches its Release run and can redispatch, so a final publish that loses a pending slot is
-simply rebuilt on the next dispatch.
+GoReleaser is the sole creator of cascade's release object. Cascade's own committed
+`orchestrate.yaml` and `manage-release` composite action are generated in an own-repo
+mode (`cascade generate-workflow --own-repo`, mirrored by `cascade verify --own-repo` so
+the committed files are drift-locked to that variant): the rc cut's `manage-release` step
+cuts the candidate tag and stops there, without pre-creating a draft release, and does so
+with the non-triggering `GITHUB_TOKEN`. GoReleaser, running inside Release, then creates
+and publishes the one release for that tag. Nothing pre-creates a draft that GoReleaser
+would duplicate, so no orphaned draft is left behind.
+
+This is not a manifest option. Own-repo mode is a CLI flag cascade passes only when
+generating and verifying its own workflows, because cascade is the one repository that
+self-publishes through GoReleaser; a downstream manifest has no way to reach it, and its
+generated `manage-release` action carries no trace of the tag-only input at all. Every
+other repository's `manage-release` still pre-creates the draft its own release-build
+workflow expects to find and publish.
+
+A single-flight `concurrency` group named `release`, an idempotency check at the head of
+the release job (`.github/scripts/release-idempotency.sh`), and a benign-`422` belt after
+GoReleaser remain as a defensive backstop. They protect the hotfix and human push paths
+and any genuine race: the group holds the invariant that no two releases run at once, and
+the idempotency check lets a queued duplicate finish green against an already-published
+tag instead of driving GoReleaser into a `422 already_exists`. On the machine paths, which
+now fire once, these guards simply never engage.
 
 ## The nightly-gated release
 

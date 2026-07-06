@@ -19,20 +19,24 @@ var actionFolderRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // RenderLocalActions returns the composite action file the manifest would
 // generate, paired with its rendered content, without writing anything to disk.
 // The path is baseDir/.github/actions/<folder>/action.yaml where <folder> is
-// cfg.GetActionFolder() (default: "manage-release").
-func RenderLocalActions(baseDir string, cfg *config.TrunkConfig) (PlannedFile, error) {
+// cfg.GetActionFolder() (default: "manage-release"). ownRepo emits cascade's
+// own-repo variant of the action (the extra tag_only input its own-repo
+// orchestrate finalize step sets); every downstream manifest gets the plain
+// action, byte-identical to before own-repo mode existed.
+func RenderLocalActions(baseDir string, cfg *config.TrunkConfig, ownRepo bool) (PlannedFile, error) {
 	actionFolder := cfg.GetActionFolder()
 	if strings.Contains(actionFolder, "..") || strings.Contains(actionFolder, "/") || !actionFolderRe.MatchString(actionFolder) {
 		return PlannedFile{}, fmt.Errorf("action_folder %q is not a safe plain folder name", actionFolder)
 	}
 	actionPath := filepath.Join(baseDir, ".github", "actions", actionFolder, "action.yaml")
-	return PlannedFile{Path: actionPath, Content: generateManageReleaseAction()}, nil
+	return PlannedFile{Path: actionPath, Content: generateManageReleaseAction(ownRepo)}, nil
 }
 
 // GenerateLocalActions creates the local action files in the user's repo.
 // Uses cfg.GetActionFolder() for the folder name (default: "manage-release").
-func GenerateLocalActions(baseDir string, cfg *config.TrunkConfig) error {
-	action, err := RenderLocalActions(baseDir, cfg)
+// See RenderLocalActions for the ownRepo semantics.
+func GenerateLocalActions(baseDir string, cfg *config.TrunkConfig, ownRepo bool) error {
+	action, err := RenderLocalActions(baseDir, cfg, ownRepo)
 	if err != nil {
 		return err
 	}
@@ -48,8 +52,14 @@ func GenerateLocalActions(baseDir string, cfg *config.TrunkConfig) error {
 	return nil
 }
 
-// generateManageReleaseAction returns the content for the local manage-release action
-func generateManageReleaseAction() string {
+// generateManageReleaseAction returns the content for the local manage-release
+// action. ownRepo adds the tag_only input (and its env/CLI-arg forwarding),
+// cascade's own-repo release plumbing: cutting the tag only, without
+// pre-creating a draft release, so the self-publishing release workflow
+// (GoReleaser) is the sole creator of the release object. It is additive and
+// omitted entirely when ownRepo is false, so downstream generation is
+// byte-identical to the action every manifest has always produced.
+func generateManageReleaseAction(ownRepo bool) string {
 	var sb strings.Builder
 
 	sb.WriteString(GeneratedFileMarker)
@@ -98,7 +108,15 @@ inputs:
     description: 'Create git tag on create action'
     required: false
     default: 'false'
-
+`)
+	if ownRepo {
+		sb.WriteString(`  tag_only:
+    description: 'Create the git tag only and skip creating a draft release'
+    required: false
+    default: 'false'
+`)
+	}
+	sb.WriteString(`
 outputs:
   release_id:
     description: 'GitHub release ID'
@@ -127,7 +145,11 @@ runs:
         INPUT_NEW_TAG: ${{ inputs.new_tag }}
         INPUT_DELETE_TAG: ${{ inputs.delete_tag }}
         INPUT_CREATE_TAG: ${{ inputs.create_tag }}
-        GITHUB_TOKEN: ${{ inputs.token }}
+`)
+	if ownRepo {
+		sb.WriteString("        INPUT_TAG_ONLY: ${{ inputs.tag_only }}\n")
+	}
+	sb.WriteString(`        GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         # Write changelog to temp file to handle multiline content
         CHANGELOG_FILE=$(mktemp)
@@ -145,7 +167,12 @@ runs:
         [[ -n "$INPUT_NEW_TAG" ]] && CMD_ARGS+=(--new-tag "$INPUT_NEW_TAG")
         [[ -n "$INPUT_DELETE_TAG" ]] && CMD_ARGS+=(--delete-tag "$INPUT_DELETE_TAG")
         [[ "$INPUT_CREATE_TAG" == "true" ]] && CMD_ARGS+=(--create-tag)
-
+`)
+	if ownRepo {
+		sb.WriteString(`        [[ "$INPUT_TAG_ONLY" == "true" ]] && CMD_ARGS+=(--tag-only)
+`)
+	}
+	sb.WriteString(`
         # Run CLI
         OUTPUT=$(cascade manage-release "${CMD_ARGS[@]}" --changelog-file "$CHANGELOG_FILE")
         rm -f "$CHANGELOG_FILE"
