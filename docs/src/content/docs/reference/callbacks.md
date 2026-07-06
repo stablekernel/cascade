@@ -1,24 +1,23 @@
 ---
-title: Callback Contract
-description: Defines the inputs, outputs, and structural requirements for validate, build, deploy, and publish callback workflows invoked by the cascade framework.
+title: Callback contract
+description: The inputs, outputs, and structural requirements for the validate, build, deploy, and publish callback workflows cascade invokes.
 ---
 
-The framework calls your workflows (callbacks) during CI/CD execution. This document defines the contract your workflows must follow.
+Cascade calls your workflows (callbacks) during pipeline execution. This page defines the contract those workflows must follow: what inputs they receive, what outputs they must declare, and how state flows between them.
 
-Every callback (validate, build, deploy, publish) is a reusable workflow that you declare with `workflow:` in the manifest. The framework invokes it with `workflow_call`.
+## Callback types
 
-## Migrating from inline `run:`/`shell:` callbacks
+| Type | Purpose | Standard inputs |
+|------|---------|-----------------|
+| **Validate** | Pre-build checks (lint, test) | `environment`, `sha`, `dry_run` |
+| **Build** | Produce artifacts | `environment`, `sha`, `dry_run` |
+| **Deploy** | Apply changes to an environment | `environment`, `sha`, `dry_run`, plus build outputs |
+| **Publish** | Retag artifacts at the prerelease-to-release boundary | `build_name`, `old_version`, `new_version`, `sha`, `artifact_id` |
 
-Inline `run:`/`shell:` callbacks were removed. A callback can no longer carry a `run:` script or a `shell:` setting in the manifest; it must point at a reusable workflow via `workflow:`. The manifest still parses these keys, but validation now rejects them.
-
-To migrate, move the script into a reusable workflow under `.github/workflows/`, expose it with `on: workflow_call` (declaring the standard `environment`, `sha`, and `dry_run` inputs), and replace the callback's `run:`/`shell:` with `workflow: .github/workflows/<name>.yaml`. The script text becomes a `run:` step inside that workflow's job. The sections below show the required structure for each callback type.
-
-## Overview
-
-Adopting repositories provide callback workflows that the framework invokes:
+Every callback is a reusable workflow you declare with `workflow:` in the manifest. Cascade invokes it with `workflow_call`.
 
 ```
-Framework                            Your Repository
+Cascade                               Your Repository
 ┌─────────────────┐                 ┌──────────────────┐
 │ orchestrate.yaml│──workflow_call──▶│ validate.yaml    │
 │                 │──workflow_call──▶│ build-app.yaml   │
@@ -29,37 +28,29 @@ Framework                            Your Repository
 └─────────────────┘                 └──────────────────┘
 ```
 
-## Callback Types
+## Standard inputs
 
-| Type | Purpose | Standard Inputs |
-|------|---------|-----------------|
-| **Validate** | Pre-build checks (lint, test) | environment, sha, dry_run |
-| **Build** | Produce artifacts | environment, sha, dry_run |
-| **Deploy** | Apply changes to an environment | environment, sha, dry_run, plus build outputs |
-| **Publish** | Retag artifacts at the prerelease->release boundary | build_name, old_version, new_version, sha, artifact_id |
-
-## Standard Inputs
-
-The framework always passes these to validate/build/deploy callbacks:
+Cascade always passes these to validate, build, and deploy callbacks:
 
 | Input | Type | Description |
 |-------|------|-------------|
-| `environment` | string | Target environment (e.g., `dev`, `test`, `prod`) |
+| `environment` | string | Target environment (for example `dev`, `test`, `prod`) |
 | `sha` | string | Commit SHA being processed |
 | `dry_run` | boolean | If `true`, skip mutating operations |
 
-Any other inputs your callback needs must come from one of:
-1. **Static `inputs:`** in the manifest
-2. **Per-environment `env_inputs:`** in the manifest
-3. **Outputs declared by a `depends_on:` callback** (auto-discovered)
+Any other input your callback needs must come from one of:
 
-The framework parses your workflow files to discover declared `outputs:` and forwards them to dependents as inputs by name.
+1. **Static `inputs:`** in the manifest.
+2. **Per-environment `env_inputs:`** in the manifest.
+3. **Outputs declared by a `depends_on:` callback** (auto-discovered).
 
-## Build Workflow Contract
+Cascade parses your workflow files to discover declared `outputs:` and forwards them to dependents as inputs by name.
+
+## Build workflow contract
 
 Build workflows produce artifacts (Docker images, binaries).
 
-### Required Structure
+### Required structure
 
 ```yaml
 name: Build App
@@ -161,11 +152,11 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 ```
 
-## Deploy Workflow Contract
+## Deploy workflow contract
 
 Deploy workflows apply changes to an environment.
 
-### Required Structure
+### Required structure
 
 ```yaml
 name: Deploy Services
@@ -188,7 +179,7 @@ on:
       # Add custom outputs as needed
 ```
 
-### Receiving Build Outputs
+### Receiving build outputs
 
 When a deploy declares `depends_on: [app]` and the `app` build declares an `image_tag` output, the deploy callback receives `image_tag` as an input automatically:
 
@@ -204,7 +195,7 @@ on:
         required: true
       image_tag:
         type: string
-        required: true   # Provided by the framework via output chaining
+        required: true   # Provided by cascade via output chaining
 ```
 
 ### Example
@@ -258,11 +249,11 @@ jobs:
             --task-definition my-task:${{ inputs.image_tag }}
 ```
 
-## Validate Workflow Contract
+## Validate workflow contract
 
 Optional pre-build validation.
 
-### Required Structure
+### Required structure
 
 ```yaml
 name: Validate
@@ -325,11 +316,11 @@ jobs:
         run: go test -v ./...
 ```
 
-## Publish Workflow Contract
+## Publish workflow contract
 
-The publish callback runs once per build at the prerelease->release boundary (when a draft RC is published as a final semver release). Use it to retag artifacts that still carry their RC version.
+The publish callback runs once per build at the prerelease-to-release boundary (when a draft RC is published as a final semver release). Use it to retag artifacts that still carry their RC version.
 
-### Required Structure
+### Required structure
 
 ```yaml
 name: Publish
@@ -359,8 +350,8 @@ on:
 | Input | Description |
 |-------|-------------|
 | `build_name` | Which build's artifacts to retag (matches a `builds[].name`) |
-| `old_version` | RC version currently in the registry (e.g., `v1.0.0-rc.2`) |
-| `new_version` | Final semver to apply (e.g., `v1.0.0`) |
+| `old_version` | RC version currently in the registry (for example `v1.0.0-rc.2`) |
+| `new_version` | Final semver to apply (for example `v1.0.0`) |
 | `sha` | Git commit SHA |
 | `artifact_id` | Immutable digest from the build's `artifact_id` output (empty if not declared) |
 
@@ -401,9 +392,9 @@ jobs:
           docker push myrepo/${{ inputs.build_name }}:${{ inputs.new_version }}
 ```
 
-The framework only carries metadata. The publish callback performs the registry operation. When `artifact_id` is present, use it instead of `old_version` so the target is unambiguous.
+Cascade only carries metadata. The publish callback performs the registry operation. When `artifact_id` is present, use it instead of `old_version` so the target is unambiguous.
 
-## Custom Inputs
+## Custom inputs
 
 Pass custom inputs via `inputs` and `env_inputs` in the manifest:
 
@@ -435,7 +426,7 @@ on:
         type: boolean
 ```
 
-## Output Chaining
+## Output chaining
 
 Outputs from one callback are passed to dependents:
 
@@ -454,11 +445,11 @@ ci:
         # Receives: artifact_id, image_tag as inputs
 ```
 
-The framework parses workflow files for `outputs:` and forwards them automatically.
+Cascade parses workflow files for `outputs:` and forwards them automatically.
 
-## State Capture
+## State capture
 
-The framework automatically captures into per-environment state:
+Cascade automatically captures into per-environment state:
 
 | Field | Source | Where |
 |-------|--------|-------|
@@ -477,11 +468,13 @@ ci:
           artifact_id: "sha256:def456..."
 ```
 
-## Environment Protection
+Which builds and deploys get captured, and under what tags, is controlled by the `state_tags` field on the corresponding manifest entry. See the `state_tags` field in the [manifest reference](/cascade/reference/manifest/) for the full field definition.
+
+## Environment protection
 
 Use GitHub Environment protection for approval gates. Because every deploy is a reusable workflow, declare the `environment:` key on the job **inside your reusable workflow**. GitHub Actions only allows a job-level `environment:` key on a steps job, never on a job that calls a reusable workflow with `uses:`, so the caller job cascade generates cannot carry it.
 
-cascade passes the target environment name to your workflow as the `environment` input, so wire it through:
+Cascade passes the target environment name to your workflow as the `environment` input, so wire it through:
 
 ```yaml
 # your reusable deploy workflow
@@ -493,11 +486,11 @@ jobs:
       - run: ./deploy.sh
 ```
 
-cascade cannot set `environment:` on the caller job it generates: GitHub Actions rejects a workflow that puts `environment:` on a `uses:` job. cascade therefore emits only the `with: environment:` input on the caller and relies on your reusable workflow to apply the protection rules. cascade prints a generate-time note when `gha_environment` is configured for an environment, reminding you to declare `environment:` inside the reusable workflow.
+Cascade cannot set `environment:` on the caller job it generates: GitHub Actions rejects a workflow that puts `environment:` on a `uses:` job. Cascade therefore emits only the `with: environment:` input on the caller and relies on your reusable workflow to apply the protection rules. Cascade prints a generate-time note when `gha_environment` is configured for an environment, reminding you to declare `environment:` inside the reusable workflow.
 
 Configure protection in GitHub: **Settings -> Environments -> Add required reviewers**.
 
-## Dry Run Handling
+## Dry run handling
 
 All callbacks should respect `dry_run`:
 
@@ -513,7 +506,7 @@ All callbacks should respect `dry_run`:
     echo "Would deploy ${{ inputs.image_tag }}"
 ```
 
-## Error Handling
+## Error handling
 
 Callback failures are handled by the `on_failure` policy:
 
@@ -524,14 +517,20 @@ Callback failures are handled by the `on_failure` policy:
 
 With `retries: N`, failed callbacks retry up to N times before final failure.
 
+## Migrating from inline `run:`/`shell:` callbacks
+
+Inline `run:`/`shell:` callbacks were removed. A callback can no longer carry a `run:` script or a `shell:` setting in the manifest; it must point at a reusable workflow via `workflow:`. The manifest still parses these keys, but validation now rejects them.
+
+To migrate, move the script into a reusable workflow under `.github/workflows/`, expose it with `on: workflow_call` (declaring the standard `environment`, `sha`, and `dry_run` inputs), and replace the callback's `run:`/`shell:` with `workflow: .github/workflows/<name>.yaml`. The script text becomes a `run:` step inside that workflow's job. The sections above show the required structure for each callback type.
+
 ## Tips
 
 ### Keep callbacks focused
 
-- Build -> produce artifacts
-- Deploy -> apply to environment
-- Validate -> check quality
-- Publish -> retag
+- Build produces artifacts.
+- Deploy applies them to an environment.
+- Validate checks quality.
+- Publish retags.
 
 ### Consistent naming
 
@@ -544,7 +543,7 @@ publish.yaml
 
 ### Declare outputs explicitly
 
-The framework discovers outputs by parsing your workflow files. Declare them under `on.workflow_call.outputs`:
+Cascade discovers outputs by parsing your workflow files. Declare them under `on.workflow_call.outputs`:
 
 ```yaml
 outputs:
@@ -562,3 +561,9 @@ act workflow_call -j build \
   --input sha=$(git rev-parse HEAD) \
   --input dry_run=true
 ```
+
+---
+
+**Prerequisite**: [Getting started](/cascade/start/getting-started/) walks through writing your first callbacks and generating a pipeline.
+
+**Next**: the [manifest reference](/cascade/reference/manifest/) documents every field that configures how callbacks are wired together.

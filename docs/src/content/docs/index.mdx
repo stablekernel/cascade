@@ -9,7 +9,7 @@ hero:
     file: ../../assets/hero.png
   actions:
     - text: Get started
-      link: /cascade/getting-started/
+      link: /cascade/start/getting-started/
       icon: right-arrow
       variant: primary
     - text: View on GitHub
@@ -25,42 +25,43 @@ Define what to build and where to deploy in one manifest. Cascade generates the 
 The manifest (`.github/manifest.yaml`) is the single source of truth. It holds the pipeline configuration and the live deployment state for every environment. You run `cascade generate-workflow` once. After that, the generated workflows own their execution.
 
 <CardGrid stagger>
-  <Card title="Stage Graph" icon="seti:plan">
+  <Card title="How Cascade works" icon="seti:plan">
     The mental model: trunk, the environment chain, the release boundary, and
     the rollback and hotfix off-ramps.
 
-    [See the stage graph →](/cascade/stage-graph/)
+    [See how it works →](/cascade/start/how-it-works/)
   </Card>
   <Card title="Getting Started" icon="rocket">
     Walk through a first manifest and the generated workflows.
 
-    [Get started →](/cascade/getting-started/)
+    [Get started →](/cascade/start/getting-started/)
   </Card>
   <Card title="Manifest Reference" icon="setting">
     Every field of the manifest documented in one place.
 
-    [Read the reference →](/cascade/configuration/)
+    [Read the reference →](/cascade/reference/manifest/)
   </Card>
   <Card title="Callback Contract" icon="random">
     The inputs and outputs your build, deploy, and publish workflows exchange
     with cascade.
 
-    [See the contract →](/cascade/callback-contract/)
+    [See the contract →](/cascade/reference/callbacks/)
   </Card>
-  <Card title="Workflows" icon="seti:github">
-    How orchestrate, promote, and release move artifacts through environments.
+  <Card title="Generated Workflows" icon="seti:github">
+    The exact file set cascade emits, and how orchestrate, promote, hotfix,
+    and rollback move artifacts through environments.
 
-    [Explore workflows →](/cascade/workflows/)
+    [Explore generated workflows →](/cascade/reference/generated-workflows/)
   </Card>
   <Card title="CLI Reference" icon="laptop">
     The commands and flags cascade exposes.
 
-    [Browse the CLI →](/cascade/cli-reference/)
+    [Browse the CLI →](/cascade/reference/cli/)
   </Card>
   <Card title="Architecture" icon="puzzle">
     The design, and what cascade does and does not own.
 
-    [Understand the design →](/cascade/architecture/)
+    [Understand the design →](/cascade/internals/architecture/)
   </Card>
 </CardGrid>
 

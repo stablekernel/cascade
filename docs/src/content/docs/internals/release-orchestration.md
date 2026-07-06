@@ -173,3 +173,8 @@ A `force` plus `dry_run` dispatch therefore exercises every component of the rea
 path (the change gate bypass, the candidate cut, Release, the full fleet, the artifact
 handoff, and the auto-promote wiring) while proving, by tag identity alone, that
 nothing publishes.
+
+## Wayfinding
+
+**Prerequisite**: [Architecture](/cascade/internals/architecture/) for the system this release chain ships.
+**Next**: none. This is the end of the internals track.

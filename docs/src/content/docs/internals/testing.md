@@ -1,5 +1,5 @@
 ---
-title: How cascade is tested
+title: How Cascade is tested
 description: How cascade verifies its generated pipelines across two complementary layers. A hermetic act plus gitea harness runs on every pull request, and a live fleet exercises real GitHub Actions across every supported topology. The reconcile gate makes fleet results trustworthy, and the platform ceiling is validated by design rather than execution.
 ---
 
@@ -30,7 +30,7 @@ The fleet (`.github/workflows/fleet-e2e.yaml`) fans out to a set of purpose-buil
 
 The fleet proves the things that only real GitHub can prove: a real release object transitioning from draft to prerelease to published, real release-candidate tags being reaped on publish, the Contents API state-write path, cross-repo dispatch between real repositories, and real branch protection being written through a scoped token.
 
-The fleet fans out in sequenced lanes so peak live concurrency on its one shared token stays low, accepts a `repos` selector for running a single lane during development, and is cut and promoted under a nightly gate that releases only on a fully green fleet. The [Release orchestration](/cascade/release-orchestration/) page documents that machinery in full.
+The fleet fans out in sequenced lanes so peak live concurrency on its one shared token stays low, accepts a `repos` selector for running a single lane during development, and is cut and promoted under a nightly gate that releases only on a fully green fleet. The [Release orchestration](/cascade/internals/release-orchestration/) page documents that machinery in full.
 
 ### Unit tests (pure logic)
 
@@ -82,3 +82,8 @@ Some behavior depends on GitHub platform features and real cloud outcomes that n
 - **Real cloud deploy outcomes.** Cascade orchestrates your build and deploy callbacks; what those callbacks do against your cloud is yours to test.
 
 For each of these, cascade asserts the part it owns: the generated workflow structure and the orchestration around the call. It treats the platform-enforced outcome as a contract validated by review, because executing it would require faking the platform rather than testing cascade.
+
+## Wayfinding
+
+**Prerequisite**: [Architecture](/cascade/internals/architecture/) for the system this testing strategy validates.
+**Next**: [Feature coverage matrix](/cascade/internals/coverage-matrix/) for the feature-by-feature trace.
