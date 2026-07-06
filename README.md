@@ -35,7 +35,7 @@
 
 ---
 
-cascade is a compiler, not a control plane. You describe your environments, builds, deploys, and release policy in one manifest. cascade compiles that manifest into GitHub Actions workflows and then gets out of the way: the generated workflows run on GitHub's own runners, with no external service, agent, or daemon watching your repository.
+cascade is a compiler, not a control plane. You describe your environments, builds, deploys, and release policy in one manifest. cascade compiles that manifest into GitHub Actions workflows and then gets out of the way: everything runs as native GitHub Actions, with no external service, agent, or daemon watching your repository. Your build and deploy callbacks run on whatever runners you configure, GitHub-hosted or self-hosted.
 
 ## How it works
 
