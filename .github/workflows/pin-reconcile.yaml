@@ -140,7 +140,7 @@ jobs:
           tmp="$(mktemp -d)"
           gh release download "$tag" \
             -R stablekernel/cascade \
-            -p 'cascade_linux_amd64.tar.gz' \
+            -p 'cascade_*_linux_amd64.tar.gz' \
             -D "$tmp"
           tar -xzf "$tmp"/*.tar.gz -C "$tmp"
           install -m 0755 "$tmp/cascade" /usr/local/bin/cascade
