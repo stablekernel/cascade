@@ -267,6 +267,39 @@ cascade verify
 
 Rather than wire this job by hand, set `drift_check.enabled: true` in the manifest and `generate-workflow` emits the drift-check workflow for you. See [Drift-check workflow](/configuration/#drift-check-workflow-opt-in).
 
+### reconcile
+
+Adopt an external governed action-pin change (for example a Dependabot bump landing in a generated workflow) back into the manifest's `action_pins`, then regenerate every workflow the manifest produces so cascade's owned output agrees with it again. `reconcile` never pushes, commits, or merges; wiring a CI job (or running it by hand) to drive it, and to commit and push its result, stays the caller's job.
+
+```bash
+cascade reconcile --changed-file .github/workflows/orchestrate.yaml
+```
+
+`reconcile` reads the files named by `--changed-file` (repeatable) as data, scanning each line by line for a governed `uses:` reference, plus the manifest itself. It never reads a pin back out of a file the manifest generates: every generated file is exclusively a regenerate target, so a run that touches nothing relevant is a safe no-op and generation stays a pure offline function of the manifest. When a changed file carries a bump for an action cascade governs, `reconcile` writes that ref verbatim into the manifest's `action_pins`, keyed by action path, and regenerates. See [Action pinning](/configuration/#action-pinning) for what that write looks like under `pin_mode: tag` and `pin_mode: sha`.
+
+`reconcile` has three modes, selected by flag:
+
+| Mode | Flag | Behavior |
+|------|------|----------|
+| Default | (none) | Reconciles a user repo's manifest: adopts the bump into `action_pins` and regenerates. |
+| Detector | `--check` | Read-only: reports whether a governed pin changed and writes a data-only JSON artifact (`--check-output`) naming the changed refs; writes nothing else. |
+| Own-repo | `--own-repo` | Reconciles cascade's own `action_pins.yaml` manifest (a full re-marshal, since cascade owns that file) rather than a user manifest, and regenerates. |
+
+`--check` and `--own-repo` are mutually exclusive: the detector is read-only, and own-repo mode is a second write target, so combining them is rejected.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | string | `<root>/.github/manifest.yaml` | Path to the manifest file |
+| `--manifest-key` | string | `ci` | Top-level key inside the manifest |
+| `--root` | string | `.` | Repository root `reconcile` scans and writes relative to |
+| `--changed-file` | string (repeatable) | - | A changed source file to scan for a governed pin bump |
+| `--check` | bool | false | Read-only detector mode: report relevance and write a JSON artifact |
+| `--check-output` | string | `pin-reconcile-result.json` | Path to write the check-mode JSON artifact |
+| `--own-repo` | bool | false | Reconcile cascade's own `action_pins.yaml` manifest |
+| `--action-pins` | string | - | Path to `action_pins.yaml` (own-repo mode) |
+
 ### plan
 
 Preview, as a per-file unified diff, what `generate-workflow` would change in the committed workflow and action files, without writing anything. `plan` is read-only: it never writes files, runs git, or modifies the repository.
