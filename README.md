@@ -275,7 +275,7 @@ cascade generates workflows that handle the orchestration layer. Your callback w
 - **Dispatch inputs**: expose operator-facing manual-run inputs on the generated `workflow_dispatch`.
 - **PR plan preview**: a comment on each PR shows which builds and deploys would run.
 - **Merge queue lane**: a dedicated gate job runs before merge to protect trunk.
-- **Action pinning**: `pin_mode: sha` emits pinned SHA references for all cascade-managed action calls. Override individual actions via `action_pins`.
+- **Action pinning**: `pin_mode: sha` emits pinned SHA references for all cascade-managed action calls. Override individual actions via `action_pins`. cascade owns the action pins in the workflows it generates, and the opt-in `reconcile` companion reconciles an external bump (for example a merged Dependabot update) back into the manifest so ownership stays in one place.
 - **Breaking-change gate**: `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless you override them.
 - **Artifact passing**: the `artifact_id` output from build callbacks is stored in state and forwarded to deploys and the publish callback.
 - **Publish callback**: once a release is published, a separate workflow call lets you retag RC artifacts in your registry.

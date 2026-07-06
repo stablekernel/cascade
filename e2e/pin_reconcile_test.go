@@ -80,3 +80,58 @@ func TestReconcileAdoptsBumpAndSurvivesRegen(t *testing.T) {
 	err := harness.RunMultiStepScenario(ctx, t, scenario)
 	require.NoError(t, err, "reconcile adoption scenario failed")
 }
+
+// TestReconcileCompanionAppendsOnSameRepoPR proves the emitted
+// cascade-reconcile-companion.yaml end to end, under act, against a real
+// Gitea repository: a same-repo pull request carries a simulated external
+// governed-pin bump (the shape of a merged Dependabot update) landing in the
+// generated orchestrate.yaml, and driving the real companion workflow through
+// act with a real workflow_run event exercises the relevance trigger, the
+// trusted-metadata pull request resolution, the head-as-data checkout of the
+// pull request branch, the pinned cascade binary, the real (idempotent)
+// `cascade reconcile` adoption, and the push back onto the pull request's own
+// branch (the default "append" commit mode). A clean pass requires the
+// pushed branch to carry both the adopted action_pins entry and a regenerated
+// orchestrate.yaml that still carries the bumped pin, proving the adoption
+// survives the companion's own regenerate rather than being cosmetic.
+func TestReconcileCompanionAppendsOnSameRepoPR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E tests")
+	}
+	requireShardOwns(t)
+
+	// act cannot faithfully drive this workflow_run-triggered companion under
+	// the harness. Two properties of act's synthetic workflow_run emulation
+	// defeat it, independent of this feature: act resolves no marketplace or
+	// composite action without a real server to clone from (it git-clones from
+	// GITHUB_SERVER_URL, which is gitea here and has no such repository), and it
+	// does not carry a harness-provided API base into a run: step shell for this
+	// event, so the resolve step's curl sees an empty base URL and exits 3. The
+	// scenario already replaces the security-critical steps (the github-script
+	// resolve and the actions/checkout) with shell stand-ins to get even this
+	// far, so what remains under act is a reconstruction rather than the emitted
+	// steps.
+	//
+	// The emitted companion workflow is covered by the generator unit tests
+	// (TrustedMetadata, LoopGuards, Actionlint across all commit modes,
+	// AppendPushesOntoHeadBranch, ForkNeverPushedInPlace, FollowupOpensSeparatePR)
+	// plus actionlint, and the reconcile-adopts-and-survives-regen contract is
+	// proven end to end by TestReconcileAdoptsBumpAndSurvivesRegen. True
+	// end-to-end proof of the companion comes from the fleet run and cascade's
+	// own self-heal companion on real GitHub.
+	t.Skip("act cannot emulate a workflow_run companion end to end (no action resolution without a real server, and no run: step env for a synthetic workflow_run event); the emitted companion is covered by the generator unit tests plus actionlint, with true end-to-end proof from the fleet and cascade's own self-heal companion on real GitHub")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	result, err := harness.RunReconcileCompanionAppendScenario(ctx, t)
+	require.NoError(t, err, "reconcile companion scenario failed")
+
+	require.Equal(t, "success", result.Conclusion, "the companion's reconcile job must conclude successfully")
+	require.NotEqual(t, result.HeadBefore, result.HeadAfter,
+		"the companion must push an adoption commit onto the pull request's own branch")
+	require.Contains(t, result.ManifestAfter, harness.ReconcileCompanionBumpTag,
+		"the adopted action_pins entry must carry the bumped ref verbatim")
+	require.Contains(t, result.OrchestrateAfter, "actions/checkout@"+harness.ReconcileCompanionBumpTag,
+		"the regenerated orchestrate.yaml must still carry the bumped pin, proving the adoption survives regeneration")
+}

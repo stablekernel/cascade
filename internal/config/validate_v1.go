@@ -431,7 +431,33 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateRollback(cfg.Rollback)...)
 	errs = append(errs, validateActionPins(cfg)...)
 	errs = append(errs, validateActionFolder(cfg.ActionFolder)...)
+	errs = append(errs, validateReconcile(cfg.Reconcile)...)
 
+	return errs
+}
+
+// validateReconcile checks the opt-in reconcile companion toggle. Source
+// selects the change-source adapter the companion recognizes; Commit selects
+// how an adoption commit is routed. Both are constrained to the known values
+// so an unrecognized adapter or mode fails validation rather than reaching the
+// generator with an assumption it cannot honor.
+func validateReconcile(r *ReconcileConfig) []string {
+	if r == nil {
+		return nil
+	}
+	var errs []string
+	switch r.Source {
+	case "", ReconcileSourceDependabot:
+		// ok
+	default:
+		errs = append(errs, fmt.Sprintf("reconcile.source must be one of: %s", ReconcileSourceDependabot))
+	}
+	switch r.Commit {
+	case "", ReconcileCommitAppend, ReconcileCommitFollowup:
+		// ok
+	default:
+		errs = append(errs, fmt.Sprintf("reconcile.commit must be one of: %s, %s", ReconcileCommitAppend, ReconcileCommitFollowup))
+	}
 	return errs
 }
 

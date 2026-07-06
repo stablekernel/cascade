@@ -165,6 +165,7 @@ type TrunkConfig struct {
 	ValidateCheck     *ValidateCheckConfig     `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
 	MergeQueue        *MergeQueueConfig        `yaml:"merge_queue,omitempty" json:"merge_queue,omitempty"`
 	DriftCheck        *DriftCheckConfig        `yaml:"drift_check,omitempty" json:"drift_check,omitempty"` // Opt-in workflow drift-check PR lane (#229)
+	Reconcile         *ReconcileConfig         `yaml:"reconcile,omitempty" json:"reconcile,omitempty"`     // Opt-in emitted pin-reconcile companion (#443)
 	// Rollback configures the opt-in rollback workflow. Absent by default; when
 	// set with repository_dispatch, an external signal can fire the rollback (#181).
 	Rollback *RollbackConfig `yaml:"rollback,omitempty" json:"rollback,omitempty"`

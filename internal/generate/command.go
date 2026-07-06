@@ -387,6 +387,44 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
+	// Generate the opt-in emitted pin-reconcile lane (reconcile.enabled):
+	// the pull_request detector plus its workflow_run companion. Absent or
+	// disabled reconcile emits nothing, so existing manifests are unaffected.
+	reconcileGen := NewReconcileGenerator(cfg, baseDir)
+	if reconcileGen.Enabled() {
+		content, err := reconcileGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating reconcile-check workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-reconcile-check.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-reconcile-check.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+
+		companionContent, err := reconcileGen.GenerateCompanion()
+		if err != nil {
+			return fmt.Errorf("generating reconcile-companion workflow: %w", err)
+		}
+		companionOutPath := ".github/workflows/cascade-reconcile-companion.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-reconcile-companion.yaml ===")
+			fmt.Print(companionContent)
+		} else {
+			if err := writeWorkflow(companionOutPath, companionContent, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, companionOutPath)
+			fmt.Printf("Generated workflow: %s\n", companionOutPath)
+		}
+	}
+
 	if opts.dryRun {
 		return nil
 	}
