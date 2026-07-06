@@ -667,6 +667,18 @@ type ReleaseConfig struct {
 	// not trigger any follow-on workflow.
 	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"`
 
+	// TagOnly makes the generated orchestrate and promote workflows cut the
+	// version tag only, without pre-creating a GitHub release object, and create
+	// that tag with the default GITHUB_TOKEN so the tag push does not trigger the
+	// release workflow. Use it when the configured release workflow (for example
+	// GoReleaser) is itself the sole creator of the release object and is
+	// dispatched explicitly against the tag. It prevents both a duplicate release
+	// workflow run (the tag push no longer fires alongside the explicit dispatch)
+	// and an orphaned draft release (nothing pre-creates a draft the release
+	// workflow would then duplicate). Requires workflow to be set and only takes
+	// effect with release_trigger: dispatch.
+	TagOnly bool `yaml:"tag_only,omitempty" json:"tag_only,omitempty"`
+
 	// VersionOverrides reserves the addressing pointer for maintainer-committed
 	// version-intent override files. RESERVED - parse + structural validation
 	// only; no generator/state/runtime behavior. Absent by default.
@@ -782,6 +794,14 @@ func (c *TrunkConfig) ReleaseEnabled() bool {
 // HasExternalRelease returns true if an external tool creates releases
 func (c *TrunkConfig) HasExternalRelease() bool {
 	return c.Release != nil && c.Release.Tag != ""
+}
+
+// ReleaseTagOnly reports whether the generated orchestrate and promote workflows
+// should cut the version tag only (with the non-triggering GITHUB_TOKEN) and let
+// the configured release workflow be the sole creator of the release object. See
+// ReleaseConfig.TagOnly for the full semantics.
+func (c *TrunkConfig) ReleaseTagOnly() bool {
+	return c.Release != nil && c.Release.TagOnly
 }
 
 // HasCustomChangelog returns true if a custom changelog workflow is configured

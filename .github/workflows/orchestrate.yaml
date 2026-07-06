@@ -135,11 +135,12 @@ jobs:
           action: update
           tag: ${{ needs.setup.outputs.version }}
           create_tag: 'true'
+          tag_only: 'true'
           environment: prerelease
           sha: ${{ needs.setup.outputs.head_sha }}
           changelog: ${{ steps.changelog.outputs.changelog }}
           previous_tag: ${{ needs.setup.outputs.previous_tag }}
-          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Dispatch Release Candidate Build
         if: ${{ github.server_url == 'https://github.com' }}
         env:

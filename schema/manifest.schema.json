@@ -501,6 +501,7 @@
         "disabled": { "type": "boolean", "description": "Disable cascade-managed releases." },
         "tag": { "type": "string", "description": "callback.output reference for releases created by an external tool." },
         "workflow": { "type": "string", "description": "Path to a reusable release-build workflow dispatched after a release is published." },
+        "tag_only": { "type": "boolean", "description": "Cut the version tag only, without pre-creating a draft release, and create the tag with the non-triggering GITHUB_TOKEN. For a self-publishing release workflow (e.g. GoReleaser) that is the sole creator of the release object. Requires workflow and release_trigger: dispatch." },
         "version_overrides": { "$ref": "#/definitions/versionOverridesConfig" }
       }
     },

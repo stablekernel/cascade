@@ -1,0 +1,56 @@
+name: "Release tag-only"
+description: |
+  Verifies that release.tag_only makes the generated orchestrate workflow cut
+  the candidate tag only, without pre-creating a draft GitHub release, and cut
+  that tag with the non-triggering GITHUB_TOKEN. This suits a self-publishing
+  release workflow (for example GoReleaser) that is the sole creator of the
+  release object and is reached by the explicit candidate dispatch: it prevents
+  both a duplicate release run (the tag push no longer fires alongside the
+  dispatch) and an orphaned draft release.
+
+  Covers:
+  - the finalize Manage Release step sets tag_only: 'true'
+  - that step creates the tag with ${{ secrets.GITHUB_TOKEN }}, not the PAT
+  - the explicit candidate dispatch survives and still uses the release PAT so
+    the dispatched run cascades to downstream workflow_run consumers
+  - the composite action exposes the tag_only input
+  - the default (no tag_only) behavior is unaffected, asserted by every other
+    generator scenario that does not set release.tag_only
+
+  Requires release_trigger: dispatch and release.workflow (validation enforces
+  both). Generator-output verification only.
+
+config:
+  trunk_branch: main
+  release_trigger: dispatch
+  release_token: ${{ secrets.CASCADE_STATE_TOKEN }}
+  release:
+    workflow: .github/workflows/release.yaml
+    tag_only: true
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial commit; assert orchestrate cuts a tag-only rc with GITHUB_TOKEN"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "          tag_only: 'true'"
+            - "          token: ${{ secrets.GITHUB_TOKEN }}"
+            - "      - name: Dispatch Release Candidate Build"
+        - path: ".github/actions/manage-release/action.yaml"
+          contains:
+            - "  tag_only:"
+            - "--tag-only"

@@ -98,6 +98,10 @@ inputs:
     description: 'Create git tag on create action'
     required: false
     default: 'false'
+  tag_only:
+    description: 'Create the git tag only and skip creating a draft release'
+    required: false
+    default: 'false'
 
 outputs:
   release_id:
@@ -127,6 +131,7 @@ runs:
         INPUT_NEW_TAG: ${{ inputs.new_tag }}
         INPUT_DELETE_TAG: ${{ inputs.delete_tag }}
         INPUT_CREATE_TAG: ${{ inputs.create_tag }}
+        INPUT_TAG_ONLY: ${{ inputs.tag_only }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         # Write changelog to temp file to handle multiline content
@@ -145,6 +150,7 @@ runs:
         [[ -n "$INPUT_NEW_TAG" ]] && CMD_ARGS+=(--new-tag "$INPUT_NEW_TAG")
         [[ -n "$INPUT_DELETE_TAG" ]] && CMD_ARGS+=(--delete-tag "$INPUT_DELETE_TAG")
         [[ "$INPUT_CREATE_TAG" == "true" ]] && CMD_ARGS+=(--create-tag)
+        [[ "$INPUT_TAG_ONLY" == "true" ]] && CMD_ARGS+=(--tag-only)
 
         # Run CLI
         OUTPUT=$(cascade manage-release "${CMD_ARGS[@]}" --changelog-file "$CHANGELOG_FILE")

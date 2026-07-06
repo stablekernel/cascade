@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+// TestNewCommand_TagOnlyFlag asserts the manage-release command exposes the
+// --tag-only flag (defaulting off) that the generated composite action forwards
+// so orchestrate's tag-only rc cut reaches release.go without creating a draft.
+func TestNewCommand_TagOnlyFlag(t *testing.T) {
+	cmd := NewCommand()
+	flag := cmd.Flags().Lookup("tag-only")
+	if flag == nil {
+		t.Fatal("expected --tag-only flag to be registered on manage-release")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--tag-only default = %q, want false", flag.DefValue)
+	}
+}
+
 // TestValidateManageReleaseFlags_SHARequiredOnlyForTagCreatingActions asserts
 // that --sha is required only for the tag-creating actions (create, prerelease,
 // publish) and is optional for the tag-addressed actions (lock, update, delete),

@@ -22,6 +22,7 @@ func NewCommand() *cobra.Command {
 	var newTag string
 	var deleteTag string
 	var createTag bool
+	var tagOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "manage-release",
@@ -93,6 +94,7 @@ Outputs (to stdout):
 				NewTag:      newTag,
 				DeleteTag:   deleteTag,
 				CreateTag:   createTag,
+				TagOnly:     tagOnly,
 			})
 			if err != nil {
 				return err
@@ -119,6 +121,7 @@ Outputs (to stdout):
 	cmd.Flags().StringVar(&newTag, "new-tag", "", "New semver tag (for prerelease action)")
 	cmd.Flags().StringVar(&deleteTag, "delete-tag", "", "Tag to delete after publish (cleanup)")
 	cmd.Flags().BoolVar(&createTag, "create-tag", false, "Create git tag on create action")
+	cmd.Flags().BoolVar(&tagOnly, "tag-only", false, "Create the git tag only and skip creating a draft release (release workflow is the sole release creator)")
 
 	_ = cmd.MarkFlagRequired("repo")
 	_ = cmd.MarkFlagRequired("action")

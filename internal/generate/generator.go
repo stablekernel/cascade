@@ -224,6 +224,25 @@ func (g *Generator) getReleaseTokenRef() string {
 	return resolveReleaseTokenRef(g.config)
 }
 
+// nonTriggeringGitHubToken is the default GITHUB_TOKEN expression. Actions taken
+// with it deliberately do not create new workflow runs (with the exception of
+// workflow_dispatch and repository_dispatch), so creating a tag with it does not
+// fire a push: tags trigger. Tag-only release paths use it for the tag-create
+// step and dispatch the release workflow separately with the release token.
+const nonTriggeringGitHubToken = "${{ secrets.GITHUB_TOKEN }}"
+
+// getTagCreateTokenRef returns the token expression for the manage-release step
+// that cuts the version tag. In tag-only mode the tag must be created with the
+// non-triggering GITHUB_TOKEN so the tag push does not start a second release
+// run alongside the explicit dispatch; otherwise the configured release token is
+// used (a push-mode trunk relies on that push to trigger its release workflow).
+func (g *Generator) getTagCreateTokenRef() string {
+	if g.config.ReleaseTagOnly() {
+		return nonTriggeringGitHubToken
+	}
+	return g.getReleaseTokenRef()
+}
+
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 // Converts absolute paths to repo-relative paths since workflows run in checked out repos.
 func (g *Generator) getManifestFilePath() string {
@@ -1886,6 +1905,12 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		sb.WriteString("          action: update\n")
 		sb.WriteString("          tag: ${{ needs.setup.outputs.version }}\n")
 		sb.WriteString("          create_tag: 'true'\n")
+		// Tag-only mode: cut the candidate tag but do not pre-create a draft
+		// release. The configured release workflow (dispatched below) is the sole
+		// creator of the release object, so a draft here would orphan.
+		if g.config.ReleaseTagOnly() {
+			sb.WriteString("          tag_only: 'true'\n")
+		}
 	}
 
 	// Only include environment if there are environments configured
@@ -1906,7 +1931,10 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		}
 	}
 	sb.WriteString("          previous_tag: ${{ needs.setup.outputs.previous_tag }}\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
+	// The tag-create token switches to the non-triggering GITHUB_TOKEN in
+	// tag-only mode so the candidate tag push does not fire the release workflow
+	// alongside the explicit dispatch emitted by writeCandidateDispatchStep.
+	fmt.Fprintf(sb, "          token: %s\n", g.getTagCreateTokenRef())
 }
 
 // writeCandidateDispatchStep fires the configured release workflow against the

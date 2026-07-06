@@ -264,7 +264,7 @@ jobs:
           tag: ${{ steps.release-data.outputs.sem_version }}
           delete_tag: ${{ steps.release-data.outputs.rc_version }}
           changelog: ${{ steps.changelog.outputs.changelog }}
-          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Trigger Release Build
         if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.is_final_env == 'true' }}
         env:
