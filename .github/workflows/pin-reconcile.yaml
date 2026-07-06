@@ -181,7 +181,9 @@ jobs:
           done < changed-files.txt
           # Own-repo mode writes the adopted ref into internal/generate/action_pins.yaml
           # and regenerates every generated workflow so they agree again.
-          cascade reconcile --own-repo "${args[@]}"
+          # --action-pins names the manifest on disk; it has no default, so it
+          # must be passed explicitly here.
+          cascade reconcile --own-repo --action-pins internal/generate/action_pins.yaml "${args[@]}"
 
       - name: Commit and push the reconciled pins
         if: steps.resolve.outputs.proceed == 'true'
