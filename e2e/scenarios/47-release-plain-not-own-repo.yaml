@@ -42,8 +42,20 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             - "          token: ${{ secrets.CASCADE_STATE_TOKEN }}"
+            # Plain (downstream) finalize installs a pinned released cascade via
+            # an unconditional setup-cli step; it never builds from source. The
+            # harness localizes every `stablekernel/cascade/.github/actions/X@ref`
+            # to `./.github/actions/X` before this assertion runs (see
+            # localizeWorkflows), so this checks the step's presence and its
+            # unconditional shape, not the pre-localize remote ref literal.
+            - "      - name: Setup CLI"
           not_contains:
             - "tag_only"
+            - "Download cascade CLI (from source)"
+            - "cascade-cli"
+            # Own-repo mode gates the Setup CLI step on build-cli having been
+            # skipped; plain mode's Setup CLI step must stay unconditional.
+            - "needs.build-cli.result"
         - path: ".github/actions/manage-release/action.yaml"
           not_contains:
             - "tag_only"

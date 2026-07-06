@@ -1845,6 +1845,63 @@ func failureOrCancelledCond(jobName string) string {
 	return fmt.Sprintf("contains(fromJSON('[\"failure\", \"cancelled\"]'), needs.%s.result)", jobName)
 }
 
+// ownRepoCLIArtifactName is the workflow-artifact name under which the build-cli
+// callback publishes the cascade binary built from the commit under release, and
+// which cascade's own-repo finalize job downloads to run the release. The
+// build-cli.yaml callback workflow uploads under this exact name; the two must
+// stay in lockstep.
+const ownRepoCLIArtifactName = "cascade-cli"
+
+// writeFinalizeCLIBootstrap emits the step(s) that put a cascade binary on PATH
+// for the finalize job's changelog and release steps.
+//
+// Downstream (every user manifest): a single pinned Setup CLI step that installs
+// a released cascade via the setup-cli action. This is correct for users, who
+// run a published binary and never build cascade from source.
+//
+// Cascade's own repo (ownRepo): the release must run the binary built from the
+// exact commit under release, not a stale published pin, so a newly added CLI
+// capability (for example the tag-only manage-release path) is available in the
+// same run that introduces it. The build-cli callback compiles that binary and
+// uploads it as ownRepoCLIArtifactName; finalize downloads it and prepends it to
+// PATH. When build-cli did not run (no release-worthy CLI change, so the release
+// path is not exercised), finalize falls back to the pinned released binary so
+// the changelog step still has a cascade on PATH.
+func (g *Generator) writeFinalizeCLIBootstrap(sb *strings.Builder) {
+	if !g.ownRepo {
+		g.writeFinalizePinnedCLI(sb, "")
+		return
+	}
+
+	sb.WriteString("      - name: Download cascade CLI (from source)\n")
+	sb.WriteString("        if: needs.build-cli.result == 'success'\n")
+	writeActionUses(sb, g.config, "        ", actionDownloadArtifact)
+	sb.WriteString("        with:\n")
+	fmt.Fprintf(sb, "          name: %s\n", ownRepoCLIArtifactName)
+	sb.WriteString("          path: .cascade-bin\n")
+	sb.WriteString("      - name: Install cascade CLI (from source)\n")
+	sb.WriteString("        if: needs.build-cli.result == 'success'\n")
+	sb.WriteString("        run: |\n")
+	sb.WriteString("          chmod +x .cascade-bin/cascade\n")
+	sb.WriteString("          echo \"$GITHUB_WORKSPACE/.cascade-bin\" >> \"$GITHUB_PATH\"\n")
+	// Fallback for runs where the build-cli callback was skipped: install the
+	// pinned released binary so the changelog step still finds cascade on PATH.
+	g.writeFinalizePinnedCLI(sb, "needs.build-cli.result != 'success'")
+}
+
+// writeFinalizePinnedCLI emits the pinned Setup CLI step. When cond is non-empty
+// it is emitted as the step's if: guard.
+func (g *Generator) writeFinalizePinnedCLI(sb *strings.Builder, cond string) {
+	sb.WriteString("      - name: Setup CLI\n")
+	if cond != "" {
+		fmt.Fprintf(sb, "        if: %s\n", cond)
+	}
+	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
+	sb.WriteString("        with:\n")
+	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
+	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+}
+
 // writeChangelogStep emits the built-in changelog generation as a step inside
 // the finalize job. The custom changelog path is NOT a step: a reusable
 // workflow cannot be invoked as a step `uses:`, so it is hoisted into its own
@@ -1857,11 +1914,7 @@ func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 	}
 	{
 		// Use built-in changelog generation
-		sb.WriteString("      - name: Setup CLI\n")
-		fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-		sb.WriteString("        with:\n")
-		fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-		fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+		g.writeFinalizeCLIBootstrap(sb)
 		sb.WriteString("      - name: Generate Changelog\n")
 		sb.WriteString("        id: changelog\n")
 		sb.WriteString("        env:\n")

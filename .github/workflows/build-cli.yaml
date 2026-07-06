@@ -42,3 +42,14 @@ jobs:
           ./cascade detect-changes --help
           ./cascade generate-changelog --help
           ./cascade generate-workflow --help
+
+      # Publish the from-source binary so cascade's own-repo finalize job runs the
+      # exact commit under release (new CLI capabilities are available in the same
+      # run that introduces them) instead of a stale pinned release.
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cascade-cli
+          path: cascade
+          if-no-files-found: error
+          retention-days: 1

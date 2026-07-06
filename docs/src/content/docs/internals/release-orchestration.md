@@ -156,6 +156,18 @@ with the non-triggering `GITHUB_TOKEN`. GoReleaser, running inside Release, then
 and publishes the one release for that tag. Nothing pre-creates a draft that GoReleaser
 would duplicate, so no orphaned draft is left behind.
 
+In own-repo mode the finalize job also runs the cascade binary built from the exact commit
+under release, not a pinned published one. Cascade is self-hosting: the release tool is the
+code being released, so a CLI capability added in a commit must be available in the same run
+that ships it. Finalize already depends on the `build-cli` callback, which compiles cascade
+from source; that job now uploads the binary as a `cascade-cli` artifact, and own-repo
+finalize downloads it and puts it on `PATH` for the changelog and `manage-release` steps. A
+downstream repository never does this: its finalize installs a pinned released cascade
+through `setup-cli`, because a user runs a published binary and never builds cascade from
+source. The from-source download is gated on `build-cli` succeeding; on a run where that
+callback was skipped, own-repo finalize falls back to the same pinned install so the
+changelog step still finds cascade on `PATH`.
+
 This is not a manifest option. Own-repo mode is a CLI flag cascade passes only when
 generating and verifying its own workflows, because cascade is the one repository that
 self-publishes through GoReleaser; a downstream manifest has no way to reach it, and its
