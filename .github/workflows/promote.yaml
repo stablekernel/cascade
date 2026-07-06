@@ -93,10 +93,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@adbd2aa1fe3871a3a02ebf3340927a54693d871b # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.1.0
+          version: v0.8.0
       - name: Run Preflight
         id: preflight
         env:
@@ -128,10 +128,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@adbd2aa1fe3871a3a02ebf3340927a54693d871b # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.1.0
+          version: v0.8.0
       - name: Validate Promotion
         env:
           MODE: ${{ github.event.inputs.mode }}
@@ -155,10 +155,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@adbd2aa1fe3871a3a02ebf3340927a54693d871b # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.1.0
+          version: v0.8.0
       - name: Generate Changelog
         id: changelog
         env:

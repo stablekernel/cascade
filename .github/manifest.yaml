@@ -10,8 +10,8 @@ ci:
       - e2e/**
       - go.mod
       - go.sum
-    cli_version: v0.1.0
-    cli_version_sha: 9dc69a1f66753a3865c38c34eca5a931f677c803
+    cli_version: v0.8.0
+    cli_version_sha: adbd2aa1fe3871a3a02ebf3340927a54693d871b
     pin_mode: sha
     manifest_file: .github/manifest.yaml
     manifest_key: ci
