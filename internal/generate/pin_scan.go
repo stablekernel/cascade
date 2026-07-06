@@ -79,6 +79,21 @@ func parseUsesLine(line string) (action, ref, comment string, ok bool) {
 	return g[1], g[2], g[3], true
 }
 
+// ParseUsesLine extracts the action path and the verbatim ref (including any
+// trailing "# <version>" comment, so a sha adoption keeps its comment) from a
+// single "uses:" line. ok is false for a line that is not an action uses:.
+func ParseUsesLine(line string) (action, ref string, ok bool) {
+	g := usesRefRe.FindStringSubmatch(line)
+	if g == nil {
+		return "", "", false
+	}
+	ref = g[2]
+	if g[3] != "" {
+		ref += " # " + g[3]
+	}
+	return g[1], ref, true
+}
+
 // ActionPinEntry is one action's pin record as authored in action_pins.yaml.
 type ActionPinEntry = actionPinEntry
 

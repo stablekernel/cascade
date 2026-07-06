@@ -18,3 +18,18 @@ func TestScanUsesForPinDrift_Exported(t *testing.T) {
 	require.Equal(t, stale, got[0].GotRef)
 	require.Equal(t, want.SHA, got[0].WantSHA)
 }
+
+func TestParseUsesLine(t *testing.T) {
+	action, ref, ok := ParseUsesLine("      - uses: actions/checkout@abc123 # v5.1.0")
+	require.True(t, ok)
+	require.Equal(t, "actions/checkout", action)
+	require.Equal(t, "abc123 # v5.1.0", ref) // ref carries the trailing comment verbatim
+
+	action, ref, ok = ParseUsesLine("      - uses: actions/checkout@v6")
+	require.True(t, ok)
+	require.Equal(t, "actions/checkout", action)
+	require.Equal(t, "v6", ref)
+
+	_, _, ok = ParseUsesLine("      - run: echo hi")
+	require.False(t, ok)
+}
