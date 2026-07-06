@@ -76,9 +76,22 @@ var defaultActionPins = mustParseActionPins(actionPinsYAML)
 // a malformed manifest, a non-40-hex SHA, or a missing generator action so the
 // failure surfaces at init rather than as silently wrong generated output.
 func mustParseActionPins(data []byte) map[string]actionPin {
+	pins, err := parseActionPins(data)
+	if err != nil {
+		panic(fmt.Sprintf("generate: %v", err))
+	}
+	return pins
+}
+
+// parseActionPins parses a manifest's bytes into the generator pin table,
+// keeping only emit: true actions (the set the generator renders). It returns
+// an error on a malformed manifest, a non-40-hex SHA, or a missing generator
+// action instead of panicking, so a disk-loaded manifest can be rejected
+// gracefully rather than crashing the process.
+func parseActionPins(data []byte) (map[string]actionPin, error) {
 	var manifest actionPinsManifest
 	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		panic(fmt.Sprintf("generate: parsing action_pins.yaml: %v", err))
+		return nil, fmt.Errorf("parsing action_pins.yaml: %w", err)
 	}
 
 	pins := make(map[string]actionPin, len(manifest.Actions))
@@ -87,26 +100,26 @@ func mustParseActionPins(data []byte) map[string]actionPin {
 			continue
 		}
 		if !commitSHAPattern.MatchString(entry.SHA) {
-			panic(fmt.Sprintf("generate: action_pins.yaml: %s sha %q is not a 40-char commit SHA", name, entry.SHA))
+			return nil, fmt.Errorf("action_pins.yaml: %s sha %q is not a 40-char commit SHA", name, entry.SHA)
 		}
 		if entry.Tag == "" || entry.Version == "" {
-			panic(fmt.Sprintf("generate: action_pins.yaml: %s is missing a tag or version", name))
+			return nil, fmt.Errorf("action_pins.yaml: %s is missing a tag or version", name)
 		}
 		pins[name] = actionPin{tag: entry.Tag, sha: entry.SHA, shaVersion: entry.Version}
 	}
 
 	// Every action the generator references by const must be present and emit:true,
-	// so a manifest edit can never drop a governed action without a build-time panic.
+	// so a manifest edit can never drop a governed action without this surfacing.
 	for _, name := range []string{
 		actionCheckout, actionGithubScript, actionDownloadArtifact,
 		actionUploadArtifact, actionCreateAppToken,
 	} {
 		if _, ok := pins[name]; !ok {
-			panic(fmt.Sprintf("generate: action_pins.yaml is missing emit:true entry for %s", name))
+			return nil, fmt.Errorf("action_pins.yaml is missing emit:true entry for %s", name)
 		}
 	}
 
-	return pins
+	return pins, nil
 }
 
 // actionRef returns the fully-rendered uses: value for a third-party action
