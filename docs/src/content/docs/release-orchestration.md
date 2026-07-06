@@ -123,6 +123,37 @@ the selector resolves to `all`, the `resolve` stage records that marker in the
 `full-run.txt` artifact, and auto-promote refuses to publish from anything other than
 a full run. Only a complete fleet validation is a safe release signal.
 
+## Release runs once per tag
+
+Every publish path drives the same [`release.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/release.yaml)
+Release workflow, and it is triggered redundantly on purpose. A candidate tag pushed
+with the state token emits a real push event, while orchestrate, promote, and
+auto-promote each also dispatch Release explicitly against the tag. The explicit
+dispatch is the dependable path: a tag created through the API, or one whose commit
+message carries a CI-skip token, does not reliably emit push or release events, so
+without the dispatch the assets would never build. The fallback stays in place for
+exactly that reason.
+
+The cost of the redundancy is that a pushed candidate tag can start two Release runs at
+the same instant. Two guards make the duplicate harmless:
+
+- A single-flight `concurrency` group named `release`, constant rather than keyed on the
+  tag, holds the hard invariant that no two releases are ever in flight together. With
+  `cancel-in-progress: false`, an active publish always finishes and the duplicate simply
+  queues behind it.
+- An idempotency check at the head of the release job. It skips the build and finishes
+  green when a live, non-draft release already carries its `checksums.txt` manifest for
+  the tag, so the queued duplicate no-ops instead of driving GoReleaser into a
+  `422 already_exists` and leaving a stray draft. A belt after GoReleaser covers the rare
+  case where two runs publish at once: a `422` is treated as success only when the tag is
+  already published, and any other failure still fails the job. The decision core lives in
+  `.github/scripts/release-idempotency.sh` and is unit tested in isolation.
+
+Because the group can supersede a still-pending duplicate when a newer trigger arrives, no
+publish is ever silently dropped: the release job is idempotent and every dispatcher
+watches its Release run and can redispatch, so a final publish that loses a pending slot is
+simply rebuilt on the next dispatch.
+
 ## The nightly-gated release
 
 Cascade's orchestrate workflow is dispatch-only, set through `release_trigger: dispatch`
