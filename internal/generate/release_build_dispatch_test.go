@@ -48,13 +48,13 @@ func TestPromoteGenerator_ReleaseBuildDispatch(t *testing.T) {
 			name:         "release workflow configured emits a dispatch to it",
 			release:      &config.ReleaseConfig{Workflow: ".github/workflows/release-build.yaml"},
 			wantStep:     true,
-			wantDispatch: "gh workflow run ./.github/workflows/release-build.yaml",
+			wantDispatch: "gh workflow run release-build.yaml",
 		},
 		{
-			name:         "bare release workflow filename is normalized",
+			name:         "bare release workflow filename dispatches unchanged",
 			release:      &config.ReleaseConfig{Workflow: "release-build.yaml"},
 			wantStep:     true,
-			wantDispatch: "gh workflow run ./.github/workflows/release-build.yaml",
+			wantDispatch: "gh workflow run release-build.yaml",
 		},
 	}
 

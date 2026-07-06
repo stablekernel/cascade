@@ -149,7 +149,7 @@ jobs:
           # The tag-push trigger is unreliable here: the candidate tag can
           # point at a state commit whose message suppresses CI, so an explicit
           # dispatch against the tag is the dependable way to build the candidate.
-          gh workflow run ./.github/workflows/release.yaml \
+          gh workflow run release.yaml \
             --repo "${{ github.repository }}" \
             --ref "$TAG"
       - name: Update Manifest

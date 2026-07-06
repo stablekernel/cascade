@@ -60,6 +60,24 @@ func normalizeWorkflowPath(path string) string {
 	return "./.github/workflows/" + filepath.Base(path)
 }
 
+// workflowDispatchTarget returns the value cascade passes as the positional
+// target of "gh workflow run" to dispatch a same-repo workflow. Every call site
+// in this package always passes --repo explicitly and targets the current
+// repository, so gh needs only the bare workflow file name (or a numeric
+// workflow ID); the "./"-prefixed repository path normalizeWorkflowPath
+// produces is correct for a uses: reusable-workflow reference but 404s against
+// gh workflow run ("workflow ... not found on the default branch"). A leading
+// "@ref" cross-repo suffix (valid for uses:, meaningless for gh workflow run,
+// whose target repo comes from --repo) is stripped defensively so a
+// misconfigured external-style value still degrades to a usable file name
+// rather than a broken dispatch argument.
+func workflowDispatchTarget(path string) string {
+	if idx := strings.Index(path, "@"); idx != -1 {
+		path = path[:idx]
+	}
+	return filepath.Base(path)
+}
+
 // envGHAName returns the GitHub Environment name for a given cascade environment
 // name. When the config has an EnvironmentConfig entry for that env whose
 // GHAEnvironment field is non-empty, that value is returned; otherwise the
@@ -1925,7 +1943,7 @@ func (g *Generator) writeCandidateDispatchStep(sb *strings.Builder) {
 	sb.WriteString("          # The tag-push trigger is unreliable here: the candidate tag can\n")
 	sb.WriteString("          # point at a state commit whose message suppresses CI, so an explicit\n")
 	sb.WriteString("          # dispatch against the tag is the dependable way to build the candidate.\n")
-	sb.WriteString("          gh workflow run " + normalizeWorkflowPath(g.config.Release.Workflow) + " \\\n")
+	sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.Release.Workflow) + " \\\n")
 	sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 	sb.WriteString("            --ref \"$TAG\"\n")
 }
