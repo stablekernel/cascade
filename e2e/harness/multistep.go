@@ -99,6 +99,12 @@ type Step struct {
 	// orphan env/* branches on the Gitea remote, then asserts the JSON report and
 	// the resulting remote branch set.
 	Consistency *ConsistencyStep `yaml:"consistency,omitempty"`
+	// Reconcile configures a "reconcile" action: a `cascade reconcile` run
+	// against a generated workflow file that was mutated in place to simulate an
+	// external governed-pin bump (the shape of a merged Dependabot update)
+	// landing in cascade-owned output. It asserts the adopted pin lands in the
+	// regenerated file and that a subsequent `cascade verify` stays clean.
+	Reconcile *ReconcileStep `yaml:"reconcile,omitempty"`
 	// ExpectFailure marks a step whose workflow is expected to conclude in
 	// failure (for example an orchestrate run whose build exits non-zero). When
 	// set, a failure conclusion is the success path and a success conclusion is
@@ -265,6 +271,29 @@ type PlanStep struct {
 	ExpectExit        int      `yaml:"expect_exit"`
 	ExpectContains    []string `yaml:"expect_contains,omitempty"`
 	ExpectNotContains []string `yaml:"expect_not_contains,omitempty"`
+}
+
+// ReconcileStep defines a "reconcile" action: `cascade reconcile` run against
+// the synced repo to prove a governed pin bump landing in an already-generated
+// workflow file (simulating an external change such as a merged Dependabot
+// bump) is adopted into the manifest's action_pins and survives a regenerate.
+// MutatePath is the generated file to bump before reconcile runs; MutateFind
+// and MutateReplace are a sed pattern and its replacement (delimited by "|",
+// so neither may contain that character) substituted into MutatePath to
+// simulate the bump landing there. ChangedFile is the path reconcile scans as
+// the bump's source and defaults to MutatePath when empty. ExpectExit is the
+// exit code `cascade reconcile` must return (0 by default). ExpectContains, when
+// set, are substrings the regenerated MutatePath must contain afterward. The
+// step always finishes with a `cascade verify` run that must exit clean,
+// proving the adopted pin survives regeneration rather than drifting back out
+// of it.
+type ReconcileStep struct {
+	MutatePath     string   `yaml:"mutate_path"`
+	MutateFind     string   `yaml:"mutate_find"`
+	MutateReplace  string   `yaml:"mutate_replace"`
+	ChangedFile    string   `yaml:"changed_file,omitempty"`
+	ExpectExit     int      `yaml:"expect_exit"`
+	ExpectContains []string `yaml:"expect_contains,omitempty"`
 }
 
 // ConsistencyStep defines a "consistency" action: a `cascade status consistency`

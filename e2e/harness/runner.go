@@ -143,6 +143,16 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.Consistency == nil {
 				return fmt.Errorf("step %d (%s): consistency action requires consistency config", i, step.Name)
 			}
+		case "reconcile":
+			if step.Reconcile == nil {
+				return fmt.Errorf("step %d (%s): reconcile action requires reconcile config", i, step.Name)
+			}
+			if step.Reconcile.MutatePath == "" {
+				return fmt.Errorf("step %d (%s): reconcile requires mutate_path", i, step.Name)
+			}
+			if step.Reconcile.MutateFind == "" {
+				return fmt.Errorf("step %d (%s): reconcile requires mutate_find", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
@@ -383,6 +393,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executePlan(ctx, step.Plan)
 	case "consistency":
 		return r.executeConsistency(ctx, step.Consistency)
+	case "reconcile":
+		return r.executeReconcile(ctx, step.Reconcile)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -555,6 +567,105 @@ func (r *Runner) executePlan(ctx context.Context, step *PlanStep) error {
 			return fmt.Errorf("plan: stdout contains unexpected substring %q: %s", unwant, output)
 		}
 	}
+	return nil
+}
+
+// executeReconcile runs `cascade reconcile` in the synced repo to prove a
+// governed pin bump landing in one already-generated workflow file (simulating
+// an external change such as a merged Dependabot bump) is adopted into the
+// manifest and survives regeneration. It first substitutes step.MutateFind for
+// step.MutateReplace in step.MutatePath (a sed pattern, not a literal match),
+// simulating the bump landing in that file; it then runs `cascade reconcile
+// --changed-file <step.ChangedFile or MutatePath>` and asserts its exit code,
+// then asserts the regenerated MutatePath contains every ExpectContains
+// substring, and finally runs `cascade verify` and requires a clean exit,
+// proving the adopted pin survives regeneration rather than drifting back out
+// of it.
+func (r *Runner) executeReconcile(ctx context.Context, step *ReconcileStep) error {
+	if r.harness == nil || r.harness.act == nil {
+		r.t.Logf("  Would run cascade reconcile (no harness)")
+		return nil
+	}
+
+	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
+		return fmt.Errorf("reconcile: failed to sync repo: %w", err)
+	}
+
+	mutateCmd := []string{"bash", "-c", fmt.Sprintf(
+		"cd /tmp/repo && sed -i %s %s",
+		shellQuote(fmt.Sprintf("s|%s|%s|", step.MutateFind, step.MutateReplace)),
+		shellQuote(step.MutatePath),
+	)}
+	exitCode, reader, err := r.harness.act.Container().Exec(ctx, mutateCmd)
+	if err != nil {
+		return fmt.Errorf("reconcile: mutate exec failed: %w", err)
+	}
+	var out bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&out, reader)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("reconcile: mutate failed (exit %d): %s", exitCode, out.String())
+	}
+
+	changedFile := step.ChangedFile
+	if changedFile == "" {
+		changedFile = step.MutatePath
+	}
+
+	reconcileCmd := []string{"bash", "-c", fmt.Sprintf(
+		"cd /tmp/repo && /usr/local/bin/cascade reconcile --changed-file %s",
+		shellQuote(changedFile),
+	)}
+	exitCode, reader, err = r.harness.act.Container().Exec(ctx, reconcileCmd)
+	if err != nil {
+		return fmt.Errorf("reconcile: exec failed: %w", err)
+	}
+	out.Reset()
+	if reader != nil {
+		_, _ = io.Copy(&out, reader)
+	}
+	output := out.String()
+	r.t.Logf("  Reconcile: exit=%d (expected %d): %s", exitCode, step.ExpectExit, output)
+	if exitCode != step.ExpectExit {
+		return fmt.Errorf("reconcile: expected exit %d, got %d: %s", step.ExpectExit, exitCode, output)
+	}
+
+	if len(step.ExpectContains) > 0 {
+		catCmd := []string{"bash", "-c", "cd /tmp/repo && cat " + shellQuote(step.MutatePath)}
+		catExit, catReader, catErr := r.harness.act.Container().Exec(ctx, catCmd)
+		if catErr != nil {
+			return fmt.Errorf("reconcile: reading regenerated %s failed: %w", step.MutatePath, catErr)
+		}
+		var catOut bytes.Buffer
+		if catReader != nil {
+			_, _ = io.Copy(&catOut, catReader)
+		}
+		if catExit != 0 {
+			return fmt.Errorf("reconcile: cat %s failed (exit %d): %s", step.MutatePath, catExit, catOut.String())
+		}
+		content := catOut.String()
+		for _, want := range step.ExpectContains {
+			if !strings.Contains(content, want) {
+				return fmt.Errorf("reconcile: regenerated %s missing expected substring %q:\n%s", step.MutatePath, want, content)
+			}
+		}
+	}
+
+	verifyCmd := []string{"bash", "-c", "cd /tmp/repo && /usr/local/bin/cascade verify"}
+	verifyExit, verifyReader, verifyErr := r.harness.act.Container().Exec(ctx, verifyCmd)
+	if verifyErr != nil {
+		return fmt.Errorf("reconcile: verify exec failed: %w", verifyErr)
+	}
+	var verifyOut bytes.Buffer
+	if verifyReader != nil {
+		_, _ = io.Copy(&verifyOut, verifyReader)
+	}
+	r.t.Logf("  Verify after reconcile: exit=%d: %s", verifyExit, verifyOut.String())
+	if verifyExit != 0 {
+		return fmt.Errorf("reconcile: cascade verify was not clean after regenerate (exit %d): %s", verifyExit, verifyOut.String())
+	}
+
 	return nil
 }
 

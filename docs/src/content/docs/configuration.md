@@ -87,7 +87,7 @@ ci:
 | `triggers` | list | No | - | Global path patterns that activate orchestration |
 | `release_trigger` | string | No | `push` | How the orchestrate workflow fires. `push` keeps the push-on-trunk plus `workflow_dispatch` triggers; `dispatch` drops the `push:` trigger so releases run only on manual `workflow_dispatch`. See [Release trigger](#release-trigger). |
 | `pin_mode` | string | No | `tag` | Third-party action pin policy. `tag` emits `<action>@<major-tag>`; `sha` emits `<action>@<commit-sha>` with the version as a trailing comment. See [Action pinning](#action-pinning). |
-| `action_pins` | map | No | - | Per-action ref overrides keyed by action path (e.g. `actions/checkout`), applied regardless of `pin_mode`. See [Action pinning](#action-pinning). |
+| `action_pins` | map | No | - | Per-action ref overrides keyed by action path (e.g. `actions/checkout`), applied regardless of `pin_mode`. This is also the storage target `cascade reconcile` writes an adopted external pin bump into (see [reconcile](/cli-reference/#reconcile)). See [Action pinning](#action-pinning). |
 | `tag_prefix` | string | No | `v` | Version tag prefix |
 | `release_token` | string | No | `state_token` if set, else `${{ secrets.GITHUB_TOKEN }}` | Token expression for release API calls and the rc tag; inherits `state_token` when unset so the rc-to-release chain has a trigger-capable token |
 | `state_token` | string | No | `${{ secrets.GITHUB_TOKEN }}` | Token expression for writing manifest state to the trunk branch |
@@ -172,6 +172,10 @@ ci:
 ```
 
 That emits `uses: actions/checkout@0123456789abcdef0123456789abcdef01234567`. An action that is neither in the built-in table nor overridden is emitted unchanged.
+
+#### `action_pins` is also the reconcile write target
+
+You do not have to hand-author every `action_pins` entry yourself. The [`cascade reconcile`](/cli-reference/#reconcile) command writes here too: when it adopts an external governed-pin change (for example a Dependabot bump landing in a generated workflow), it sets that action's `action_pins` entry to the incoming ref verbatim, keyed by action path, exactly as if you had written the override by hand. Under `pin_mode: tag` the adopted value is a bare tag (for example `v6`); under `pin_mode: sha` it is the commit sha with its trailing `# <version>` comment (for example `abc123def4567890abc123def4567890abc12345 # v6.0.1`). That whole string, comment included, is stored as a single YAML-quoted scalar, not a bare value followed by a real YAML comment, so it survives being re-parsed on the next reconcile or regenerate; the generator still emits it correctly as `actions/checkout@abc123def4567890abc123def4567890abc12345 # v6.0.1` in the generated workflow, identical to a hand-written sha override.
 
 #### Overriding a pin switches its update channel
 
