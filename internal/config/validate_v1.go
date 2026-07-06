@@ -59,6 +59,12 @@ var jobIDSafeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // commitSHARe matches a full 40-character lowercase-hex Git commit SHA.
 var commitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// actionPinValueRe bounds an action_pins override value to a ref plus an
+// optional trailing "# <version>" comment. It rejects newlines and any
+// character that could break out of the emitted YAML scalar, since actionRef
+// splices the value raw into a generated workflow.
+var actionPinValueRe = regexp.MustCompile(`^[A-Za-z0-9._+/-]+(?: # [A-Za-z0-9._+-]+)?$`)
+
 // dispatchInputOptionRe matches a choice dispatch-input option that is safe to
 // emit verbatim as a YAML block-sequence item under workflow_dispatch's
 // inputs.<name>.options. cascade renders each option unquoted, so the accepted
@@ -349,7 +355,24 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateEnvironmentConfig(cfg)...)
 	errs = append(errs, validateTokenSources(cfg)...)
 	errs = append(errs, validateRollback(cfg.Rollback)...)
+	errs = append(errs, validateActionPins(cfg)...)
 
+	return errs
+}
+
+// validateActionPins charset-validates every action_pins override value. Each
+// value is spliced raw into a generated workflow's uses: line, so it must be
+// bounded to a ref plus an optional trailing "# <version>" comment and must
+// never carry a newline or other character that could break out of the
+// emitted YAML scalar.
+func validateActionPins(cfg *TrunkConfig) []string {
+	var errs []string
+	for _, action := range sortedKeys(cfg.ActionPins) {
+		ref := cfg.ActionPins[action]
+		if !actionPinValueRe.MatchString(ref) {
+			errs = append(errs, fmt.Sprintf("action_pins[%q]: invalid ref %q", action, ref))
+		}
+	}
 	return errs
 }
 
