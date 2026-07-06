@@ -203,6 +203,39 @@ func TestRun_HandWrittenFile_NeverOrphan(t *testing.T) {
 	require.NotContains(t, errOut.String(), "ci.yaml")
 }
 
+func TestRun_OwnRepoMarkedFile_NeverOrphan(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	// A file carrying the own-repo self-heal marker is cascade-generated but
+	// intentionally outside the manifest plan, so it must never be flagged as an
+	// orphan even though it sits in the scanned workflow directory.
+	ownRepo := filepath.Join(dir, ".github", "workflows", "pin-reconcile.yaml")
+	require.NoError(t, os.WriteFile(ownRepo,
+		[]byte(generate.OwnRepoGeneratedFileMarker+"\nname: Pin Reconcile\non: push\n"), 0o644))
+
+	var out, errOut bytes.Buffer
+	err := Run(opts(dir), &out, &errOut)
+	require.NoError(t, err, "own-repo marked file must not be reported as drift")
+	require.NotContains(t, errOut.String(), "pin-reconcile.yaml")
+}
+
+func TestRun_PlainMarkedFile_StillOrphan_RegressionGuard(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	// Regression guard: adding the own-repo skip must not weaken real orphan
+	// detection. A file carrying the plain GeneratedFileMarker that the manifest
+	// no longer plans is still an orphan and must drift.
+	plain := filepath.Join(dir, ".github", "workflows", "stale.yaml")
+	require.NoError(t, os.WriteFile(plain,
+		[]byte(generate.GeneratedFileMarker+"\nname: Stale\non: push\n"), 0o644))
+
+	var out, errOut bytes.Buffer
+	err := Run(opts(dir), &out, &errOut)
+	require.True(t, errors.Is(err, ErrDrift), "plain-marked unplanned file must still be an orphan")
+	require.Contains(t, errOut.String(), "stale.yaml")
+	require.Contains(t, errOut.String(), "orphaned")
+}
+
 func TestRun_MultipleOrphans_SortedDeterministic(t *testing.T) {
 	t.Parallel()
 	dir := newRepo(t)
