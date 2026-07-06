@@ -507,12 +507,9 @@ ci:
 | `disabled` | emitted | bool | false | Disable cascade release management. |
 | `tag` | emitted | string | - | `callback.output` reference for an external release tool. |
 | `workflow` | emitted | string | - | Release workflow dispatched against a release tag to build and attach binaries. |
-| `tag_only` | emitted | bool | false | Cut the version tag only, without pre-creating a draft release, and create the tag with the non-triggering `GITHUB_TOKEN`. For a self-publishing release workflow (for example GoReleaser) that is the sole creator of the release object. Requires `workflow` and `release_trigger: dispatch`. |
 | `version_overrides` | reserved | object | - | Reserved pointer (`dir:`) to maintainer-committed version-intent override files. See [Versioning](/cascade/reference/versioning/). |
 
 When `workflow` is set, cascade dispatches it (via `gh workflow run --ref <tag>`) rather than relying only on the tag-push trigger, which GitHub does not reliably start when the tagged commit carries a CI-skip marker. Omit the section to use cascade defaults.
-
-Set `tag_only: true` when the release `workflow` publishes the release object itself, as GoReleaser does. Orchestrate then cuts the candidate tag with the default `GITHUB_TOKEN`, whose actions do not start a workflow run, and dispatches the release workflow explicitly. The tag push therefore does not also fire the release workflow, so it runs exactly once, and nothing pre-creates a draft the release workflow would duplicate into an orphan. It requires `release_trigger: dispatch` (the mode that emits the explicit dispatch) and a `workflow` (the dispatch target); validation rejects `tag_only` without both.
 
 ### changelog
 

@@ -1,24 +1,34 @@
-name: "Release tag-only"
+name: "Release own-repo tag-only"
 description: |
-  Verifies that release.tag_only makes the generated orchestrate workflow cut
-  the candidate tag only, without pre-creating a draft GitHub release, and cut
+  Verifies cascade's own-repo release-plumbing generation mode
+  (`cascade generate-workflow --own-repo`): the orchestrate finalize step cuts
+  the candidate tag only, without pre-creating a draft GitHub release, and cuts
   that tag with the non-triggering GITHUB_TOKEN. This suits a self-publishing
-  release workflow (for example GoReleaser) that is the sole creator of the
-  release object and is reached by the explicit candidate dispatch: it prevents
-  both a duplicate release run (the tag push no longer fires alongside the
-  dispatch) and an orphaned draft release.
+  release workflow (GoReleaser, cascade's own case) that is the sole creator of
+  the release object and is reached by the explicit candidate dispatch: it
+  prevents both a duplicate release run (the tag push no longer fires alongside
+  the dispatch) and an orphaned draft release.
+
+  Own-repo mode is NOT a manifest field. It exists only because cascade itself
+  self-publishes through GoReleaser; a downstream repository's manifest has no
+  way to reach it, and this scenario's own config block below carries nothing
+  own-repo-specific at all. own_repo: true selects the generation mode the same
+  way `--own-repo` does on the CLI.
 
   Covers:
-  - the finalize Manage Release step sets tag_only: 'true'
-  - that step creates the tag with ${{ secrets.GITHUB_TOKEN }}, not the PAT
-  - the explicit candidate dispatch survives and still uses the release PAT so
+  - `generate-workflow --own-repo` emits tag_only: 'true' on the finalize Manage
+    Release step and creates the tag with ${{ secrets.GITHUB_TOKEN }}, not the
+    configured release token
+  - the explicit candidate dispatch survives and still uses the release token so
     the dispatched run cascades to downstream workflow_run consumers
-  - the composite action exposes the tag_only input
-  - the default (no tag_only) behavior is unaffected, asserted by every other
-    generator scenario that does not set release.tag_only
+  - the own-repo composite action exposes the tag_only input
+  - plain (non-own-repo) generation is unaffected on both axes: the regression
+    step below asserts no tag_only anywhere and the release token retained,
+    exactly as every other generator scenario (none of which set own_repo)
+    already proves for the rest of the fleet
 
   Requires release_trigger: dispatch and release.workflow (validation enforces
-  both). Generator-output verification only.
+  both, independent of own_repo). Generator-output verification only.
 
 config:
   trunk_branch: main
@@ -26,7 +36,6 @@ config:
   release_token: ${{ secrets.CASCADE_STATE_TOKEN }}
   release:
     workflow: .github/workflows/release.yaml
-    tag_only: true
   environments: [dev]
   builds:
     - name: app
@@ -34,8 +43,10 @@ config:
       triggers: ["src/**"]
   deploys: []
 
+own_repo: true
+
 steps:
-  - name: "Initial commit; assert orchestrate cuts a tag-only rc with GITHUB_TOKEN"
+  - name: "Initial commit; assert own-repo orchestrate cuts a tag-only rc with GITHUB_TOKEN"
     action: commit
     commit:
       message: "feat: add app"

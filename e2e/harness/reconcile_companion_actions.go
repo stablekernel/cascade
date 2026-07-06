@@ -110,7 +110,7 @@ func RunReconcileCompanionAppendScenario(ctx context.Context, t *testing.T) (*Re
 			{Name: "deploy", Workflow: ".github/workflows/deploy.yaml"},
 		},
 	}
-	if err := h.StageRepoFromConfig(ctx, cfg, nil); err != nil {
+	if err := h.StageRepoFromConfig(ctx, cfg, nil, false); err != nil {
 		return nil, fmt.Errorf("stage repo: %w", err)
 	}
 

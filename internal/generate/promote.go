@@ -56,17 +56,6 @@ func (g *PromoteGenerator) getReleaseTokenRef() string {
 	return resolveReleaseTokenRef(g.config)
 }
 
-// getTagCreateTokenRef returns the token expression for the publish step that
-// cuts the semver tag. In tag-only mode it is the non-triggering GITHUB_TOKEN so
-// the semver tag push does not fire the release workflow alongside the explicit
-// Trigger Release Build dispatch; otherwise the configured release token is used.
-func (g *PromoteGenerator) getTagCreateTokenRef() string {
-	if g.config.ReleaseTagOnly() {
-		return nonTriggeringGitHubToken
-	}
-	return g.getReleaseTokenRef()
-}
-
 // getStateTokenRef returns the token expression used to write manifest state to
 // the trunk branch. Users configure the full expression via the state_token
 // config option; it defaults to "${{ secrets.GITHUB_TOKEN }}".
@@ -1229,10 +1218,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          tag: ${{ steps.release-data.outputs.sem_version }}\n")
 	sb.WriteString("          delete_tag: ${{ steps.release-data.outputs.rc_version }}\n") // RC tag to find release
 	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
-	// The publish step cuts the semver tag; in tag-only mode it uses the
-	// non-triggering GITHUB_TOKEN so the tag push does not fire the release
-	// workflow alongside the explicit Trigger Release Build dispatch below.
-	fmt.Fprintf(sb, "          token: %s\n", g.getTagCreateTokenRef())
+	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// Trigger the configured release-build workflow to build and attach binaries.
 	// GitHub does not reliably fire release event webhooks when a draft release is

@@ -34,6 +34,13 @@ type PlanOptions struct {
 	// against a repo's current pins instead of the binary's stale compiled-in
 	// defaultActionPins copy; an explicit user action_pins override still wins.
 	PinOverridesPath string
+	// OwnRepo plans cascade's own-repo release-plumbing variant of the
+	// orchestrate workflow and the manage-release composite action (tag-only
+	// finalize step, non-triggering GITHUB_TOKEN tag-create) instead of the
+	// plain output every downstream manifest produces. Only cascade's own
+	// verify/generate-workflow --own-repo invocation sets this; it is not a
+	// manifest field.
+	OwnRepo bool
 }
 
 // Plan resolves the manifest and returns the complete set of files the generate
@@ -95,7 +102,11 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	var planned []PlannedFile
 
 	// 1. orchestrate -> outputPath (verify always treats the full set as enabled).
-	orchestrateGen := NewGenerator(cfg, baseDir)
+	var orchestrateOpts []GeneratorOption
+	if opts.OwnRepo {
+		orchestrateOpts = append(orchestrateOpts, WithOwnRepoRelease())
+	}
+	orchestrateGen := NewGenerator(cfg, baseDir, orchestrateOpts...)
 	orchestrateGen.SetState(manifestState)
 	content, err := orchestrateGen.Generate()
 	if err != nil {
@@ -192,7 +203,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	}
 
 	// 10. composite action -> baseDir/.github/actions/<folder>/action.yaml.
-	action, err := RenderLocalActions(baseDir, cfg)
+	action, err := RenderLocalActions(baseDir, cfg, opts.OwnRepo)
 	if err != nil {
 		return nil, fmt.Errorf("rendering local actions: %w", err)
 	}

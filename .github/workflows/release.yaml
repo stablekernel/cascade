@@ -6,11 +6,12 @@ on:
   # push-only and have no dispatcher, so push: tags is their build path.
   #
   # The machine rc and final-release paths do NOT rely on this trigger. The
-  # orchestrate rc cut and the promote/auto-promote publish create their tag
-  # with the default GITHUB_TOKEN, whose actions deliberately do not start a
-  # workflow run, and then dispatch this workflow explicitly (below) with the
-  # release PAT. That keeps exactly one Release run per machine-cut tag while
-  # still cascading to fleet-e2e via workflow_run.
+  # orchestrate rc cut (generated in cascade's own-repo mode, see
+  # generate-workflow --own-repo) and the auto-promote final publish create
+  # their tag with the default GITHUB_TOKEN, whose actions deliberately do not
+  # start a workflow run, and then dispatch this workflow explicitly (below)
+  # with the release PAT. That keeps exactly one Release run per machine-cut
+  # tag while still cascading to fleet-e2e via workflow_run.
   push:
     tags:
       - "v*"
@@ -20,10 +21,10 @@ on:
   # does not re-fire this trigger, so it never loops on the machine path.
   release:
     types: [published, released]
-  # Canonical trigger for every machine path. orchestrate, promote, and
-  # auto-promote dispatch this workflow against the cut tag with the release
-  # PAT; this is immune to a CI-skip state commit on the tagged commit and to
-  # the API-release events GitHub does not reliably fire (#86).
+  # Canonical trigger for every machine path. orchestrate and auto-promote
+  # dispatch this workflow against the cut tag with the release PAT; this is
+  # immune to a CI-skip state commit on the tagged commit and to the
+  # API-release events GitHub does not reliably fire (#86).
   workflow_dispatch:
 
 # Least-privilege default: read-only at the top level. Only the release job,

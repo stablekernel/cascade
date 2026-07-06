@@ -26,6 +26,7 @@ func NewCommand() *cobra.Command {
 	var push bool
 	var orchestrateOnly bool
 	var promoteOnly bool
+	var ownRepo bool
 
 	cmd := &cobra.Command{
 		Use:   "generate-workflow",
@@ -57,6 +58,7 @@ the "ci" key by default. Use --manifest-key to change the key name.`,
 				push:              push,
 				orchestrateOnly:   orchestrateOnly,
 				promoteOnly:       promoteOnly,
+				ownRepo:           ownRepo,
 			}
 			return runGenerateWorkflow(opts)
 		},
@@ -74,6 +76,7 @@ the "ci" key by default. Use --manifest-key to change the key name.`,
 	cmd.Flags().BoolVarP(&push, "push", "p", false, "Push commit to remote (implies --commit)")
 	cmd.Flags().BoolVar(&orchestrateOnly, "orchestrate-only", false, "Only generate orchestrate.yaml")
 	cmd.Flags().BoolVar(&promoteOnly, "promote-only", false, "Only generate promote.yaml")
+	cmd.Flags().BoolVar(&ownRepo, "own-repo", false, "Generate cascade's own-repo release-plumbing variant (tag-only manage-release, non-triggering tag-create). Maintainer-only; never used by a downstream manifest.")
 
 	return cmd
 }
@@ -92,6 +95,7 @@ type generateOptions struct {
 	push               bool
 	orchestrateOnly    bool
 	promoteOnly        bool
+	ownRepo            bool
 }
 
 func runGenerateWorkflow(opts generateOptions) error {
@@ -148,7 +152,11 @@ func runGenerateWorkflow(opts generateOptions) error {
 	// Create orchestrate generator and validate
 	var orchestrateGen *Generator
 	if generateOrchestrate {
-		orchestrateGen = NewGenerator(cfg, baseDir)
+		var orchestrateOpts []GeneratorOption
+		if opts.ownRepo {
+			orchestrateOpts = append(orchestrateOpts, WithOwnRepoRelease())
+		}
+		orchestrateGen = NewGenerator(cfg, baseDir, orchestrateOpts...)
 		orchestrateGen.SetState(manifestState)
 		warnings := orchestrateGen.Validate()
 		for _, w := range warnings {
@@ -430,7 +438,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	}
 
 	// Generate local actions (manage-release or custom folder name)
-	if err := GenerateLocalActions(baseDir, cfg); err != nil {
+	if err := GenerateLocalActions(baseDir, cfg, opts.ownRepo); err != nil {
 		return fmt.Errorf("generating local actions: %w", err)
 	}
 	actionPath := filepath.Join(baseDir, ".github", "actions", cfg.GetActionFolder(), "action.yaml")

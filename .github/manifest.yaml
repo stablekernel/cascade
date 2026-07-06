@@ -23,7 +23,6 @@ ci:
         triggers: []
     release:
       workflow: .github/workflows/release.yaml
-      tag_only: true
     changelog:
       contributors: true
   state:

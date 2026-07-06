@@ -115,7 +115,11 @@ func (h *Harness) SetupInfra(ctx context.Context) error {
 // a callback body the generic stub cannot express (for example a deploy that
 // fails only under the Rollback workflow); files staged via a later step's
 // commit.files would land after generation and never be read by the generator.
-func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config, setupWorkflows map[string]string) error {
+// ownRepo runs generation via `cascade generate-workflow --own-repo`
+// (MultiStepScenario.OwnRepo), cascade's own-repo release-plumbing variant; it
+// is not part of config because own-repo mode is a CLI flag, never a manifest
+// field a downstream user could set.
+func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config, setupWorkflows map[string]string, ownRepo bool) error {
 	var err error
 
 	// Create repo
@@ -308,7 +312,7 @@ runs:
 		}
 
 		// Generate workflows from config
-		if err := h.GenerateWorkflows(ctx); err != nil {
+		if err := h.GenerateWorkflows(ctx, ownRepo); err != nil {
 			return fmt.Errorf("failed to generate workflows: %w", err)
 		}
 	}
@@ -488,8 +492,12 @@ jobs:
 `, displayName)
 }
 
-// GenerateWorkflows generates GitHub Actions workflows from cicd-config.yaml
-func (h *Harness) GenerateWorkflows(ctx context.Context) error {
+// GenerateWorkflows generates GitHub Actions workflows from cicd-config.yaml.
+// ownRepo appends --own-repo to the generate-workflow invocation, exercising
+// cascade's own-repo release-plumbing variant (tag-only manage-release + the
+// non-triggering GITHUB_TOKEN tag-create) instead of the plain output every
+// downstream user's manifest produces.
+func (h *Harness) GenerateWorkflows(ctx context.Context, ownRepo bool) error {
 	if h.repo == nil {
 		return fmt.Errorf("repo not initialized")
 	}
@@ -546,9 +554,13 @@ func (h *Harness) GenerateWorkflows(ctx context.Context) error {
 
 	// Run generate-workflow command
 	// CLI auto-detects .github/manifest.yaml with ci: key at top level
+	genArgs := "generate-workflow -f"
+	if ownRepo {
+		genArgs += " --own-repo"
+	}
 	genCmd := []string{
 		"bash", "-c",
-		"cd /tmp/repo && /usr/local/bin/cascade generate-workflow -f",
+		"cd /tmp/repo && /usr/local/bin/cascade " + genArgs,
 	}
 
 	exitCode, reader, err := h.act.Container().Exec(ctx, genCmd)

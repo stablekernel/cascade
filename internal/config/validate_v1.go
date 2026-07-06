@@ -382,20 +382,6 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 		errs = append(errs, "release_trigger must be one of: push, dispatch")
 	}
 
-	// release.tag_only cuts the tag only and hands the release object to the
-	// configured release workflow, which is reached by an explicit dispatch. It
-	// therefore requires release.workflow (the dispatch target) and
-	// release_trigger: dispatch (the mode that emits the dispatch); without both,
-	// nothing would build or publish the release.
-	if cfg.Release != nil && cfg.Release.TagOnly {
-		if cfg.Release.Workflow == "" {
-			errs = append(errs, "release.tag_only requires release.workflow to be set")
-		}
-		if cfg.ReleaseTrigger != ReleaseTriggerDispatch {
-			errs = append(errs, "release.tag_only requires release_trigger: dispatch")
-		}
-	}
-
 	// dispatch_inputs may not shadow generator-owned reserved names, must carry a
 	// name safe to emit as a workflow_dispatch input key (and referenced via
 	// ${{ inputs.<name> }}), and choice inputs need options that are safe to emit

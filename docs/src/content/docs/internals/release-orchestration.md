@@ -127,27 +127,41 @@ a full run. Only a complete fleet validation is a safe release signal.
 
 Every publish path drives the same [`release.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/release.yaml)
 Release workflow. Each machine path fires it exactly once, through an explicit
-`workflow_dispatch`. Orchestrate (the rc cut) and promote and auto-promote (the final
-publish) create their tag with the default `GITHUB_TOKEN`, whose actions deliberately do
-not start a workflow run, so the tag push does not fire the `push: tags` trigger. They
-then dispatch Release explicitly against that tag with the release token. The dispatch is
-the canonical trigger: it is immune both to a CI-skip token on the tagged commit and to
-the API-release events GitHub does not reliably fire, which would otherwise leave assets unbuilt. Because the
-dispatch carries the release token rather than the default token, the resulting Release
-run still cascades to `fleet-e2e` through `workflow_run`.
+`workflow_dispatch`. Orchestrate (the rc cut) and auto-promote (the final publish) create
+their tag with the default `GITHUB_TOKEN`, whose actions deliberately do not start a
+workflow run, so the tag push does not fire the `push: tags` trigger. They then dispatch
+Release explicitly against that tag with the release token. The dispatch is the canonical
+trigger: it is immune both to a CI-skip token on the tagged commit and to the API-release
+events GitHub does not reliably fire, which would otherwise leave assets unbuilt. Because
+the dispatch carries the release token rather than the default token, the resulting
+Release run still cascades to `fleet-e2e` through `workflow_run`.
+
+Cascade also generates a `promote.yaml` (every manifest with more than one environment
+gets one), but it plays no part in cascade's own release path: cascade has no
+intermediate environments to promote between, and its actual final publish is
+auto-promote's hand-authored chain. `promote.yaml` sits unused, generated in its plain
+(non-own-repo) form like any downstream repository's would be.
 
 The `push: tags` trigger stays in place for the two paths that have no dispatcher: the
 hotfix tag and a human ad-hoc `git push vX.Y.Z`. Both are push-only, and their tag is
 pushed with a workflow-triggering identity, so `push: tags` is their build path. The
 machine paths never rely on it.
 
-GoReleaser is the sole creator of cascade's release object. The orchestrate rc cut sets
-`release.tag_only: true` in the manifest, so its `manage-release` step cuts the candidate
-tag and stops there, without pre-creating a draft release. GoReleaser, running inside
-Release, then creates and publishes the one release for that tag. Nothing pre-creates a
-draft that GoReleaser would duplicate, so no orphaned draft is left behind. The `tag_only`
-switch is scoped to cascade's own manifest; a downstream repository that has no GoReleaser
-omits it and keeps the draft-then-publish flow unchanged.
+GoReleaser is the sole creator of cascade's release object. Cascade's own committed
+`orchestrate.yaml` and `manage-release` composite action are generated in an own-repo
+mode (`cascade generate-workflow --own-repo`, mirrored by `cascade verify --own-repo` so
+the committed files are drift-locked to that variant): the rc cut's `manage-release` step
+cuts the candidate tag and stops there, without pre-creating a draft release, and does so
+with the non-triggering `GITHUB_TOKEN`. GoReleaser, running inside Release, then creates
+and publishes the one release for that tag. Nothing pre-creates a draft that GoReleaser
+would duplicate, so no orphaned draft is left behind.
+
+This is not a manifest option. Own-repo mode is a CLI flag cascade passes only when
+generating and verifying its own workflows, because cascade is the one repository that
+self-publishes through GoReleaser; a downstream manifest has no way to reach it, and its
+generated `manage-release` action carries no trace of the tag-only input at all. Every
+other repository's `manage-release` still pre-creates the draft its own release-build
+workflow expects to find and publish.
 
 A single-flight `concurrency` group named `release`, an idempotency check at the head of
 the release job (`.github/scripts/release-idempotency.sh`), and a benign-`422` belt after
