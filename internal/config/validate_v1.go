@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Structural validation for the v1 reserved-shape fields. These rules are the
@@ -204,19 +205,48 @@ func validateCallbackTimeout(prefix string, isReusableWorkflow bool, timeoutMinu
 // newline is rejected the same as an embedded one.
 var localCallbackPathRe = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
+// crossRepoCallbackRe bounds a cross-repo "@"-containing callback ref to a
+// path, a single "@", and a ref, each drawn from the same safe path charset
+// as localCallbackPathRe. This is the positive-charset counterpart to the
+// up-front containsUnsafeChar guard below, applied to the one accepted shape
+// that carries an "@".
+var crossRepoCallbackRe = regexp.MustCompile(`^[A-Za-z0-9._/-]+@[A-Za-z0-9._/-]+$`)
+
+// containsUnsafeChar reports whether s contains a newline, carriage return,
+// other control character, or whitespace. Every branch of
+// validateLocalCallbackWorkflowPath ultimately splices its value raw into a
+// generated workflow's uses: line, so this check is applied once, up front,
+// rather than duplicated per branch: it keeps guarding every branch even if
+// the function grows a new accepted shape later.
+func containsUnsafeChar(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateLocalCallbackWorkflowPath checks that a local callback workflow path
 // is either a bare filename, a .github/workflows/... path, or a cross-repo
 // external ref (containing "@"). Any other form is rejected because GitHub
-// requires local reusable workflows to live under .github/workflows/. Both
-// accepted local forms are also charset-validated: the value is spliced raw
-// into a generated workflow's uses: line, so it must never carry a newline or
-// other character that could break out of the emitted YAML scalar.
+// requires local reusable workflows to live under .github/workflows/. Every
+// accepted form is charset-validated: the value is spliced raw into a
+// generated workflow's uses: line, so it must never carry a newline or other
+// character that could break out of the emitted YAML scalar.
 func validateLocalCallbackWorkflowPath(prefix, workflow string) []string {
 	if workflow == "" {
 		return nil
 	}
-	// Cross-repo external refs contain "@" - always valid.
+	if containsUnsafeChar(workflow) {
+		return []string{fmt.Sprintf("%s: local callback workflow %q contains unsafe characters", prefix, workflow)}
+	}
+	// Cross-repo external refs contain "@" - valid only when the whole value
+	// is a path@ref shape drawn from the safe path charset.
 	if strings.Contains(workflow, "@") {
+		if !crossRepoCallbackRe.MatchString(workflow) {
+			return []string{fmt.Sprintf("%s: cross-repo local callback workflow %q must be a path@ref reference", prefix, workflow)}
+		}
 		return nil
 	}
 	// Bare filename (no "/") - valid; normalizeWorkflowPath will route it.

@@ -109,3 +109,16 @@ func TestValidateLocalCallbackWorkflowPath_RejectsUnsafeCharacters(t *testing.T)
 		t.Fatal("expected an error for a .github/workflows/... path carrying a newline, got none")
 	}
 }
+
+// TestValidateLocalCallbackWorkflowPath_RejectsUnsafeCrossRepoRef guards the
+// remaining unguarded branch: a cross-repo "@"-containing ref is spliced raw
+// into a generated workflow's uses: line just like the local forms, so it
+// must reject a value carrying a newline or other character that could break
+// out of the emitted YAML scalar too.
+func TestValidateLocalCallbackWorkflowPath_RejectsUnsafeCrossRepoRef(t *testing.T) {
+	t.Parallel()
+	errs := validateLocalCallbackWorkflowPath("promote_callback", "owner/repo/.github/workflows/w.yaml@main\n      run: curl evil")
+	if len(errs) == 0 {
+		t.Fatal("expected an error for a cross-repo ref carrying a newline, got none")
+	}
+}
