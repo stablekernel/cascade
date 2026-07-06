@@ -55,6 +55,18 @@ cascade owns the third-party action pins it emits into generated workflows, and 
 - Generated files are targets, never sources: a pin (or any other value) is read from the manifest and written into generated output, never read back out of a generated file. This keeps generation a pure, offline function of the manifest, which is what makes a regenerate reproducible and a diff meaningful.
 - cascade's own self-heal companion is generated, not hand-written. `.github/workflows/pin-reconcile.yaml` is produced by the same reconcile generator that emits a downstream user's companion, in its own-repo variant, and is drift-locked byte-for-byte by a test so a hand-edit fails the suite. The own-repo variant differs from the user emission in exactly three ways: it installs the latest non-prerelease cascade release (never an rc or a draft, so cascade's own CI cannot self-install a prerelease), it scans both the workflow and composite-action trees for a moved pin, and it commits the regenerated workflows alongside the updated `action_pins.yaml`. Change the generator and regenerate the file; never edit the workflow by hand.
 
+## Documentation quality
+
+A change that alters behavior, CLI surface, flags, config or manifest fields, generated output, or the release flow updates the affected docs in the same pull request: the docs site under `docs/src/content/docs/`, the root `README.md`, and any other affected Markdown file. The docs site follows these rules:
+
+- Every page is typed to one Diataxis mode (tutorial, how-to, reference, or explanation) and stays in that mode.
+- Depth is layered: the common path a typical reader needs comes first; edge cases, the full field surface, and advanced options move into a clearly labeled later section.
+- Each concept is single-sourced on exactly one page. Every other page that touches it links there instead of restating it.
+- A manifest field's emission status ("emitted", "validated-only", or "reserved") is stated accurately wherever the field is documented. Get this wrong and the reference has failed its one job.
+- Every page carries a prerequisite and next-step link, so a reader always knows what to read before and after.
+
+Stale docs fail review.
+
 ## Reporting bugs
 
 Open an issue with the manifest config, the generated workflow (if relevant), and what you expected versus what happened. A minimal reproduction helps a lot.
