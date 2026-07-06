@@ -135,6 +135,27 @@ jobs:
             drift-exit.txt
           retention-days: 1
 
+      # Read-only reconcile detector. It records whether a governed action pin
+      # moved in a source file so the pin-reconcile companion (workflow_run,
+      # base-repo context) can adopt it back into the manifest. This step is
+      # advisory: it never fails the PR gate, and the companion recomputes the
+      # adoption authoritatively before it writes anything.
+      - name: Detect governed pin drift for reconcile
+        run: |
+          set +e
+          /tmp/cascade reconcile --check
+          echo "reconcile check exit: $?"
+          set -e
+
+      - name: Upload reconcile result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pin-reconcile-result
+          path: pin-reconcile-result.json
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: Fail on drift
         run: |
           CODE=$(cat drift-exit.txt)
