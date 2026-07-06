@@ -148,7 +148,7 @@ Generated workflows are build output. cascade owns the third-party action pins i
 
 A future cascade version may write a pointer comment into the generated workflow header naming the manifest that owns its pins, so ownership is visible from the file itself without consulting these docs. That pointer is not emitted today; nothing in the current output implies it.
 
-cascade is also adding an opt-in reconcile companion that watches for an external action-pin change (for example a Dependabot bump landing in a generated workflow) and adopts it into `action_pins` automatically, then regenerates so every workflow agrees again. It has not shipped yet; the sections below on Dependabot, token permissions, and automerge describe the ownership model it is built on and the fallback posture to use until it does.
+cascade also ships an opt-in reconcile companion that watches for an external action-pin change (for example a Dependabot bump landing in a generated workflow) and adopts it into `action_pins` automatically, then regenerates so every workflow agrees again. Set `reconcile.enabled: true` to emit it; see [Reconcile companion](#reconcile-companion-opt-in) below for the generated shape and [reconcile](/cli-reference/#reconcile) for the command it runs. The sections below on Dependabot, token permissions, and automerge describe the ownership model it is built on and the fallback posture for repositories that do not opt in.
 
 Two fields control the pinning policy today.
 
@@ -183,17 +183,17 @@ Setting `action_pins` for an action switches that action's update channel. Befor
 
 One consequence of that: because the override is the only state, an adopted pin can trail cascade's own curated default over time, for example when cascade's table later moves the same action to a newer commit. This is a known, documented edge today, not something cascade reconciles automatically.
 
-#### Dependabot fallback (until the reconcile companion ships)
+#### Dependabot fallback (for repositories that do not enable reconcile)
 
-Dependabot can propose bumps directly against the actions pinned in your generated workflow files, since it reads `uses:` lines wherever they appear. Until the reconcile companion is available, the practical fallback is excluding the generated workflow paths from Dependabot's GitHub Actions directory scan, so a bump lands in `action_pins` where cascade tracks it instead of a hand-edit that the next regenerate reports as drift. Treat this as a fallback, not the recommended posture: once the reconcile companion ships, prefer letting it adopt the bump into the manifest rather than steering Dependabot away from the generated paths.
+Dependabot can propose bumps directly against the actions pinned in your generated workflow files, since it reads `uses:` lines wherever they appear. For a repository that does not enable the reconcile companion, the practical fallback is excluding the generated workflow paths from Dependabot's GitHub Actions directory scan, so a bump lands in `action_pins` where cascade tracks it instead of a hand-edit that the next regenerate reports as drift. Treat this as a fallback, not the recommended posture: prefer enabling `reconcile` so the companion adopts the bump into the manifest rather than steering Dependabot away from the generated paths.
 
-#### Token permissions for pin ownership (forward-looking)
+#### Token permissions for pin ownership
 
-The token that writes manifest state (`state_token`, or its `_app` variant; see [Token authentication](#token-authentication)) needs headroom for pin ownership. It already needs `Contents: write` to push manifest state. The reconcile companion will add `Workflows: write`, because pushing a regenerated `.github/workflows/*.yaml` file requires the workflow scope; without it, the push fails. The fuller set a token exercising cascade's pin ownership, hotfix, drift-check, and deployment features needs is `Metadata: read`, `Contents: read and write`, `Workflows: write`, `Actions: read and write`, `Pull requests: read and write`, `Issues: read and write`, and `Deployments: read and write`. Provisioning this set once, through a GitHub App installation token or a fine-grained PAT, avoids re-scoping every time a new feature lands. A broad classic PAT can express the same permissions but without per-repo or per-scope precision, so prefer the App or fine-grained PAT path.
+The token that writes manifest state (`state_token`, or its `_app` variant; see [Token authentication](#token-authentication)) needs headroom for pin ownership. It already needs `Contents: write` to push manifest state. The reconcile companion adds `Workflows: write` when a regenerate must also push updated workflow files, because that requires the workflow scope; without it, the push fails. The fuller set a token exercising cascade's pin ownership, hotfix, drift-check, and deployment features needs is `Metadata: read`, `Contents: read and write`, `Workflows: write`, `Actions: read and write`, `Pull requests: read and write`, `Issues: read and write`, and `Deployments: read and write`. Provisioning this set once, through a GitHub App installation token or a fine-grained PAT, avoids re-scoping every time a new feature lands. A broad classic PAT can express the same permissions but without per-repo or per-scope precision, so prefer the App or fine-grained PAT path.
 
 #### Automerge caveat
 
-Enabling the reconcile companion will change what a red drift check means. Today, a hand-edited pin or an external bump landing in a generated file makes `cascade verify` fail and stays red until someone intervenes. With the companion enabled, that same bump is instead adopted into `action_pins` and the workflow regenerated automatically, turning what would have been a red check green. If your repository automerges once checks pass, a pin bump can land and merge unattended. If you rely on automerge, prefer the companion's followup commit-routing mode when it ships: it opens the adoption as its own pull request rather than pushing onto the triggering one, so a human still reviews the pin change before it merges.
+Enabling the reconcile companion changes what a red drift check means. Without it, a hand-edited pin or an external bump landing in a generated file makes `cascade verify` fail and stays red until someone intervenes. With the companion enabled, that same bump is instead adopted into `action_pins` and the workflow regenerated automatically, turning what would have been a red check green. If your repository automerges once checks pass, a pin bump can land and merge unattended. If you rely on automerge, prefer the companion's followup commit-routing mode (`reconcile.commit: followup`): it opens the adoption as its own pull request rather than pushing onto the triggering one, so a human still reviews the pin change before it merges.
 
 ### Token authentication
 
@@ -597,6 +597,35 @@ Behavior:
 - **cascade-owned.** Both files carry the cascade-generated marker, so `cascade verify` itself tracks them: edit them by hand and they are reported as drift; remove the toggle and they are reported as orphans.
 
 > **Pin recommendation.** When you enable `comment: true`, consider setting `pin_mode: sha`. The comment companion runs `actions/github-script` in a write-scoped `workflow_run` job, and the product default `pin_mode: tag` references that action by a floating major tag. Pinning to a full commit SHA removes the floating-tag exposure on the one job that holds a `pull-requests: write` token.
+
+### Reconcile companion (opt-in)
+
+Set `reconcile.enabled: true` and `generate-workflow` emits the fork-safe [`cascade reconcile`](/cli-reference/#reconcile) lane: a `pull_request` detector plus a `workflow_run` companion that adopts an external governed-pin change back into `action_pins` and regenerates, so a bump such as a merged Dependabot update lands in the manifest instead of drifting the generated workflow out from under it.
+
+```yaml
+ci:
+  config:
+    reconcile:
+      enabled: true
+      source: dependabot
+      commit: append
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | false | Emit the reconcile detector (`.github/workflows/cascade-reconcile-check.yaml`) and companion (`.github/workflows/cascade-reconcile-companion.yaml`) |
+| `source` | string | `dependabot` | The change-source adapter this companion recognizes. The reconcile engine itself is source-agnostic; `dependabot` is the first adapter. |
+| `commit` | string | `append` | How the adoption commit is routed. `append` pushes onto the triggering pull request's own branch; `followup` opens a separate pull request instead, for repositories that automerge without further review. |
+
+Behavior:
+
+- **Opt-in and additive.** Omit `reconcile` and nothing is emitted; existing output is byte-for-byte identical to before.
+- **Read-only detector.** `cascade-reconcile-check.yaml` triggers on `pull_request` with `contents: read` only. It runs `cascade reconcile --check`, which decides relevance and writes the changed governed refs to a data-only `pin-reconcile-result` artifact; a fork pull request gets a read-only token and no secrets, so this job cannot push or comment.
+- **Base-definition companion.** `cascade-reconcile-companion.yaml` triggers on `workflow_run` in the base-repo context, where it holds a scoped `contents: write` / `pull-requests: write` token. It resolves the target pull request only from trusted `workflow_run` run metadata, downloads the detector's artifact as data, fetches the pull request's head files via the trusted `refs/pull/<n>/head` ref (never a checkout of a fork's own repository), and runs the pinned `cascade reconcile` binary to adopt the change.
+- **Commit routing.** `commit: append` (the default) pushes the adoption commit onto the triggering pull request's own branch, but only when that pull request is not a fork; a fork pull request always falls back to a sticky comment naming the refs to adopt by hand, since cascade cannot push to a fork's branch. `commit: followup` never touches the original branch: it commits to a cascade-owned `cascade-reconcile/pr-<n>` branch and opens (or updates) a separate pull request against the same base, so an automerge-without-review pull request is never mutated in place.
+- **Loop guards.** The companion only pushes when `cascade reconcile` actually changed something, re-checks the branch's fresh tip before pushing and aborts rather than overwriting newer commits, and never force-pushes onto a shared branch.
+- **Automerge caveat.** See [Automerge caveat](#automerge-caveat) above: enabling this companion turns a would-be-red drift into a green check, so prefer `commit: followup` if your repository automerges once checks pass.
+- **Token scope.** The common case needs only `Contents: write` on the state token, because the source pull request already updated the generated workflow byte for byte and only the manifest changes; `Workflows: write` is needed only when a regenerate must also push updated workflow files.
 
 ### Native deployments (opt-in)
 
