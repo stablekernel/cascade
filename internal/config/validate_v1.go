@@ -194,10 +194,23 @@ func validateCallbackTimeout(prefix string, isReusableWorkflow bool, timeoutMinu
 		"%s: timeout_minutes is not valid on a reusable-workflow callback; GitHub forbids timeout-minutes on a job that calls a reusable workflow - set timeout-minutes inside your callback workflow instead", prefix)}
 }
 
+// localCallbackPathRe bounds a bare-filename or .github/workflows/... local
+// callback value to characters safe to splice raw into a generated
+// workflow's uses: line. It rejects newlines, other control characters,
+// quotes, whitespace, and any character that could break out of the emitted
+// YAML scalar, while allowing the path characters a callback workflow ref
+// legitimately needs. The trailing "$" is Go's default (non-multiline)
+// anchor, which matches only the true end of the string, so a trailing
+// newline is rejected the same as an embedded one.
+var localCallbackPathRe = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
 // validateLocalCallbackWorkflowPath checks that a local callback workflow path
 // is either a bare filename, a .github/workflows/... path, or a cross-repo
 // external ref (containing "@"). Any other form is rejected because GitHub
-// requires local reusable workflows to live under .github/workflows/.
+// requires local reusable workflows to live under .github/workflows/. Both
+// accepted local forms are also charset-validated: the value is spliced raw
+// into a generated workflow's uses: line, so it must never carry a newline or
+// other character that could break out of the emitted YAML scalar.
 func validateLocalCallbackWorkflowPath(prefix, workflow string) []string {
 	if workflow == "" {
 		return nil
@@ -208,13 +221,20 @@ func validateLocalCallbackWorkflowPath(prefix, workflow string) []string {
 	}
 	// Bare filename (no "/") - valid; normalizeWorkflowPath will route it.
 	if !strings.Contains(workflow, "/") {
+		if !localCallbackPathRe.MatchString(workflow) {
+			return []string{fmt.Sprintf("%s: local callback workflow %q contains unsafe characters", prefix, workflow)}
+		}
 		return nil
 	}
 	// .github/workflows/... path - valid only when it stays inside that
-	// directory; a ".." traversal segment after the prefix must not escape it.
+	// directory and carries no unsafe characters; a ".." traversal segment
+	// after the prefix must not escape it.
 	if strings.HasPrefix(workflow, ".github/workflows/") || strings.HasPrefix(workflow, "./.github/workflows/") {
 		if strings.Contains(workflow, "..") {
 			return []string{fmt.Sprintf("%s: local callback workflow must not contain '..' segments, got %q", prefix, workflow)}
+		}
+		if !localCallbackPathRe.MatchString(workflow) {
+			return []string{fmt.Sprintf("%s: local callback workflow %q contains unsafe characters", prefix, workflow)}
 		}
 		return nil
 	}

@@ -94,3 +94,18 @@ func TestValidateLocalCallbackWorkflowPath_RejectsTraversal(t *testing.T) {
 		t.Fatal("expected an error for a traversal path, got none")
 	}
 }
+
+// TestValidateLocalCallbackWorkflowPath_RejectsUnsafeCharacters guards both
+// accepted branches (bare filename and the .github/workflows/... path)
+// against a value carrying a newline or other character that could break out
+// of the emitted YAML scalar when the path is spliced raw into a generated
+// workflow's uses: line.
+func TestValidateLocalCallbackWorkflowPath_RejectsUnsafeCharacters(t *testing.T) {
+	t.Parallel()
+	if errs := validateLocalCallbackWorkflowPath("promote_callback", "x\n      run: curl evil"); len(errs) == 0 {
+		t.Fatal("expected an error for a bare filename carrying a newline, got none")
+	}
+	if errs := validateLocalCallbackWorkflowPath("promote_callback", ".github/workflows/x.yaml\n      run: curl evil"); len(errs) == 0 {
+		t.Fatal("expected an error for a .github/workflows/... path carrying a newline, got none")
+	}
+}
