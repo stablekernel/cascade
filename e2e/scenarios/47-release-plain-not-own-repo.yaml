@@ -42,8 +42,14 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             - "          token: ${{ secrets.CASCADE_STATE_TOKEN }}"
+            # Plain (downstream) finalize installs a pinned released cascade via
+            # setup-cli; it never builds from source.
+            - "      - name: Setup CLI"
+            - "stablekernel/cascade/.github/actions/setup-cli@"
           not_contains:
             - "tag_only"
+            - "Download cascade CLI (from source)"
+            - "cascade-cli"
         - path: ".github/actions/manage-release/action.yaml"
           not_contains:
             - "tag_only"

@@ -61,6 +61,12 @@ steps:
             - "          tag_only: 'true'"
             - "          token: ${{ secrets.GITHUB_TOKEN }}"
             - "      - name: Dispatch Release Candidate Build"
+            # Own-repo finalize runs the binary built from the commit under
+            # release (from the build-cli callback artifact), not a stale pin,
+            # so a new CLI capability (for example --tag-only) is present in the
+            # same run that introduces it.
+            - "      - name: Download cascade CLI (from source)"
+            - "          name: cascade-cli"
         - path: ".github/actions/manage-release/action.yaml"
           contains:
             - "  tag_only:"

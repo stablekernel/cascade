@@ -108,7 +108,19 @@ jobs:
           if [[ "$HAS_OUTPUTS" == "false" ]]; then
             echo "_No outputs produced_" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Download cascade CLI (from source)
+        if: needs.build-cli.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cascade-cli
+          path: .cascade-bin
+      - name: Install cascade CLI (from source)
+        if: needs.build-cli.result == 'success'
+        run: |
+          chmod +x .cascade-bin/cascade
+          echo "$GITHUB_WORKSPACE/.cascade-bin" >> "$GITHUB_PATH"
       - name: Setup CLI
+        if: needs.build-cli.result != 'success'
         uses: stablekernel/cascade/.github/actions/setup-cli@58c3d309faaf5028aa03900aded8424e738afb81 # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}

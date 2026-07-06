@@ -89,6 +89,57 @@ func TestGenerator_OwnRepoRelease(t *testing.T) {
 	}
 }
 
+// TestGenerator_OwnRepoFinalizeBuildsFromSource asserts that in own-repo mode the
+// finalize job obtains its cascade binary from the build-cli callback artifact
+// (the commit under release), not from a pinned setup-cli release, so a newly
+// added CLI capability is present in the same run that introduces it. Plain
+// generation (every downstream manifest) must keep the pinned setup-cli and never
+// download the from-source artifact.
+func TestGenerator_OwnRepoFinalizeBuildsFromSource(t *testing.T) {
+	release := &config.ReleaseConfig{Workflow: ".github/workflows/release.yaml"}
+
+	t.Run("own-repo finalize downloads the from-source binary", func(t *testing.T) {
+		cfg, tmpDir := candidateDispatchConfig(t, true, release)
+		cfg.ReleaseToken = pat
+
+		content, err := NewGenerator(cfg, tmpDir, WithOwnRepoRelease()).Generate()
+		require.NoError(t, err)
+
+		// Scope to the finalize job: from the finalize header to the failure gate.
+		finalize := blockBetween(t, content, "  finalize:", "- name: Check for Failures")
+		assert.Contains(t, finalize, "- name: Download cascade CLI (from source)",
+			"own-repo finalize must download the from-source cascade binary")
+		assert.Contains(t, finalize, "name: "+ownRepoCLIArtifactName,
+			"own-repo finalize must download the build-cli artifact by name")
+		assert.Contains(t, finalize, "actions/download-artifact@",
+			"own-repo finalize must use the pinned download-artifact action")
+		assert.Contains(t, finalize, "if: needs.build-cli.result == 'success'",
+			"the from-source download must be gated on the build-cli callback succeeding")
+		assert.Contains(t, finalize, "echo \"$GITHUB_WORKSPACE/.cascade-bin\" >> \"$GITHUB_PATH\"",
+			"the from-source binary must be prepended to PATH")
+		// The pinned setup-cli survives only as the skipped-build fallback, guarded
+		// by the complementary condition.
+		assert.Contains(t, finalize, "if: needs.build-cli.result != 'success'",
+			"own-repo finalize must retain a pinned fallback when build-cli was skipped")
+	})
+
+	t.Run("plain finalize keeps the pinned setup-cli and never downloads", func(t *testing.T) {
+		cfg, tmpDir := candidateDispatchConfig(t, true, release)
+		cfg.ReleaseToken = pat
+
+		content, err := NewGenerator(cfg, tmpDir).Generate()
+		require.NoError(t, err)
+
+		finalize := blockBetween(t, content, "  finalize:", "- name: Check for Failures")
+		assert.NotContains(t, finalize, "Download cascade CLI (from source)",
+			"plain finalize must not download a from-source binary")
+		assert.NotContains(t, finalize, ownRepoCLIArtifactName,
+			"plain finalize must carry no trace of the own-repo build artifact")
+		assert.Contains(t, finalize, "stablekernel/cascade/.github/actions/setup-cli@",
+			"plain finalize must install the pinned released cascade via setup-cli")
+	})
+}
+
 // TestGenerator_NewGeneratorTwoArgDefaultsToPlainMode is a narrow regression
 // lock: the pre-existing two-argument NewGenerator(cfg, baseDir) call every
 // caller in the codebase already uses must keep behaving exactly as before
