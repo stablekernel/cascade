@@ -387,6 +387,28 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
+	// Generate the opt-in emitted pin-reconcile PR detector (reconcile.enabled).
+	// Absent or disabled reconcile emits nothing, so existing manifests are
+	// unaffected. The workflow_run companion rides alongside once implemented.
+	reconcileGen := NewReconcileGenerator(cfg, baseDir)
+	if reconcileGen.Enabled() {
+		content, err := reconcileGen.Generate()
+		if err != nil {
+			return fmt.Errorf("generating reconcile-check workflow: %w", err)
+		}
+		outPath := ".github/workflows/cascade-reconcile-check.yaml"
+		if opts.dryRun {
+			fmt.Println("\n=== cascade-reconcile-check.yaml ===")
+			fmt.Print(content)
+		} else {
+			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+				return err
+			}
+			generatedFiles = append(generatedFiles, outPath)
+			fmt.Printf("Generated workflow: %s\n", outPath)
+		}
+	}
+
 	if opts.dryRun {
 		return nil
 	}
