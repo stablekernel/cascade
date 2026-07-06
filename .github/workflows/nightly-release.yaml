@@ -265,9 +265,13 @@ jobs:
     # rehearsal is always among the newest) and deletes the older accumulated
     # ones, so they cannot pile up and pollute version-calc.
     #
-    # Always on the schedule; on a manual run only when this is not itself a
-    # dry run, so it never races the tag the dispatch job just cut.
-    if: github.event_name == 'schedule' || github.event.inputs.dry_run != 'true'
+    # Always runs, including on a dry-run dispatch: retention only ever deletes
+    # tags OLDER than the newest few, so the tag a concurrent dispatch job is
+    # cutting (always the newest by monotonic run number) can never be among
+    # them even if this job races ahead of that push. Skipping the whole job on
+    # a dry-run dispatch (the previous behavior) left pruning off for as long as
+    # a maintainer kept rehearsing back to back, which is exactly when dry-run
+    # tags accumulate fastest.
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -292,6 +296,25 @@ jobs:
           dryrun_re='^v[0-9]+\.[0-9]+\.[0-9]+-dryrun\.[0-9]+$'
 
           git fetch --tags --force --prune --prune-tags --quiet origin
+
+          # A dry-run release can outlive its tag: if the tag is ever removed
+          # out-of-band (e.g. a manual `git push --delete` that does not also
+          # delete the release object), the release is left dangling with no
+          # ref to find it by. A tag-only scan can never see it again, so it
+          # accumulates invisibly forever. Reconcile those first: with no live
+          # tag there is no in-flight rehearsal chain to protect, so retention
+          # does not apply and each one is deleted unconditionally.
+          mapfile -t releases < <(
+            gh release list -L 200 --json tagName --jq '.[].tagName' \
+              | grep -E "$dryrun_re" || true
+          )
+          for tag in "${releases[@]}"; do
+            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+              continue # has a live tag; handled by the retention pass below
+            fi
+            gh release delete "$tag" --yes
+            echo "::notice::Deleted orphaned dry-run release ${tag} (tag already gone)."
+          done
 
           mapfile -t tags < <(git tag -l | grep -E "$dryrun_re" | sort -V || true)
 
