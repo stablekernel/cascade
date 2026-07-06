@@ -93,7 +93,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@adbd2aa1fe3871a3a02ebf3340927a54693d871b # v0.8.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@58c3d309faaf5028aa03900aded8424e738afb81 # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.8.0
@@ -128,7 +128,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@adbd2aa1fe3871a3a02ebf3340927a54693d871b # v0.8.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@58c3d309faaf5028aa03900aded8424e738afb81 # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.8.0
@@ -155,7 +155,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@adbd2aa1fe3871a3a02ebf3340927a54693d871b # v0.8.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@58c3d309faaf5028aa03900aded8424e738afb81 # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           version: v0.8.0
