@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Structural validation for the v1 reserved-shape fields. These rules are the
@@ -58,6 +59,32 @@ var jobIDSafeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // commitSHARe matches a full 40-character lowercase-hex Git commit SHA.
 var commitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// actionFolderRe matches a safe action_folder name: a plain path component
+// with no directory separators or traversal segments, since the generator
+// joins it directly into a filesystem path under .github/actions/.
+var actionFolderRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateActionFolder rejects an action_folder value that is empty, contains
+// a path separator, contains a ".." traversal segment, or otherwise falls
+// outside a safe plain-name charset. The generator joins the value directly
+// into .github/actions/<folder>/action.yaml, so an unsafe value could escape
+// the intended actions directory.
+func validateActionFolder(folder string) []string {
+	if folder == "" {
+		return nil
+	}
+	if strings.Contains(folder, "..") || strings.Contains(folder, "/") || !actionFolderRe.MatchString(folder) {
+		return []string{fmt.Sprintf("action_folder %q must be a plain folder name with no path separators or '..' segments", folder)}
+	}
+	return nil
+}
+
+// actionPinValueRe bounds an action_pins override value to a ref plus an
+// optional trailing "# <version>" comment. It rejects newlines and any
+// character that could break out of the emitted YAML scalar, since actionRef
+// splices the value raw into a generated workflow.
+var actionPinValueRe = regexp.MustCompile(`^[A-Za-z0-9._+/-]+(?: # [A-Za-z0-9._+-]+)?$`)
 
 // dispatchInputOptionRe matches a choice dispatch-input option that is safe to
 // emit verbatim as a YAML block-sequence item under workflow_dispatch's
@@ -168,24 +195,77 @@ func validateCallbackTimeout(prefix string, isReusableWorkflow bool, timeoutMinu
 		"%s: timeout_minutes is not valid on a reusable-workflow callback; GitHub forbids timeout-minutes on a job that calls a reusable workflow - set timeout-minutes inside your callback workflow instead", prefix)}
 }
 
+// localCallbackPathRe bounds a bare-filename or .github/workflows/... local
+// callback value to characters safe to splice raw into a generated
+// workflow's uses: line. It rejects newlines, other control characters,
+// quotes, whitespace, and any character that could break out of the emitted
+// YAML scalar, while allowing the path characters a callback workflow ref
+// legitimately needs. The trailing "$" is Go's default (non-multiline)
+// anchor, which matches only the true end of the string, so a trailing
+// newline is rejected the same as an embedded one.
+var localCallbackPathRe = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// crossRepoCallbackRe bounds a cross-repo "@"-containing callback ref to a
+// path, a single "@", and a ref, each drawn from the same safe path charset
+// as localCallbackPathRe. This is the positive-charset counterpart to the
+// up-front containsUnsafeChar guard below, applied to the one accepted shape
+// that carries an "@".
+var crossRepoCallbackRe = regexp.MustCompile(`^[A-Za-z0-9._/-]+@[A-Za-z0-9._/-]+$`)
+
+// containsUnsafeChar reports whether s contains a newline, carriage return,
+// other control character, or whitespace. Every branch of
+// validateLocalCallbackWorkflowPath ultimately splices its value raw into a
+// generated workflow's uses: line, so this check is applied once, up front,
+// rather than duplicated per branch: it keeps guarding every branch even if
+// the function grows a new accepted shape later.
+func containsUnsafeChar(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateLocalCallbackWorkflowPath checks that a local callback workflow path
 // is either a bare filename, a .github/workflows/... path, or a cross-repo
 // external ref (containing "@"). Any other form is rejected because GitHub
-// requires local reusable workflows to live under .github/workflows/.
+// requires local reusable workflows to live under .github/workflows/. Every
+// accepted form is charset-validated: the value is spliced raw into a
+// generated workflow's uses: line, so it must never carry a newline or other
+// character that could break out of the emitted YAML scalar.
 func validateLocalCallbackWorkflowPath(prefix, workflow string) []string {
 	if workflow == "" {
 		return nil
 	}
-	// Cross-repo external refs contain "@" - always valid.
+	if containsUnsafeChar(workflow) {
+		return []string{fmt.Sprintf("%s: local callback workflow %q contains unsafe characters", prefix, workflow)}
+	}
+	// Cross-repo external refs contain "@" - valid only when the whole value
+	// is a path@ref shape drawn from the safe path charset.
 	if strings.Contains(workflow, "@") {
+		if !crossRepoCallbackRe.MatchString(workflow) {
+			return []string{fmt.Sprintf("%s: cross-repo local callback workflow %q must be a path@ref reference", prefix, workflow)}
+		}
 		return nil
 	}
 	// Bare filename (no "/") - valid; normalizeWorkflowPath will route it.
 	if !strings.Contains(workflow, "/") {
+		if !localCallbackPathRe.MatchString(workflow) {
+			return []string{fmt.Sprintf("%s: local callback workflow %q contains unsafe characters", prefix, workflow)}
+		}
 		return nil
 	}
-	// .github/workflows/... path - valid.
+	// .github/workflows/... path - valid only when it stays inside that
+	// directory and carries no unsafe characters; a ".." traversal segment
+	// after the prefix must not escape it.
 	if strings.HasPrefix(workflow, ".github/workflows/") || strings.HasPrefix(workflow, "./.github/workflows/") {
+		if strings.Contains(workflow, "..") {
+			return []string{fmt.Sprintf("%s: local callback workflow must not contain '..' segments, got %q", prefix, workflow)}
+		}
+		if !localCallbackPathRe.MatchString(workflow) {
+			return []string{fmt.Sprintf("%s: local callback workflow %q contains unsafe characters", prefix, workflow)}
+		}
 		return nil
 	}
 	return []string{fmt.Sprintf("%s: local callback workflow must be a .github/workflows/... path or a bare filename, got %q", prefix, workflow)}
@@ -349,7 +429,25 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateEnvironmentConfig(cfg)...)
 	errs = append(errs, validateTokenSources(cfg)...)
 	errs = append(errs, validateRollback(cfg.Rollback)...)
+	errs = append(errs, validateActionPins(cfg)...)
+	errs = append(errs, validateActionFolder(cfg.ActionFolder)...)
 
+	return errs
+}
+
+// validateActionPins charset-validates every action_pins override value. Each
+// value is spliced raw into a generated workflow's uses: line, so it must be
+// bounded to a ref plus an optional trailing "# <version>" comment and must
+// never carry a newline or other character that could break out of the
+// emitted YAML scalar.
+func validateActionPins(cfg *TrunkConfig) []string {
+	var errs []string
+	for _, action := range sortedKeys(cfg.ActionPins) {
+		ref := cfg.ActionPins[action]
+		if !actionPinValueRe.MatchString(ref) {
+			errs = append(errs, fmt.Sprintf("action_pins[%q]: invalid ref %q", action, ref))
+		}
+	}
 	return errs
 }
 

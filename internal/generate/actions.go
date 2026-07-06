@@ -4,10 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
 )
+
+// actionFolderRe mirrors the config package's action_folder charset check.
+// This is a defense-in-depth guard: config validation already rejects an
+// unsafe action_folder, but the generator refuses to join an unsafe value
+// into a filesystem path rather than trusting the caller validated it.
+var actionFolderRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // RenderLocalActions returns the composite action file the manifest would
 // generate, paired with its rendered content, without writing anything to disk.
@@ -15,6 +22,9 @@ import (
 // cfg.GetActionFolder() (default: "manage-release").
 func RenderLocalActions(baseDir string, cfg *config.TrunkConfig) (PlannedFile, error) {
 	actionFolder := cfg.GetActionFolder()
+	if strings.Contains(actionFolder, "..") || strings.Contains(actionFolder, "/") || !actionFolderRe.MatchString(actionFolder) {
+		return PlannedFile{}, fmt.Errorf("action_folder %q is not a safe plain folder name", actionFolder)
+	}
 	actionPath := filepath.Join(baseDir, ".github", "actions", actionFolder, "action.yaml")
 	return PlannedFile{Path: actionPath, Content: generateManageReleaseAction()}, nil
 }
