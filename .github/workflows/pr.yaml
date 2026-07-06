@@ -108,6 +108,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so the reconcile detector can diff base..head to find
+          # the changed governed source files a pin bump would land in.
+          fetch-depth: 0
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
@@ -135,6 +139,19 @@ jobs:
             drift-exit.txt
           retention-days: 1
 
+      # List the PR's changed governed source files so the reconcile detector
+      # scans them for a moved pin. cascade's own governed sources are the
+      # hand-written workflows AND the composite actions, so diff over both.
+      # The pull_request SHAs are attacker-influenceable on a fork PR, so they
+      # are routed through env and referenced as quoted shell variables.
+      - name: List changed governed source files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            -- .github/workflows/ .github/actions/ > changed-files.txt
+
       # Read-only reconcile detector. It records whether a governed action pin
       # moved in a source file so the pin-reconcile companion (workflow_run,
       # base-repo context) can adopt it back into the manifest. This step is
@@ -143,7 +160,11 @@ jobs:
       - name: Detect governed pin drift for reconcile
         run: |
           set +e
-          /tmp/cascade reconcile --check
+          args=()
+          while IFS= read -r f; do
+            [ -n "$f" ] && args+=(--changed-file "$f")
+          done < changed-files.txt
+          /tmp/cascade reconcile --check --check-output pin-reconcile-result.json "${args[@]}"
           echo "reconcile check exit: $?"
           set -e
 

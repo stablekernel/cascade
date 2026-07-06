@@ -122,6 +122,7 @@ jobs:
             core.setOutput('proceed', 'true');
             core.setOutput('head_ref', head.ref);
             core.setOutput('head_sha', head.sha);
+            core.setOutput('base_sha', base.sha);
 
       - name: Install released cascade CLI
         if: steps.resolve.outputs.proceed == 'true'
@@ -161,13 +162,26 @@ jobs:
 
       - name: Reconcile the pin manifest and regenerate
         if: steps.resolve.outputs.proceed == 'true'
+        env:
+          BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
         run: |
           set -euo pipefail
           git config user.name "cascade-bot"
           git config user.email "cascade-bot@users.noreply.github.com"
+          # List the changed governed source files a pin bump would land in.
+          # cascade's own governed sources are the hand-written workflows AND
+          # the composite actions, so diff over both. The SHAs come from trusted
+          # workflow_run metadata but are still routed through env and quoted.
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            -- .github/workflows/ .github/actions/ > changed-files.txt
+          args=()
+          while IFS= read -r f; do
+            [ -n "$f" ] && args+=(--changed-file "$f")
+          done < changed-files.txt
           # Own-repo mode writes the adopted ref into internal/generate/action_pins.yaml
           # and regenerates every generated workflow so they agree again.
-          cascade reconcile --own-repo
+          cascade reconcile --own-repo "${args[@]}"
 
       - name: Commit and push the reconciled pins
         if: steps.resolve.outputs.proceed == 'true'
