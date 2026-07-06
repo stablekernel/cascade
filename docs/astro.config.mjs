@@ -18,21 +18,35 @@ export default defineConfig({
       // Mermaid follows the Starlight light/dark toggle. We keep autoTheme so
       // node fills and text stay legible in both modes, and brand only the
       // accent surfaces (edges, borders, cluster outlines, active accent) with
-      // cascade teal/copper - colors that read on both the dark slate and the
-      // light gray Starlight backgrounds.
+      // cascade teal and copper, colors that read on both the dark slate and
+      // the light gray Starlight backgrounds.
       autoTheme: true,
       mermaidConfig: {
         themeVariables: {
           fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-          // Cascade cyan-teal: drives edges, focus accents, and active states.
+          // Cascade cyan-teal drives edges, focus accents, and active states.
           primaryColor: '#0E8B82',
           primaryBorderColor: '#36D0C4',
+          primaryTextColor: '#F8FAFC',
           lineColor: '#36D0C4',
-          // Cluster (subgraph) outline in teal; transparent fill keeps the
-          // Starlight surface showing through in either mode.
+          // The flowchart renderer keys node fill, border, and text off mainBkg,
+          // nodeBorder, and nodeTextColor rather than the primary* variables, so
+          // brand all three explicitly. A mid-tone teal fill with light text reads
+          // on both the dark slate and the light gray Starlight backgrounds and
+          // keeps the diagrams on the same palette as the README badges.
+          mainBkg: '#0E8B82',
+          nodeBorder: '#36D0C4',
+          nodeTextColor: '#F8FAFC',
+          // Subgraph (cluster) outline in teal with a transparent fill so the
+          // Starlight surface shows through in either mode; title in teal.
           clusterBorder: '#36D0C4',
           clusterBkg: 'transparent',
-          // Copper/ember secondary accent for highlighted nodes.
+          titleColor: '#36D0C4',
+          // Keep edge labels legible over either background.
+          edgeLabelBackground: '#0B1220',
+          // Copper and ember secondary accent for highlighted nodes.
+          secondaryColor: '#B87333',
+          secondaryBorderColor: '#E8702A',
           tertiaryColor: '#B87333',
           tertiaryBorderColor: '#E8702A',
         },

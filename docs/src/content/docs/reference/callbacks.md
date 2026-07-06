@@ -16,16 +16,24 @@ Cascade calls your workflows (callbacks) during pipeline execution. This page de
 
 Every callback is a reusable workflow you declare with `workflow:` in the manifest. Cascade invokes it with `workflow_call`.
 
-```
-Cascade                               Your Repository
-┌─────────────────┐                 ┌──────────────────┐
-│ orchestrate.yaml│──workflow_call──▶│ validate.yaml    │
-│                 │──workflow_call──▶│ build-app.yaml   │
-│                 │──workflow_call──▶│ deploy-cdk.yaml  │
-│                 │                 │                  │
-│ promote.yaml    │──workflow_call──▶│ deploy-svc.yaml  │
-│                 │──workflow_call──▶│ publish.yaml     │
-└─────────────────┘                 └──────────────────┘
+```mermaid
+flowchart LR
+    subgraph cascade["Cascade"]
+        orchestrate["orchestrate.yaml"]
+        promote["promote.yaml"]
+    end
+    subgraph yours["Your repository"]
+        validate["validate.yaml"]
+        build["build-app.yaml"]
+        deployCdk["deploy-cdk.yaml"]
+        deploySvc["deploy-svc.yaml"]
+        publish["publish.yaml"]
+    end
+    orchestrate -->|workflow_call| validate
+    orchestrate -->|workflow_call| build
+    orchestrate -->|workflow_call| deployCdk
+    promote -->|workflow_call| deploySvc
+    promote -->|workflow_call| publish
 ```
 
 ## Standard inputs
