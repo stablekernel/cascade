@@ -82,3 +82,15 @@ func TestValidateLocalCallbackWorkflowPath(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateLocalCallbackWorkflowPath_RejectsTraversal guards the callback
+// workflow path sink: the .github/workflows/ prefix check alone does not
+// reject a value that escapes the directory via a ".." traversal segment
+// after that prefix.
+func TestValidateLocalCallbackWorkflowPath_RejectsTraversal(t *testing.T) {
+	t.Parallel()
+	errs := validateLocalCallbackWorkflowPath("x", ".github/workflows/../../../secret")
+	if len(errs) == 0 {
+		t.Fatal("expected an error for a traversal path, got none")
+	}
+}

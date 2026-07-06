@@ -210,8 +210,12 @@ func validateLocalCallbackWorkflowPath(prefix, workflow string) []string {
 	if !strings.Contains(workflow, "/") {
 		return nil
 	}
-	// .github/workflows/... path - valid.
+	// .github/workflows/... path - valid only when it stays inside that
+	// directory; a ".." traversal segment after the prefix must not escape it.
 	if strings.HasPrefix(workflow, ".github/workflows/") || strings.HasPrefix(workflow, "./.github/workflows/") {
+		if strings.Contains(workflow, "..") {
+			return []string{fmt.Sprintf("%s: local callback workflow must not contain '..' segments, got %q", prefix, workflow)}
+		}
 		return nil
 	}
 	return []string{fmt.Sprintf("%s: local callback workflow must be a .github/workflows/... path or a bare filename, got %q", prefix, workflow)}
