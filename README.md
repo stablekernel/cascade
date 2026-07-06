@@ -129,6 +129,30 @@ Opt-in companions (drift-check, PR-preview, pin-reconcile) are emitted only when
 | GitHub Environments | The `environments` command emits per-environment config (`required_reviewers`, `wait_timer`, `branch_policy`) for you to apply. |
 | Schema enforcement | Every CLI invocation checks `schema_version` and rejects incompatible manifests with a clear error. |
 
+A manifest that puts a few of these to work: `web` builds only after `api`, and each build and deploy runs only when its `triggers` match the changed paths.
+
+```yaml
+# .github/manifest.yaml
+ci:
+  config:
+    schema_version: 1
+    trunk_branch: main
+    cli_version: v0.9.1
+    environments: [dev, staging, prod]
+    builds:
+      - name: api
+        workflow: .github/workflows/build-api.yaml
+        triggers: ["api/**"]
+      - name: web
+        workflow: .github/workflows/build-web.yaml
+        triggers: ["web/**"]
+        depends_on: [api]
+    deploys:
+      - name: services
+        workflow: .github/workflows/deploy.yaml
+        triggers: ["api/**", "web/**"]
+```
+
 Full field-by-field detail lives in the [manifest reference](https://stablekernel.github.io/cascade/reference/manifest/).
 
 ---
