@@ -59,6 +59,26 @@ var jobIDSafeNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // commitSHARe matches a full 40-character lowercase-hex Git commit SHA.
 var commitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// actionFolderRe matches a safe action_folder name: a plain path component
+// with no directory separators or traversal segments, since the generator
+// joins it directly into a filesystem path under .github/actions/.
+var actionFolderRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateActionFolder rejects an action_folder value that is empty, contains
+// a path separator, contains a ".." traversal segment, or otherwise falls
+// outside a safe plain-name charset. The generator joins the value directly
+// into .github/actions/<folder>/action.yaml, so an unsafe value could escape
+// the intended actions directory.
+func validateActionFolder(folder string) []string {
+	if folder == "" {
+		return nil
+	}
+	if strings.Contains(folder, "..") || strings.Contains(folder, "/") || !actionFolderRe.MatchString(folder) {
+		return []string{fmt.Sprintf("action_folder %q must be a plain folder name with no path separators or '..' segments", folder)}
+	}
+	return nil
+}
+
 // actionPinValueRe bounds an action_pins override value to a ref plus an
 // optional trailing "# <version>" comment. It rejects newlines and any
 // character that could break out of the emitted YAML scalar, since actionRef
@@ -356,6 +376,7 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateTokenSources(cfg)...)
 	errs = append(errs, validateRollback(cfg.Rollback)...)
 	errs = append(errs, validateActionPins(cfg)...)
+	errs = append(errs, validateActionFolder(cfg.ActionFolder)...)
 
 	return errs
 }
