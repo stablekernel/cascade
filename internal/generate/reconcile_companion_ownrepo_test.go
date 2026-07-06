@@ -71,8 +71,10 @@ func TestReconcileGenerator_OwnRepoCompanion_SecurityPosture(t *testing.T) {
 	content, err := NewReconcileGenerator(ownRepoReconcileConfig(), t.TempDir(), WithOwnRepo()).GenerateCompanion()
 	require.NoError(t, err)
 
-	assert.True(t, strings.HasPrefix(content, GeneratedFileMarker),
-		"own-repo companion must carry the cascade-owned generated marker")
+	assert.True(t, strings.HasPrefix(content, OwnRepoGeneratedFileMarker),
+		"own-repo companion must carry the distinct own-repo generated marker")
+	assert.NotContains(t, content, GeneratedFileMarker,
+		"own-repo companion must not carry the plain marker, so verify's orphan scan skips it")
 	assert.Contains(t, content, "on:\n  workflow_run:")
 	assert.Contains(t, content, `workflows: ["PR Validation"]`)
 	assert.Contains(t, content, "permissions: {}")

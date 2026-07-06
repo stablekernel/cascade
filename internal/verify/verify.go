@@ -176,7 +176,10 @@ func Run(o Options, stdout, stderr io.Writer) error {
 // findOrphans scans the directories that hold the planned workflow files for
 // cascade-owned files the manifest no longer plans. A file is an orphan only
 // when it carries generate.GeneratedFileMarker (so hand-written workflows are
-// never flagged) and is not itself a planned file. The scan is confined to the
+// never flagged) and is not itself a planned file. A file carrying
+// generate.OwnRepoGeneratedFileMarker is cascade's own self-heal companion,
+// generated and drift-locked but intentionally outside the manifest plan, so it
+// is skipped rather than flagged. The scan is confined to the
 // distinct directories of the planned workflow files (normally
 // .github/workflows); the composite action directory and the wider repo are
 // never scanned. It returns the orphans sorted by absolute path for stable
@@ -207,6 +210,13 @@ func findOrphans(planned []generate.PlannedFile, plannedPaths map[string]struct{
 					continue
 				}
 				return nil, fmt.Errorf("reading %s for orphan check: %w", full, rerr)
+			}
+			// The own-repo self-heal companion is cascade-generated and
+			// drift-locked, but it lives outside the manifest workflow plan on
+			// purpose, so it is never a manifest orphan. Skip it before the plain
+			// marker check so real orphans still surface.
+			if bytes.Contains(body, []byte(generate.OwnRepoGeneratedFileMarker)) {
+				continue
 			}
 			if bytes.Contains(body, []byte(generate.GeneratedFileMarker)) {
 				orphans = append(orphans, full)

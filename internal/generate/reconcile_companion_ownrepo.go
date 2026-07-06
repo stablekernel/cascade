@@ -35,7 +35,7 @@ const ownRepoReconcileCommitSubject = "ci: reconcile governed action pins"
 func (g *ReconcileGenerator) generateOwnRepoCompanion() string {
 	var sb strings.Builder
 
-	sb.WriteString(GeneratedFileMarker + "\n")
+	sb.WriteString(OwnRepoGeneratedFileMarker + "\n")
 	sb.WriteString("# Adopts an external action-pin bump back into cascade's own pin manifest and\n")
 	sb.WriteString("# regenerates the workflows, so a governed pin that moved in a hand-written\n")
 	sb.WriteString("# source file (a Dependabot bump, a manual edit) flows into\n")
