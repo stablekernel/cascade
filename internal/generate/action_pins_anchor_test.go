@@ -35,7 +35,7 @@ func TestActionPinsAnchorCoversManifest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Correctness: no governed uses: line in the anchor may diverge from the manifest.
-	mismatches := scanUsesForPinDrift(anchorWorkflowPath, string(content), manifest)
+	mismatches := ScanUsesForPinDrift(anchorWorkflowPath, string(content), manifest)
 	require.Emptyf(t, mismatches, "dependabot anchor refs diverge from action_pins.yaml: %v", mismatches)
 
 	// Completeness: every manifest action must appear in the anchor so Dependabot
