@@ -1,0 +1,202 @@
+# Adopts an external action-pin bump back into cascade's own pin manifest and
+# regenerates the workflows, so a governed pin that moved in a hand-written
+# source file (a Dependabot bump, a manual edit) flows into
+# internal/generate/action_pins.yaml and every generated workflow agrees again.
+#
+# Companion to PR Validation, same shape as the PR Failure Report. PR Validation
+# runs on pull_request, so for fork PRs it gets a read-only token and no secrets
+# and cannot push. This workflow runs on workflow_run in the BASE repo context,
+# resolves the target pull request ONLY from trusted workflow_run metadata, and
+# reads the triggering run's uploaded pin-reconcile-result artifact strictly as
+# data. It never executes pull request head code: it installs a PINNED cascade
+# CLI from a published release asset and runs that trusted binary over the head
+# files, which it treats as data.
+#
+# The self-heal push is same-repo only. A fork head can neither receive a push
+# nor be handed the write token, so a fork pull request is skipped. The default
+# token stays read-only; the branch write uses the trigger-capable state token,
+# matching the act-image-repin and hotfix trunk jobs. The emitted commit keeps
+# its DCO signoff and does not GPG-sign, matching the act-image-repin precedent
+# (GPG signing is a local merge rule, not a CI rule).
+name: Pin Reconcile
+
+on:
+  workflow_run:
+    workflows: ["PR Validation"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: pin-reconcile-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile governed action pins
+    runs-on: ubuntu-latest
+    # Only act on PR-triggered source runs.
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download reconcile result
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pin-reconcile-result
+          path: pin-reconcile-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve target pull request and relevance
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run = context.payload.workflow_run;
+
+            // Read the data-only relevance artifact (never executed). No
+            // governed pin change means there is nothing to adopt.
+            let relevant = false;
+            try {
+              const raw = fs.readFileSync('pin-reconcile-result/pin-reconcile-result.json', 'utf8');
+              relevant = JSON.parse(raw).relevant === true;
+            } catch (e) {
+              core.info(`No reconcile-result artifact to read: ${e.message}`);
+            }
+            if (!relevant) {
+              core.info('No governed pin change to adopt; nothing to do.');
+              core.setOutput('proceed', 'false');
+              return;
+            }
+
+            // Resolve the target pull request ONLY from trusted workflow_run
+            // metadata. The artifact and the triggering run's contents are
+            // attacker-controlled on a fork PR, so they must never decide which
+            // branch we touch.
+            let prNumber;
+            if (run.pull_requests && run.pull_requests.length > 0) {
+              prNumber = run.pull_requests[0].number;
+            } else {
+              const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner, repo, commit_sha: run.head_sha,
+              });
+              const match = associated.data.find((pr) => pr.head.sha === run.head_sha);
+              if (match) { prNumber = match.number; }
+            }
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.info('No pull request resolved from workflow_run metadata; nothing to do.');
+              core.setOutput('proceed', 'false');
+              return;
+            }
+
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+            const head = pr.data.head;
+            const base = pr.data.base;
+
+            // Same-repo only. A fork head cannot receive a push and must never
+            // be handed the write token, so it is skipped here.
+            if (!head.repo || head.repo.full_name !== base.repo.full_name) {
+              core.info('Pull request head is on a fork; the self-heal push is same-repo only.');
+              core.setOutput('proceed', 'false');
+              return;
+            }
+
+            // head_sha guard: skip a superseded completion so a stale run cannot
+            // rewrite a branch that already advanced.
+            if (head.sha !== run.head_sha) {
+              core.info(`Run head ${run.head_sha} is superseded by branch head ${head.sha}; skipping.`);
+              core.setOutput('proceed', 'false');
+              return;
+            }
+
+            core.setOutput('proceed', 'true');
+            core.setOutput('head_ref', head.ref);
+            core.setOutput('head_sha', head.sha);
+
+      - name: Install released cascade CLI
+        if: steps.resolve.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          # Install a PINNED cascade CLI from its published release asset, never
+          # a binary built off pull request head. Resolving the latest release
+          # tag matches how setup-cli installs the binary downstream.
+          tag="$(gh release list -R stablekernel/cascade -L 1 --json tagName -q '.[0].tagName')"
+          if [ -z "$tag" ]; then
+            echo "::error::no published cascade release to install; cannot reconcile."
+            exit 1
+          fi
+          echo "Installing cascade ${tag} from its released asset."
+          tmp="$(mktemp -d)"
+          gh release download "$tag" \
+            -R stablekernel/cascade \
+            -p 'cascade_linux_amd64.tar.gz' \
+            -D "$tmp"
+          tar -xzf "$tmp"/*.tar.gz -C "$tmp"
+          install -m 0755 "$tmp/cascade" /usr/local/bin/cascade
+          rm -rf "$tmp"
+          cascade version
+
+      - name: Check out the pull request head
+        if: steps.resolve.outputs.proceed == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The head branch is same-repo (guarded above). Full history lets the
+          # non-fast-forward guard compare against the fresh remote tip. The
+          # state token carries the branch write; the head files are read as
+          # data and only the trusted released binary runs over them.
+          ref: ${{ steps.resolve.outputs.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+
+      - name: Reconcile the pin manifest and regenerate
+        if: steps.resolve.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "cascade-bot"
+          git config user.email "cascade-bot@users.noreply.github.com"
+          # Own-repo mode writes the adopted ref into internal/generate/action_pins.yaml
+          # and regenerates every generated workflow so they agree again.
+          cascade reconcile --own-repo
+
+      - name: Commit and push the reconciled pins
+        if: steps.resolve.outputs.proceed == 'true'
+        env:
+          HEAD_REF: ${{ steps.resolve.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+
+          # Stage an explicit manifest-first pathspec allowlist, never git add -A,
+          # so only the pin manifest and the regenerated workflows can ride the
+          # commit. The workflows glob is included because cascade's own repo
+          # commits its regenerated workflows.
+          git add internal/generate/action_pins.yaml '.github/workflows/*.yaml'
+
+          # Guard (b): push only when the reconcile actually changed tracked files.
+          if git diff --cached --quiet; then
+            echo "Reconcile produced no change; the branch already agrees with the manifest."
+            exit 0
+          fi
+
+          git commit -s -m "ci: reconcile governed action pins"
+
+          # Guard (c): reconcile against the fresh remote tip and refuse a
+          # non-fast-forward. If the branch advanced while we worked, abort
+          # rather than overwrite the newer commit; the plain (non-force) push
+          # enforces the same fast-forward rule as a backstop.
+          git fetch origin "$HEAD_REF"
+          if ! git merge-base --is-ancestor "origin/${HEAD_REF}" HEAD; then
+            echo "::warning::${HEAD_REF} advanced during reconcile; aborting the push (non-fast-forward)."
+            exit 0
+          fi
+          git push origin "HEAD:${HEAD_REF}"
