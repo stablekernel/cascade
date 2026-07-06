@@ -4,76 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
-
-// usesRefRe extracts the action path, pinned ref, and trailing version comment
-// from a single workflow/composite "uses:" line. It accepts an optional leading
-// "- " and optional surrounding quotes so it matches both step-list and
-// continuation forms. The ref is everything up to whitespace or "#"; the comment
-// is the first token after "# ", if present.
-var usesRefRe = regexp.MustCompile(`uses:\s*["']?([^"'\s@]+)@([^"'\s#]+)["']?\s*(?:#\s*(\S+))?`)
-
-// pinMismatch is one governed "uses:" line whose pinned ref or version comment
-// disagrees with the action-pins manifest. file and line locate it; want* hold
-// the manifest's canonical values; got* hold what the file actually carries.
-type pinMismatch struct {
-	file        string
-	line        int
-	action      string
-	wantSHA     string
-	wantVersion string
-	gotRef      string
-	gotComment  string
-}
-
-// String renders a mismatch as a single "file:line want ... got ..." row for the
-// aggregated failure table.
-func (m pinMismatch) String() string {
-	return fmt.Sprintf("%s:%d %s want %s # %s got %s # %s",
-		m.file, m.line, m.action, m.wantSHA, m.wantVersion, m.gotRef, m.gotComment)
-}
-
-// scanUsesForPinDrift walks every line of one file's content and returns the
-// governed "uses:" lines that diverge from the manifest. A line is governed when
-// its action path is a manifest key; local ("./...") and cascade self-action
-// refs are never manifest keys and so are skipped implicitly. For a governed
-// line the pinned ref must equal the manifest SHA and the trailing comment must
-// equal the manifest version, so a silent SHA-or-comment drift is caught.
-func scanUsesForPinDrift(file, content string, manifest map[string]actionPinEntry) []pinMismatch {
-	var mismatches []pinMismatch
-	for i, line := range strings.Split(content, "\n") {
-		groups := usesRefRe.FindStringSubmatch(line)
-		if groups == nil {
-			continue
-		}
-		action, ref, comment := groups[1], groups[2], groups[3]
-		entry, governed := manifest[action]
-		if !governed {
-			continue
-		}
-		if ref == entry.SHA && comment == entry.Version {
-			continue
-		}
-		mismatches = append(mismatches, pinMismatch{
-			file:        file,
-			line:        i + 1,
-			action:      action,
-			wantSHA:     entry.SHA,
-			wantVersion: entry.Version,
-			gotRef:      ref,
-			gotComment:  comment,
-		})
-	}
-	return mismatches
-}
 
 // repoGitHubDir walks up from this test file's own source location to the module
 // root (the directory holding go.mod) and returns that root's ".github" path.
@@ -126,10 +63,17 @@ func governedFiles(t *testing.T, githubDir string) []string {
 // action across cascade's own .github tree, not just the generator-emitted ones.
 func loadActionPinsManifest(t *testing.T) map[string]actionPinEntry {
 	t.Helper()
-	var manifest actionPinsManifest
-	require.NoError(t, yaml.Unmarshal(actionPinsYAML, &manifest))
-	require.NotEmpty(t, manifest.Actions, "action_pins.yaml parsed to an empty action set")
-	return manifest.Actions
+	manifest, err := LoadEmbeddedPinManifest()
+	require.NoError(t, err)
+	require.NotEmpty(t, manifest, "action_pins.yaml parsed to an empty action set")
+	return manifest
+}
+
+// loadActionPinsManifestForTest is a thin alias of loadActionPinsManifest for
+// tests outside this file that need the same embedded manifest.
+func loadActionPinsManifestForTest(t *testing.T) map[string]actionPinEntry {
+	t.Helper()
+	return loadActionPinsManifest(t)
 }
 
 // TestWorkflowsConsistentWithActionPins is the merge gate that keeps cascade's
@@ -143,13 +87,13 @@ func TestWorkflowsConsistentWithActionPins(t *testing.T) {
 	manifest := loadActionPinsManifest(t)
 	githubDir := repoGitHubDir(t)
 
-	var mismatches []pinMismatch
+	var mismatches []PinMismatch
 	for _, file := range governedFiles(t, githubDir) {
 		content, err := os.ReadFile(file) //nolint:gosec // path comes from a fixed glob under the repo's .github tree.
 		require.NoError(t, err)
 		rel, err := filepath.Rel(filepath.Dir(githubDir), file)
 		require.NoError(t, err)
-		mismatches = append(mismatches, scanUsesForPinDrift(rel, string(content), manifest)...)
+		mismatches = append(mismatches, ScanUsesForPinDrift(rel, string(content), manifest)...)
 	}
 
 	if len(mismatches) > 0 {
@@ -164,7 +108,7 @@ func TestWorkflowsConsistentWithActionPins(t *testing.T) {
 }
 
 // TestWorkflowConsistencyLint_DetectsDivergence is the negative control that
-// keeps the lint honest: it feeds scanUsesForPinDrift a fixture whose checkout
+// keeps the lint honest: it feeds ScanUsesForPinDrift a fixture whose checkout
 // SHA is deliberately wrong and asserts the scan reports exactly that line with
 // the manifest's canonical SHA as the "want". If the detector ever silently
 // stopped flagging drift, this test goes red even though the real repo is clean.
@@ -179,9 +123,9 @@ func TestWorkflowConsistencyLint_DetectsDivergence(t *testing.T) {
 		"    steps:\n" +
 		"      - uses: actions/checkout@" + stale + " # " + want.Version + "\n"
 
-	mismatches := scanUsesForPinDrift("fixture.yaml", fixture, manifest)
+	mismatches := ScanUsesForPinDrift("fixture.yaml", fixture, manifest)
 	require.Len(t, mismatches, 1, "a flipped checkout SHA must produce exactly one mismatch")
-	require.Equal(t, actionCheckout, mismatches[0].action)
-	require.Equal(t, stale, mismatches[0].gotRef)
-	require.Equal(t, want.SHA, mismatches[0].wantSHA, "want must carry the manifest's canonical SHA")
+	require.Equal(t, actionCheckout, mismatches[0].Action)
+	require.Equal(t, stale, mismatches[0].GotRef)
+	require.Equal(t, want.SHA, mismatches[0].WantSHA, "want must carry the manifest's canonical SHA")
 }
