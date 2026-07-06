@@ -33,7 +33,8 @@ structural burst that the wrapper alone could not absorb.
 ```mermaid
 flowchart LR
   plan[plan] --> resolve[resolve]
-  resolve --> primary[primary]
+  resolve --> repin[repin fleet to rc]
+  repin --> primary[primary]
   primary --> dependents[dependents x2]
   dependents --> heavy[4env alone]
   heavy --> remainder[remainder, max 2]
@@ -43,7 +44,8 @@ flowchart LR
 | Stage | What it does |
 |---|---|
 | `plan` | Parses the `repos` selector once and emits the lane gates and matrices every fan-out job keys off. This is the single place the fleet roster lives. |
-| `resolve` | Gates the run, resolves the cascade version under test, and peels its tag to the underlying commit. It exposes both as outputs; every lane forwards them to its suite's dispatch so the suite self-repins to the version under test on its own main before running. It also writes `version-under-test.txt` and a `full-run.txt` completeness marker for auto-promote to read. |
+| `resolve` | Gates the run, resolves the cascade version under test, and peels its tag to the underlying commit. It exposes both as outputs for the repin job and every lane. It also writes `version-under-test.txt` and a `full-run.txt` completeness marker for auto-promote to read. |
+| `repin` | Re-stamps every example repository's committed workflows onto the resolved candidate before any suite lane fans out, delegating to the reusable [`suite-rc-repin.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/suite-rc-repin.yaml). Every suite lane gates on it, so none starts against a stale committed ref. |
 | `primary` | Runs first and must pass before its dependents start. |
 | `dependents` | `artifact-a` and `artifact-b` mutate the primary's shared external state, so they run only after the primary is green. The two run together, which is the lane that defines the fleet's peak of about two repositories. |
 | `heavy` | `4env` is the heaviest and most fragile repository, so it runs alone in its own job, sequenced after the dependents lane so the two never stack. |
@@ -55,18 +57,34 @@ a candidate tag's assets actually reached the releases page) and on manual dispa
 
 ### How each suite lands on the version under test
 
-The fleet does not pin the example repositories centrally before fan-out. Instead each
-suite self-repins: when a lane dispatches a suite it forwards the resolved candidate
-version and its peeled commit, and the suite points its own manifest at that version,
-regenerates its workflows, and commits the pin on its own main before it runs. This
-keeps every repository's own token and main authoritative, and a suite only ever moves
-onto a candidate it is about to validate.
+Every example repository's committed workflow resolves the cascade actions it runs
+through a `uses: stablekernel/cascade/.github/actions/setup-cli@<ref>` reference. GitHub
+resolves a job's `uses:` references from the workflow file as it existed when the run was
+triggered, before any workflow input or in-job step applies. A `uses:` reference is
+therefore a static committed value that no dispatch input can drive, and a reference left
+pointing at a throwaway candidate tag that has since been pruned kills the lane at set-up
+with an unresolved-action error before the suite can do anything about it.
+
+So the fleet re-stamps the roster centrally, just in time, before it fans out. The `repin`
+job (the reusable
+[`suite-rc-repin.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/suite-rc-repin.yaml))
+clones each repository fresh, points its manifest `cli_version` and `cli_version_sha` at
+the resolved candidate, rewrites any stale in-repo prerelease references, regenerates the
+workflows against the candidate binary (which rewrites the committed `setup-cli` reference
+to a reference that resolves), and pushes the result to main. Every suite lane gates on a
+green repin, so none starts against a stale committed reference. Candidate tags stay
+throwaway: with repin-first, deleting one mid-cycle is a non-event, because the repin
+re-stamps the roster onto the current candidate before any lane runs.
 
 The separate bootstrap tooling pin (the `setup-cli` version each suite installs before
 cascade is even present) is kept current by
 [`suite-bootstrap-pin.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/suite-bootstrap-pin.yaml),
 which runs when cascade publishes a final `vX.Y.Z` release and moves each suite's
-committed bootstrap pin onto it. Because the fleet already validated that exact version
+committed bootstrap pin onto it. That final-release bumper and the pre-fan-out `repin`
+job never collide: they fire on different triggers (a published `vX.Y.Z` release versus
+the candidate under test), target different files (each suite's `scenario-suite.yaml`
+bootstrap pin versus the generated workflows plus manifest), and run under separate
+concurrency groups. Because the fleet already validated that exact version
 across every repository before it published, the bump is a proven no-op check rather than
 a gate that can block a release.
 
@@ -94,10 +112,11 @@ gh workflow run fleet-e2e.yaml -f repos=4env
 
 The selector accepts a single short name, or a comma or space separated list. The
 default (no input, which is also the value on the Release-triggered path) is `all`,
-which runs the full fleet. Only the suite lanes honor the selector, and each dispatched
-suite self-repins to the version under test regardless of the subset. A lane the selector
-skips reports `skipped` and the gate treats it as satisfied, so a subset run still produces
-a meaningful verdict over exactly the lanes that ran.
+which runs the full fleet. Only the suite lanes honor the selector; the repin job always
+covers the full roster so every repository stays on the version under test regardless of
+the subset. A lane the selector skips reports `skipped` and the gate treats it as
+satisfied, so a subset run still produces a meaningful verdict over exactly the lanes that
+ran.
 
 A selective run never auto-promotes. The `plan` stage sets `full_run=true` only when
 the selector resolves to `all`, the `resolve` stage records that marker in the

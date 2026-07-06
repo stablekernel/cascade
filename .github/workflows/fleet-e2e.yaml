@@ -40,8 +40,8 @@ on:
         description: >-
           cascade version to validate (e.g. v1.2.0-rc.1). Default empty resolves
           to the rc tag on the workflow_run path. resolve peels this to its
-          commit sha and each lane forwards both to its suite, which self-repins
-          to them before running.
+          commit sha, then the repin job re-stamps every example repo's
+          committed workflows onto it before any suite lane fans out.
         required: false
         default: ''
       repos:
@@ -177,9 +177,10 @@ jobs:
             echo "Trigger: \`$EVENT_NAME\`"
             echo "cascade version under test: \`${VERSION:-<empty>}\`"
             echo ""
-            echo "> Each suite self-repins to this version when its lane"
-            echo "> dispatches it, so the suite runs the binary named here"
-            echo "> rather than a stale pinned one."
+            echo "> The repin job re-stamps every example repo's committed"
+            echo "> workflows onto this version before any suite lane fans out,"
+            echo "> so each suite runs the binary named here from a fresh pin"
+            echo "> rather than a stale committed one."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Write the full_run marker (true only when repos=all/default). Auto-promote
@@ -320,13 +321,31 @@ jobs:
             echo "| remainder | $RUN_REMAINDER |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Repin: re-stamp every example repo's committed workflows onto the rc under
+  # test BEFORE any suite lane fans out. A suite cannot repin its own committed
+  # setup-cli `uses:` ref, because GitHub resolves a job's `uses:` refs from the
+  # workflow file as it existed at trigger time, before any in-job step runs. So
+  # a stale or pruned committed ref would kill the lane at "Set up job" before an
+  # in-suite repin could fire. This job clones each repo fresh, regenerates its
+  # workflows against the rc binary, and pushes to main; every suite lane gates
+  # on it so none starts against a stale committed ref. Delegated to the reusable
+  # suite-rc-repin.yaml so the logic lives in one place.
+  repin:
+    name: Repin fleet to rc
+    needs: [resolve, plan]
+    uses: ./.github/workflows/suite-rc-repin.yaml
+    with:
+      cascade_version: ${{ needs.resolve.outputs.cascade_version }}
+      cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
+    secrets: inherit
+
   # Lane 1, stage 1: primary must run and pass before its dependents. Gated on
-  # the plan selector; the suite self-repins to the version under test on
-  # dispatch, so it never runs against a stale pin.
+  # the plan selector and on a green repin, so it never runs against a stale
+  # committed ref.
   primary:
     name: primary
-    needs: [resolve, plan]
-    if: needs.plan.outputs.run_primary == 'true'
+    needs: [resolve, plan, repin]
+    if: needs.plan.outputs.run_primary == 'true' && needs.repin.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -348,7 +367,7 @@ jobs:
   # it (primary sets up the state they mutate).
   dependents:
     name: dependents (${{ matrix.repo }})
-    needs: [resolve, plan, primary]
+    needs: [resolve, plan, repin, primary]
     if: needs.plan.outputs.run_dependents == 'true' && needs.primary.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -372,11 +391,12 @@ jobs:
   # its own dedicated job with nothing beside it. Sequenced AFTER the dependents
   # lane (via needs) so the two-repo dependents peak and this lane never stack;
   # `always()` lets it proceed when the primary/dependents lane was filtered out
-  # by the selector. The suite self-repins to the version under test on dispatch.
+  # by the selector. Still gated on a green repin so it never runs against a
+  # stale committed ref.
   heavy:
     name: 4env (heavy)
-    needs: [resolve, plan, dependents]
-    if: always() && needs.plan.outputs.run_heavy == 'true'
+    needs: [resolve, plan, repin, dependents]
+    if: always() && needs.plan.outputs.run_heavy == 'true' && needs.repin.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -400,12 +420,12 @@ jobs:
 
   # Lane 3: the light remainder, capped at two repos in flight. Sequenced AFTER
   # the heavy lane (via needs) so 4env and this capped matrix never overlap;
-  # `always()` lets it proceed when the heavy lane was filtered out. Each suite
-  # self-repins on dispatch. max-parallel keeps live API pressure at two repos.
+  # `always()` lets it proceed when the heavy lane was filtered out. Still gated
+  # on a green repin. max-parallel keeps live API pressure at two repos.
   remainder:
     name: remainder (${{ matrix.repo }})
-    needs: [resolve, plan, heavy]
-    if: always() && needs.plan.outputs.run_remainder == 'true'
+    needs: [resolve, plan, repin, heavy]
+    if: always() && needs.plan.outputs.run_remainder == 'true' && needs.repin.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -432,7 +452,7 @@ jobs:
   # over exactly the lanes that ran. A real fan-out failure still reds the run.
   aggregate:
     name: Fleet gate
-    needs: [resolve, plan, primary, dependents, heavy, remainder]
+    needs: [resolve, plan, repin, primary, dependents, heavy, remainder]
     # Always run so the gate renders a verdict rather than inheriting a skip.
     # A skipped aggregate reads as success (skipped != failed), so if this job
     # were gated on resolve succeeding, a fleet that resolved no rc and ran no
@@ -453,6 +473,7 @@ jobs:
           WR_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           R_RESOLVE: ${{ needs.resolve.result }}
+          R_REPIN: ${{ needs.repin.result }}
           R_PRIMARY: ${{ needs.primary.result }}
           R_DEPENDENTS: ${{ needs.dependents.result }}
           R_HEAVY: ${{ needs.heavy.result }}
@@ -468,14 +489,16 @@ jobs:
             echo "| Lane | Result |"
             echo "|---|---|"
             echo "| resolve (version under test) | $R_RESOLVE |"
+            echo "| repin (all example repos to rc) | $R_REPIN |"
             echo "| primary | $R_PRIMARY |"
             echo "| dependents (artifact-a, artifact-b) | $R_DEPENDENTS |"
             echo "| 4env (heavy, alone) | $R_HEAVY |"
             echo "| remainder (3env, 2env, single-env, release-only, no-env, callbacks, rollback-dispatch) | $R_REMAINDER |"
             echo ""
             echo "> rc gate: this conclusion is the fleet validation signal for"
-            echo "> the rc tag. Each suite self-repins to this rc when its lane"
-            echo "> dispatches it, so a green gate validates the binary named above."
+            echo "> the rc tag. The repin job re-stamped every example repo onto"
+            echo "> this rc before fan-out, so a green gate validates the binary"
+            echo "> named above."
             echo "> A lane shown as 'skipped' was not selected by the repos input."
             echo "> rc -> release promotion should consume the latest fleet-e2e"
             echo "> conclusion for that tag before promoting, and only from a"
@@ -516,6 +539,16 @@ jobs:
               exit 1
               ;;
           esac
+
+          # The repin job re-stamps every example repo onto the rc before any
+          # lane fans out. It is never selector-gated, so in a validation context
+          # it must have succeeded; a skipped or failed repin means the lanes ran
+          # (or were prevented from running) against an unknown pin state and the
+          # gate must red rather than read as a green release signal.
+          if [ "$R_REPIN" != "success" ]; then
+            echo "::error::Fleet E2E validated nothing: repin did not succeed (result=$R_REPIN) in a candidate context. Failing closed."
+            exit 1
+          fi
 
           # A validation lane passes when it succeeded OR was skipped (filtered
           # out by the repos selector, or - for dependents - skipped because

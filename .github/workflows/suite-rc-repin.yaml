@@ -1,0 +1,309 @@
+# Suite RC Repin - just-in-time repin of the whole cascade-example fleet to the
+# release candidate under test, run as the FIRST thing every fleet fan-out does.
+#
+# Why this exists (and why the suite cannot repin itself): each example repo's
+# committed generated workflow contains
+#   uses: stablekernel/cascade/.github/actions/setup-cli@<ref>
+# GitHub resolves a job's `uses:` refs from the workflow file as it existed when
+# the run was triggered, BEFORE any workflow input or in-job step applies. So a
+# `uses:` ref is a static committed value that no dispatch input can drive the
+# way the installed binary version can. If that committed ref points at a
+# throwaway candidate tag that has since been pruned, the suite lane dies at
+# "Set up job" with "Unable to resolve action ...@<pruned ref>", before any
+# in-suite repin step could run.
+#
+# The fix is to re-stamp every example repo's committed workflows onto the rc
+# under test BEFORE its lane dispatches. This reusable workflow clones each repo
+# fresh, points its manifest cli_version/cli_version_sha at the rc, rewrites any
+# stale in-repo prerelease refs, regenerates the workflows against the rc binary
+# (which rewrites the committed setup-cli ref), and pushes the result to main.
+# Every suite fan-out job in fleet-e2e.yaml gates on this workflow, so no lane
+# starts against a stale committed ref.
+#
+# Composition with suite-bootstrap-pin.yaml: that sibling is the FINAL-release
+# bumper. It triggers on a published vX.Y.Z Release and moves each repo's
+# scenario-suite.yaml BOOTSTRAP pin. This workflow triggers pre-fan-out on the
+# rc under test and rewrites the GENERATED workflow setup-cli ref plus the
+# manifest cli_version pair. Different trigger, different target file, and a
+# distinct concurrency group, so the two never fight over the same bytes.
+name: Suite RC Repin
+
+on:
+  workflow_call:
+    inputs:
+      cascade_version:
+        description: >-
+          The rc (or dryrun) tag under test, e.g. v1.2.0-rc.1. Every example
+          repo is repinned to this before any suite lane dispatches.
+        required: true
+        type: string
+      cascade_version_sha:
+        description: >-
+          The 40-hex commit that cascade_version peels to. Optional: when the
+          caller already resolved it (fleet-e2e's resolve job does), pass it to
+          skip a redundant peel. Empty means this workflow peels the tag itself
+          via git ls-remote, exactly as the resolve job does.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      CASCADE_STATE_TOKEN:
+        description: >-
+          Fleet PAT with contents write plus workflow scope on every example
+          repo. Pushes regenerated .github/workflows files onto each protected
+          main and reads main back to confirm the pin landed.
+        required: true
+
+permissions:
+  contents: read
+
+# Own concurrency group, deliberately NOT suite-bootstrap-pin's. One rc repin in
+# flight per candidate; a newer rc supersedes an older queued repin rather than
+# stacking cross-repo pushes. Keyed on the version so two different candidates do
+# not serialize behind each other unnecessarily.
+concurrency:
+  group: suite-rc-repin-${{ inputs.cascade_version }}
+  cancel-in-progress: false
+
+env:
+  FLEET_OWNER: stablekernel
+
+jobs:
+  # Pin every example repo to the rc UNDER TEST before any suite fans out.
+  # Without this the suites resolve whatever committed setup-cli ref each repo's
+  # main statically carries, so a fresh rc (or one whose prior candidate tag was
+  # pruned) never actually runs. This job downloads the rc binary, regenerates
+  # each repo's workflows against it, and pushes the repin to each repo's main
+  # (idempotent: no change -> no commit). Repin always covers the full roster:
+  # pinning is cheap, idempotent, and sequential (one repo at a time), so it adds
+  # nothing to live fan-out concurrency.
+  repin:
+    name: Repin fleet to rc
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RC_VERSION: ${{ inputs.cascade_version }}
+      RC_SHA_INPUT: ${{ inputs.cascade_version_sha }}
+      STATE_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+      GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+    steps:
+      - name: Download the rc cascade binary and resolve its commit sha
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RC_VERSION:-}" ]; then
+            echo "::error::No cascade version supplied; cannot repin the fleet"
+            exit 1
+          fi
+          # GoReleaser strips the leading v from the embedded version, so
+          # `cascade version` prints the tag WITHOUT it. Keep both forms: the
+          # v-prefixed tag for release/manifest refs, the bare form for the
+          # binary self-report comparison.
+          RC_BARE="${RC_VERSION#v}"
+          echo "RC_BARE=$RC_BARE" >> "$GITHUB_ENV"
+
+          # Resolve the rc tag's commit sha so the repin can SHA-pin each example
+          # repo's setup-cli self-action (cli_version_sha). Prefer the caller's
+          # already-resolved sha; otherwise peel the tag here. cascade's release
+          # tags are annotated, so refs/tags/<rc> is a tag-object sha, not a
+          # commit; ^{} dereferences to the underlying commit. A lightweight tag
+          # has no peeled ref, so fall back to the bare ref, which is already the
+          # commit.
+          RC_SHA="${RC_SHA_INPUT:-}"
+          if [ -z "$RC_SHA" ]; then
+            RC_SHA=$(git ls-remote "https://github.com/${REPO}" "refs/tags/${RC_VERSION}^{}" | awk '{print $1}')
+            if [ -z "$RC_SHA" ]; then
+              RC_SHA=$(git ls-remote "https://github.com/${REPO}" "refs/tags/${RC_VERSION}" | awk '{print $1}')
+            fi
+          fi
+          if ! printf '%s' "$RC_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::Could not resolve a commit sha for tag ${RC_VERSION} (got '${RC_SHA}')"
+            exit 1
+          fi
+          echo "Resolved ${RC_VERSION} to commit ${RC_SHA}"
+          echo "RC_SHA=$RC_SHA" >> "$GITHUB_ENV"
+
+          TMPDIR=$(mktemp -d)
+          echo "Downloading $RC_VERSION linux/amd64 archive from $REPO"
+          gh release download "$RC_VERSION" \
+            --repo "$REPO" \
+            --pattern '*linux_amd64*' \
+            --dir "$TMPDIR"
+          tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
+          install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
+          rm -rf "$TMPDIR"
+
+          INSTALLED=$(cascade version 2>/dev/null | head -n 1 | awk '{print $2}')
+          # Tolerate a leading v in the self-report so the check tracks the
+          # release tag rather than a future ldflags formatting choice.
+          echo "Installed cascade version: $INSTALLED (expected $RC_BARE)"
+          if [ "${INSTALLED#v}" != "$RC_BARE" ]; then
+            echo "::error::Downloaded binary reports '$INSTALLED' but expected '$RC_BARE'"
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config --global user.name "cascade-fleet-bot"
+          git config --global user.email "cascade-fleet-bot@users.noreply.github.com"
+
+      - name: Repin each example repo to the rc
+        run: |
+          set -euo pipefail
+          # The full roster of example repos. Keep this in sync with the plan
+          # job roster in fleet-e2e.yaml. Repinning means: set manifest
+          # cli_version + cli_version_sha to the rc, replace any other in-repo
+          # prerelease refs (rc/dryrun), regenerate the workflows with the rc
+          # binary (which rewrites the committed setup-cli ref), then commit and
+          # push only if something changed. Every hand-written suite feature is
+          # preserved: regeneration only rewrites the generated workflows, and
+          # nothing else is touched.
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch"
+
+          # Apply the repin mutation to the checkout in the current directory:
+          # point cli_version at the rc, rewrite any other in-repo rc refs, then
+          # regenerate the generated workflows. Re-runnable, because the retry
+          # loop resets the tree to the fetched remote tip and re-applies this on
+          # top of it (mirroring cascade's commitWithApplicationRetry).
+          apply_repin() {
+            local manifest="$1"
+            # 1. Point the manifest cli_version at the rc.
+            sed -i -E "s|^([[:space:]]*cli_version:[[:space:]]*).*$|\1${RC_VERSION}|" "$manifest"
+
+            # 1b. Pair cli_version_sha with the rc tag's peeled commit so the
+            #     regenerated setup-cli self-action ref is SHA-pinned (under
+            #     pin_mode: sha). Update it in place when present, else insert a
+            #     sibling line right after cli_version preserving its indent.
+            if grep -qE "^[[:space:]]*cli_version_sha:" "$manifest"; then
+              sed -i -E "s|^([[:space:]]*cli_version_sha:[[:space:]]*).*$|\1${RC_SHA}|" "$manifest"
+            else
+              sed -i -E "s|^([[:space:]]*)cli_version:([[:space:]]*).*$|&\n\1cli_version_sha:\2${RC_SHA}|" "$manifest"
+            fi
+
+            # 2. Replace any other in-repo prerelease refs (rc OR dryrun, e.g. an
+            #    explicit setup-cli@v..-rc.. or a stale @v..-dryrun.. pin a suite
+            #    hand-wrote, which a prior dry-run repin may have left) with the
+            #    rc. Scope to tracked YAML files; the regen below rewrites
+            #    generated workflows, this catches anything outside them.
+            while IFS= read -r f; do
+              [ -f "$f" ] || continue
+              sed -i -E "s#v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+#${RC_VERSION}#g" "$f"
+            done < <(grep -rlE "v[0-9]+\.[0-9]+\.[0-9]+-(rc|dryrun)\.[0-9]+" . --include='*.yaml' --include='*.yml' 2>/dev/null || true)
+
+            # 3. Regenerate the workflows with the rc binary. This rewrites the
+            #    generated setup-cli refs to the rc and nothing hand-written.
+            cascade generate-workflow --force -c "$manifest"
+          }
+
+          # Repin one repo. Returns non-zero on any regen or push failure so the
+          # caller can record it and red the job. The example repos' main is
+          # protected, but the fleet token has write access (the suites' own
+          # state-writes to the same main succeed). A force push is rejected by
+          # the ruleset; a NORMAL fast-forward push is not. We clone fresh main,
+          # so the first push is a fast-forward. On a non-fast-forward rejection
+          # (a concurrent write landed) we fetch/reset/re-apply/retry, up to
+          # MAX_ATTEMPTS, exactly as cascade's state-writer does.
+          MAX_ATTEMPTS=5
+          repin_repo() {
+            local slug="$1" workdir manifest attempt status push_out
+            workdir=$(mktemp -d)
+            git clone --depth 1 \
+              "https://x-access-token:${STATE_TOKEN}@github.com/${slug}.git" \
+              "$workdir" || return 1
+            cd "$workdir" || return 1
+
+            manifest=".github/manifest.yaml"
+            if [ ! -f "$manifest" ]; then
+              echo "::error::${slug} has no ${manifest}"
+              return 1
+            fi
+
+            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+              apply_repin "$manifest" || return 1
+
+              # No diff means the remote already matches the rc: nothing to push.
+              if [ -z "$(git status --porcelain)" ]; then
+                echo "${slug} already at ${RC_VERSION}; nothing to repin"
+                return 0
+              fi
+
+              git add -A
+              # CI has no GPG key, so DCO sign-off only (-s) with signing
+              # explicitly disabled. The example repos are not GPG-gated.
+              # [skip ci] keeps this push from triggering the repo's own
+              # orchestrate workflow.
+              git -c commit.gpgsign=false commit --no-gpg-sign -s \
+                -m "chore: repin to ${RC_VERSION} [skip ci]" || return 1
+
+              # NORMAL push (no --force). Capture the exit status explicitly so a
+              # ruleset rejection fails the repo rather than being swallowed.
+              set +e
+              push_out=$(git push origin HEAD:main 2>&1)
+              status=$?
+              set -e
+              if [ "$status" -eq 0 ]; then
+                echo "${slug} repinned to ${RC_VERSION} (attempt ${attempt})"
+                return 0
+              fi
+              echo "push attempt ${attempt}/${MAX_ATTEMPTS} for ${slug} failed:"
+              echo "$push_out"
+
+              # Recover from a non-fast-forward rejection: reset onto the freshly
+              # fetched remote tip and re-apply on the next iteration. A genuine
+              # write-access (ruleset) rejection cannot fast-forward away, so it
+              # surfaces here and on the final attempt reds the repo.
+              git fetch origin main || return 1
+              git reset --hard origin/main || return 1
+              sleep "$attempt"
+            done
+
+            echo "::error::${slug} push rejected after ${MAX_ATTEMPTS} attempts (last output above)"
+            return 1
+          }
+
+          # Confirm the repo's main actually carries the rc cli_version after the
+          # push. Belt-and-suspenders: a silent no-op (push that landed nothing)
+          # can never report green because this reads the published main back.
+          # The contents API can serve stale cached bytes for a few seconds after
+          # a push, so retry the read-back with linear backoff (matching the push
+          # loop) rather than redding the fleet on a single lagged read.
+          verify_pinned() {
+            local slug="$1" actual attempt
+            actual=""
+            for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+              actual=$(gh api "repos/${slug}/contents/.github/manifest.yaml" \
+                --jq '.content' | base64 -d \
+                | grep -E "^[[:space:]]*cli_version:" | head -n 1 \
+                | sed -E 's|^[[:space:]]*cli_version:[[:space:]]*||' | tr -d '"' | tr -d "'") || actual=""
+              if [ "$actual" = "$RC_VERSION" ]; then
+                echo "${slug} main verified at ${RC_VERSION} (attempt ${attempt})"
+                return 0
+              fi
+              echo "verify attempt ${attempt}/${MAX_ATTEMPTS} for ${slug}: read '${actual}', want '${RC_VERSION}'"
+              sleep "$attempt"
+            done
+            echo "::error::${slug} main cli_version is '${actual}', expected '${RC_VERSION}' after ${MAX_ATTEMPTS} attempts"
+            return 1
+          }
+
+          failed=""
+          for name in $REPOS; do
+            slug="${FLEET_OWNER}/cascade-example-${name}"
+            echo "::group::repin ${slug} -> ${RC_VERSION}"
+            ok=1
+            ( repin_repo "$slug" ) || ok=0
+            if [ "$ok" -eq 1 ]; then
+              verify_pinned "$slug" || ok=0
+            fi
+            [ "$ok" -eq 1 ] || failed="${failed} ${slug}"
+            echo "::endgroup::"
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::Repin failed for:${failed}"
+            exit 1
+          fi
+          echo "All example repos pinned to ${RC_VERSION}"
