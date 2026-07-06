@@ -135,3 +135,115 @@ func TestReconcileGenerator_Actionlint(t *testing.T) {
 	out, runErr := cmd.CombinedOutput()
 	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
 }
+
+// TestReconcileGenerator_GenerateCompanion_Disabled mirrors Generate_Disabled
+// for the workflow_run companion.
+func TestReconcileGenerator_GenerateCompanion_Disabled(t *testing.T) {
+	_, err := NewReconcileGenerator(&config.TrunkConfig{}, t.TempDir()).GenerateCompanion()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reconcile is not enabled")
+}
+
+// TestReconcileGenerator_Companion_TrustedMetadata is the keystone security
+// test. It proves the workflow_run companion derives the target PR number
+// ONLY from trusted workflow_run run metadata, never from the fork-controlled
+// artifact, and obtains a pinned release binary rather than building or
+// running off the repository's own (possibly malicious) source tree.
+func TestReconcileGenerator_Companion_TrustedMetadata(t *testing.T) {
+	content, err := NewReconcileGenerator(reconcileConfig(), t.TempDir()).GenerateCompanion()
+	require.NoError(t, err)
+
+	assert.True(t, strings.HasPrefix(content, GeneratedFileMarker))
+	assert.Contains(t, content, "on:\n  workflow_run:")
+	assert.Contains(t, content, `workflows: ["Cascade Reconcile Check"]`)
+	assert.Contains(t, content, "permissions: {}", "top-level permissions must be empty")
+	assert.Contains(t, content, "if: github.event.workflow_run.event == 'pull_request'")
+
+	// Trusted-metadata derivation: PR number comes from run.pull_requests or the
+	// head-SHA lookup, NEVER from the downloaded artifact.
+	assert.Contains(t, content, "const run = context.payload.workflow_run;")
+	assert.Contains(t, content, "prNumber = run.pull_requests[0].number;")
+	assert.Contains(t, content, "listPullRequestsAssociatedWithCommit")
+	assert.Contains(t, content, "commit_sha: run.head_sha")
+
+	// A pinned release binary, never a go run off the repository's own tree.
+	assert.NotContains(t, content, "go run")
+	assert.Contains(t, content, "setup-cli@")
+
+	// Head files are fetched as data via the trusted refs/pull/<n>/head ref on
+	// the base repo (never a direct checkout of the fork repository), so
+	// nothing from a fork's own checkout configuration is ever executed.
+	assert.Contains(t, content, "refs/pull/${{ steps.resolve.outputs.pr_number }}/head")
+	assert.NotContains(t, content, "repository: ${{ steps.resolve.outputs.head_repo }}")
+
+	// Pushes with the trigger-capable state token, never the default token.
+	assert.Contains(t, content, resolveStateTokenRef(reconcileConfig()))
+}
+
+// TestReconcileGenerator_Companion_LoopGuards asserts all three loop-
+// termination guards the companion relies on to avoid an unbounded reconcile
+// loop:
+//
+//	(a) the write round-trips through the real, idempotent `cascade reconcile`
+//	    command rather than a hand-rolled shell/yq edit;
+//	(b) the push step is skipped when nothing actually changed;
+//	(c) the push re-checks the branch's fresh tip and aborts rather than
+//	    force-pushing over commits made since this run started.
+func TestReconcileGenerator_Companion_LoopGuards(t *testing.T) {
+	content, err := NewReconcileGenerator(reconcileConfig(), t.TempDir()).GenerateCompanion()
+	require.NoError(t, err)
+
+	// (a) idempotent typed-command write: the real command, not raw yq/sed.
+	assert.Contains(t, content, "cascade reconcile \"${args[@]}\"",
+		"must invoke the real idempotent reconcile command")
+	assert.NotContains(t, content, "yq eval", "must not hand-edit the manifest with yq")
+
+	// (b) push-only-if-git-diff-nonempty.
+	assert.Contains(t, content, "git diff --quiet")
+	assert.Contains(t, content, "nothing to push")
+
+	// (c) reconcile-against-fresh-tip with non-fast-forward abort: never force.
+	assert.Contains(t, content, "origin/$HEAD_REF")
+	assert.Contains(t, content, "aborting rather than overwrite")
+	assert.NotContains(t, content, "--force", "must never force-push over newer commits")
+	assert.NotContains(t, content, "git push -f")
+}
+
+// TestReconcileGenerator_Companion_Deterministic proves byte-stability across
+// repeated generation.
+func TestReconcileGenerator_Companion_Deterministic(t *testing.T) {
+	g := NewReconcileGenerator(reconcileConfig(), t.TempDir())
+	first, err := g.GenerateCompanion()
+	require.NoError(t, err)
+	second, err := g.GenerateCompanion()
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+}
+
+// TestReconcileGenerator_Companion_Actionlint runs actionlint over the
+// generated companion file. Skipped when actionlint is not installed.
+func TestReconcileGenerator_Companion_Actionlint(t *testing.T) {
+	bin, err := exec.LookPath("actionlint")
+	if err != nil {
+		t.Skip("actionlint not installed")
+	}
+
+	g := NewReconcileGenerator(reconcileConfig(), t.TempDir())
+	companion, err := g.GenerateCompanion()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	wfDir := filepath.Join(dir, ".github", "workflows")
+	require.NoError(t, os.MkdirAll(wfDir, 0755))
+	companionPath := filepath.Join(wfDir, "cascade-reconcile-companion.yaml")
+	require.NoError(t, os.WriteFile(companionPath, []byte(companion), 0644))
+
+	gitInit := exec.Command("git", "init", "-q")
+	gitInit.Dir = dir
+	require.NoError(t, gitInit.Run(), "git init for actionlint project root")
+
+	cmd := exec.Command(bin, "-shellcheck=", companionPath)
+	cmd.Dir = dir
+	out, runErr := cmd.CombinedOutput()
+	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
+}
