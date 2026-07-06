@@ -1,15 +1,11 @@
 name: Deploy docs
 
-# Publishes the Starlight docs site to GitHub Pages on every push to main that
-# touches the docs source or this workflow. Pull requests build the site without
-# deploying, so broken docs are caught before they merge.
+# Builds and deploys the Starlight docs site to GitHub Pages on every push to
+# main that touches the docs source or this workflow. PR-time build validation
+# lives in the PR Validation workflow's gate, so a broken docs build blocks the
+# merge there; this workflow only builds and deploys on push to main.
 on:
   push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs-deploy.yaml'
-  pull_request:
     branches: [main]
     paths:
       - 'docs/**'
