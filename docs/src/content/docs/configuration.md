@@ -144,7 +144,13 @@ ci:
 
 ### Action pinning
 
-cascade governs how the third-party actions it emits into your workflows (for example `actions/checkout` and `actions/github-script`) are referenced. Two fields control the policy.
+Generated workflows are build output. cascade owns the third-party action pins inside them (for example `actions/checkout` and `actions/github-script`) and reconciles that ownership back to a single source of truth: the manifest. The supported way to change a pinned action is `pin_mode` and `action_pins`, described below, not a hand-edit of the generated YAML. A hand-edited pin is reported as drift by the next `cascade verify` and overwritten by the next regenerate.
+
+A future cascade version may write a pointer comment into the generated workflow header naming the manifest that owns its pins, so ownership is visible from the file itself without consulting these docs. That pointer is not emitted today; nothing in the current output implies it.
+
+cascade is also adding an opt-in reconcile companion that watches for an external action-pin change (for example a Dependabot bump landing in a generated workflow) and adopts it into `action_pins` automatically, then regenerates so every workflow agrees again. It has not shipped yet; the sections below on Dependabot, token permissions, and automerge describe the ownership model it is built on and the fallback posture to use until it does.
+
+Two fields control the pinning policy today.
 
 `pin_mode` sets the reference style for every third-party action cascade emits:
 
@@ -166,6 +172,24 @@ ci:
 ```
 
 That emits `uses: actions/checkout@0123456789abcdef0123456789abcdef01234567`. An action that is neither in the built-in table nor overridden is emitted unchanged.
+
+#### Overriding a pin switches its update channel
+
+Setting `action_pins` for an action switches that action's update channel. Before the override, the action tracks cascade's own curated pin table (`internal/generate/action_pins.yaml`), which cascade updates as it ships new releases. Once you set an override, that action's future updates come from wherever you or your tooling point the override, not from cascade's table anymore. The override is the only state cascade keeps for that action: there is no separate record of when or why it was set, and no path back to the curated default other than removing the override yourself.
+
+One consequence of that: because the override is the only state, an adopted pin can trail cascade's own curated default over time, for example when cascade's table later moves the same action to a newer commit. This is a known, documented edge today, not something cascade reconciles automatically.
+
+#### Dependabot fallback (until the reconcile companion ships)
+
+Dependabot can propose bumps directly against the actions pinned in your generated workflow files, since it reads `uses:` lines wherever they appear. Until the reconcile companion is available, the practical fallback is excluding the generated workflow paths from Dependabot's GitHub Actions directory scan, so a bump lands in `action_pins` where cascade tracks it instead of a hand-edit that the next regenerate reports as drift. Treat this as a fallback, not the recommended posture: once the reconcile companion ships, prefer letting it adopt the bump into the manifest rather than steering Dependabot away from the generated paths.
+
+#### Token permissions for pin ownership (forward-looking)
+
+The token that writes manifest state (`state_token`, or its `_app` variant; see [Token authentication](#token-authentication)) needs headroom for pin ownership. It already needs `Contents: write` to push manifest state. The reconcile companion will add `Workflows: write`, because pushing a regenerated `.github/workflows/*.yaml` file requires the workflow scope; without it, the push fails. The fuller set a token exercising cascade's pin ownership, hotfix, drift-check, and deployment features needs is `Metadata: read`, `Contents: read and write`, `Workflows: write`, `Actions: read and write`, `Pull requests: read and write`, `Issues: read and write`, and `Deployments: read and write`. Provisioning this set once, through a GitHub App installation token or a fine-grained PAT, avoids re-scoping every time a new feature lands. A broad classic PAT can express the same permissions but without per-repo or per-scope precision, so prefer the App or fine-grained PAT path.
+
+#### Automerge caveat
+
+Enabling the reconcile companion will change what a red drift check means. Today, a hand-edited pin or an external bump landing in a generated file makes `cascade verify` fail and stays red until someone intervenes. With the companion enabled, that same bump is instead adopted into `action_pins` and the workflow regenerated automatically, turning what would have been a red check green. If your repository automerges once checks pass, a pin bump can land and merge unattended. If you rely on automerge, prefer the companion's followup commit-routing mode when it ships: it opens the adoption as its own pull request rather than pushing onto the triggering one, so a human still reviews the pin change before it merges.
 
 ### Token authentication
 
