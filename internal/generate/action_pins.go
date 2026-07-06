@@ -75,19 +75,35 @@ var defaultActionPins = mustParseActionPins(actionPinsYAML)
 // keeping only emit: true actions (the set the generator renders). It panics on
 // a malformed manifest, a non-40-hex SHA, or a missing generator action so the
 // failure surfaces at init rather than as silently wrong generated output.
+//
+// The generator-action completeness check applies only here, not in
+// parseActionPins: the embedded manifest must define every action the
+// generator references by const, but an arbitrary disk-loaded manifest (for
+// example a reconcile overlay) legitimately carries only the subset of
+// actions it overrides.
 func mustParseActionPins(data []byte) map[string]actionPin {
 	pins, err := parseActionPins(data)
 	if err != nil {
 		panic(fmt.Sprintf("generate: %v", err))
 	}
+
+	for _, name := range []string{
+		actionCheckout, actionGithubScript, actionDownloadArtifact,
+		actionUploadArtifact, actionCreateAppToken,
+	} {
+		if _, ok := pins[name]; !ok {
+			panic(fmt.Sprintf("generate: action_pins.yaml is missing emit:true entry for %s", name))
+		}
+	}
+
 	return pins
 }
 
 // parseActionPins parses a manifest's bytes into the generator pin table,
 // keeping only emit: true actions (the set the generator renders). It returns
-// an error on a malformed manifest, a non-40-hex SHA, or a missing generator
-// action instead of panicking, so a disk-loaded manifest can be rejected
-// gracefully rather than crashing the process.
+// an error on a malformed manifest or a non-40-hex SHA instead of panicking,
+// so a disk-loaded manifest can be rejected gracefully rather than crashing
+// the process.
 func parseActionPins(data []byte) (map[string]actionPin, error) {
 	var manifest actionPinsManifest
 	if err := yaml.Unmarshal(data, &manifest); err != nil {
@@ -106,17 +122,6 @@ func parseActionPins(data []byte) (map[string]actionPin, error) {
 			return nil, fmt.Errorf("action_pins.yaml: %s is missing a tag or version", name)
 		}
 		pins[name] = actionPin{tag: entry.Tag, sha: entry.SHA, shaVersion: entry.Version}
-	}
-
-	// Every action the generator references by const must be present and emit:true,
-	// so a manifest edit can never drop a governed action without this surfacing.
-	for _, name := range []string{
-		actionCheckout, actionGithubScript, actionDownloadArtifact,
-		actionUploadArtifact, actionCreateAppToken,
-	} {
-		if _, ok := pins[name]; !ok {
-			return nil, fmt.Errorf("action_pins.yaml is missing emit:true entry for %s", name)
-		}
 	}
 
 	return pins, nil
