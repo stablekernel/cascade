@@ -26,6 +26,17 @@ const reconcileCheckWorkflowName = "Cascade Reconcile Check"
 // companion pushes onto (or alongside) the triggering PR.
 const reconcileCommitMessage = "chore: reconcile governed action pins"
 
+// reconcileCommentMarker is the hidden HTML marker embedded in the fork
+// fallback comment so a later run finds and updates the same sticky comment
+// instead of posting a new one.
+const reconcileCommentMarker = "<!-- cascade-reconcile -->"
+
+// reconcileFollowupBranchExpr is the cascade-owned branch name a "followup"
+// commit (or an append-mode fork fallback, were it to open a PR) would use.
+// It is deterministic per PR number so a repeat run updates the same branch
+// and PR rather than accumulating one per run.
+const reconcileFollowupBranchExpr = "cascade-reconcile/pr-${{ steps.resolve.outputs.pr_number }}"
+
 // ReconcileGenerator emits the opt-in emitted pin-reconcile companion (#443).
 //
 // A pull_request job runs strictly read-only: it computes the PR's changed
@@ -223,7 +234,28 @@ func (g *ReconcileGenerator) writeCompanionJob(sb *strings.Builder) {
 	g.writeCompanionCheckoutStep(sb)
 	g.writeCompanionSetupCLIStep(sb)
 	g.writeCompanionReconcileStep(sb)
-	g.writeCompanionPushStep(sb)
+
+	// Commit routing: "followup" always lands as a separate PR against a
+	// cascade-owned branch (safe regardless of fork, and the recommended
+	// posture for a PR that automerges without further review). The default
+	// "append" mode pushes onto the PR's own head branch, but only when the PR
+	// is NOT a fork: cascade has no push access to a fork's branch, so a fork
+	// PR always falls back to a sticky comment instead, never an in-place push.
+	if g.commitMode() == config.ReconcileCommitFollowup {
+		g.writeCompanionFollowupSteps(sb)
+		return
+	}
+	g.writeCompanionAppendStep(sb)
+	g.writeCompanionForkFallbackStep(sb)
+}
+
+// commitMode returns the configured commit-routing mode, defaulting to
+// "append" when unset.
+func (g *ReconcileGenerator) commitMode() string {
+	if g.config.Reconcile == nil || g.config.Reconcile.Commit == "" {
+		return config.ReconcileCommitAppend
+	}
+	return g.config.Reconcile.Commit
 }
 
 func (g *ReconcileGenerator) writeDownloadStep(sb *strings.Builder) {
@@ -306,6 +338,7 @@ func (g *ReconcileGenerator) writeResolveScript(sb *strings.Builder) {
 		"",
 		"core.setOutput('pr_number', String(prNumber));",
 		"core.setOutput('base_sha', pr.data.base.sha);",
+		"core.setOutput('base_ref', pr.data.base.ref);",
 		"core.setOutput('head_sha', pr.data.head.sha);",
 		"core.setOutput('head_ref', pr.data.head.ref);",
 		"core.setOutput('fork', String(pr.data.head.repo && pr.data.head.repo.full_name !== pr.data.base.repo.full_name));",
@@ -368,14 +401,17 @@ func (g *ReconcileGenerator) writeCompanionReconcileStep(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
-// writeCompanionPushStep pushes the adoption commit onto the PR head branch,
-// applying the remaining loop-termination guards: (b) push-only-if-nonempty
-// (a converged tree pushes nothing) and (c) reconcile-against-fresh-tip,
-// aborting on a non-fast-forward rather than force-pushing over commits made
-// since this run started.
-func (g *ReconcileGenerator) writeCompanionPushStep(sb *strings.Builder) {
+// writeCompanionAppendStep pushes the adoption commit directly onto the PR's
+// own head branch (the default "append" mode), gated off entirely for a fork
+// PR: cascade has no push access to a fork's branch, so this step never runs
+// for one (see writeCompanionForkFallbackStep). It applies the remaining
+// loop-termination guards: (b) push-only-if-nonempty (a converged tree
+// pushes nothing) and (c) reconcile-against-fresh-tip, aborting on a
+// non-fast-forward rather than force-pushing over commits made since this run
+// started.
+func (g *ReconcileGenerator) writeCompanionAppendStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Push the reconcile commit\n")
-	sb.WriteString("        if: steps.resolve.outputs.relevant == 'true'\n")
+	sb.WriteString("        if: steps.resolve.outputs.relevant == 'true' && steps.resolve.outputs.fork != 'true'\n")
 	sb.WriteString("        env:\n")
 	sb.WriteString("          HEAD_REF: ${{ steps.resolve.outputs.head_ref }}\n")
 	sb.WriteString("          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}\n")
@@ -395,4 +431,132 @@ func (g *ReconcileGenerator) writeCompanionPushStep(sb *strings.Builder) {
 	sb.WriteString("            exit 0\n")
 	sb.WriteString("          fi\n")
 	sb.WriteString("          git push origin \"HEAD:$HEAD_REF\"\n")
+	sb.WriteString("\n")
+}
+
+// writeCompanionForkFallbackStep is the mandatory fallback for a fork PR
+// under the default "append" mode: cascade cannot push onto a fork's own
+// branch, so it posts (or updates) a sticky comment naming the governed refs
+// the PR should adopt, read strictly as data from the check artifact. It
+// never checks out or executes fork code and never opens a PR on the fork's
+// behalf.
+func (g *ReconcileGenerator) writeCompanionForkFallbackStep(sb *strings.Builder) {
+	sb.WriteString("      - name: Fork fallback (sticky comment)\n")
+	sb.WriteString("        if: steps.resolve.outputs.relevant == 'true' && steps.resolve.outputs.fork == 'true'\n")
+	writeActionUses(sb, g.config, "        ", actionGithubScript)
+	sb.WriteString("        with:\n")
+	sb.WriteString("          script: |\n")
+	g.writeForkFallbackScript(sb)
+}
+
+func (g *ReconcileGenerator) writeForkFallbackScript(sb *strings.Builder) {
+	lines := []string{
+		"const fs = require('fs');",
+		fmt.Sprintf("const marker = '%s';", reconcileCommentMarker),
+		"const owner = context.repo.owner;",
+		"const repo = context.repo.repo;",
+		"const prNumber = Number(" + "'${{ steps.resolve.outputs.pr_number }}'" + ");",
+		"",
+		"// Read the changed refs strictly as data from the check artifact; this",
+		"// PR is a fork, so cascade never checks out or executes its code.",
+		"let changed = {};",
+		"try {",
+		fmt.Sprintf("  const raw = fs.readFileSync('%s/%s', 'utf8');", reconcileCheckArtifact, reconcileCheckArtifactFile),
+		"  changed = JSON.parse(raw).changed_refs || {};",
+		"} catch (e) {",
+		"  changed = {};",
+		"}",
+		"",
+		"const lines = Object.entries(changed).map(([action, ref]) => `- \\`${action}\\`: ${ref}`);",
+		"const body = [",
+		"  marker,",
+		"  '## Governed action pin changed',",
+		"  '',",
+		"  'This pull request bumps a cascade-governed action pin. Cascade cannot push',",
+		"  'to a fork branch, so adopt it by hand in `action_pins`:',",
+		"  '',",
+		"  ...lines,",
+		"].join('\\n');",
+		"",
+		"const comments = await github.paginate(github.rest.issues.listComments, {",
+		"  owner, repo, issue_number: prNumber,",
+		"});",
+		"const existing = comments.find((c) => c.body && c.body.includes(marker));",
+		"if (existing) {",
+		"  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });",
+		"} else {",
+		"  await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });",
+		"}",
+	}
+	for _, l := range lines {
+		if l == "" {
+			sb.WriteString("\n")
+			continue
+		}
+		fmt.Fprintf(sb, "            %s\n", l)
+	}
+}
+
+// writeCompanionFollowupSteps implements the "followup" commit mode: the
+// adoption commit lands on a cascade-owned, deterministic branch (never the
+// PR's own head branch, so it is safe regardless of fork), and a distinct PR
+// against the same base branch is opened (or updated on a repeat run) rather
+// than silently mutating a PR that may automerge without further review.
+// cascade owns this branch exclusively, so, unlike the append-mode push onto
+// a user's own PR branch, force-pushing it on every run is safe: each run
+// starts from a fresh checkout of the current PR head, so the branch's base
+// commit legitimately changes whenever the PR head does.
+func (g *ReconcileGenerator) writeCompanionFollowupSteps(sb *strings.Builder) {
+	sb.WriteString("      - name: Push the followup branch\n")
+	sb.WriteString("        if: steps.resolve.outputs.relevant == 'true'\n")
+	sb.WriteString("        id: followup_push\n")
+	sb.WriteString("        run: |\n")
+	sb.WriteString("          if git diff --quiet && git diff --cached --quiet; then\n")
+	sb.WriteString("            echo \"No pending reconcile changes; nothing to push.\"\n")
+	sb.WriteString("            echo \"pushed=false\" >> \"$GITHUB_OUTPUT\"\n")
+	sb.WriteString("            exit 0\n")
+	sb.WriteString("          fi\n")
+	sb.WriteString("          git config user.name \"github-actions[bot]\"\n")
+	sb.WriteString("          git config user.email \"github-actions[bot]@users.noreply.github.com\"\n")
+	fmt.Fprintf(sb, "          git checkout -b %q\n", reconcileFollowupBranchExpr)
+	sb.WriteString("          git add .github\n")
+	fmt.Fprintf(sb, "          git commit -m %q\n", reconcileCommitMessage)
+	fmt.Fprintf(sb, "          git push --force origin \"HEAD:%s\"\n", reconcileFollowupBranchExpr)
+	sb.WriteString("          echo \"pushed=true\" >> \"$GITHUB_OUTPUT\"\n")
+	sb.WriteString("\n")
+
+	sb.WriteString("      - name: Open or update the followup PR\n")
+	sb.WriteString("        if: steps.followup_push.outputs.pushed == 'true'\n")
+	writeActionUses(sb, g.config, "        ", actionGithubScript)
+	sb.WriteString("        with:\n")
+	sb.WriteString("          script: |\n")
+	g.writeFollowupPRScript(sb)
+}
+
+func (g *ReconcileGenerator) writeFollowupPRScript(sb *strings.Builder) {
+	lines := []string{
+		"const owner = context.repo.owner;",
+		"const repo = context.repo.repo;",
+		"const prNumber = '${{ steps.resolve.outputs.pr_number }}';",
+		"const baseRef = '${{ steps.resolve.outputs.base_ref }}';",
+		fmt.Sprintf("const head = '%s';", reconcileFollowupBranchExpr),
+		"const title = 'chore: reconcile governed action pins';",
+		"const body = `Adopts the governed action-pin change from #${prNumber}.`;",
+		"",
+		"const existing = await github.paginate(github.rest.pulls.list, {",
+		"  owner, repo, head: `${owner}:${head}`, state: 'open',",
+		"});",
+		"if (existing.length > 0) {",
+		"  core.info(`Followup PR #${existing[0].number} already open; the push updated it.`);",
+		"  return;",
+		"}",
+		"await github.rest.pulls.create({ owner, repo, title, body, head, base: baseRef });",
+	}
+	for _, l := range lines {
+		if l == "" {
+			sb.WriteString("\n")
+			continue
+		}
+		fmt.Fprintf(sb, "            %s\n", l)
+	}
 }

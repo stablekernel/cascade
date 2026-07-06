@@ -228,22 +228,82 @@ func TestReconcileGenerator_Companion_Actionlint(t *testing.T) {
 		t.Skip("actionlint not installed")
 	}
 
-	g := NewReconcileGenerator(reconcileConfig(), t.TempDir())
-	companion, err := g.GenerateCompanion()
+	for _, commit := range []string{"", config.ReconcileCommitAppend, config.ReconcileCommitFollowup} {
+		cfg := reconcileConfig()
+		cfg.Reconcile.Commit = commit
+		g := NewReconcileGenerator(cfg, t.TempDir())
+		companion, err := g.GenerateCompanion()
+		require.NoError(t, err)
+
+		dir := t.TempDir()
+		wfDir := filepath.Join(dir, ".github", "workflows")
+		require.NoError(t, os.MkdirAll(wfDir, 0755))
+		companionPath := filepath.Join(wfDir, "cascade-reconcile-companion.yaml")
+		require.NoError(t, os.WriteFile(companionPath, []byte(companion), 0644))
+
+		gitInit := exec.Command("git", "init", "-q")
+		gitInit.Dir = dir
+		require.NoError(t, gitInit.Run(), "git init for actionlint project root")
+
+		cmd := exec.Command(bin, "-shellcheck=", companionPath)
+		cmd.Dir = dir
+		out, runErr := cmd.CombinedOutput()
+		assert.NoError(t, runErr, "actionlint reported issues for commit=%q:\n%s", commit, string(out))
+	}
+}
+
+// TestReconcileGenerator_Companion_AppendPushesOntoHeadBranch proves the
+// default ("append", also the empty-string default) mode pushes the adoption
+// commit directly onto the PR's own head branch, gated on the PR NOT being a
+// fork (a fork can never receive an in-place push; see the fork-fallback
+// test below).
+func TestReconcileGenerator_Companion_AppendPushesOntoHeadBranch(t *testing.T) {
+	for _, commit := range []string{"", config.ReconcileCommitAppend} {
+		cfg := reconcileConfig()
+		cfg.Reconcile.Commit = commit
+		content, err := NewReconcileGenerator(cfg, t.TempDir()).GenerateCompanion()
+		require.NoError(t, err)
+
+		assert.Contains(t, content, `git push origin "HEAD:$HEAD_REF"`)
+		assert.Contains(t, content, "steps.resolve.outputs.fork != 'true'",
+			"the direct push must be gated off for a fork PR")
+	}
+}
+
+// TestReconcileGenerator_Companion_ForkNeverPushedInPlace is the keystone
+// fork-safety test: regardless of the configured commit mode, a fork PR must
+// never receive a direct push onto its head branch. In append mode it falls
+// back to a sticky comment instead.
+func TestReconcileGenerator_Companion_ForkNeverPushedInPlace(t *testing.T) {
+	content, err := NewReconcileGenerator(reconcileConfig(), t.TempDir()).GenerateCompanion()
 	require.NoError(t, err)
 
-	dir := t.TempDir()
-	wfDir := filepath.Join(dir, ".github", "workflows")
-	require.NoError(t, os.MkdirAll(wfDir, 0755))
-	companionPath := filepath.Join(wfDir, "cascade-reconcile-companion.yaml")
-	require.NoError(t, os.WriteFile(companionPath, []byte(companion), 0644))
+	// The fork fallback step is gated to fork PRs only and never pushes onto
+	// the (inaccessible) fork head branch; it posts a sticky comment instead.
+	assert.Contains(t, content, "steps.resolve.outputs.fork == 'true'")
+	assert.Contains(t, content, reconcileCommentMarker)
+	assert.Contains(t, content, "createComment")
 
-	gitInit := exec.Command("git", "init", "-q")
-	gitInit.Dir = dir
-	require.NoError(t, gitInit.Run(), "git init for actionlint project root")
+	// Every git push in the file must be scoped away from a fork PR (either
+	// the append push, gated fork != 'true', or the followup push, which
+	// targets cascade's own branch rather than the PR's head branch).
+	assert.NotContains(t, content, "git push origin \"HEAD:${{ steps.resolve.outputs.head_ref }}\"")
+}
 
-	cmd := exec.Command(bin, "-shellcheck=", companionPath)
-	cmd.Dir = dir
-	out, runErr := cmd.CombinedOutput()
-	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
+// TestReconcileGenerator_Companion_FollowupOpensSeparatePR proves the
+// "followup" mode never touches the original PR's own branch: it commits to
+// a cascade-owned branch and opens (or updates) a distinct PR against the
+// same base branch, so an automerge-without-review PR is never silently
+// mutated in place.
+func TestReconcileGenerator_Companion_FollowupOpensSeparatePR(t *testing.T) {
+	cfg := reconcileConfig()
+	cfg.Reconcile.Commit = config.ReconcileCommitFollowup
+	content, err := NewReconcileGenerator(cfg, t.TempDir()).GenerateCompanion()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "cascade-reconcile/pr-")
+	assert.Contains(t, content, "steps.resolve.outputs.base_ref")
+	assert.Contains(t, content, "github.rest.pulls.create")
+	// The followup path must never push onto the original PR's own branch.
+	assert.NotContains(t, content, `git push origin "HEAD:$HEAD_REF"`)
 }
