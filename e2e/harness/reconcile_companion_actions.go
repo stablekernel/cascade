@@ -164,12 +164,21 @@ func RunReconcileCompanionAppendScenario(ctx context.Context, t *testing.T) (*Re
 		Event:        "workflow_run",
 		EventJSON:    eventJSON,
 		WorkflowPath: ".github/workflows/cascade-reconcile-companion.yaml",
-		// act does not populate $GITHUB_REPOSITORY as "owner/repo" for a
-		// synthetic workflow_run event (it derives it from the git remote URL
-		// verbatim instead), so the mock resolve step reads the real repo
-		// full name from this plain env var rather than a GitHub Actions
-		// expression.
-		Env: map[string]string{"CASCADE_REPO_FULL_NAME": AdminUsername + "/" + h.repo.Name},
+		// The mock resolve step reads two values from custom env vars rather
+		// than the built-in GitHub Actions ones. act does not populate
+		// $GITHUB_REPOSITORY as "owner/repo" for a synthetic workflow_run
+		// event (it derives it from the git remote URL verbatim instead), and
+		// act manages the reserved $GITHUB_* names itself: it does NOT carry
+		// the outer --env GITHUB_API_URL override into a `run:` step's shell
+		// for this event (a `uses:` step such as github-script still sees it,
+		// which is why every other scenario works). Custom, non-reserved names
+		// survive into the shell intact, so the step reads the repo full name
+		// and the Gitea API base from these instead. The API base is the same
+		// network-internal alias act itself targets (http://gitea:3000/api/v1).
+		Env: map[string]string{
+			"CASCADE_REPO_FULL_NAME": AdminUsername + "/" + h.repo.Name,
+			"CASCADE_API_URL":        h.act.GiteaURL() + "/api/v1",
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("run companion workflow: %w", err)
@@ -288,12 +297,15 @@ var downloadStepRE = regexp.MustCompile(`(?s)      - name: Download pin-reconcil
 // pull_requests entry, then re-fetches the pull request fresh from the real
 // Gitea API (the same fresh-tip and fork-detection logic the real script
 // runs), reading the real repo's "owner/repo" from the CASCADE_REPO_FULL_NAME
-// env var the scenario provides (act does not populate the built-in
-// $GITHUB_REPOSITORY as "owner/repo" for a synthetic workflow_run event; it
-// carries the git remote URL verbatim instead). Only the execution engine is
-// substituted, not the logic. It is inlined as a direct run: block, not a
-// local composite action, for the same id-plus-local-uses reason as the
-// download step above.
+// env var and the Gitea API base from the CASCADE_API_URL env var the scenario
+// provides. Both use custom, non-reserved names deliberately: act does not
+// populate the built-in $GITHUB_REPOSITORY as "owner/repo" for a synthetic
+// workflow_run event (it carries the git remote URL verbatim instead), and act
+// manages the reserved $GITHUB_* names itself, so a `run:` step does not see
+// the outer --env $GITHUB_API_URL override for this event (a `uses:` step such
+// as github-script still does). Only the execution engine is substituted, not
+// the logic. It is inlined as a direct run: block, not a local composite
+// action, for the same id-plus-local-uses reason as the download step above.
 const mockResolveStepBlock = `      - name: Resolve target PR
         id: resolve
         env:
@@ -305,7 +317,7 @@ const mockResolveStepBlock = `      - name: Resolve target PR
           if [ -f pin-reconcile-result/pin-reconcile-result.json ]; then
             relevant=$(jq -r '.relevant' pin-reconcile-result/pin-reconcile-result.json)
           fi
-          resp=$(curl -sf -H "Authorization: token $GH_TOKEN" "$GITHUB_API_URL/repos/$CASCADE_REPO_FULL_NAME/pulls/$PR_NUMBER")
+          resp=$(curl -sf -H "Authorization: token $GH_TOKEN" "$CASCADE_API_URL/repos/$CASCADE_REPO_FULL_NAME/pulls/$PR_NUMBER")
           base_sha=$(echo "$resp" | jq -r '.base.sha')
           base_ref=$(echo "$resp" | jq -r '.base.ref')
           head_sha=$(echo "$resp" | jq -r '.head.sha')
