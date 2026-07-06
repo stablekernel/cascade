@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How cascade is put together - the design principles, the shape of the system, and the seams built for extension.
+description: How cascade is put together: the design principles, the shape of the system, and the seams built for extension.
 ---
 
 This page is for contributors and evaluators who want the internals: why cascade
