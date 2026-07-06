@@ -53,11 +53,32 @@ const reconcileFollowupBranchExpr = "cascade-reconcile/pr-${{ steps.resolve.outp
 type ReconcileGenerator struct {
 	config  *config.TrunkConfig
 	baseDir string
+	ownRepo bool
+}
+
+// ReconcileOption customizes a ReconcileGenerator. Options are the additive,
+// variadic tail of NewReconcileGenerator so new behavior never changes the
+// two-argument signature callers already depend on.
+type ReconcileOption func(*ReconcileGenerator)
+
+// WithOwnRepo switches the generator into own-repo mode, which emits cascade's
+// self-heal companion for its own repository rather than the companion a
+// downstream user adopts. The own-repo companion installs the latest
+// non-prerelease cascade release, scans both the workflows and composite-action
+// trees for a moved governed pin, and commits the regenerated workflows plus the
+// updated pin manifest back onto the triggering branch.
+func WithOwnRepo() ReconcileOption {
+	return func(g *ReconcileGenerator) { g.ownRepo = true }
 }
 
 // NewReconcileGenerator creates a new reconcile companion workflow generator.
-func NewReconcileGenerator(cfg *config.TrunkConfig, baseDir string) *ReconcileGenerator {
-	return &ReconcileGenerator{config: cfg, baseDir: baseDir}
+// Optional behavior is supplied through the variadic ReconcileOption tail.
+func NewReconcileGenerator(cfg *config.TrunkConfig, baseDir string, opts ...ReconcileOption) *ReconcileGenerator {
+	g := &ReconcileGenerator{config: cfg, baseDir: baseDir}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // Enabled reports whether the reconcile companion should be emitted.
@@ -190,6 +211,10 @@ func (g *ReconcileGenerator) getStateTokenRef() string {
 func (g *ReconcileGenerator) GenerateCompanion() (string, error) {
 	if !g.Enabled() {
 		return "", fmt.Errorf("cannot generate reconcile companion workflow: reconcile is not enabled")
+	}
+
+	if g.ownRepo {
+		return g.generateOwnRepoCompanion(), nil
 	}
 
 	var sb strings.Builder
