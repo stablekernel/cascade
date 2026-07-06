@@ -80,3 +80,37 @@ func TestReconcileAdoptsBumpAndSurvivesRegen(t *testing.T) {
 	err := harness.RunMultiStepScenario(ctx, t, scenario)
 	require.NoError(t, err, "reconcile adoption scenario failed")
 }
+
+// TestReconcileCompanionAppendsOnSameRepoPR proves the emitted
+// cascade-reconcile-companion.yaml end to end, under act, against a real
+// Gitea repository: a same-repo pull request carries a simulated external
+// governed-pin bump (the shape of a merged Dependabot update) landing in the
+// generated orchestrate.yaml, and driving the real companion workflow through
+// act with a real workflow_run event exercises the relevance trigger, the
+// trusted-metadata pull request resolution, the head-as-data checkout of the
+// pull request branch, the pinned cascade binary, the real (idempotent)
+// `cascade reconcile` adoption, and the push back onto the pull request's own
+// branch (the default "append" commit mode). A clean pass requires the
+// pushed branch to carry both the adopted action_pins entry and a regenerated
+// orchestrate.yaml that still carries the bumped pin, proving the adoption
+// survives the companion's own regenerate rather than being cosmetic.
+func TestReconcileCompanionAppendsOnSameRepoPR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E tests")
+	}
+	requireShardOwns(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	result, err := harness.RunReconcileCompanionAppendScenario(ctx, t)
+	require.NoError(t, err, "reconcile companion scenario failed")
+
+	require.Equal(t, "success", result.Conclusion, "the companion's reconcile job must conclude successfully")
+	require.NotEqual(t, result.HeadBefore, result.HeadAfter,
+		"the companion must push an adoption commit onto the pull request's own branch")
+	require.Contains(t, result.ManifestAfter, harness.ReconcileCompanionBumpTag,
+		"the adopted action_pins entry must carry the bumped ref verbatim")
+	require.Contains(t, result.OrchestrateAfter, "actions/checkout@"+harness.ReconcileCompanionBumpTag,
+		"the regenerated orchestrate.yaml must still carry the bumped pin, proving the adoption survives regeneration")
+}
