@@ -45,7 +45,7 @@ steps:
             - "    if: ${{ github.event.inputs.dry_run != 'true' }}\n"
             # Follow-on release-build dispatch against the published tag.
             - "      - name: Trigger Release Build\n"
-            - "          gh workflow run ./.github/workflows/release-build.yaml \\\n"
+            - "          gh workflow run release-build.yaml \\\n"
           not_contains:
             # The promote path uses the CLI gate, not the release bash step.
             - "      - name: Check Breaking Changes\n"

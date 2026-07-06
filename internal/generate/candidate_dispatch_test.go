@@ -76,8 +76,9 @@ func TestGenerator_CandidateDispatchStep(t *testing.T) {
 				require.Contains(t, content, "- name: Dispatch Release Candidate Build",
 					"expected the candidate dispatch step in dispatch mode with a release workflow")
 				body := stepRunBody(t, content, "Dispatch Release Candidate Build")
-				assert.Contains(t, body, "gh workflow run ./.github/workflows/release.yaml",
-					"the step must dispatch the configured release workflow, normalized")
+				assert.Contains(t, body, "gh workflow run release.yaml",
+					"the step must dispatch the configured release workflow by its bare file name; "+
+						"gh workflow run 404s on a \"./\"-prefixed repo path")
 				assert.Contains(t, body, `--ref "$TAG"`,
 					"the dispatch must target the candidate tag")
 			} else {
@@ -89,7 +90,9 @@ func TestGenerator_CandidateDispatchStep(t *testing.T) {
 }
 
 // TestGenerator_CandidateDispatchNormalizesBareFilename asserts a bare release
-// workflow filename is normalized to a repo-relative path in the dispatch.
+// workflow filename dispatches unchanged: gh workflow run addresses a same-repo
+// workflow by file name (or numeric ID), never by a "./"-prefixed repository
+// path, so an already-bare name needs no further normalization.
 func TestGenerator_CandidateDispatchNormalizesBareFilename(t *testing.T) {
 	cfg, tmpDir := candidateDispatchConfig(t, true, &config.ReleaseConfig{Workflow: "release.yaml"})
 
@@ -97,6 +100,6 @@ func TestGenerator_CandidateDispatchNormalizesBareFilename(t *testing.T) {
 	require.NoError(t, err)
 
 	body := stepRunBody(t, content, "Dispatch Release Candidate Build")
-	assert.Contains(t, body, "gh workflow run ./.github/workflows/release.yaml",
-		"a bare release workflow filename must normalize to a repo-relative path")
+	assert.Contains(t, body, "gh workflow run release.yaml",
+		"a bare release workflow filename must dispatch unchanged")
 }

@@ -36,10 +36,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@58c3d309faaf5028aa03900aded8424e738afb81 # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.1.0
+          version: v0.8.0
       - name: Run Setup
         id: setup
         run: |
@@ -109,10 +109,10 @@ jobs:
             echo "_No outputs produced_" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@58c3d309faaf5028aa03900aded8424e738afb81 # v0.8.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.1.0
+          version: v0.8.0
       - name: Generate Changelog
         id: changelog
         env:
@@ -149,7 +149,7 @@ jobs:
           # The tag-push trigger is unreliable here: the candidate tag can
           # point at a state commit whose message suppresses CI, so an explicit
           # dispatch against the tag is the dependable way to build the candidate.
-          gh workflow run ./.github/workflows/release.yaml \
+          gh workflow run release.yaml \
             --repo "${{ github.repository }}" \
             --ref "$TAG"
       - name: Update Manifest

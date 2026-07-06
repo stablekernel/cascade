@@ -1236,7 +1236,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 		sb.WriteString("        run: |\n")
 		sb.WriteString("          # Dispatch the configured release-build workflow against the\n")
 		sb.WriteString("          # published tag so it can build and attach release binaries.\n")
-		sb.WriteString("          gh workflow run " + normalizeWorkflowPath(g.config.Release.Workflow) + " \\\n")
+		sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.Release.Workflow) + " \\\n")
 		sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 		sb.WriteString("            --ref \"$TAG\"\n\n")
 	}
@@ -1264,7 +1264,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 			bName := b.Name
 			sb.WriteString("          ARTIFACT_ID_" + strings.ToUpper(strings.ReplaceAll(bName, "-", "_")))
 			sb.WriteString("=$(yq eval \".$MANIFEST_KEY.state.$SOURCE_ENV.builds." + bName + ".artifact_id // \\\"\\\"\" \"$MANIFEST_FILE\")\n")
-			sb.WriteString("          gh workflow run " + normalizeWorkflowPath(g.config.Publish.Workflow) + " \\\n")
+			sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.Publish.Workflow) + " \\\n")
 			sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 			sb.WriteString("            --ref \"$NEW_VERSION\" \\\n")
 			sb.WriteString("            -f build_name=" + bName + " \\\n")
