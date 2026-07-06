@@ -31,10 +31,7 @@ type Options struct {
 // anything actually changed; a converged tree is a safe no-op, which is the
 // loop-termination guarantee a reconcile companion relies on.
 func Run(opts Options) (bool, error) {
-	manifestPath := opts.ManifestPath
-	if manifestPath == "" {
-		manifestPath = filepath.Join(opts.Root, ".github", "manifest.yaml")
-	}
+	manifestPath := resolveManifestPath(opts.Root, opts.ManifestPath)
 	manifestKey := opts.ManifestKey
 	if manifestKey == "" {
 		manifestKey = config.DefaultManifestKey
@@ -94,6 +91,29 @@ func Run(opts Options) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// resolveManifestPath returns the manifest path Run and RunOwnRepo read and
+// write, and the value threaded through to generate.Plan as its ConfigPath. A
+// caller-supplied manifestPath (an explicit --config) is used verbatim. When
+// it is unset, the default resolves to an absolute path anchored at the
+// process working directory (matching root when root is relative), rather
+// than a root-relative join. generate.Plan embeds this exact string verbatim
+// into the generated header's "Regenerate with: cascade generate-workflow
+// --config <path>" comment, and config.FindConfigFile (the auto-detect path
+// verify and generate-workflow fall back to with no --config flag) always
+// resolves through os.Getwd(), so a relative default here would make that
+// header comment differ from what a subsequent verify recomputes: byte-for-
+// byte the same file, reported as spurious drift.
+func resolveManifestPath(root, manifestPath string) string {
+	if manifestPath != "" {
+		return manifestPath
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		absRoot = root
+	}
+	return filepath.Join(absRoot, ".github", "manifest.yaml")
 }
 
 // scanChangedFiles reads every changed file (resolved against root when not

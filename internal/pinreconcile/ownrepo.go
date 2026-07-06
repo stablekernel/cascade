@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -44,10 +43,7 @@ type OwnRepoOptions struct {
 // regenerates every workflow cascade's own manifest produces so it agrees
 // again. It reports whether anything actually changed.
 func RunOwnRepo(opts OwnRepoOptions) (bool, error) {
-	manifestPath := opts.ManifestPath
-	if manifestPath == "" {
-		manifestPath = filepath.Join(opts.Root, ".github", "manifest.yaml")
-	}
+	manifestPath := resolveManifestPath(opts.Root, opts.ManifestPath)
 	manifestKey := opts.ManifestKey
 	if manifestKey == "" {
 		manifestKey = config.DefaultManifestKey
