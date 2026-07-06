@@ -63,7 +63,7 @@ jobs:
     outputs:
       code: ${{ steps.compute.outputs.code }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
 
       - id: filter
         if: github.event_name == 'pull_request'
@@ -146,7 +146,7 @@ jobs:
         # when the workflow_dispatch `shard` input collapses the matrix.
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           # workflow_dispatch: honour the explicit ref input.
           # All other triggers (push:tags, merge_group): use the exact SHA

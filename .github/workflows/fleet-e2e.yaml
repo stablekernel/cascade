@@ -332,7 +332,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Dispatch and watch primary
         uses: ./.github/actions/dispatch-suite
         with:
@@ -359,7 +359,7 @@ jobs:
       matrix:
         repo: ${{ fromJSON(needs.plan.outputs.dependents_repos) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Dispatch and watch
         uses: ./.github/actions/dispatch-suite
         with:
@@ -382,7 +382,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Dispatch and watch 4env
         uses: ./.github/actions/dispatch-suite
         with:
@@ -416,7 +416,7 @@ jobs:
       matrix:
         repo: ${{ fromJSON(needs.plan.outputs.remainder_repos) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Dispatch and watch
         uses: ./.github/actions/dispatch-suite
         with:

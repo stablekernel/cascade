@@ -149,7 +149,7 @@ jobs:
 
       - name: Check out the pull request head
         if: steps.resolve.outputs.proceed == 'true'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           # The head branch is same-repo (guarded above). Full history lets the
           # non-fast-forward guard compare against the fresh remote tip. The
