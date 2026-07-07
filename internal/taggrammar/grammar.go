@@ -1,0 +1,130 @@
+// Package taggrammar is the single source of truth for the shape of cascade's
+// own release tags. It is intentionally dependency-free (stdlib only) so that
+// both version discovery and git tagging can share one grammar without pulling
+// in cascade internals.
+package taggrammar
+
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+)
+
+// Spec describes the shape of a release tag. The zero value is not usable;
+// construct a Spec with Default and override individual fields as needed.
+// Every field defaults to cascade's historical grammar.
+type Spec struct {
+	// Prefix is the literal string that leads a tag, historically "v".
+	Prefix string
+	// PreReleaseToken names a pre-release, historically "rc".
+	PreReleaseToken string
+	// PreReleaseSeparator sits between the token and its number,
+	// historically ".".
+	PreReleaseSeparator string
+	// DryRunToken names a rehearsal tag, historically "dryrun". Rehearsal
+	// tags are deliberately not version-parseable so they stay invisible to
+	// version discovery.
+	DryRunToken string
+	// StrictPrefix, when true, reads the prefix literally. When false the
+	// read side accepts any alphabetic prefix so historical and foreign-cased
+	// tags still parse.
+	StrictPrefix bool
+}
+
+// Default returns the historical cascade grammar: v-prefixed semantic versions
+// with "rc." pre-releases and "dryrun" rehearsal tags.
+func Default() Spec {
+	return Spec{
+		Prefix:              "v",
+		PreReleaseToken:     "rc",
+		PreReleaseSeparator: ".",
+		DryRunToken:         "dryrun",
+	}
+}
+
+// prefixPattern returns the regex fragment used to match the tag prefix. With
+// StrictPrefix the configured prefix is matched literally; otherwise any
+// alphabetic run is accepted so the read side stays permissive.
+func (s Spec) prefixPattern() string {
+	if s.StrictPrefix {
+		return regexp.QuoteMeta(s.Prefix)
+	}
+	return "[a-zA-Z]*"
+}
+
+// versionRegex compiles the anchored pattern that matches a version-parseable
+// tag: prefix, numeric core, an optional pre-release using the configured token
+// and separator, and an optional nested ".hotfix.<n>".
+func (s Spec) versionRegex() *regexp.Regexp {
+	pattern := fmt.Sprintf(
+		`^(%s)(\d+)\.(\d+)\.(\d+)(?:-%s%s(\d+)(?:\.hotfix\.(\d+))?)?$`,
+		s.prefixPattern(),
+		regexp.QuoteMeta(s.PreReleaseToken),
+		regexp.QuoteMeta(s.PreReleaseSeparator),
+	)
+	return regexp.MustCompile(pattern)
+}
+
+// IsVersionTag reports whether tag is a version-parseable tag under this Spec.
+// Rehearsal (dryrun) tags and foreign tags return false so they stay invisible
+// to version discovery.
+func (s Spec) IsVersionTag(tag string) bool {
+	return s.versionRegex().MatchString(tag)
+}
+
+// Parsed holds the numeric fields of a version tag. PreRelease and Hotfix use
+// -1 to mean absent, matching the convention used elsewhere in cascade.
+type Parsed struct {
+	Major      int
+	Minor      int
+	Patch      int
+	PreRelease int
+	Hotfix     int
+}
+
+// Parse extracts the numeric fields of tag under this Spec. It returns ok=false
+// when tag is not a version tag. An absent pre-release or hotfix is reported as
+// -1.
+func (s Spec) Parse(tag string) (Parsed, bool) {
+	m := s.versionRegex().FindStringSubmatch(tag)
+	if m == nil {
+		return Parsed{}, false
+	}
+	// Submatch layout: [0] whole, [1] prefix, [2] major, [3] minor,
+	// [4] patch, [5] pre-release, [6] hotfix.
+	p := Parsed{
+		Major:      atoi(m[2]),
+		Minor:      atoi(m[3]),
+		Patch:      atoi(m[4]),
+		PreRelease: -1,
+		Hotfix:     -1,
+	}
+	if m[5] != "" {
+		p.PreRelease = atoi(m[5])
+	}
+	if m[6] != "" {
+		p.Hotfix = atoi(m[6])
+	}
+	return p, true
+}
+
+// Format renders p under this Spec. It always emits the prefix and numeric
+// core, appends "-<token><separator><n>" when PreRelease is present, and
+// appends ".hotfix.<m>" when Hotfix is present.
+func (s Spec) Format(p Parsed) string {
+	out := fmt.Sprintf("%s%d.%d.%d", s.Prefix, p.Major, p.Minor, p.Patch)
+	if p.PreRelease >= 0 {
+		out += fmt.Sprintf("-%s%s%d", s.PreReleaseToken, s.PreReleaseSeparator, p.PreRelease)
+	}
+	if p.Hotfix >= 0 {
+		out += fmt.Sprintf(".hotfix.%d", p.Hotfix)
+	}
+	return out
+}
+
+// atoi converts a submatch known to be all digits. The grammar guarantees the
+// input, so any error is discarded and yields 0.
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}
