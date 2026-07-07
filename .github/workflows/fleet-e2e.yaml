@@ -34,6 +34,16 @@ on:
   workflow_run:
     workflows: ["Release"]
     types: [completed]
+    # Only fan out for a release-candidate or rehearsal tag. When a green fleet
+    # auto-promotes, it dispatches Release again for the final vX.Y.Z tag to
+    # build the published assets; that second Release run must not re-enter the
+    # fleet, or it triggers a redundant no-op fleet plus auto-promote lap. The
+    # head_branch of a Release run dispatched by ref is the tag short-name, so
+    # these globs match the rc and dryrun tags and skip the final release tag.
+    # The resolve/plan jobs keep an equivalent rc-candidate guard as a backstop.
+    branches:
+      - "*-rc.*"
+      - "*-dryrun.*"
   workflow_dispatch:
     inputs:
       cascade_version:

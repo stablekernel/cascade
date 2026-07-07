@@ -52,8 +52,11 @@ flowchart LR
 | `remainder` | The light repositories (`3env`, `2env`, `single-env`, `release-only`, `no-env`, `callbacks`, `rollback-dispatch`) run in a matrix capped at two in flight via `max-parallel`, sequenced after the heavy lane. |
 | `aggregate` | The Fleet gate. It needs every lane, so a green gate means every selected repository passed. Auto-promote keys off this conclusion. |
 
-The fleet triggers on completion of the Release workflow (the dependable signal that
-a candidate tag's assets actually reached the releases page) and on manual dispatch.
+The fleet triggers on completion of the Release workflow for a release-candidate or
+rehearsal tag (the dependable signal that a candidate tag's assets actually reached the
+releases page) and on manual dispatch. The `workflow_run` trigger carries a `branches`
+filter of `*-rc.*` and `*-dryrun.*`, so the final `vX.Y.Z` publish Release run described
+below does not re-enter the fleet.
 
 ### How each suite lands on the version under test
 
@@ -134,7 +137,10 @@ Release explicitly against that tag with the release token. The dispatch is the 
 trigger: it is immune both to a CI-skip token on the tagged commit and to the API-release
 events GitHub does not reliably fire, which would otherwise leave assets unbuilt. Because
 the dispatch carries the release token rather than the default token, the resulting
-Release run still cascades to `fleet-e2e` through `workflow_run`.
+Release run can cascade to `fleet-e2e` through `workflow_run`. Only the rc cut does: its
+tag matches the fleet's `*-rc.*` filter, so it drives the validation lap. Auto-promote's
+final-publish Release runs against the plain `vX.Y.Z` tag, which the filter excludes, so
+the already-validated release does not trigger a second no-op fleet and auto-promote lap.
 
 Cascade also generates a `promote.yaml` (every manifest with more than one environment
 gets one), but it plays no part in cascade's own release path: cascade has no
