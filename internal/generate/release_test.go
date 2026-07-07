@@ -336,3 +336,23 @@ func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
 	assert.Contains(t, content, "group: my-custom-release", "custom group must propagate to release")
 	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to release")
 }
+
+func TestReleaseGenerator_AllowBreakingChanges_BakesGateOff(t *testing.T) {
+	// Default: the breaking-change gate reads the per-run workflow input.
+	def := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}}
+	defContent, err := NewReleaseGenerator(def, "").Generate()
+	require.NoError(t, err)
+	assert.Contains(t, defContent, "ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n")
+	assert.NotContains(t, defContent, "ALLOW_BREAKING: \"true\"\n")
+
+	// allow_breaking_changes: true bakes the gate off so a breaking release
+	// proceeds even when the per-run input is unchecked.
+	on := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}, AllowBreakingChanges: true}
+	onContent, err := NewReleaseGenerator(on, "").Generate()
+	require.NoError(t, err)
+	assert.Contains(t, onContent, "ALLOW_BREAKING: \"true\"\n")
+	assert.NotContains(t, onContent, "ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n")
+	// The operator-facing input stays declared; the gate simply no longer
+	// depends on it.
+	assert.Contains(t, onContent, "allow_breaking_changes:\n")
+}
