@@ -280,6 +280,64 @@ func TestSchema_AcceptsRunsOnUnionForms(t *testing.T) {
 	}
 }
 
+func TestSchema_AcceptsTagGrammarBlock(t *testing.T) {
+	sch := compileSchema(t)
+
+	good := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch": "main",
+			"tag_grammar": map[string]any{
+				"prefix":               "release-",
+				"prerelease_token":     "beta",
+				"prerelease_separator": ".",
+				"dryrun_token":         "rehearsal",
+				"strict_prefix":        true,
+			},
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, good)); err != nil {
+		t.Fatalf("valid tag_grammar block must validate: %v", err)
+	}
+}
+
+// TestSchema_RejectsInvalidTagGrammar proves the JSON Schema enforces the same
+// character allowlist as config.validateTagGrammar: a token carrying a
+// disallowed character or an empty prerelease_token must be rejected, so the
+// schema and the Go validator agree.
+func TestSchema_RejectsInvalidTagGrammar(t *testing.T) {
+	sch := compileSchema(t)
+
+	cases := map[string]map[string]any{
+		"prerelease_token with quote": {
+			"ci": map[string]any{"config": map[string]any{
+				"trunk_branch": "main",
+				"tag_grammar":  map[string]any{"prerelease_token": "r'c"},
+			}},
+		},
+		"empty prerelease_token": {
+			"ci": map[string]any{"config": map[string]any{
+				"trunk_branch": "main",
+				"tag_grammar":  map[string]any{"prerelease_token": ""},
+			}},
+		},
+		"unknown tag_grammar key": {
+			"ci": map[string]any{"config": map[string]any{
+				"trunk_branch": "main",
+				"tag_grammar":  map[string]any{"bogus": "x"},
+			}},
+		},
+	}
+
+	for name, doc := range cases {
+		doc := doc
+		t.Run(name, func(t *testing.T) {
+			if err := sch.Validate(toJSONValue(t, doc)); err == nil {
+				t.Fatalf("expected validation to fail for %q, but it passed", name)
+			}
+		})
+	}
+}
+
 func TestSchema_OnDiskCopiesAreByteIdentical(t *testing.T) {
 	root := repoRoot(t)
 	paths := []string{
