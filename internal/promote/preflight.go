@@ -602,6 +602,13 @@ func (p *Preflighter) checkBreakingChangesForMode(
 		return false, ""
 	}
 
+	// A repository may disable the gate for good via the manifest
+	// (allow_breaking_changes: true). When set, no crossing blocks, mirroring
+	// the per-run --allow-breaking override but applied once for the repo.
+	if p.cicdFile.Config.AllowsBreakingChanges() {
+		return false, ""
+	}
+
 	// Get source SHA for breaking change detection
 	sourceSHA := promotions[0].SHA
 	if sourceSHA == "" {

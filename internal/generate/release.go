@@ -240,7 +240,15 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("        id: check\n")
 	sb.WriteString("        env:\n")
 	sb.WriteString("          SOURCE_SHA: ${{ steps.validate.outputs.source_sha }}\n")
-	sb.WriteString("          ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n")
+	// The gate reads the per-run workflow input by default. A repo that opts out
+	// with allow_breaking_changes: true bakes the value on at generation time, so
+	// a breaking release proceeds even when the operator leaves the input
+	// unchecked. Mirrors how the tag grammar is baked from g.config.
+	if g.config.AllowsBreakingChanges() {
+		sb.WriteString("          ALLOW_BREAKING: \"true\"\n")
+	} else {
+		sb.WriteString("          ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n")
+	}
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          # Colorized logging helpers\n")
 	sb.WriteString("          log_info() { echo -e \"\\033[36m[INFO]\\033[0m $1\"; }\n")

@@ -572,6 +572,28 @@ When `workflow` is set, cascade dispatches it (via `gh workflow run --ref <tag>`
 
 Omit the section to use the built-in conventional commit parser.
 
+## allow_breaking_changes
+
+| Field | Status | Type | Default | Description |
+|-------|--------|------|---------|-------------|
+| `allow_breaking_changes` | emitted | bool | false | Disable the breaking-change gate for this repository. |
+
+By default the gate is enabled: a `feat!:` or `BREAKING CHANGE:` commit blocks the
+pre-release to release boundary (and release to prod) during a promote or release, so the
+major bump is a deliberate act. Set `allow_breaking_changes: true` at the config level to
+turn the gate off once for the whole repository. Those crossings then proceed without the
+per-run `allow_breaking_changes` workflow input, which stays available for repositories that
+leave the gate on.
+
+```yaml
+ci:
+  config:
+    allow_breaking_changes: true
+```
+
+Leave it unset (the default) to keep the gate on. A manifest that omits the field generates
+byte-identical workflows to before.
+
 ## environment_config
 
 Per-environment settings keyed by environment name. Consumed for native GitHub Environment support and deployment URLs.
