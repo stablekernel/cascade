@@ -5,25 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
-// versionTagRegex matches cascade's canonical version tags: vX.Y.Z, optionally
-// with an -rc.N prerelease and a nested .hotfix.M segment. It is kept in lockstep
-// with the parser in internal/version (see version.Parse). The git package cannot
-// import internal/version directly because that package depends, transitively
-// through internal/changelog, on this one; TestIsValidVersionTag_InSyncWithVersionParse
-// asserts the two stay in agreement.
-var versionTagRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+)(?:\.hotfix\.(\d+))?)?$`)
-
-// IsValidVersionTag reports whether tag is a well-formed cascade version tag.
-// Tags that do not match (for example a vX.Y.Z-dryrun.N exercise tag, a foreign
-// "nightly" or "latest" tag, or a typo) are invisible to version discovery so
-// they can never be mistaken for the latest released or prereleased version.
+// IsValidVersionTag reports whether tag is a well-formed cascade version tag
+// under the default grammar. Tags that do not match (for example a
+// vX.Y.Z-dryrun.N exercise tag, a foreign "nightly" or "latest" tag, or a typo)
+// are invisible to version discovery so they can never be mistaken for the
+// latest released or prereleased version.
 func IsValidVersionTag(tag string) bool {
-	return versionTagRegex.MatchString(tag)
+	return IsValidVersionTagSpec(taggrammar.Default(), tag)
+}
+
+// IsValidVersionTagSpec reports whether tag is a well-formed version tag under
+// spec. Version discovery and git both read this from the canonical grammar, so
+// the predicate can never drift from the parser the way a hand-copied regex
+// once could.
+func IsValidVersionTagSpec(spec taggrammar.Spec, tag string) bool {
+	return spec.IsVersionTag(tag)
 }
 
 // GetChangedFiles returns the list of files changed between two commits
@@ -490,7 +492,18 @@ func remoteRefAlreadyGone(out []byte) bool {
 // process working directory points elsewhere; an empty dir falls back to the
 // process working directory.
 func GetLatestReleaseTag(dir, prefix string) (string, string, error) {
-	cmd := exec.Command("git", "tag", "-l", prefix+"*", "--sort=-v:refname")
+	spec := taggrammar.Default()
+	spec.Prefix = prefix
+	return GetLatestReleaseTagSpec(dir, spec)
+}
+
+// GetLatestReleaseTagSpec is GetLatestReleaseTag under a caller-supplied grammar.
+// The prefix glob widens the candidate set to every tag that leads with the
+// grammar's prefix; the release predicate then narrows it to a published
+// release, so a custom pre-release token is classified correctly rather than
+// slipping through a hard-wired "-rc." check.
+func GetLatestReleaseTagSpec(dir string, spec taggrammar.Spec) (string, string, error) {
+	cmd := exec.Command("git", "tag", "-l", spec.Prefix+"*", "--sort=-v:refname")
 	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
@@ -502,15 +515,17 @@ func GetLatestReleaseTag(dir, prefix string) (string, string, error) {
 		return "", "", nil
 	}
 
-	// Find the first published release: a valid cascade version with no -rc
-	// suffix. Filtering through IsValidVersionTag keeps non-version tags (such as
-	// a vX.Y.Z-dryrun.N exercise tag, which also lacks an -rc suffix) from being
-	// mistaken for a release.
+	// Find the first published release: a tag that parses as a version under the
+	// grammar and carries no pre-release segment. Parsing through the grammar
+	// keeps non-version tags (such as a vX.Y.Z-dryrun.N exercise tag) out, and
+	// the no-pre-release check keeps pre-releases (rc, beta, or any custom token)
+	// from being mistaken for a release.
 	for _, tag := range tags {
-		if !IsValidVersionTag(tag) {
+		parsed, ok := spec.Parse(tag)
+		if !ok {
 			continue
 		}
-		if !strings.Contains(tag, "-rc.") {
+		if parsed.PreRelease < 0 {
 			// Get the SHA for this tag
 			cmd = exec.Command("git", "rev-list", "-n", "1", tag)
 			cmd.Dir = dir

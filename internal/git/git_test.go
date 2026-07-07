@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
 // newScratchRepo initializes a git repository in a temp directory, changes the
@@ -703,5 +705,28 @@ func TestIsValidVersionTag(t *testing.T) {
 				t.Errorf("IsValidVersionTag(%q) = %v, want %v", tt.tag, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGetLatestReleaseTag_CustomTokenNotMistakenForRelease proves the release
+// classifier narrows on "parses with no pre-release" rather than a hard-wired
+// "-rc." substring. Under a beta grammar, v1.2.3-beta.1 is a pre-release and
+// must be skipped, so the lookup returns the real release v1.2.2.
+func TestGetLatestReleaseTag_CustomTokenNotMistakenForRelease(t *testing.T) {
+	newScratchRepo(t)
+	commitFile(t, "a.txt", "one", "first commit")
+
+	tagHead(t, "v1.2.2")        // published release
+	tagHead(t, "v1.2.3-beta.1") // pre-release under the beta grammar
+
+	spec := taggrammar.Default()
+	spec.PreReleaseToken = "beta"
+
+	got, _, err := GetLatestReleaseTagSpec("", spec)
+	if err != nil {
+		t.Fatalf("GetLatestReleaseTagSpec() unexpected error: %v", err)
+	}
+	if got != "v1.2.2" {
+		t.Errorf("GetLatestReleaseTagSpec() = %q, want %q (beta pre-release must not count as a release)", got, "v1.2.2")
 	}
 }

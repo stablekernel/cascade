@@ -86,13 +86,6 @@ func preReleaseSuffixRegex(spec taggrammar.Spec) *regexp.Regexp {
 	))
 }
 
-// extractRC returns the pre-release number embedded in a version string under
-// the default grammar, or -1 when the string has no such segment directly after
-// its numeric core.
-func extractRC(s string) int {
-	return extractRCWithGrammar(defaultSpec, s)
-}
-
 // extractRCWithGrammar returns the pre-release number embedded in s under spec,
 // or -1 when s has no pre-release segment directly after its numeric core. It
 // tolerates trailing suffixes the strict Parse rejects so a recorded dev version
