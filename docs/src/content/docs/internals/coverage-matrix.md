@@ -88,6 +88,7 @@ only under real installation tokens on the fleet, never in the token-free harnes
 | No-change skip | `06-no-change-skip` | `probe_concurrency` step 12 (4env) | `internal/changes` | A re-dispatch with no watched change skips, on real Actions |
 | Concurrency cancellation | `07-orchestrate-concurrency` | `probe_concurrency` cancel (4env) | `internal/generate` | The older run in a per-component group is cancelled and the survivor concludes |
 | Breaking-change gate | `37-release-breaking-gate`, `38-promote-breaking-gate-release-build` | `release-gates` (primary) | `internal/promote`, `internal/release` | A breaking transition is refused without the explicit allow flag |
+| Breaking-change gate disabled per-repo | `49-allow-breaking-changes-manifest` | | `internal/config`, `internal/promote`, `internal/generate` | A manifest `allow_breaking_changes: true` bakes the gate off, so a breaking release proceeds without the per-run override |
 | Promote from diverged env blocked | `rollback/rollback-marks-diverged-blocks-promote` | `rollback-check` diverged-blocks-promote (2env) | `internal/promote` | Promotion from a diverged source is refused (registered as an expected failure) |
 | Allow-downgrade and prod guard | `20-promote-allow-downgrade` | `release-gates` (primary) | `internal/promote/downgrade.go` | A downgrade needs the flag, and prod needs it even when a lower env does not |
 | Promote with missing source | `promote/promote-fails-missing-source` | | `internal/promote` | A promotion with no built source fails fast |

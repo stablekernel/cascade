@@ -24,7 +24,7 @@ With no other inputs, `mode=default` advances the chain by exactly one step: the
 | `default` | Advance one logical step from the environment currently ahead. |
 | `<from>-to-<to>` (for example `dev-to-prod`) | Cascade through every environment between `from` and `to`, deploying and finalizing each one in turn. |
 
-A breaking-change gate sits at the prerelease-to-release boundary regardless of mode. If the commits being promoted include a breaking change, the run stops there unless you pass `allow_breaking_changes: true`.
+A breaking-change gate sits at the prerelease-to-release boundary regardless of mode. If the commits being promoted include a breaking change, the run stops there unless you pass `allow_breaking_changes: true`. A repository can turn the gate off for good by setting [`allow_breaking_changes: true`](/cascade/reference/manifest/#allow_breaking_changes) in the manifest config, so the per-run input is not needed.
 
 | Input | Type | Default | Purpose |
 |-------|------|---------|---------|

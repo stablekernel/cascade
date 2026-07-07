@@ -1,0 +1,49 @@
+name: "Manifest allow_breaking_changes bakes the gate off"
+description: |
+  Verifies that setting allow_breaking_changes: true at the config level bakes
+  the release breaking-change gate off, so a breaking release proceeds without
+  the per-run allow_breaking_changes input (#492).
+
+  A single-environment manifest generates a Release-flavored workflow into
+  promote.yaml (see 09-single-env-repo.yaml and 37-release-breaking-gate.yaml).
+  With the gate enabled (the default) the check reads the per-run input; with
+  allow_breaking_changes: true the generator bakes ALLOW_BREAKING to "true".
+
+  The operator-facing allow_breaking_changes input stays declared; the gate
+  simply no longer depends on it. The gate itself is skipped for the whole
+  repository, so a feat!: commit crosses the pre-release to release boundary
+  without a per-run override.
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [prod]
+  allow_breaking_changes: true
+  deploys:
+    - name: app
+      workflow: .github/workflows/deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit generates promote.yaml; assert the gate is baked off"
+    action: commit
+    commit:
+      message: "feat!: drop legacy API"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            # The detection step still runs, but the allow decision is baked on.
+            - "      - name: Check Breaking Changes\n"
+            - "          ALLOW_BREAKING: \"true\"\n"
+            - "          echo \"has_breaking=$HAS_BREAKING\" >> \"$GITHUB_OUTPUT\"\n"
+            # The operator-facing input remains declared for gate-on repos.
+            - "      allow_breaking_changes:\n"
+          not_contains:
+            # The gate no longer reads the per-run input.
+            - "          ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n"
