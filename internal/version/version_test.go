@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stablekernel/cascade/internal/changelog"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -724,6 +725,22 @@ func TestVersion_NextHotfix(t *testing.T) {
 		_ = base.NextHotfix()
 		assert.Equal(t, "v1.4.0-rc.2", base.String())
 	})
+}
+
+// TestCalculator_CustomGrammarEmitsCustomShape proves the calculator emits the
+// pre-release shape from its grammar rather than a hard-wired "-rc.". A beta
+// token with an empty separator must yield "-beta0", not "-rc.0".
+func TestCalculator_CustomGrammarEmitsCustomShape(t *testing.T) {
+	spec := taggrammar.Default()
+	spec.PreReleaseToken = "beta"
+	spec.PreReleaseSeparator = ""
+
+	calc := NewCalculatorWithGrammar(spec)
+	got, err := calc.CalculateNext("", "", []changelog.ConventionalCommit{
+		{Type: "feat", Description: "initial feature"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v0.1.0-beta0", got.String())
 }
 
 func mustParse(t *testing.T, s string) *Version {

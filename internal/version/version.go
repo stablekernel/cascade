@@ -8,7 +8,25 @@ import (
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/changelog"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
+
+// defaultSpec is cascade's historical tag grammar. The package-level Parse,
+// ParseBase, and String helpers read from it so their behavior stays identical
+// to the hand-written regexes they replaced, while the grammar itself lives in
+// one place.
+var defaultSpec = taggrammar.Default()
+
+// prefixPattern returns the regex fragment matching a tag prefix under spec: the
+// literal prefix when StrictPrefix is set, otherwise any alphabetic run so
+// historical and foreign-cased tags still parse. It mirrors the read side of the
+// canonical grammar.
+func prefixPattern(spec taggrammar.Spec) string {
+	if spec.StrictPrefix {
+		return regexp.QuoteMeta(spec.Prefix)
+	}
+	return "[a-zA-Z]*"
+}
 
 // Version represents a semantic version with optional pre-release suffix
 type Version struct {
@@ -18,6 +36,21 @@ type Version struct {
 	PreRelease int    // -1 means no pre-release suffix, >= 0 is the RC number
 	Hotfix     int    // -1 means no hotfix segment, >= 0 is the hotfix number
 	Prefix     string // e.g., "v" or custom prefix
+
+	// grammarSpec, when set, names the tag grammar this version renders under.
+	// It is nil for versions built under the default grammar, which keeps the
+	// zero value and every literal-constructed Version rendering identically to
+	// before. Only versions produced under a non-default grammar carry one.
+	grammarSpec *taggrammar.Spec
+}
+
+// activeSpec returns the tag grammar this version renders under: its own when
+// set, otherwise the default grammar.
+func (v *Version) activeSpec() taggrammar.Spec {
+	if v.grammarSpec != nil {
+		return *v.grammarSpec
+	}
+	return defaultSpec
 }
 
 // BumpType represents the type of version bump
@@ -30,27 +63,42 @@ const (
 	BumpMajor
 )
 
-// semverRegex matches versions like v1.2.3, v1.2.3-rc.4, or v1.2.3-rc.4.hotfix.5.
-// The hotfix segment is only valid nested after an rc segment.
-var semverRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+)(?:\.hotfix\.(\d+))?)?$`)
-
-// baseVersionRegex matches a semver core (vX.Y.Z) with any optional
+// baseRegex matches a semver core (vX.Y.Z) under spec with any optional
 // pre-release suffix (for example -rc.4, -dryrun.13, or -beta.1). Only the
 // numeric core and prefix are captured; the suffix is intentionally ignored.
-var baseVersionRegex = regexp.MustCompile(`^([a-zA-Z]*)(\d+)\.(\d+)\.(\d+)(?:-.+)?$`)
+// The prefix fragment comes from the spec so a custom prefix widens or narrows
+// the accepted set consistently with the strict parser.
+func baseRegex(spec taggrammar.Spec) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(`^(%s)(\d+)\.(\d+)\.(\d+)(?:-.+)?$`, prefixPattern(spec)))
+}
 
-// rcSuffixRegex captures the rc number from a version whose core is immediately
-// followed by an -rc.N segment, tolerating any trailing exercise suffix (for
-// example -rc.4.hotfix.5 or -rc.4.dryrun.1). It is anchored only at the start so
-// a foreign suffix such as -beta.1 or -dryrun.4 simply yields no match.
-var rcSuffixRegex = regexp.MustCompile(`^[a-zA-Z]*\d+\.\d+\.\d+-rc\.(\d+)`)
+// preReleaseSuffixRegex captures the pre-release number from a version whose
+// core is immediately followed by the spec's pre-release segment, tolerating any
+// trailing exercise suffix (for example -rc.4.hotfix.5 or -rc.4.dryrun.1). It is
+// anchored only at the start so a foreign suffix such as -beta.1 or -dryrun.4
+// simply yields no match. Token and separator both come from the spec.
+func preReleaseSuffixRegex(spec taggrammar.Spec) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(
+		`^%s\d+\.\d+\.\d+-%s%s(\d+)`,
+		prefixPattern(spec),
+		regexp.QuoteMeta(spec.PreReleaseToken),
+		regexp.QuoteMeta(spec.PreReleaseSeparator),
+	))
+}
 
-// extractRC returns the rc number embedded in a version string, or -1 when the
-// string has no -rc.N segment directly after its numeric core. It tolerates
-// trailing suffixes the strict Parse rejects so a recorded dev version can still
-// advance its rc counter instead of silently resetting to rc.0.
+// extractRC returns the pre-release number embedded in a version string under
+// the default grammar, or -1 when the string has no such segment directly after
+// its numeric core.
 func extractRC(s string) int {
-	matches := rcSuffixRegex.FindStringSubmatch(s)
+	return extractRCWithGrammar(defaultSpec, s)
+}
+
+// extractRCWithGrammar returns the pre-release number embedded in s under spec,
+// or -1 when s has no pre-release segment directly after its numeric core. It
+// tolerates trailing suffixes the strict Parse rejects so a recorded dev version
+// can still advance its counter instead of silently resetting to zero.
+func extractRCWithGrammar(spec taggrammar.Spec, s string) int {
+	matches := preReleaseSuffixRegex(spec).FindStringSubmatch(s)
 	if matches == nil {
 		return -1
 	}
@@ -66,7 +114,14 @@ func extractRC(s string) int {
 // their next version solely from a base can use this so a stray suffixed value
 // recorded as the latest does not abort the whole calculation.
 func ParseBase(s string) (*Version, error) {
-	matches := baseVersionRegex.FindStringSubmatch(s)
+	return ParseBaseWithGrammar(defaultSpec, s)
+}
+
+// ParseBaseWithGrammar parses the numeric core of s under spec, tolerating and
+// discarding any pre-release suffix. See ParseBase for the full contract; this
+// form lets callers supply a non-default grammar.
+func ParseBaseWithGrammar(spec taggrammar.Spec, s string) (*Version, error) {
+	matches := baseRegex(spec).FindStringSubmatch(s)
 	if matches == nil {
 		return nil, fmt.Errorf("invalid version format: %s", s)
 	}
@@ -85,42 +140,49 @@ func ParseBase(s string) (*Version, error) {
 	}, nil
 }
 
-// Parse parses a version string into a Version struct
+// Parse parses a version string into a Version struct under the default grammar.
 func Parse(s string) (*Version, error) {
-	matches := semverRegex.FindStringSubmatch(s)
-	if matches == nil {
+	return ParseWithGrammar(defaultSpec, s)
+}
+
+// ParseWithGrammar parses s into a Version under spec. The numeric fields come
+// from the canonical grammar so the two never drift; the prefix is the literal
+// run the tag leads with, which the grammar has already validated.
+func ParseWithGrammar(spec taggrammar.Spec, s string) (*Version, error) {
+	p, ok := spec.Parse(s)
+	if !ok {
 		return nil, fmt.Errorf("invalid version format: %s", s)
 	}
 
-	major, _ := strconv.Atoi(matches[2])
-	minor, _ := strconv.Atoi(matches[3])
-	patch, _ := strconv.Atoi(matches[4])
-
-	preRelease := -1
-	if matches[5] != "" {
-		preRelease, _ = strconv.Atoi(matches[5])
-	}
-
-	hotfix := -1
-	if matches[6] != "" {
-		hotfix, _ = strconv.Atoi(matches[6])
-	}
-
 	return &Version{
-		Major:      major,
-		Minor:      minor,
-		Patch:      patch,
-		PreRelease: preRelease,
-		Hotfix:     hotfix,
-		Prefix:     matches[1],
+		Major:      p.Major,
+		Minor:      p.Minor,
+		Patch:      p.Patch,
+		PreRelease: p.PreRelease,
+		Hotfix:     p.Hotfix,
+		Prefix:     leadingPrefix(s),
 	}, nil
 }
 
-// String returns the version as a string
+// leadingPrefix returns the run of characters before the first digit in s, which
+// for a validated version tag is exactly its prefix ("v", "release", or empty).
+func leadingPrefix(s string) string {
+	i := strings.IndexFunc(s, func(r rune) bool { return r >= '0' && r <= '9' })
+	if i < 0 {
+		return s
+	}
+	return s[:i]
+}
+
+// String returns the version as a string. The prefix and numeric core come from
+// the version's own fields; the pre-release token and separator come from its
+// grammar, so a custom grammar renders its own shape while the default renders
+// the historical "-rc." form.
 func (v *Version) String() string {
+	spec := v.activeSpec()
 	base := fmt.Sprintf("%s%d.%d.%d", v.Prefix, v.Major, v.Minor, v.Patch)
 	if v.PreRelease >= 0 {
-		rc := fmt.Sprintf("%s-rc.%d", base, v.PreRelease)
+		rc := fmt.Sprintf("%s-%s%s%d", base, spec.PreReleaseToken, spec.PreReleaseSeparator, v.PreRelease)
 		if v.Hotfix >= 0 {
 			return fmt.Sprintf("%s.hotfix.%d", rc, v.Hotfix)
 		}
@@ -219,15 +281,25 @@ func DetermineBumpType(commits []changelog.ConventionalCommit) BumpType {
 
 // Calculator handles version calculation for the release workflow
 type Calculator struct {
-	prefix string
+	spec taggrammar.Spec
 }
 
-// NewCalculator creates a new version calculator
+// NewCalculator creates a new version calculator for the default grammar with a
+// custom prefix. An empty prefix defaults to "v".
 func NewCalculator(prefix string) *Calculator {
 	if prefix == "" {
 		prefix = "v"
 	}
-	return &Calculator{prefix: prefix}
+	spec := taggrammar.Default()
+	spec.Prefix = prefix
+	return &Calculator{spec: spec}
+}
+
+// NewCalculatorWithGrammar creates a version calculator that emits tags in the
+// shape described by spec, so a caller with a non-default token, separator, or
+// prefix gets a matching next version.
+func NewCalculatorWithGrammar(spec taggrammar.Spec) *Calculator {
+	return &Calculator{spec: spec}
 }
 
 // CalculateNext determines the next version for the lowest environment
@@ -248,7 +320,7 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 			Patch:      0,
 			PreRelease: -1,
 			Hotfix:     -1,
-			Prefix:     c.prefix,
+			Prefix:     c.spec.Prefix,
 		}
 	} else {
 		// Only the numeric core of the next env's version feeds the
@@ -257,7 +329,7 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 		// must not abort the calculation, matching the discovery-side filtering
 		// that keeps such exercise tags out of tag lookups.
 		var err error
-		baseVersion, err = ParseBase(nextEnvVersion)
+		baseVersion, err = ParseBaseWithGrammar(c.spec, nextEnvVersion)
 		if err != nil {
 			return nil, fmt.Errorf("parsing next env version: %w", err)
 		}
@@ -273,7 +345,7 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 
 	// Calculate the new version
 	newVersion := baseVersion.BaseVersion().Bump(bumpType)
-	newVersion.Prefix = c.prefix
+	newVersion.Prefix = c.spec.Prefix
 
 	// Ensure minimum version of v0.1.0 (v0.0.x is not valid for releases)
 	if newVersion.Major == 0 && newVersion.Minor == 0 {
@@ -291,21 +363,25 @@ func (c *Calculator) CalculateNext(currentDevVersion, nextEnvVersion string, com
 		// example -beta.1, -dryrun.4, or -rc.4.dryrun.1) does not silently reset
 		// the rc counter and collide with an already-published rc tag. This
 		// mirrors the tolerant handling applied to nextEnvVersion above.
-		currentBase, err := ParseBase(currentDevVersion)
+		currentBase, err := ParseBaseWithGrammar(c.spec, currentDevVersion)
 		switch {
 		case err != nil:
 			// Base itself is unparseable, so start fresh.
 			newVersion.PreRelease = 0
 		case newVersion.Equal(currentBase):
-			// Same base version, so increment off the recorded rc. extractRC
-			// returns -1 when the dev version has no rc segment, yielding a
-			// fresh rc.0.
-			newVersion.PreRelease = extractRC(currentDevVersion) + 1
+			// Same base version, so increment off the recorded rc.
+			// extractRCWithGrammar returns -1 when the dev version has no
+			// pre-release segment, yielding a fresh rc.0.
+			newVersion.PreRelease = extractRCWithGrammar(c.spec, currentDevVersion) + 1
 		default:
 			// Different base version, so start at rc.0.
 			newVersion.PreRelease = 0
 		}
 	}
+
+	// Stamp the grammar so the result renders in the calculator's shape.
+	spec := c.spec
+	newVersion.grammarSpec = &spec
 
 	return newVersion, nil
 }
