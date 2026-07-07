@@ -93,6 +93,7 @@
           "type": "string",
           "description": "Version tag prefix (default: \"v\")."
         },
+        "tag_grammar": { "$ref": "#/definitions/tagGrammarConfig" },
         "release_token": {
           "type": "string",
           "description": "GitHub Actions secret expression for release operations (default: ${{ secrets.GITHUB_TOKEN }})."
@@ -694,6 +695,37 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "comment": { "type": "boolean" }
+      }
+    },
+    "tagGrammarConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional, additive reshaping of the release tag grammar. Every field is optional; an omitted field inherits cascade's historical default, so an empty block leaves the default grammar (for example v1.2.3, v1.2.3-rc.1, v1.2.3-dryrun.1) unchanged. Component values are restricted to letters, digits, '.', '_', and '-' so every emitted tag stays a valid git ref and shell-safe token.",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]*$",
+          "description": "Version tag prefix (default: \"v\"). When set, this wins over the manifest-level tag_prefix. May be empty for a prefix-less grammar."
+        },
+        "prerelease_token": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "description": "Token marking a pre-release tag (default: \"rc\"). Must be non-empty and must differ from dryrun_token so rehearsal tags stay distinguishable."
+        },
+        "prerelease_separator": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]*$",
+          "description": "Separator between the base version and the pre-release token (default: \"-\"). May be empty."
+        },
+        "dryrun_token": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "description": "Token marking a dry-run rehearsal tag (default: \"dryrun\"). Must differ from prerelease_token."
+        },
+        "strict_prefix": {
+          "type": "boolean",
+          "description": "Require the configured prefix on parse rather than accepting a prefix-less version (default: false)."
+        }
       }
     },
     "rollbackConfig": {

@@ -432,6 +432,79 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateActionPins(cfg)...)
 	errs = append(errs, validateActionFolder(cfg.ActionFolder)...)
 	errs = append(errs, validateReconcile(cfg.Reconcile)...)
+	errs = append(errs, validateTagGrammar(cfg)...)
+
+	return errs
+}
+
+// tagGrammarAllowedChars is the allowlist of characters a tag_grammar
+// component may contain. Every character in it is simultaneously safe in a
+// git ref, a regex literal, and a single-quoted shell string, so a value built
+// only from this set can never break the resolved regex, the created git tag,
+// or the single-quoted `sed '...'` cascade's own generated release workflow
+// emits. A blocklist would need to anticipate every shell and regex
+// metacharacter (including a bare single quote, which terminates the emitted
+// shell string); an allowlist rejects everything it does not explicitly
+// admit, so nothing new can slip through.
+const tagGrammarAllowedChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+
+// tagGrammarUnsafeChar reports whether s contains any character outside
+// tagGrammarAllowedChars. A tag component carrying such a character could not
+// be compiled into a regex, created as a git tag, or spliced into the
+// generated release workflow's single-quoted sed expression, so it is
+// rejected up front rather than failing opaquely at tag time.
+func tagGrammarUnsafeChar(s string) bool {
+	for _, r := range s {
+		if !strings.ContainsRune(tagGrammarAllowedChars, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateTagGrammar structurally validates the optional tag_grammar block.
+// These are hard errors, not advisories: an empty pre-release token, a
+// component carrying a character outside tagGrammarAllowedChars, or a dryrun
+// token that collides with the pre-release token would each produce a
+// grammar that cannot round-trip, so generation must not proceed. A nil block
+// is valid and preserves the historical grammar. The redundant-prefix case is
+// handled separately as a non-fatal advisory (see TrunkConfig.TagGrammarWarnings).
+func validateTagGrammar(cfg *TrunkConfig) []string {
+	g := cfg.TagGrammar
+	if g == nil {
+		return nil
+	}
+	var errs []string
+
+	if g.PreReleaseToken != nil {
+		if *g.PreReleaseToken == "" {
+			errs = append(errs, "tag_grammar.prerelease_token must not be empty")
+		} else if tagGrammarUnsafeChar(*g.PreReleaseToken) {
+			errs = append(errs, fmt.Sprintf(
+				"tag_grammar.prerelease_token %q must contain only letters, digits, '.', '_', and '-'", *g.PreReleaseToken))
+		}
+	}
+	if g.Prefix != nil && tagGrammarUnsafeChar(*g.Prefix) {
+		errs = append(errs, fmt.Sprintf(
+			"tag_grammar.prefix %q must contain only letters, digits, '.', '_', and '-'", *g.Prefix))
+	}
+	if g.PreReleaseSeparator != nil && tagGrammarUnsafeChar(*g.PreReleaseSeparator) {
+		errs = append(errs, fmt.Sprintf(
+			"tag_grammar.prerelease_separator %q must contain only letters, digits, '.', '_', and '-'", *g.PreReleaseSeparator))
+	}
+	if g.DryRunToken != nil && tagGrammarUnsafeChar(*g.DryRunToken) {
+		errs = append(errs, fmt.Sprintf(
+			"tag_grammar.dryrun_token %q must contain only letters, digits, '.', '_', and '-'", *g.DryRunToken))
+	}
+
+	// The dryrun token must stay distinguishable from the pre-release token, or
+	// a rehearsal tag would parse as a real pre-release. Compare the resolved
+	// values so a token that collides only after defaulting is still caught.
+	spec := cfg.ResolveTagGrammar()
+	if spec.DryRunToken == spec.PreReleaseToken {
+		errs = append(errs, fmt.Sprintf(
+			"tag_grammar.dryrun_token %q must differ from the prerelease_token so rehearsal tags stay distinguishable", spec.DryRunToken))
+	}
 
 	return errs
 }

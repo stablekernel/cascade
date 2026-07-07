@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Spec describes the shape of a release tag. The zero value is not usable;
@@ -120,6 +121,46 @@ func (s Spec) Format(p Parsed) string {
 		out += fmt.Sprintf(".hotfix.%d", p.Hotfix)
 	}
 	return out
+}
+
+// StripPreRelease returns tag with its pre-release segment (and anything after
+// it, such as a nested hotfix) removed, leaving just the prefix and numeric
+// core. It cuts at this spec's pre-release marker ("-" + token + separator), so
+// the default grammar cuts at "-rc." exactly as the historical literal strip
+// did, byte for byte. A tag without the marker is returned unchanged.
+func (s Spec) StripPreRelease(tag string) string {
+	marker := "-" + s.PreReleaseToken + s.PreReleaseSeparator
+	if idx := strings.Index(tag, marker); idx != -1 {
+		return tag[:idx]
+	}
+	return tag
+}
+
+// PreReleaseStripSedBRE returns the anchored sed basic-regular-expression that
+// matches this spec's pre-release segment at the end of a version string, for
+// example "-rc\.[0-9]*$" for the default grammar and "-beta[0-9]*$" for a beta
+// token with an empty separator. Both the token and the separator are
+// escaped, so a metacharacter such as "." (a value the config allowlist
+// otherwise permits in either field) matches literally instead of as a
+// wildcard. Code generators bake this into the driven repo's release
+// workflow so the emitted strip follows the configured grammar.
+func (s Spec) PreReleaseStripSedBRE() string {
+	return "-" + sedBREEscape(s.PreReleaseToken) + sedBREEscape(s.PreReleaseSeparator) + "[0-9]*$"
+}
+
+// sedBREEscape backslash-escapes the characters that carry special meaning in a
+// sed basic regular expression so a literal separator matches literally. The
+// backslash is escaped first so it is not doubled by a later pass.
+func sedBREEscape(s string) string {
+	const special = `\.[]*^$`
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune(special, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // atoi converts a submatch known to be all digits. The grammar guarantees the

@@ -352,6 +352,18 @@ func TestGetLatestRelease(t *testing.T) {
 			want:    "v2.0.0",
 			wantErr: false,
 		},
+		{
+			name:    "tolerate build metadata on a release",
+			tags:    []string{"v1.2.3+build.5"},
+			want:    "v1.2.3",
+			wantErr: false,
+		},
+		{
+			name:    "release with build metadata beats a lower release",
+			tags:    []string{"v1.0.0", "v1.2.3+build.5"},
+			want:    "v1.2.3",
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -365,6 +377,47 @@ func TestGetLatestRelease(t *testing.T) {
 			assert.Equal(t, tt.want, got.String())
 		})
 	}
+}
+
+// TestParseTolerant covers the read-side tolerance for foreign pre-releases and
+// build metadata. These shapes may exist in a repo's history; discovery must see
+// them without cascade ever emitting them.
+func TestParseTolerant(t *testing.T) {
+	// Build metadata is discarded: the parsed core matches v1.2.3 and renders
+	// without the +build segment.
+	t.Run("build metadata discarded to same core", func(t *testing.T) {
+		v, err := ParseTolerant("v1.2.3+build.5")
+		require.NoError(t, err)
+		assert.Equal(t, 1, v.Major)
+		assert.Equal(t, 2, v.Minor)
+		assert.Equal(t, 3, v.Patch)
+		assert.Equal(t, -1, v.PreRelease, "build metadata is not a pre-release")
+		assert.Equal(t, "v1.2.3", v.String(), "build metadata is never emitted")
+	})
+
+	// Any recognized pre-release sorts below its release.
+	t.Run("foreign pre-release sorts below release", func(t *testing.T) {
+		pre, err := ParseTolerant("v1.2.3-beta.1")
+		require.NoError(t, err)
+		rel, err := ParseTolerant("v1.2.3")
+		require.NoError(t, err)
+		assert.True(t, pre.PreRelease >= 0, "beta.1 must be recognized as a pre-release")
+		assert.Equal(t, -1, pre.Compare(rel), "v1.2.3-beta.1 must sort below v1.2.3")
+		assert.Equal(t, 1, rel.Compare(pre))
+	})
+
+	// A separator-less foreign token still reads as a pre-release.
+	t.Run("separatorless foreign token is a pre-release", func(t *testing.T) {
+		v, err := ParseTolerant("v1.2.3-rc1")
+		require.NoError(t, err)
+		assert.True(t, v.PreRelease >= 0)
+	})
+
+	// A tag without a numeric core is not a version.
+	t.Run("non-version rejected", func(t *testing.T) {
+		_, err := ParseTolerant("not-a-version")
+		assert.Error(t, err)
+	})
 }
 
 func TestStripRC(t *testing.T) {

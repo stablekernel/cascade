@@ -154,6 +154,7 @@ func (f *Finalizer) runLifecycleCleanup() error {
 			Environment: ev.env,
 			BaseVersion: ev.baseVersion,
 			SHA:         ev.sha,
+			Spec:        resolveTagGrammar(f.cicdFile),
 		}); err != nil {
 			fmt.Printf("Warning: rejoin cleanup for %s: cleaning hotfix releases: %v\n", ev.env, err)
 		}

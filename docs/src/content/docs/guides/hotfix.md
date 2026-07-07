@@ -49,7 +49,7 @@ Re-dispatch targeting the same environment afterward to resume the chain from wh
 
 ## Version grammar
 
-A hotfix allocates its own version segment so it sorts correctly relative to the rc sequence it interrupts. See [Hotfix version grammar](/cascade/reference/versioning/#hotfix-version-grammar) for the full derivation; the short form is `-rc.N.hotfix.M` for an unpublished (rc) base, or the next free patch for an already-published base.
+A hotfix allocates its own version segment so it sorts correctly relative to the pre-release sequence it interrupts. See [Hotfix version grammar](/cascade/reference/versioning/#hotfix-version-grammar) for the full derivation; the short form is `-rc.N.hotfix.M` by default (configurable via [`tag_grammar`](/cascade/reference/manifest/#tag_grammar)) for an unpublished base, or the next free patch for an already-published base.
 
 ## What to watch
 

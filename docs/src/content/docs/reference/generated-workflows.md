@@ -59,7 +59,7 @@ Orchestrate takes no manual inputs; it runs automatically on push. Its outputs:
 | `release_url` | URL to the GitHub release. |
 | `execution_plan` | JSON execution plan with dependency-ordered waves. |
 
-The setup job reads the manifest's recorded SHA, diffs it against the current head, matches changed files against each callback's triggers, and builds an execution plan that respects `depends_on`. Version is computed from conventional commits since the last release: `feat!:`/`BREAKING CHANGE:` bumps major, `feat:` bumps minor, `fix:`/`perf:` bumps patch. The first environment always gets an rc suffix (`v1.2.0-rc.0`); each further orchestrate run increments the rc counter.
+The setup job reads the manifest's recorded SHA, diffs it against the current head, matches changed files against each callback's triggers, and builds an execution plan that respects `depends_on`. Version is computed from conventional commits since the last release: `feat!:`/`BREAKING CHANGE:` bumps major, `feat:` bumps minor, `fix:`/`perf:` bumps patch. The first environment always gets a pre-release suffix (`v1.2.0-rc.0` by default; configurable via [`tag_grammar`](/cascade/reference/manifest/#tag_grammar)); each further orchestrate run increments the pre-release counter.
 
 ## Promote workflow anatomy
 

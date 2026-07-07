@@ -55,6 +55,15 @@ cascade owns the third-party action pins it emits into generated workflows, and 
 - Generated files are targets, never sources: a pin (or any other value) is read from the manifest and written into generated output, never read back out of a generated file. This keeps generation a pure, offline function of the manifest, which is what makes a regenerate reproducible and a diff meaningful.
 - cascade's own self-heal companion is generated, not hand-written. `.github/workflows/pin-reconcile.yaml` is produced by the same reconcile generator that emits a downstream user's companion, in its own-repo variant, and is drift-locked byte-for-byte by a test so a hand-edit fails the suite. The own-repo variant differs from the user emission in exactly three ways: it installs the latest non-prerelease cascade release (never an rc or a draft, so cascade's own CI cannot self-install a prerelease), it scans both the workflow and composite-action trees for a moved pin, and it commits the regenerated workflows alongside the updated `action_pins.yaml`. Change the generator and regenerate the file; never edit the workflow by hand.
 
+## Tag grammar
+
+cascade owns one canonical shape for its release tags, and that ownership rests on a few rules that any code touching version tags must keep:
+
+- `internal/taggrammar` is the single source of truth for the shape of a release tag: the prefix, the pre-release token, the separator, and the dry-run token. No other package hand-copies a tag regex or a format string; every tag sink (version parsing, the git tag predicate, the promote-boundary strip, generated workflow templates, hotfix segment allocation) derives its behavior from a resolved `taggrammar.Spec`, never a re-implementation of it.
+- A manifest's `tag_grammar` block resolves to exactly one `taggrammar.Spec` per repository (`internal/config`), and that resolved spec is threaded through, not re-read piecemeal from manifest fields at each call site.
+- Read-side tolerance (recognizing a foreign pre-release shape or build metadata left over from before `tag_grammar` was adopted) lives in the shared grammar package too, so every consumer stays consistent about what counts as a version tag.
+- cascade's own self-release tooling (`nightly-release.yaml`, `release.yaml`, and the fleet) stays pinned to the default grammar (`taggrammar.Default()`) regardless of what a driven repository configures; it never resolves a manifest's `tag_grammar` for cascade's own tags.
+
 ## Documentation quality
 
 A change that alters behavior, CLI surface, flags, config or manifest fields, generated output, or the release flow updates the affected docs in the same pull request: the docs site under `docs/src/content/docs/`, the root `README.md`, and any other affected Markdown file. The docs site follows these rules:

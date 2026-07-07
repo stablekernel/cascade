@@ -69,7 +69,65 @@ const (
 // The prefix fragment comes from the spec so a custom prefix widens or narrows
 // the accepted set consistently with the strict parser.
 func baseRegex(spec taggrammar.Spec) *regexp.Regexp {
-	return regexp.MustCompile(fmt.Sprintf(`^(%s)(\d+)\.(\d+)\.(\d+)(?:-.+)?$`, prefixPattern(spec)))
+	// [-+].+ tolerates either a pre-release suffix (-rc.4, -beta.1) or bare build
+	// metadata (+build.5) after the core. Both are discarded; only the numeric
+	// core and prefix are captured.
+	return regexp.MustCompile(fmt.Sprintf(`^(%s)(\d+)\.(\d+)\.(\d+)(?:[-+].+)?$`, prefixPattern(spec)))
+}
+
+// tolerantReadRegex matches a version tag on the read side, accepting shapes the
+// strict emit grammar rejects: any foreign pre-release identifier after the core
+// (for example -beta.1 or -rc1) and optional +build metadata. Group 5 captures
+// the pre-release identifier (empty when absent); build metadata is matched but
+// never captured, so it is discarded. This is deliberately distinct from the
+// strict grammar so discovery can see historical tags without cascade emitting
+// them.
+func tolerantReadRegex(spec taggrammar.Spec) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(
+		`^(%s)(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$`,
+		prefixPattern(spec)))
+}
+
+// ParseTolerant parses s on the read side under the default grammar, tolerating
+// a foreign pre-release identifier and discarding build metadata. See
+// ParseTolerantWithGrammar for the full contract.
+func ParseTolerant(s string) (*Version, error) {
+	return ParseTolerantWithGrammar(defaultSpec, s)
+}
+
+// ParseTolerantWithGrammar parses s on the read side under spec. It recognizes
+// the numeric core plus an optional foreign pre-release identifier and optional
+// build metadata. A recognized pre-release is marked present (PreRelease >= 0) so
+// it sorts below its release; the specific identifier is not interpreted, since
+// the read-side contract is only "any pre-release sorts below the release" plus
+// cascade's own rc counter, which the calculator handles separately. Build
+// metadata is discarded and never stored, so it is never emitted. It errors only
+// when s lacks a valid numeric core.
+func ParseTolerantWithGrammar(spec taggrammar.Spec, s string) (*Version, error) {
+	m := tolerantReadRegex(spec).FindStringSubmatch(s)
+	if m == nil {
+		return nil, fmt.Errorf("invalid version format: %s", s)
+	}
+
+	major, _ := strconv.Atoi(m[2])
+	minor, _ := strconv.Atoi(m[3])
+	patch, _ := strconv.Atoi(m[4])
+
+	preRelease := -1
+	if m[5] != "" {
+		// A foreign pre-release identifier is marked present so it sorts below
+		// the release. Its value is not interpreted (see the contract above).
+		preRelease = 0
+	}
+
+	return &Version{
+		Major:      major,
+		Minor:      minor,
+		Patch:      patch,
+		PreRelease: preRelease,
+		Hotfix:     -1,
+		Prefix:     leadingPrefix(s),
+	}, nil
 }
 
 // preReleaseSuffixRegex captures the pre-release number from a version whose
@@ -201,27 +259,40 @@ func (v *Version) BaseVersion() *Version {
 	}
 }
 
+// WithGrammar returns a copy of v that renders under spec, so a version parsed
+// with ParseWithGrammar carries its grammar through subsequent copy operations
+// (WithHotfix, WithRC, Bump) and renders its configured pre-release shape. The
+// zero/default grammar is preserved as-is, so a default version is unchanged.
+func (v *Version) WithGrammar(spec taggrammar.Spec) *Version {
+	out := *v
+	s := spec
+	out.grammarSpec = &s
+	return &out
+}
+
 // WithRC returns a copy with the specified RC number
 func (v *Version) WithRC(rc int) *Version {
 	return &Version{
-		Major:      v.Major,
-		Minor:      v.Minor,
-		Patch:      v.Patch,
-		PreRelease: rc,
-		Hotfix:     -1,
-		Prefix:     v.Prefix,
+		Major:       v.Major,
+		Minor:       v.Minor,
+		Patch:       v.Patch,
+		PreRelease:  rc,
+		Hotfix:      -1,
+		Prefix:      v.Prefix,
+		grammarSpec: v.grammarSpec,
 	}
 }
 
 // Bump returns a new version with the specified bump applied
 func (v *Version) Bump(bump BumpType) *Version {
 	result := &Version{
-		Major:      v.Major,
-		Minor:      v.Minor,
-		Patch:      v.Patch,
-		PreRelease: -1,
-		Hotfix:     -1,
-		Prefix:     v.Prefix,
+		Major:       v.Major,
+		Minor:       v.Minor,
+		Patch:       v.Patch,
+		PreRelease:  -1,
+		Hotfix:      -1,
+		Prefix:      v.Prefix,
+		grammarSpec: v.grammarSpec,
 	}
 
 	switch bump {
@@ -384,7 +455,11 @@ func GetLatestRelease(tags []string) (*Version, error) {
 	var latest *Version
 
 	for _, tag := range tags {
-		v, err := Parse(tag)
+		// Read tolerantly so a repo whose history carries a foreign pre-release
+		// shape or build metadata is still visible to discovery. Build metadata
+		// is discarded to the numeric core; a recognized pre-release is skipped
+		// just like a native -rc tag.
+		v, err := ParseTolerant(tag)
 		if err != nil {
 			continue // Skip non-semver tags
 		}
@@ -418,12 +493,13 @@ func GetLatestRelease(tags []string) (*Version, error) {
 // preserving the major, minor, patch, pre-release, and prefix.
 func (v *Version) WithHotfix(m int) *Version {
 	return &Version{
-		Major:      v.Major,
-		Minor:      v.Minor,
-		Patch:      v.Patch,
-		PreRelease: v.PreRelease,
-		Hotfix:     m,
-		Prefix:     v.Prefix,
+		Major:       v.Major,
+		Minor:       v.Minor,
+		Patch:       v.Patch,
+		PreRelease:  v.PreRelease,
+		Hotfix:      m,
+		Prefix:      v.Prefix,
+		grammarSpec: v.grammarSpec,
 	}
 }
 

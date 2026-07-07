@@ -226,7 +226,7 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("          SOURCE_VERSION: ${{ steps.validate.outputs.source_version }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          # Strip RC suffix (e.g., v1.2.0-rc.3 -> v1.2.0)\n")
-	sb.WriteString("          SEMVER_TAG=$(echo \"$SOURCE_VERSION\" | sed 's/-rc\\.[0-9]*$//')\n")
+	fmt.Fprintf(sb, "          SEMVER_TAG=$(echo \"$SOURCE_VERSION\" | sed 's/%s//')\n", g.config.ResolveTagGrammar().PreReleaseStripSedBRE())
 	sb.WriteString("          echo \"semver_tag=$SEMVER_TAG\" >> \"$GITHUB_OUTPUT\"\n")
 	sb.WriteString("          echo \"::notice::Semver tag: $SEMVER_TAG (from $SOURCE_VERSION)\"\n")
 

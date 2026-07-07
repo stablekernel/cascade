@@ -44,6 +44,7 @@ func runParseConfig(configPath, outputFormat string) error {
 
 	errors := Validate(cfg)
 	warnings, _ := cfg.ValidateSchemaVersion()
+	warnings = append(warnings, cfg.TagGrammarWarnings()...)
 	for _, w := range warnings {
 		log.Warn("%s", w)
 	}

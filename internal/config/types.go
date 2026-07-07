@@ -132,6 +132,10 @@ type TrunkConfig struct {
 	// annotated cli_version tag to its commit and writes this.
 	CLIVersionSHA string `yaml:"cli_version_sha,omitempty" json:"cli_version_sha,omitempty"`
 	TagPrefix     string   `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
+	// TagGrammar optionally reshapes the release tag grammar (prefix, pre-release
+	// token and separator, dryrun token). Absent by default; when absent the
+	// historical grammar is used. Additive and scoped to tag shape only.
+	TagGrammar *TagGrammarConfig `yaml:"tag_grammar,omitempty" json:"tag_grammar,omitempty"`
 	ReleaseToken  string   `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
 	StateToken    string   `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
 	// ReleaseTokenApp optionally backs the release-token seam with a GitHub App

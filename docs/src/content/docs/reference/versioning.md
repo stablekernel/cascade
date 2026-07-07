@@ -140,11 +140,11 @@ Older tags outside the current release line do not receive backported fixes. See
 
 ## Hotfix version grammar
 
-A hotfix applies one or more trunk commits onto an environment pinned to an older trunk base (see the [hotfix guide](/cascade/guides/hotfix/)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (an rc) or already published.
+A hotfix applies one or more trunk commits onto an environment pinned to an older trunk base (see the [hotfix guide](/cascade/guides/hotfix/)). The version cascade allocates for a hotfix depends on whether the environment's current version is still in flight (a pre-release) or already published.
 
 ### rc-based (unpublished) base
 
-When the environment holds an rc version, the hotfix appends a nested `hotfix.M` segment:
+When the environment holds a pre-release version, the hotfix appends a nested `hotfix.M` segment. With the default grammar (prerelease token `rc`, separator `.`):
 
 ```
 v1.4.0-rc.2          -> v1.4.0-rc.2.hotfix.1   (first hotfix)
@@ -157,7 +157,7 @@ The dotted form is deliberate. Under semver precedence the pre-release field lis
 v1.4.0-rc.2 < v1.4.0-rc.2.hotfix.1 < v1.4.0-rc.2.hotfix.2 < v1.4.0-rc.3
 ```
 
-A hotfix version therefore slots cleanly between its base rc and the next rc, and it never collides with the orchestrator's rc sequence. The rc-shaped tag and draft cleanup logic matches the plain `<prefix>X.Y.Z-rc.N` shape for the configured `tag_prefix` (the default `v`, a custom prefix such as `rel-`, or no prefix), so it is inert on hotfix tags; hotfix tags and drafts are cleaned up explicitly when the divergence ends.
+A hotfix version therefore slots cleanly between its base pre-release and the next one, and it never collides with the orchestrator's pre-release sequence. The general shape is `<prefix>X.Y.Z-<token><separator>N.hotfix.M`, where the prefix, token, and separator come from the resolved [`tag_grammar`](/cascade/reference/manifest/#tag_grammar) (`v`, `rc`, and `.` unless configured otherwise); the nested `hotfix.M` segment itself is fixed and not reshaped by `tag_grammar`. The pre-release-shaped tag and draft cleanup logic matches this same resolved shape, so it is inert on hotfix tags; hotfix tags and drafts are cleaned up explicitly when the divergence ends.
 
 ### Published (no rc) base
 
@@ -168,7 +168,18 @@ v1.3.0 -> v1.3.1   (first hotfix)
 v1.3.1 -> v1.3.2   (next free patch)
 ```
 
-cascade allocates the next free patch by reconciling against existing tags, so the hotfix does not collide with a patch the normal release flow may also mint. There is no `vX.Y.Z-hotfix.M` form; the nested `hotfix.M` segment applies only to rc-based, still-in-flight versions.
+cascade allocates the next free patch by reconciling against existing tags, so the hotfix does not collide with a patch the normal release flow may also mint. There is no `vX.Y.Z-hotfix.M` form; the nested `hotfix.M` segment applies only to still-in-flight, pre-release versions.
+
+## Tag grammar
+
+The `-rc.N` shape used throughout this page is cascade's default pre-release grammar, not a fixed rule. An optional [`tag_grammar`](/cascade/reference/manifest/#tag_grammar) manifest block reshapes the prefix, the pre-release token, and the separator between the token and its number, so the general tag shape is `<prefix>X.Y.Z-<token><separator>N[.hotfix.M]`. A manifest that omits `tag_grammar` reproduces the historical grammar shown above byte-identically.
+
+Two rules bound how far this configurability goes:
+
+- **Read tolerance.** On read, cascade also recognizes a foreign pre-release shape (for example `beta.1` or `rc1`) and build metadata (for example `+build.5`) left over from before `tag_grammar` was adopted, so an existing repository's tag history stays visible to version discovery. cascade never emits those shapes itself, and a recognized foreign pre-release always sorts below its release.
+- **Clean release boundary only.** Changing `tag_grammar` is supported at a clean release boundary, when no version is currently in flight. There is no mid-flight migration window that mixes two grammars across the same in-progress release.
+
+See the [manifest reference](/cascade/reference/manifest/#tag_grammar) for the full field list and defaults.
 
 ## Version bump reference
 

@@ -8,6 +8,7 @@ import (
 	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/release"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
 // CleanReleasesRequest describes the hotfix release objects to remove when an
@@ -22,6 +23,10 @@ type CleanReleasesRequest struct {
 	// release whose tag was already deleted by a prior partial run can still be
 	// resolved by its target_commitish and removed, rather than leaking.
 	SHA string
+	// Spec is the resolved tag grammar. It lets the hotfix-tag match parse a
+	// custom pre-release token. A zero value is normalized to the historical
+	// default by the cleaner, so callers with no custom grammar can omit it.
+	Spec taggrammar.Spec
 }
 
 // LifecycleCleaner performs the side effects of ending a divergence: deleting
@@ -157,7 +162,11 @@ func (c *gitReleaseCleaner) CleanHotfixReleases(req CleanReleasesRequest) error 
 	if err != nil {
 		return fmt.Errorf("listing tags for hotfix cleanup: %w", err)
 	}
-	hotfixTags := hotfix.HotfixTagsForBase(req.BaseVersion, tags)
+	spec := req.Spec
+	if spec == (taggrammar.Spec{}) {
+		spec = taggrammar.Default()
+	}
+	hotfixTags := hotfix.HotfixTagsForBase(spec, req.BaseVersion, tags)
 
 	var firstErr error
 	for _, tag := range hotfixTags {

@@ -1,0 +1,170 @@
+name: "Custom Tag Grammar Release and Promotion"
+description: "A non-default tag_grammar reshapes the release-candidate tag and recorded state, and promotion strips the custom pre-release token to publish"
+
+config:
+  trunk_branch: main
+  environments: [dev, qa, uat, prod]
+  # A non-default tag grammar. The prefix stays "v" but the pre-release is named
+  # "beta" with an empty separator, so a candidate reads "v0.2.0-beta0" instead
+  # of the historical "v0.2.0-rc.0". The rehearsal token is renamed too so it
+  # stays distinguishable from the pre-release token.
+  tag_grammar:
+    prefix: v
+    prerelease_token: beta
+    prerelease_separator: ""
+    dryrun_token: rehearsal
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+
+# Starting state: a mature repo with v0.1.0 already published. The candidate
+# environments carry the custom-shape pre-release, and the published tiers carry
+# the plain base version. The v0.1.0-beta0 record was cleaned at publish time, so
+# only the v0.1.0 tag remains.
+setup:
+  state:
+    dev:
+      version: "v0.1.0-beta0"
+    qa:
+      version: "v0.1.0-beta0"
+    uat:
+      version: "v0.1.0-beta0"
+    release:
+      version: "v0.1.0"
+    prod:
+      version: "v0.1.0"
+  tags:
+    - "v0.1.0"
+  releases:
+    - tag: "v0.1.0"
+      prerelease: false
+
+steps:
+  # Step 1: New feature commit drives the next candidate.
+  - name: "New app feature for v0.2.0"
+    action: commit
+    commit:
+      message: "feat: add new feature"
+      files:
+        src/app.ts: |
+          export function main() {
+            console.log("App v0.2.0 with new feature");
+          }
+
+  # Step 2: Orchestrate dev. The candidate tag and recorded state must be in the
+  # custom shape "v0.2.0-beta0", not the historical "v0.2.0-rc.0".
+  - name: "Orchestrate dev after feature"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.2.0-beta0"
+      jobs:
+        build-app: success
+        deploy-cdk: skipped
+      releases:
+        - tag: "v0.2.0-beta0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0", "v0.2.0-beta0"]
+
+  # Step 3: Cascade promote dev to qa. The candidate is published (draft: false)
+  # while keeping its custom shape.
+  - name: "Cascade promote dev to qa"
+    action: promote
+    promote:
+      mode: cascade
+      target: qa
+    expect:
+      state:
+        qa:
+          sha: commit1
+          version: "v0.2.0-beta0"
+        dev:
+          unchanged: true
+        uat:
+          unchanged: true
+        prod:
+          unchanged: true
+      releases:
+        - tag: "v0.2.0-beta0"
+          prerelease: true
+          draft: false
+      jobs:
+        deploy-cdk: skipped
+
+  # Step 4: Cascade promote qa to uat. Still the custom-shape candidate.
+  - name: "Cascade promote qa to uat"
+    action: promote
+    promote:
+      mode: cascade
+      target: uat
+    expect:
+      state:
+        uat:
+          sha: commit1
+          version: "v0.2.0-beta0"
+        qa:
+          unchanged: true
+        dev:
+          unchanged: true
+        prod:
+          unchanged: true
+      releases:
+        - tag: "v0.2.0-beta0"
+          prerelease: true
+          draft: false
+
+  # Step 5: Standard promote from uat to release crosses the publish boundary.
+  # The custom pre-release token is stripped, so the published version is
+  # "v0.2.0" and the custom-shape candidate tags are reaped.
+  - name: "Promote uat to release"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit1
+          version: "v0.2.0"
+        uat:
+          unchanged: true
+      releases:
+        - tag: "v0.2.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0", "v0.2.0"]
+        deleted: ["v0.1.0-beta0", "v0.2.0-beta0"]
+
+  # Step 6: Standard promote from release to prod carries the published version
+  # forward, confirming promotion advances correctly past the boundary.
+  - name: "Promote release to prod"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        prod:
+          sha: commit1
+          version: "v0.2.0"
+      jobs:
+        deploy-cdk: skipped
+
+# FINAL STATE:
+# dev:     commit1 @ v0.2.0-beta0
+# qa:      commit1 @ v0.2.0-beta0
+# uat:     commit1 @ v0.2.0-beta0
+# release: commit1 @ v0.2.0
+# prod:    commit1 @ v0.2.0
+# - The candidate tag and recorded state used the custom "v0.2.0-beta0" shape
+# - Promotion stripped the "beta" token to publish "v0.2.0"
+# - Latest release: v0.2.0 (published, not prerelease)

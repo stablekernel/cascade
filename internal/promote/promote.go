@@ -9,6 +9,7 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
 // PromotionMode defines how the promotion operates
@@ -229,7 +230,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 			if rs := preState["release"]; rs != nil && rs.SHA == sourceState.SHA {
 				break
 			}
-			semVersion := stripRCSuffix(sourceState.Version)
+			semVersion := p.stripPreRelease(sourceState.Version)
 			promo := EnvPromotion{
 				Environment: "release",
 				SourceEnv:   sourceEnv,
@@ -289,7 +290,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 			result.ReleaseData = &ReleaseData{
 				SHA:        sourceState.SHA,
 				RCVersion:  sourceState.Version,
-				SemVersion: stripRCSuffix(sourceState.Version),
+				SemVersion: p.stripPreRelease(sourceState.Version),
 			}
 		}
 	}
@@ -328,7 +329,7 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 					result.ReleaseData = &ReleaseData{
 						SHA:        sourceState.SHA,
 						RCVersion:  sourceState.Version,
-						SemVersion: stripRCSuffix(sourceState.Version),
+						SemVersion: p.stripPreRelease(sourceState.Version),
 					}
 				}
 			}
@@ -437,7 +438,7 @@ func (p *Promoter) noEnvironmentPromotion() (*PromotionResult, error) {
 		Environment: "release",
 		SourceEnv:   "prerelease",
 		SHA:         sourceState.SHA,
-		Version:     stripRCSuffix(sourceState.Version), // Use semver for release
+		Version:     p.stripPreRelease(sourceState.Version), // Use semver for release
 		NeedsDeploy: false,                              // No deployment for library/CLI projects
 	}
 
@@ -452,7 +453,7 @@ func (p *Promoter) noEnvironmentPromotion() (*PromotionResult, error) {
 		ReleaseData: &ReleaseData{
 			SHA:        sourceState.SHA,
 			RCVersion:  sourceState.Version,
-			SemVersion: stripRCSuffix(sourceState.Version),
+			SemVersion: p.stripPreRelease(sourceState.Version),
 		},
 	}
 
@@ -465,7 +466,7 @@ func (p *Promoter) noEnvironmentPromotion() (*PromotionResult, error) {
 			p.cicdFile.State["release"] = &config.EnvState{}
 		}
 		p.cicdFile.State["release"].SHA = sourceState.SHA
-		p.cicdFile.State["release"].Version = stripRCSuffix(sourceState.Version)
+		p.cicdFile.State["release"].Version = p.stripPreRelease(sourceState.Version)
 		p.cicdFile.State["release"].CommittedAt = timestamp
 		p.cicdFile.State["release"].CommittedBy = p.actor
 
@@ -572,7 +573,7 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 		publishEnv = envs[len(envs)-1]
 	}
 	prodEnv := envs[len(envs)-1]
-	semVersion := stripRCSuffix(sourceState.Version)
+	semVersion := p.stripPreRelease(sourceState.Version)
 
 	// Build promotions for envs[sourceIdx+1..targetIdx]. Materialize "release"
 	// as its own promotion either when it's in the env list or when crossing
@@ -722,11 +723,28 @@ func (r *PromotionResult) ToJSON() string {
 
 // Helper functions
 
-func stripRCSuffix(version string) string {
-	if idx := strings.Index(version, "-rc."); idx != -1 {
-		return version[:idx]
+// resolveTagGrammar folds a manifest into its tag grammar, falling back to the
+// historical default when the manifest or its config is absent so callers never
+// dereference a nil config.
+func resolveTagGrammar(f *config.CICDFile) taggrammar.Spec {
+	if f == nil || f.Config == nil {
+		return taggrammar.Default()
 	}
-	return version
+	return f.Config.ResolveTagGrammar()
+}
+
+// stripPreRelease reduces a version to its base under this promoter's configured
+// tag grammar, so a custom pre-release token (for example "beta") is stripped
+// just as the historical "rc" is, instead of publishing the pre-release shape.
+func (p *Promoter) stripPreRelease(version string) string {
+	return resolveTagGrammar(p.cicdFile).StripPreRelease(version)
+}
+
+// stripRCSuffix strips the default-grammar pre-release segment. It is retained
+// for callers with no manifest in scope; grammar-aware promotion uses
+// stripPreRelease so a custom token is honored.
+func stripRCSuffix(version string) string {
+	return taggrammar.Default().StripPreRelease(version)
 }
 
 func indexOf(slice []string, item string) int {
