@@ -112,6 +112,50 @@ The `environments` list is fully configurable. cascade attaches no meaning to sp
 
 Workflow-level trigger types beyond `push` are set under [`extra_triggers`](#extra_triggers).
 
+### tag_grammar
+
+Optional, additive block that reshapes the release tag grammar. A manifest that omits it
+produces cascade's historical grammar exactly: `vX.Y.Z` releases, `-rc.N` pre-releases, and
+`.hotfix.M` hotfixes, so existing repositories are unaffected.
+
+```yaml
+ci:
+  config:
+    tag_grammar:
+      prefix: v
+      prerelease_token: rc
+      prerelease_separator: "."
+      dryrun_token: dryrun
+      strict_prefix: false
+```
+
+| Field | Status | Type | Default | Description |
+|-------|--------|------|---------|-------------|
+| `prefix` | emitted | string | `v` | Literal prefix cascade puts on every new tag. |
+| `prerelease_token` | emitted | string | `rc` | Token that marks a release-candidate tag. |
+| `prerelease_separator` | emitted | string | `.` | Separator between the token and its number. `.` yields `rc.4`; an empty string yields `rc4`. |
+| `dryrun_token` | emitted | string | `dryrun` | Token that marks a rehearsal tag. |
+| `strict_prefix` | emitted | bool | false | When false, reads accept any alphabetic prefix so historical and foreign-cased tags still parse. When true, reads require the exact configured prefix. |
+
+**Relationship to `tag_prefix`.** `tag_prefix` still sets the prefix on its own when
+`tag_grammar` is absent. When both `tag_prefix` and `tag_grammar.prefix` are set,
+`tag_grammar.prefix` wins, and `cascade parse-config` emits a non-fatal warning naming both
+keys so the redundancy is visible. Resolution is well defined either way; the warning is
+advisory only.
+
+**Reading pre-existing tags.** On read, cascade tolerates a pre-existing foreign pre-release
+shape (for example `beta.1` or `rc1`) and build metadata (for example `+build.5`) so a
+repository whose history predates `tag_grammar` stays visible to version discovery. cascade
+never emits those shapes itself, and a recognized foreign pre-release always sorts below its
+release.
+
+**cascade's own releases.** cascade's own self-release workflows stay pinned to the default
+grammar regardless of what a driven repository configures. `tag_grammar` reshapes the tags a
+driven repository's pipeline cuts, not cascade's own release process.
+
+See [Versioning and schema](/cascade/reference/versioning/) for the hotfix version grammar
+and the full reserved-shapes catalog.
+
 ## CLI pinning
 
 These fields pin the cascade CLI and third-party actions the generated workflows install.
@@ -812,6 +856,11 @@ The implicit `release` slot tracks the most recently published (non-draft) GitHu
 - A repository cannot set both `external` (primary) and `notify` (satellite).
 - A per-callback `permissions` block is the complete permission set for that caller job and replaces the workflow default rather than merging.
 - `cli_version_sha` takes effect only under `pin_mode: sha`.
+- `tag_grammar.prerelease_token` must not be empty. `tag_grammar.prefix`,
+  `prerelease_token`, `prerelease_separator`, and `dryrun_token` must not contain
+  whitespace, control characters, or a git-ref-unsafe character (any of `/`, `~`, `^`, `:`,
+  `?`, `*`, `[`, or a backslash). The resolved `dryrun_token` must differ from the resolved
+  `prerelease_token`.
 
 ## What to read next
 
