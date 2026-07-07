@@ -1141,3 +1141,42 @@ environments:
 		t.Fatalf("re-marshal changed output:\nwant:\n%s\ngot:\n%s", src, out)
 	}
 }
+
+func TestTrunkConfig_AllowsBreakingChanges(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *TrunkConfig
+		want bool
+	}{
+		{name: "nil config keeps gate enabled", cfg: nil, want: false},
+		{name: "unset field keeps gate enabled", cfg: &TrunkConfig{}, want: false},
+		{name: "explicit false keeps gate enabled", cfg: &TrunkConfig{AllowBreakingChanges: false}, want: false},
+		{name: "true disables gate", cfg: &TrunkConfig{AllowBreakingChanges: true}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.cfg.AllowsBreakingChanges())
+		})
+	}
+}
+
+func TestTrunkConfig_AllowBreakingChanges_YAMLRoundTrip(t *testing.T) {
+	const src = `trunk_branch: main
+allow_breaking_changes: true
+`
+	var cfg TrunkConfig
+	require.NoError(t, yaml.Unmarshal([]byte(src), &cfg))
+	assert.True(t, cfg.AllowBreakingChanges)
+
+	out, err := yaml.Marshal(&cfg)
+	require.NoError(t, err)
+	assert.Equal(t, src, string(out))
+
+	// Zero value stays absent from emitted YAML (omitempty), so default
+	// manifests are byte-identical to today.
+	var zero TrunkConfig
+	require.NoError(t, yaml.Unmarshal([]byte("trunk_branch: main\n"), &zero))
+	zeroOut, err := yaml.Marshal(&zero)
+	require.NoError(t, err)
+	assert.NotContains(t, string(zeroOut), "allow_breaking_changes")
+}

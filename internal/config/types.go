@@ -136,6 +136,12 @@ type TrunkConfig struct {
 	// token and separator, dryrun token). Absent by default; when absent the
 	// historical grammar is used. Additive and scoped to tag shape only.
 	TagGrammar *TagGrammarConfig `yaml:"tag_grammar,omitempty" json:"tag_grammar,omitempty"`
+	// AllowBreakingChanges disables the breaking-change promote gate for this
+	// repository. The zero value (false, the default) keeps the gate enabled, so
+	// a feat!: or BREAKING CHANGE: commit still blocks the pre-release to release
+	// and release to prod crossings. Set true to let those crossings proceed
+	// without the per-run override. Additive and opt-in.
+	AllowBreakingChanges bool `yaml:"allow_breaking_changes,omitempty" json:"allow_breaking_changes,omitempty"`
 	ReleaseToken  string   `yaml:"release_token,omitempty" json:"release_token,omitempty"` // GitHub secret name for release operations (default: "GITHUB_TOKEN")
 	StateToken    string   `yaml:"state_token,omitempty" json:"state_token,omitempty"`     // Token expression for writing manifest state to the trunk branch (default: "GITHUB_TOKEN")
 	// ReleaseTokenApp optionally backs the release-token seam with a GitHub App
@@ -317,6 +323,13 @@ func (c *TrunkConfig) GetTagPrefix() string {
 		return "v"
 	}
 	return c.TagPrefix
+}
+
+// AllowsBreakingChanges reports whether the breaking-change promote gate is
+// disabled for this repository via the manifest. Nil-safe: a nil config keeps
+// the gate enabled (returns false).
+func (c *TrunkConfig) AllowsBreakingChanges() bool {
+	return c != nil && c.AllowBreakingChanges
 }
 
 // normalizeTokenExpression returns a GitHub Actions expression that resolves to
