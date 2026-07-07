@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -642,18 +643,22 @@ func (g *GiteaContainer) DeleteTag(ctx context.Context, repo *Repo, tag string) 
 	return nil
 }
 
-// DeleteRCTags deletes all RC tags matching a base version (e.g., v1.0.0-rc.*)
-// This simulates what the GitHub manage-release action does after publishing
-func (g *GiteaContainer) DeleteRCTags(ctx context.Context, repo *Repo, baseVersion string) error {
+// DeleteRCTags deletes all pre-release tags matching a base version under the
+// given grammar (e.g., v1.0.0-rc.* by default, or v0.2.0-beta* for a custom
+// token/separator). This simulates what the GitHub manage-release action does
+// after publishing, so it must honor the same tag grammar the release feature
+// honors. Pass taggrammar.Default() to reproduce the historical "-rc." behavior.
+func (g *GiteaContainer) DeleteRCTags(ctx context.Context, repo *Repo, baseVersion string, spec taggrammar.Spec) error {
 	tags, err := g.GetTags(ctx, repo)
 	if err != nil {
 		return fmt.Errorf("failed to get tags: %w", err)
 	}
 
 	for _, tag := range tags {
-		// Check if this is an RC tag for the given base version
-		// e.g., "v1.0.0-rc.0", "v1.0.0-rc.1" match base "v1.0.0"
-		if isRCTagForBase(tag, baseVersion) {
+		// Check if this is a pre-release tag for the given base version.
+		// e.g., under the default grammar "v1.0.0-rc.0", "v1.0.0-rc.1"
+		// match base "v1.0.0".
+		if isRCTagForBase(tag, baseVersion, spec) {
 			if err := g.DeleteTag(ctx, repo, tag); err != nil {
 				return fmt.Errorf("failed to delete RC tag %s: %w", tag, err)
 			}
@@ -663,11 +668,16 @@ func (g *GiteaContainer) DeleteRCTags(ctx context.Context, repo *Repo, baseVersi
 	return nil
 }
 
-// isRCTagForBase checks if a tag is an RC tag for a given base version
-// e.g., "v1.0.0-rc.0" is an RC tag for "v1.0.0"
-func isRCTagForBase(tag, baseVersion string) bool {
-	// Tag must start with the base version + "-rc."
-	prefix := baseVersion + "-rc."
+// isRCTagForBase checks if a tag is a pre-release tag for a given base version
+// under spec. The candidate prefix is derived from the grammar as
+// baseVersion + "-" + token + separator, so the default grammar (token "rc",
+// separator ".") yields the historical "-rc." prefix while a custom grammar
+// (e.g. token "beta", separator "") yields "-beta". Everything after the prefix
+// must be digits, so "v1.2.3-rc.0" matches base "v1.2.3" but nested tags such as
+// "v1.2.3-rc.4.hotfix.1" and unrelated tags do not.
+func isRCTagForBase(tag, baseVersion string, spec taggrammar.Spec) bool {
+	// Tag must start with the base version + "-" + pre-release token + separator.
+	prefix := baseVersion + "-" + spec.PreReleaseToken + spec.PreReleaseSeparator
 	if len(tag) <= len(prefix) {
 		return false
 	}

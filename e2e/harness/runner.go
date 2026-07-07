@@ -1143,9 +1143,12 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 		}
 	}
 
-	// Delete RC tags for each final release (simulating publish cleanup)
+	// Delete RC tags for each final release (simulating publish cleanup).
+	// Honor the configured tag grammar so custom pre-release tokens (e.g.
+	// "beta" with no separator) are reaped, not just the default "-rc." shape.
+	spec := config.ResolveTagGrammar()
 	for _, finalTag := range finalReleaseTags {
-		if err := r.harness.gitea.DeleteRCTags(ctx, r.harness.repo, finalTag); err != nil {
+		if err := r.harness.gitea.DeleteRCTags(ctx, r.harness.repo, finalTag, spec); err != nil {
 			r.t.Logf("  Warning: failed to cleanup RC tags for %s: %v", finalTag, err)
 		} else {
 			r.t.Logf("  Cleaned up RC tags for %s", finalTag)
