@@ -156,6 +156,13 @@ driven repository's pipeline cuts, not cascade's own release process.
 See [Versioning and schema](/cascade/reference/versioning/) for the hotfix version grammar
 and the full reserved-shapes catalog.
 
+:::note[Tag grammar is not version selection]
+`tag_grammar` answers how a tag is shaped, not which versions are selected. Constraints or
+ranges over versions, such as a selector accepting only `>=v1.2`, are a different concern
+and are out of scope here. Should that capability arrive, it lands as its own additive
+optional block rather than being folded into `tag_grammar`.
+:::
+
 ## CLI pinning
 
 These fields pin the cascade CLI and third-party actions the generated workflows install.
