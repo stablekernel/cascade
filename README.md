@@ -124,6 +124,7 @@ Opt-in companions (drift-check, PR-preview, pin-reconcile) are emitted only when
 | Action pinning | `pin_mode: tag` (default) or `sha`, with an embedded action-pins manifest and an opt-in reconcile companion. |
 | PR plan preview | An opt-in comment on each PR shows which builds and deploys would run. |
 | Breaking-change gate | `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless overridden. |
+| Tag grammar | Release tags follow `vX.Y.Z-rc.N` by default; the prefix, prerelease token, and separator are configurable via `tag_grammar`, and an omitted block reproduces today's shape exactly. |
 | Artifact passing | The `artifact_id` output from a build is stored in state and forwarded to deploys and publish. |
 | GitHub Environments | The `environments` command emits per-environment config (`required_reviewers`, `wait_timer`, `branch_policy`) for you to apply. |
 | Schema enforcement | Every CLI invocation checks `schema_version` and rejects incompatible manifests with a clear error. |
