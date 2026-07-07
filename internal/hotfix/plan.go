@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stablekernel/cascade/internal/version"
 )
 
@@ -324,7 +325,7 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 	}
 
 	// Compute the hotfix version candidate from the env's current version.
-	candidate, err := hotfixVersionCandidate(state.Version)
+	candidate, err := hotfixVersionCandidate(resolveTagGrammar(p.cicd), state.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -448,16 +449,17 @@ func envTipDivergenceError(branch, tip, baseSHA string, diverged bool) error {
 }
 
 // hotfixVersionCandidate returns the next free hotfix version over the base of
-// envVersion. An rc version yields its first nested hotfix segment.
-func hotfixVersionCandidate(envVersion string) (string, error) {
+// envVersion under spec. A pre-release version yields its first nested hotfix
+// segment, rendered in the configured grammar.
+func hotfixVersionCandidate(spec taggrammar.Spec, envVersion string) (string, error) {
 	if envVersion == "" {
 		return "", fmt.Errorf("target environment has no recorded version; cannot compute hotfix version")
 	}
-	v, err := version.Parse(envVersion)
+	v, err := version.ParseWithGrammar(spec, envVersion)
 	if err != nil {
 		return "", fmt.Errorf("parsing target version %q: %w", envVersion, err)
 	}
-	return v.NextHotfix().String(), nil
+	return v.WithGrammar(spec).NextHotfix().String(), nil
 }
 
 // envBranch returns the integration branch name for an environment.

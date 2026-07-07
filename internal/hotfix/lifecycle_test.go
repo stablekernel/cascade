@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stablekernel/cascade/internal/taggrammar"
+
 	"github.com/stablekernel/cascade/internal/config"
 )
 
@@ -215,7 +217,7 @@ func TestHotfixTagsForBase(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := HotfixTagsForBase(tt.baseVersion, tt.tags)
+			got := HotfixTagsForBase(taggrammar.Default(), tt.baseVersion, tt.tags)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("HotfixTagsForBase() = %v, want %v", got, tt.want)
 			}

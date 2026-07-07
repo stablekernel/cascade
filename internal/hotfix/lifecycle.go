@@ -5,8 +5,19 @@ import (
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stablekernel/cascade/internal/version"
 )
+
+// resolveTagGrammar folds a manifest into its tag grammar, falling back to the
+// historical default when the manifest or its config is absent so callers never
+// dereference a nil config.
+func resolveTagGrammar(f *config.CICDFile) taggrammar.Spec {
+	if f == nil || f.Config == nil {
+		return taggrammar.Default()
+	}
+	return f.Config.ResolveTagGrammar()
+}
 
 // EnvBranchPrefix is the prefix of the per-environment integration branches a
 // hotfix creates (for example env/test). A branch carrying this prefix exists
@@ -62,31 +73,34 @@ func HealOrphanEnvBranches(branches []string, state map[string]*config.EnvState,
 	return healed, nil
 }
 
-// HotfixTagsForBase returns the hotfix tags in tags that belong to the rc base
-// of baseVersion. A hotfix tag has the dotted shape vX.Y.Z-rc.N.hotfix.M; it
-// shares the rc base (vX.Y.Z-rc.N) of the version the environment held while
-// diverged. The RC-shaped cleanup in internal/release deliberately cannot see
-// these tags (it matches only ^vX.Y.Z-rc.N$), so divergence-end cleanup must
-// collect them explicitly.
+// HotfixTagsForBase returns the hotfix tags in tags that belong to the
+// pre-release base of baseVersion under spec. A hotfix tag has the dotted shape
+// <base>-<token><sep>N.hotfix.M (for example vX.Y.Z-rc.N.hotfix.M); it shares the
+// pre-release base of the version the environment held while diverged. The
+// pre-release-shaped cleanup in internal/release deliberately cannot see these
+// tags, so divergence-end cleanup must collect them explicitly.
 //
-// baseVersion may itself be a hotfix version (vX.Y.Z-rc.N.hotfix.M); it is
-// normalized to its rc base before matching. Tags that do not parse, are not
-// hotfix tags, or belong to a different rc base are excluded. The result is nil
-// when nothing matches.
-func HotfixTagsForBase(baseVersion string, tags []string) []string {
-	base, err := version.Parse(baseVersion)
+// baseVersion may itself be a hotfix version; it is normalized to its
+// pre-release base before matching. Parsing uses spec so a custom pre-release
+// token still resolves. Tags that do not parse, are not hotfix tags, or belong to
+// a different pre-release base are excluded. The result is nil when nothing
+// matches.
+func HotfixTagsForBase(spec taggrammar.Spec, baseVersion string, tags []string) []string {
+	base, err := version.ParseWithGrammar(spec, baseVersion)
 	if err != nil || base.PreRelease < 0 {
 		return nil
 	}
+	base = base.WithGrammar(spec)
 	// Normalize to the rc base so a hotfix baseVersion matches its siblings.
 	rcBase := base.WithRC(base.PreRelease).String()
 
 	var matched []string
 	for _, tag := range tags {
-		v, err := version.Parse(tag)
+		v, err := version.ParseWithGrammar(spec, tag)
 		if err != nil || v.Hotfix < 0 {
 			continue
 		}
+		v = v.WithGrammar(spec)
 		if v.WithRC(v.PreRelease).String() == rcBase {
 			matched = append(matched, tag)
 		}

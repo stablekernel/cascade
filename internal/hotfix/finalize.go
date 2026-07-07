@@ -561,10 +561,12 @@ func (f *Finalizer) allocateVersion(priorVersion string) (string, error) {
 	if priorVersion == "" {
 		return "", fmt.Errorf("target environment has no recorded version; cannot allocate a hotfix version")
 	}
-	v, err := version.Parse(priorVersion)
+	spec := resolveTagGrammar(f.cicd)
+	v, err := version.ParseWithGrammar(spec, priorVersion)
 	if err != nil {
 		return "", fmt.Errorf("parsing target version %q: %w", priorVersion, err)
 	}
+	v = v.WithGrammar(spec)
 
 	tags, err := f.tagLister.ListTags()
 	if err != nil {

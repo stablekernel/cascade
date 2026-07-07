@@ -259,27 +259,40 @@ func (v *Version) BaseVersion() *Version {
 	}
 }
 
+// WithGrammar returns a copy of v that renders under spec, so a version parsed
+// with ParseWithGrammar carries its grammar through subsequent copy operations
+// (WithHotfix, WithRC, Bump) and renders its configured pre-release shape. The
+// zero/default grammar is preserved as-is, so a default version is unchanged.
+func (v *Version) WithGrammar(spec taggrammar.Spec) *Version {
+	out := *v
+	s := spec
+	out.grammarSpec = &s
+	return &out
+}
+
 // WithRC returns a copy with the specified RC number
 func (v *Version) WithRC(rc int) *Version {
 	return &Version{
-		Major:      v.Major,
-		Minor:      v.Minor,
-		Patch:      v.Patch,
-		PreRelease: rc,
-		Hotfix:     -1,
-		Prefix:     v.Prefix,
+		Major:       v.Major,
+		Minor:       v.Minor,
+		Patch:       v.Patch,
+		PreRelease:  rc,
+		Hotfix:      -1,
+		Prefix:      v.Prefix,
+		grammarSpec: v.grammarSpec,
 	}
 }
 
 // Bump returns a new version with the specified bump applied
 func (v *Version) Bump(bump BumpType) *Version {
 	result := &Version{
-		Major:      v.Major,
-		Minor:      v.Minor,
-		Patch:      v.Patch,
-		PreRelease: -1,
-		Hotfix:     -1,
-		Prefix:     v.Prefix,
+		Major:       v.Major,
+		Minor:       v.Minor,
+		Patch:       v.Patch,
+		PreRelease:  -1,
+		Hotfix:      -1,
+		Prefix:      v.Prefix,
+		grammarSpec: v.grammarSpec,
 	}
 
 	switch bump {
@@ -480,12 +493,13 @@ func GetLatestRelease(tags []string) (*Version, error) {
 // preserving the major, minor, patch, pre-release, and prefix.
 func (v *Version) WithHotfix(m int) *Version {
 	return &Version{
-		Major:      v.Major,
-		Minor:      v.Minor,
-		Patch:      v.Patch,
-		PreRelease: v.PreRelease,
-		Hotfix:     m,
-		Prefix:     v.Prefix,
+		Major:       v.Major,
+		Minor:       v.Minor,
+		Patch:       v.Patch,
+		PreRelease:  v.PreRelease,
+		Hotfix:      m,
+		Prefix:      v.Prefix,
+		grammarSpec: v.grammarSpec,
 	}
 }
 
