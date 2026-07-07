@@ -7,6 +7,7 @@ package taggrammar
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 )
 
 // Spec describes the shape of a release tag. The zero value is not usable;
@@ -69,4 +70,61 @@ func (s Spec) versionRegex() *regexp.Regexp {
 // to version discovery.
 func (s Spec) IsVersionTag(tag string) bool {
 	return s.versionRegex().MatchString(tag)
+}
+
+// Parsed holds the numeric fields of a version tag. PreRelease and Hotfix use
+// -1 to mean absent, matching the convention used elsewhere in cascade.
+type Parsed struct {
+	Major      int
+	Minor      int
+	Patch      int
+	PreRelease int
+	Hotfix     int
+}
+
+// Parse extracts the numeric fields of tag under this Spec. It returns ok=false
+// when tag is not a version tag. An absent pre-release or hotfix is reported as
+// -1.
+func (s Spec) Parse(tag string) (Parsed, bool) {
+	m := s.versionRegex().FindStringSubmatch(tag)
+	if m == nil {
+		return Parsed{}, false
+	}
+	// Submatch layout: [0] whole, [1] prefix, [2] major, [3] minor,
+	// [4] patch, [5] pre-release, [6] hotfix.
+	p := Parsed{
+		Major:      atoi(m[2]),
+		Minor:      atoi(m[3]),
+		Patch:      atoi(m[4]),
+		PreRelease: -1,
+		Hotfix:     -1,
+	}
+	if m[5] != "" {
+		p.PreRelease = atoi(m[5])
+	}
+	if m[6] != "" {
+		p.Hotfix = atoi(m[6])
+	}
+	return p, true
+}
+
+// Format renders p under this Spec. It always emits the prefix and numeric
+// core, appends "-<token><separator><n>" when PreRelease is present, and
+// appends ".hotfix.<m>" when Hotfix is present.
+func (s Spec) Format(p Parsed) string {
+	out := fmt.Sprintf("%s%d.%d.%d", s.Prefix, p.Major, p.Minor, p.Patch)
+	if p.PreRelease >= 0 {
+		out += fmt.Sprintf("-%s%s%d", s.PreReleaseToken, s.PreReleaseSeparator, p.PreRelease)
+	}
+	if p.Hotfix >= 0 {
+		out += fmt.Sprintf(".hotfix.%d", p.Hotfix)
+	}
+	return out
+}
+
+// atoi converts a submatch known to be all digits. The grammar guarantees the
+// input, so any error is discarded and yields 0.
+func atoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
