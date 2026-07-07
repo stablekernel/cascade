@@ -110,8 +110,10 @@ Examples:
 				}
 			}
 
-			// Calculate next version
-			calc := NewCalculator(cfg.GetTagPrefix())
+			// Calculate next version under the manifest's resolved tag grammar so
+			// a custom prefix, pre-release token, or separator is honored. With no
+			// tag_grammar block this resolves to the historical default.
+			calc := NewCalculatorWithGrammar(cfg.ResolveTagGrammar())
 			nextVersion, err := calc.CalculateNext(currentDevVersion, nextEnvVersion, commits)
 			if err != nil {
 				return fmt.Errorf("calculating version: %w", err)

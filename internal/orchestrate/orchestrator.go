@@ -334,12 +334,19 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 	// Get current environment's version and next env's version
 	var currentDevVersion, nextEnvVersion, nextEnvSHA string
 
+	// Resolve the manifest's tag grammar once so tag discovery and version
+	// calculation share one shape. With no tag_grammar block this is the
+	// historical default, keeping behavior byte-identical.
+	spec := o.cicdFile.Config.ResolveTagGrammar()
+
 	// For no-environment setup (library/CLI projects), use the provided environment key
 	// for state tracking but don't require it to be in the environments list
 	if len(envs) == 0 {
 		// No environments - this is a library/CLI project
 		// All builds go to pre-release, version bumps based on conventional commits
-		tagPrefix := o.cicdFile.Config.GetTagPrefix()
+		// The resolved Spec.Prefix IS the prefix; the tag glob below widens on it
+		// and the version predicate narrows, so a custom grammar stays consistent.
+		tagPrefix := spec.Prefix
 
 		// Get current dev version from state (for RC number tracking)
 		if state := o.cicdFile.State[o.environment]; state != nil {
@@ -359,7 +366,7 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 
 		// Get latest published release (non-RC) as base version for version calculation
 		// This ensures we continue from v1.0.0 → v1.0.1-rc.0, not restart at v0.1.0-rc.0
-		latestRelease, releaseSHA, err := git.GetLatestReleaseTag(o.baseDir, tagPrefix)
+		latestRelease, releaseSHA, err := git.GetLatestReleaseTagSpec(o.baseDir, spec)
 		if err != nil {
 			log.Warn("Failed to get latest release tag: %v", err)
 		} else if latestRelease != "" {
@@ -415,8 +422,8 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 
 	log.Debug("Found %d conventional commits for version calculation", len(commits))
 
-	// Calculate next version
-	calc := version.NewCalculator(o.cicdFile.Config.GetTagPrefix())
+	// Calculate next version under the resolved tag grammar shared with discovery.
+	calc := version.NewCalculatorWithGrammar(spec)
 	nextVersion, err := calc.CalculateNext(currentDevVersion, nextEnvVersion, commits)
 	if err != nil {
 		return "", fmt.Errorf("calculating version: %w", err)
