@@ -308,8 +308,9 @@ func (p *Preflighter) checkDowngrade(promotions []EnvPromotion, result *Prefligh
 			continue
 		}
 
-		incoming, errIn := version.Parse(incomingStr)
-		current, errCur := version.Parse(currentStr)
+		spec := resolveTagGrammar(p.cicdFile)
+		incoming, errIn := version.ParseWithGrammar(spec, incomingStr)
+		current, errCur := version.ParseWithGrammar(spec, currentStr)
 		if errIn != nil || errCur != nil {
 			// FAIL-OPEN: non-semver version -> warn and continue.
 			result.Warnings = append(result.Warnings, fmt.Sprintf(

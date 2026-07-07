@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Spec describes the shape of a release tag. The zero value is not usable;
@@ -120,6 +121,19 @@ func (s Spec) Format(p Parsed) string {
 		out += fmt.Sprintf(".hotfix.%d", p.Hotfix)
 	}
 	return out
+}
+
+// StripPreRelease returns tag with its pre-release segment (and anything after
+// it, such as a nested hotfix) removed, leaving just the prefix and numeric
+// core. It cuts at this spec's pre-release marker ("-" + token + separator), so
+// the default grammar cuts at "-rc." exactly as the historical literal strip
+// did, byte for byte. A tag without the marker is returned unchanged.
+func (s Spec) StripPreRelease(tag string) string {
+	marker := "-" + s.PreReleaseToken + s.PreReleaseSeparator
+	if idx := strings.Index(tag, marker); idx != -1 {
+		return tag[:idx]
+	}
+	return tag
 }
 
 // atoi converts a submatch known to be all digits. The grammar guarantees the
