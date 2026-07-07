@@ -136,6 +136,32 @@ func (s Spec) StripPreRelease(tag string) string {
 	return tag
 }
 
+// PreReleaseStripSedBRE returns the anchored sed basic-regular-expression that
+// matches this spec's pre-release segment at the end of a version string, for
+// example "-rc\.[0-9]*$" for the default grammar and "-beta[0-9]*$" for a beta
+// token with an empty separator. The token is emitted literally; the separator
+// is escaped so a metacharacter such as "." matches literally. Code generators
+// bake this into the driven repo's release workflow so the emitted strip follows
+// the configured grammar.
+func (s Spec) PreReleaseStripSedBRE() string {
+	return "-" + s.PreReleaseToken + sedBREEscape(s.PreReleaseSeparator) + "[0-9]*$"
+}
+
+// sedBREEscape backslash-escapes the characters that carry special meaning in a
+// sed basic regular expression so a literal separator matches literally. The
+// backslash is escaped first so it is not doubled by a later pass.
+func sedBREEscape(s string) string {
+	const special = `\.[]*^$`
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune(special, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // atoi converts a submatch known to be all digits. The grammar guarantees the
 // input, so any error is discarded and yields 0.
 func atoi(s string) int {

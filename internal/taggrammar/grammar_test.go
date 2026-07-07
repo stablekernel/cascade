@@ -98,6 +98,19 @@ func TestStripPreRelease_CustomToken(t *testing.T) {
 	}
 }
 
+func TestPreReleaseStripSedBRE(t *testing.T) {
+	if got := Default().PreReleaseStripSedBRE(); got != `-rc\.[0-9]*$` {
+		t.Errorf("Default PreReleaseStripSedBRE() = %q, want %q", got, `-rc\.[0-9]*$`)
+	}
+
+	s := Default()
+	s.PreReleaseToken = "beta"
+	s.PreReleaseSeparator = ""
+	if got := s.PreReleaseStripSedBRE(); got != `-beta[0-9]*$` {
+		t.Errorf("beta PreReleaseStripSedBRE() = %q, want %q", got, `-beta[0-9]*$`)
+	}
+}
+
 func TestParseFormat_NonDefaultSpec(t *testing.T) {
 	s := Default()
 	s.Prefix = ""

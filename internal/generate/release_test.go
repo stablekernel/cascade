@@ -205,6 +205,29 @@ func TestReleaseGenerator_SemverTagCalculation(t *testing.T) {
 
 }
 
+// TestReleaseGenerator_SemverTagCalculation_CustomToken proves the emitted strip
+// pattern follows the configured tag grammar: a beta token with an empty
+// separator yields the beta-shaped sed expression, not the rc one.
+func TestReleaseGenerator_SemverTagCalculation_CustomToken(t *testing.T) {
+	betaToken := "beta"
+	emptySep := ""
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"prod"},
+		TagGrammar: &config.TagGrammarConfig{
+			PreReleaseToken:     &betaToken,
+			PreReleaseSeparator: &emptySep,
+		},
+	}
+
+	gen := NewReleaseGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "sed 's/-beta[0-9]*$//'")
+	assert.NotContains(t, content, "sed 's/-rc\\.[0-9]*$//'")
+}
+
 func TestReleaseGenerator_ChangelogGeneration(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
