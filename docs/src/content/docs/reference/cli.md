@@ -844,6 +844,27 @@ Bump rules:
 - Fix (`fix`) triggers a patch bump.
 - Pre-release environments append an RC suffix (e.g., `v1.3.0-rc.0`).
 
+`next-version` resolves [`tag_grammar`](/cascade/reference/manifest/#tag_grammar) from the
+manifest and formats the calculated version under that grammar, so its output matches what
+`orchestrate` cuts and what the generated release workflow publishes. With no `tag_grammar`
+block the output keeps the historical `rc.N` shape shown above. A manifest with a custom
+`prerelease_token` and `prerelease_separator`:
+
+```yaml
+ci:
+  config:
+    tag_grammar:
+      prerelease_token: pre
+      prerelease_separator: ""
+```
+
+changes the emitted shape:
+
+```bash
+cascade next-version --environment prod --base-sha abc123 --head-sha def456
+# v1.3.0-pre0
+```
+
 ### generate-changelog
 
 Generate a markdown changelog from conventional commits.
