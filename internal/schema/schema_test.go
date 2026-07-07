@@ -365,3 +365,31 @@ func TestSchema_OnDiskCopiesAreByteIdentical(t *testing.T) {
 		}
 	}
 }
+
+// TestSchema_AcceptsAllowBreakingChanges proves the config-level
+// allow_breaking_changes boolean is declared, so a manifest that disables the
+// breaking-change gate validates under the config object's
+// additionalProperties: false.
+func TestSchema_AcceptsAllowBreakingChanges(t *testing.T) {
+	sch := compileSchema(t)
+
+	good := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch":           "main",
+			"allow_breaking_changes": true,
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, good)); err != nil {
+		t.Fatalf("allow_breaking_changes must validate: %v", err)
+	}
+
+	bad := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch":           "main",
+			"allow_breaking_changes": "yes",
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, bad)); err == nil {
+		t.Fatalf("a non-boolean allow_breaking_changes must be rejected")
+	}
+}

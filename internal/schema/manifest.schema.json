@@ -94,6 +94,10 @@
           "description": "Version tag prefix (default: \"v\")."
         },
         "tag_grammar": { "$ref": "#/definitions/tagGrammarConfig" },
+        "allow_breaking_changes": {
+          "type": "boolean",
+          "description": "Disable the breaking-change promote gate for this repository. Default false keeps the gate enabled, so a feat!: or BREAKING CHANGE: commit blocks the pre-release to release and release to prod crossings. Set true to let those crossings proceed without the per-run override."
+        },
         "release_token": {
           "type": "string",
           "description": "GitHub Actions secret expression for release operations (default: ${{ secrets.GITHUB_TOKEN }})."
