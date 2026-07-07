@@ -111,6 +111,18 @@ func TestPreReleaseStripSedBRE(t *testing.T) {
 	}
 }
 
+// A pre-release token that itself carries a sed-BRE metacharacter (a literal
+// "." is allowed by the config allowlist) must be escaped the same way the
+// separator already is, or the emitted sed would match more than the literal
+// token intends.
+func TestPreReleaseStripSedBRE_EscapesTokenMetachar(t *testing.T) {
+	s := Default()
+	s.PreReleaseToken = "r.c"
+	if got := s.PreReleaseStripSedBRE(); got != `-r\.c\.[0-9]*$` {
+		t.Errorf("PreReleaseStripSedBRE() = %q, want %q", got, `-r\.c\.[0-9]*$`)
+	}
+}
+
 func TestParseFormat_NonDefaultSpec(t *testing.T) {
 	s := Default()
 	s.Prefix = ""

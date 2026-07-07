@@ -143,6 +143,35 @@ func TestValidateTagGrammar(t *testing.T) {
 			name: "custom separator empty is allowed",
 			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{PreReleaseSeparator: strptr("")}},
 		},
+		{
+			name:    "prerelease token with embedded single quote rejected",
+			cfg:     &TrunkConfig{TagGrammar: &TagGrammarConfig{PreReleaseToken: strptr("b'ad")}},
+			wantErr: "prerelease_token",
+		},
+		{
+			name: "prefix v is allowed",
+			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{Prefix: strptr("v")}},
+		},
+		{
+			name: "prerelease token beta is allowed",
+			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{PreReleaseToken: strptr("beta")}},
+		},
+		{
+			name: "prerelease token pre is allowed",
+			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{PreReleaseToken: strptr("pre")}},
+		},
+		{
+			name: "separator dot is allowed",
+			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{PreReleaseSeparator: strptr(".")}},
+		},
+		{
+			name: "dryrun token dryrun is allowed",
+			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{DryRunToken: strptr("dryrun")}},
+		},
+		{
+			name: "dryrun token rehearsal is allowed",
+			cfg:  &TrunkConfig{TagGrammar: &TagGrammarConfig{DryRunToken: strptr("rehearsal")}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

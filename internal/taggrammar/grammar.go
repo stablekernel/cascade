@@ -139,12 +139,13 @@ func (s Spec) StripPreRelease(tag string) string {
 // PreReleaseStripSedBRE returns the anchored sed basic-regular-expression that
 // matches this spec's pre-release segment at the end of a version string, for
 // example "-rc\.[0-9]*$" for the default grammar and "-beta[0-9]*$" for a beta
-// token with an empty separator. The token is emitted literally; the separator
-// is escaped so a metacharacter such as "." matches literally. Code generators
-// bake this into the driven repo's release workflow so the emitted strip follows
-// the configured grammar.
+// token with an empty separator. Both the token and the separator are
+// escaped, so a metacharacter such as "." (a value the config allowlist
+// otherwise permits in either field) matches literally instead of as a
+// wildcard. Code generators bake this into the driven repo's release
+// workflow so the emitted strip follows the configured grammar.
 func (s Spec) PreReleaseStripSedBRE() string {
-	return "-" + s.PreReleaseToken + sedBREEscape(s.PreReleaseSeparator) + "[0-9]*$"
+	return "-" + sedBREEscape(s.PreReleaseToken) + sedBREEscape(s.PreReleaseSeparator) + "[0-9]*$"
 }
 
 // sedBREEscape backslash-escapes the characters that carry special meaning in a
