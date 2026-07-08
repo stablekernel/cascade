@@ -8,6 +8,7 @@ import (
 	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/release"
+	"github.com/stablekernel/cascade/internal/statewrite"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
@@ -76,6 +77,31 @@ func WithClock(now func() time.Time) FinalizeOption {
 	return func(f *Finalizer) {
 		if now != nil {
 			f.now = now
+		}
+	}
+}
+
+// WithComponent scopes finalization to the named declared component, so its
+// promoted state is recorded under state.components.<name>.<env> (and, on a
+// publish, latest_release.components.<name>) via the scoped serializer rather
+// than the flat single-component state.<env> form. An empty name is a no-op,
+// preserving the single-component path byte-identically. It is set by a
+// per-component generated promote workflow passing --component.
+func WithComponent(name string) FinalizeOption {
+	return func(f *Finalizer) {
+		f.component = name
+	}
+}
+
+// withContentsClient injects the GitHub Contents client the API state-write path
+// uses, so the optimistic-lock retry loop can be exercised against a fake that
+// simulates a concurrent finalizer's 409. Production leaves it unset and the
+// default gh-CLI client is used. It is unexported because it exists only for the
+// concurrent-finalize tests, not the public API surface.
+func withContentsClient(c statewrite.ContentsClient) FinalizeOption {
+	return func(f *Finalizer) {
+		if c != nil {
+			f.contentsClient = c
 		}
 	}
 }

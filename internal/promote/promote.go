@@ -66,6 +66,10 @@ type Promoter struct {
 	actor      string
 	force      bool // For default mode: continue on failure
 	ancestor   AncestorFunc
+	// component, when non-empty, scopes a non-dry-run saveConfig (the simulate
+	// path) to state.components.<component>.<env> via config.WriteScopedState. An
+	// empty value keeps the flat single-component serialization, byte-identical.
+	component string
 }
 
 // PromoterOptions configures the Promoter
@@ -74,6 +78,9 @@ type PromoterOptions struct {
 	DryRun     bool
 	Actor      string
 	Force      bool // For default mode: continue on failure
+	// Component scopes persisted state to the named declared component. Empty
+	// selects the single-component path, byte-identical to today.
+	Component string
 }
 
 // NewPromoter creates a new Promoter. Optional behavior (such as the
@@ -99,6 +106,7 @@ func NewPromoter(opts PromoterOptions, options ...Option) (*Promoter, error) {
 		actor:      actor,
 		force:      opts.Force,
 		ancestor:   gc.ancestor,
+		component:  opts.Component,
 	}, nil
 }
 
@@ -439,7 +447,7 @@ func (p *Promoter) noEnvironmentPromotion() (*PromotionResult, error) {
 		SourceEnv:   "prerelease",
 		SHA:         sourceState.SHA,
 		Version:     p.stripPreRelease(sourceState.Version), // Use semver for release
-		NeedsDeploy: false,                              // No deployment for library/CLI projects
+		NeedsDeploy: false,                                  // No deployment for library/CLI projects
 	}
 
 	result := &PromotionResult{
@@ -708,11 +716,31 @@ func (p *Promoter) saveConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to read config: %w", err)
 	}
-	data, err := config.WriteManifestState(current, key, p.cicdFile.State, p.cicdFile.LatestRelease)
+	data, err := p.serializeState(current, key)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	return os.WriteFile(p.configPath, data, 0644)
+}
+
+// serializeState rewrites current with the in-memory state. In the
+// single-component form it reconciles the whole flat state node via
+// WriteManifestState, byte-identical to the historical behavior. In the
+// component-scoped form it node-patches only state.components.<component>.<env>
+// (and latest_release.components.<component>) via WriteScopedState, preserving
+// every sibling component verbatim.
+func (p *Promoter) serializeState(current []byte, key string) ([]byte, error) {
+	if p.component == "" {
+		return config.WriteManifestState(current, key, p.cicdFile.State, p.cicdFile.LatestRelease)
+	}
+	writes := make([]config.StateWrite, 0, len(p.cicdFile.State))
+	for env, st := range p.cicdFile.State {
+		writes = append(writes, config.StateWrite{Component: p.component, Env: env, State: st})
+	}
+	if p.cicdFile.LatestRelease != nil {
+		writes = append(writes, config.StateWrite{Component: p.component, Latest: p.cicdFile.LatestRelease})
+	}
+	return config.WriteScopedState(current, key, writes...)
 }
 
 // ToJSON returns the result as JSON
