@@ -102,6 +102,14 @@ func NewPromoter(opts PromoterOptions, options ...Option) (*Promoter, error) {
 		return nil, err
 	}
 
+	// Narrow the working ladder to the component's resolved environment subset. A
+	// component may declare a shorter `environments` list than the repo-global
+	// ladder; the promotion runtime must advance and gate along that subset, not
+	// the global ladder. A no-op for the single-component (empty) path.
+	if err := applyComponentLadder(cicdFile, opts.Component); err != nil {
+		return nil, err
+	}
+
 	actor := opts.Actor
 	if actor == "" {
 		actor = "github-actions[bot]"
@@ -146,6 +154,35 @@ func overlayComponentState(cicdFile *config.CICDFile, configPath, component stri
 	for env, st := range compState {
 		cicdFile.State[env] = st
 	}
+	return nil
+}
+
+// applyComponentLadder narrows the working config's environment ladder to the
+// named component's resolved subset, read via config.TrunkConfig.ResolveComponent.
+// A component may override the repo-global `environments` list with a shorter
+// subset; the promotion runtime derives the next-env, is-last-env, and gating
+// decisions from cicdFile.Config.Environments, so narrowing it here makes every
+// such derivation honor the component's ladder without teaching each call site
+// about components. It is a no-op when component is empty (the single-component
+// path is byte-identical) or when the manifest carries no config. This mirrors
+// how internal/rollback.New resolves the component's ladder for its guards.
+func applyComponentLadder(cicdFile *config.CICDFile, component string) error {
+	if component == "" || cicdFile.Config == nil {
+		return nil
+	}
+	// A component may be recorded only under state.components (per-component state
+	// seeding) without a config.components declaration. Such a component carries no
+	// `environments` override, so the repo-global ladder already applies; there is
+	// nothing to narrow and resolving would fail on the undeclared name. Narrow the
+	// ladder only for a component the config actually declares.
+	if _, declared := cicdFile.Config.Components[component]; !declared {
+		return nil
+	}
+	resolved, err := cicdFile.Config.ResolveComponent(component)
+	if err != nil {
+		return fmt.Errorf("resolving component %q: %w", component, err)
+	}
+	cicdFile.Config.Environments = resolved.Config.Environments
 	return nil
 }
 

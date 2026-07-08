@@ -1,0 +1,133 @@
+name: "Per-Component Environment Subset"
+description: |
+  Proves a component promotes only through its own environment ladder when it
+  declares a shorter `environments` subset than the repo-global ladder (#297). The
+  manifest declares a global three-env ladder [dev, staging, prod] and two
+  components: "api" narrows its ladder to [dev, staging], while "web" inherits the
+  full global ladder. Each component owns a path subtree with its own strict tag
+  namespace and version line.
+
+  The proof is asymmetric. api's last env, staging, is the terminal position of its
+  ladder, so promoting api into staging is the publish crossing: api's staging state
+  lands the stripped release version api-0.1.0, not the api-0.1.0-rc.0 an ordinary
+  intermediate advance would carry. A promotion runtime that ignored api's subset
+  and walked the global ladder would treat staging as an intermediate hop (carrying
+  the rc version) and still hold prod as a further target. A cascade of api into the
+  global-only prod env is therefore rejected: prod is not on api's ladder. The
+  sibling web, on the full ladder, still promotes all the way to prod on its own
+  web-0.1.0 line, and api's recorded staging state stays byte-identical across web's
+  entire cycle.
+
+config:
+  trunk_branch: main
+  environments: [dev, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+      environments: [dev, staging]
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so the
+  # per-component workflows executed below are the pristine generated output.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  # Cut api's dev prerelease on its own version line.
+  - name: "Orchestrate api to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+
+  # Promote api from dev to staging, api's last (terminal) env. Because staging is
+  # the top of api's ladder, this is the publish crossing: staging records the
+  # stripped release version api-0.1.0. Under a runtime that walked the global
+  # ladder, staging would be an intermediate hop still carrying api-0.1.0-rc.0. web
+  # has not been touched, so its subtree must be absent.
+  - name: "Promote api from dev to staging (its terminal env)"
+    action: promote
+    promote:
+      mode: cascade
+      target: staging
+      component: api
+    expect:
+      state:
+        api-staging:
+          component: api
+          env: staging
+          version: "api-0.1.0"
+        web-staging:
+          component: web
+          env: staging
+          wiped: true
+
+  # A cascade of api into the global-only prod env must be rejected: prod is not on
+  # api's ladder [dev, staging]. A runtime that ignored the subset would happily
+  # promote api into prod. The workflow fails at preflight.
+  - name: "Reject promoting api into the global-only prod env"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: api
+      expect_failure: true
+
+  # Advance web through its own cycle. web inherits the full ladder, so it reaches
+  # prod. Cutting web's dev prerelease must not disturb api's recorded staging state.
+  - name: "Orchestrate web to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: web
+    expect:
+      state:
+        api-staging:
+          component: api
+          env: staging
+          unchanged: true
+
+  # Promote web from dev to prod. web's full ladder reaches prod on its own web-0.1.0
+  # line; api's staging subtree must survive byte-identical.
+  - name: "Promote web from dev to prod (full ladder)"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: web
+    expect:
+      state:
+        web-prod:
+          component: web
+          env: prod
+          version: "web-0.1.0"
+        api-staging:
+          component: api
+          env: staging
+          unchanged: true
