@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/stablekernel/cascade/internal/config"
 )
 
 // NewCommand creates the manage-release command
@@ -23,6 +25,9 @@ func NewCommand() *cobra.Command {
 	var deleteTag string
 	var createTag bool
 	var tagOnly bool
+	var configPath string
+	var manifestKey string
+	var component string
 
 	cmd := &cobra.Command{
 		Use:   "manage-release",
@@ -83,7 +88,17 @@ Outputs (to stdout):
 				changelog = strings.TrimSpace(string(content))
 			}
 
-			manager := NewManager(repo, token)
+			// Scope RC-tag reaping to a declared component's tag namespace when
+			// --component is set, so a component's publish never reaps a sibling
+			// component's RC tags and a custom pre-release token is reaped instead
+			// of accumulating. Without --component the reaper keeps its historical
+			// permissive single-component behavior.
+			opts, err := componentReapOptions(configPath, manifestKey, component)
+			if err != nil {
+				return err
+			}
+
+			manager := NewManager(repo, token, opts...)
 			result, err := manager.Manage(Options{
 				Action:      act,
 				Environment: environment,
@@ -122,6 +137,9 @@ Outputs (to stdout):
 	cmd.Flags().StringVar(&deleteTag, "delete-tag", "", "Tag to delete after publish (cleanup)")
 	cmd.Flags().BoolVar(&createTag, "create-tag", false, "Create git tag on create action")
 	cmd.Flags().BoolVar(&tagOnly, "tag-only", false, "Create the git tag only and skip creating a draft release (release workflow is the sole release creator)")
+	cmd.Flags().StringVar(&configPath, "config", "", "Path to CI/CD config file (required with --component to resolve the component tag grammar)")
+	cmd.Flags().StringVar(&manifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
+	cmd.Flags().StringVar(&component, "component", "", "Declared component to scope RC-tag reaping to (multi-component manifests)")
 
 	_ = cmd.MarkFlagRequired("repo")
 	_ = cmd.MarkFlagRequired("action")
@@ -129,6 +147,39 @@ Outputs (to stdout):
 	_ = cmd.MarkFlagRequired("tag")
 
 	return cmd
+}
+
+// componentReapOptions resolves the Manager options that scope RC-tag reaping to
+// a declared component. When component is empty the single-component path is
+// used and no options are returned, so reaping behavior is unchanged. When a
+// component is named the manifest is loaded and the component's strict tag
+// grammar is threaded via WithTagGrammar so reaping is exact to that component's
+// namespace. A named component requires --config so the grammar can be resolved.
+func componentReapOptions(configPath, manifestKey, component string) ([]Option, error) {
+	if component == "" {
+		return nil, nil
+	}
+	if configPath == "" {
+		return nil, fmt.Errorf("--config is required with --component to resolve the component tag grammar")
+	}
+	if manifestKey == "" {
+		manifestKey = config.DefaultManifestKey
+	}
+
+	file, err := config.ParseManifestFile(configPath, manifestKey)
+	if err != nil {
+		return nil, fmt.Errorf("loading manifest for component %q: %w", component, err)
+	}
+	if file.Config == nil {
+		return nil, fmt.Errorf("manifest %q has no %q config for component %q", configPath, manifestKey, component)
+	}
+
+	resolved, err := file.Config.ResolveComponent(component)
+	if err != nil {
+		return nil, fmt.Errorf("resolving component %q: %w", component, err)
+	}
+
+	return []Option{WithTagGrammar(resolved.TagGrammarSpec())}, nil
 }
 
 // tagCreatingActions are the actions that materialize a git tag pointing at a
