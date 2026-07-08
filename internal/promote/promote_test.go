@@ -339,6 +339,7 @@ func TestDefaultPromotion_StripsRCSuffixOnPublishEnv(t *testing.T) {
 	}
 	if releasePromo == nil {
 		t.Fatal("no promotion found for env 'release'")
+		return
 	}
 
 	if releasePromo.Version != "v1.0.0" {
@@ -404,6 +405,7 @@ func TestCascadePromotion_StripsRCSuffixOnPublishEnv(t *testing.T) {
 	}
 	if releasePromo == nil {
 		t.Fatal("no promotion found for env 'release'")
+		return
 	}
 
 	if releasePromo.Version != "v1.0.0" {

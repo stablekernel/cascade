@@ -129,6 +129,7 @@ func TestPlan_RejectsNonTrunkCommit(t *testing.T) {
 	_, err := p.Plan(side, "test")
 	if err == nil {
 		t.Fatal("expected error for non-trunk commit, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "trunk") {
 		t.Errorf("error %q should mention trunk", err.Error())
@@ -150,6 +151,7 @@ func TestPlan_RejectsFirstEnv(t *testing.T) {
 	_, err := p.Plan(fix, "dev")
 	if err == nil {
 		t.Fatal("expected error for first env, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "first environment") {
 		t.Errorf("error %q should mention first environment", err.Error())
@@ -277,6 +279,7 @@ func TestPlan_ExistingBranchTipMismatch_FailsClosedWithoutRealChecker(t *testing
 	_, err := p.Plan(fix, "test")
 	if err == nil {
 		t.Fatal("expected tip-mismatch error")
+		return
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "abandoned hotfix branch") {
@@ -325,6 +328,7 @@ func TestPlan_SingleFlight_OpenPRBlocks(t *testing.T) {
 	_, err := p.Plan(fix, "test")
 	if err == nil {
 		t.Fatal("expected single-flight error")
+		return
 	}
 	if checker.calledWith != "env/test" {
 		t.Errorf("PR checker queried %q, want env/test", checker.calledWith)

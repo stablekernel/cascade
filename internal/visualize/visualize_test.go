@@ -188,6 +188,7 @@ func TestBuildViewModel_CyclicGraphErrors(t *testing.T) {
 	_, err := BuildViewModel(g)
 	if err == nil {
 		t.Fatal("expected error for cyclic graph, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "cycle") {
 		t.Errorf("expected cycle error, got: %v", err)

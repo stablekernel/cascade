@@ -21,6 +21,7 @@ func TestPlan_FirstEnvironment_NoTarget_Guarded(t *testing.T) {
 	_, err := rb.Plan("dev", "", "")
 	if err == nil {
 		t.Fatalf("expected guard error rolling back the first environment, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "first environment") {
 		t.Errorf("error = %q, want it to name the first environment", err.Error())
@@ -43,6 +44,7 @@ func TestPlan_FirstEnvironment_WithTarget_Guarded(t *testing.T) {
 	_, err := rb.Plan("dev", "devsha1234567", "")
 	if err == nil {
 		t.Fatalf("expected guard error rolling back the first environment with --to, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "first environment") {
 		t.Errorf("error = %q, want it to name the first environment", err.Error())
@@ -57,6 +59,7 @@ func TestPlan_FirstEnvironment_Deployable_Guarded(t *testing.T) {
 	_, err := rb.Plan("dev", "", "services")
 	if err == nil {
 		t.Fatalf("expected guard error for a deployable-scoped first-env rollback, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "first environment") {
 		t.Errorf("error = %q, want it to name the first environment", err.Error())
@@ -89,6 +92,7 @@ func TestApply_FirstEnvironment_Guarded(t *testing.T) {
 	err := rb.Apply(plan)
 	if err == nil {
 		t.Fatalf("expected Apply to refuse a first-environment rollback, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "first environment") {
 		t.Errorf("error = %q, want it to name the first environment", err.Error())

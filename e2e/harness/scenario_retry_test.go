@@ -210,6 +210,7 @@ func TestRunScenarioWithRetry_PersistsEvidenceOnExhaustion(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected an error after exhausting attempts")
+		return
 	}
 
 	// The error must reference a written artifact path.

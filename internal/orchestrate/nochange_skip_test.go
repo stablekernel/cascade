@@ -225,10 +225,12 @@ func TestFinalize_RecordsPerBuildSHA(t *testing.T) {
 	envState := orch.cicdFile.State["prerelease"]
 	if envState == nil {
 		t.Fatalf("prerelease state is nil after Finalize")
+		return
 	}
 	bs := envState.Builds["app"]
 	if bs == nil {
 		t.Fatalf("envState.Builds[app] is nil; expected a recorded build state")
+		return
 	}
 	if bs.SHA != headSHA {
 		t.Errorf("envState.Builds[app].SHA = %q, want %q", bs.SHA, headSHA)

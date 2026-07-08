@@ -173,6 +173,7 @@ func TestLoadTheme_MissingFile_Errors(t *testing.T) {
 	_, err := LoadTheme(filepath.Join(t.TempDir(), "absent.json"))
 	if err == nil {
 		t.Fatal("expected error for missing theme file, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "absent.json") {
 		t.Errorf("error should name the file, got: %v", err)
@@ -199,6 +200,7 @@ func TestLoadTheme_Malformed_Errors(t *testing.T) {
 	_, err := LoadTheme(noName)
 	if err == nil {
 		t.Fatal("expected error for theme missing name, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "name") {
 		t.Errorf("error should mention the missing name field, got: %v", err)

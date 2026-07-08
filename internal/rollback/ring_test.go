@@ -16,6 +16,7 @@ func seedRing(t *testing.T, rb *Rollbacker, env string, ring []config.EnvStateSn
 	st := rb.cicdFile.State[env]
 	if st == nil {
 		t.Fatalf("no live state for env %q to seed ring", env)
+		return
 	}
 	st.Previous = ring
 }
@@ -185,6 +186,7 @@ func TestResolveTarget_UnresolvableReturnsError(t *testing.T) {
 	_, err := rb.Plan("prod", "", "")
 	if err == nil {
 		t.Fatal("expected error when no prior version to roll back to, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "no prior version to roll back to") {
 		t.Errorf("error = %q, want it to mention no prior version to roll back to", err.Error())

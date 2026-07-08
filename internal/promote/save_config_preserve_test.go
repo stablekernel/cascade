@@ -86,6 +86,7 @@ func TestSaveConfig_NonDryRunPromote_PreservesUnmodeledManifestKeys(t *testing.T
 	testState := reparsed.State["test"]
 	if testState == nil {
 		t.Fatalf("expected state.test to be written, got nil; manifest:\n%s", out)
+		return
 	}
 	if testState.SHA != "abc123" {
 		t.Errorf("state.test.sha = %q, want %q", testState.SHA, "abc123")
