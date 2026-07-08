@@ -57,6 +57,20 @@ func PromoteConcurrencyGroup(name string) string {
 	return fmt.Sprintf("promote-%s", name)
 }
 
+// RollbackConcurrencyGroup derives the rollback concurrency group for a named
+// component. It lives in a dedicated "rollback-" namespace, deliberately distinct
+// from both ComponentConcurrencyGroup's "orchestrate-" namespace and
+// PromoteConcurrencyGroup's "promote-" namespace, because GitHub concurrency
+// groups are repo-global across workflows: a rollback workflow that reused either
+// key would silently serialize or cancel against that component's orchestrate or
+// promote run. Like the single-component rollback lane (which keys on the bare
+// workflow name to serialize every rollback run), this carries no ref or mode
+// axis, so all of a component's rollback runs serialize against each other; the
+// component identity keeps two components from sharing a lane.
+func RollbackConcurrencyGroup(name string) string {
+	return fmt.Sprintf("rollback-%s", name)
+}
+
 // GetComponentTagPrefix returns the declared tag_prefix for the named component,
 // the tag namespace that component's versions and tags live under. It errors when
 // the component is not declared. Version and tag discovery use this so a

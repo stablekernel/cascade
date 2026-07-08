@@ -40,14 +40,49 @@ const hotfixConflictLabel = "cascade-hotfix-conflict"
 type HotfixGenerator struct {
 	config  *config.TrunkConfig
 	baseDir string
+
+	// componentName, when non-empty, names the component this hotfix workflow is
+	// scoped to. It suffixes the workflow name, composes the component identity
+	// into the concurrency group, threads --component through the hotfix CLI steps
+	// so plan and finalize record state under this component's subtree, and points
+	// the context job's raw N-1 state read at state.components.<name>. It is set
+	// only via WithHotfixComponentName by the per-component fan-out.
+	componentName string
+}
+
+// HotfixGeneratorOption configures a HotfixGenerator. Options are additive so new
+// per-component capability never breaks the positional constructor signature.
+type HotfixGeneratorOption func(*HotfixGenerator)
+
+// WithHotfixComponentName scopes the generated hotfix workflow to a declared
+// component so a multi-component manifest emits one distinct cascade-hotfix-<name>.yaml
+// per component. It sets the emitted workflow name, threads --component through the
+// hotfix CLI steps, composes the component into the concurrency group, and points
+// the context job's rollback-SHA read at the component's state subtree.
+func WithHotfixComponentName(name string) HotfixGeneratorOption {
+	return func(g *HotfixGenerator) { g.componentName = name }
 }
 
 // NewHotfixGenerator creates a hotfix-workflow generator bound to the given
 // trunk config and repository base directory.
-func NewHotfixGenerator(cfg *config.TrunkConfig, baseDir string) *HotfixGenerator {
-	return &HotfixGenerator{
+func NewHotfixGenerator(cfg *config.TrunkConfig, baseDir string, opts ...HotfixGeneratorOption) *HotfixGenerator {
+	g := &HotfixGenerator{
 		config:  cfg,
 		baseDir: baseDir,
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
+}
+
+// writeComponentFlag emits a "--component <name> \" continuation line at the given
+// indent when this hotfix workflow is scoped to a component, so the hotfix CLI
+// records and reads state under that component's subtree. The single-component
+// workflow emits nothing, keeping its CLI invocations byte-identical.
+func (g *HotfixGenerator) writeComponentFlag(sb *strings.Builder, indent string) {
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "%s--component %s \\\n", indent, g.componentName)
 	}
 }
 
@@ -131,7 +166,11 @@ func (g *HotfixGenerator) writeHeader(sb *strings.Builder) {
 }
 
 func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
-	sb.WriteString("name: Cascade Hotfix\n\n")
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "name: Cascade Hotfix (%s)\n\n", g.componentName)
+	} else {
+		sb.WriteString("name: Cascade Hotfix\n\n")
+	}
 	sb.WriteString("on:\n")
 	sb.WriteString("  workflow_dispatch:\n")
 	sb.WriteString("    inputs:\n")
@@ -194,7 +233,15 @@ func (g *HotfixGenerator) writePermissions(sb *strings.Builder) {
 // (orchestrate, promote, rollback) that a manifest-global group cannot serialize.
 func (g *HotfixGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
-	sb.WriteString("  group: ${{ github.event_name == 'pull_request' && format('hotfix-finalize-{0}', github.repository) || format('hotfix-{0}', github.event.inputs.target_env) }}\n")
+	if g.componentName != "" {
+		// Bake the component identity into both the finalize (per-repo) and apply
+		// (per-target-env) lanes so two components' hotfixes into the same env do
+		// not collide on one repo-global group, mirroring the promote fan-out's
+		// per-component isolation.
+		fmt.Fprintf(sb, "  group: ${{ github.event_name == 'pull_request' && format('hotfix-finalize-%s-{0}', github.repository) || format('hotfix-%s-{0}', github.event.inputs.target_env) }}\n", g.componentName, g.componentName)
+	} else {
+		sb.WriteString("  group: ${{ github.event_name == 'pull_request' && format('hotfix-finalize-{0}', github.repository) || format('hotfix-{0}', github.event.inputs.target_env) }}\n")
+	}
 	sb.WriteString("  cancel-in-progress: false\n")
 	sb.WriteString("\n")
 }
@@ -262,6 +309,7 @@ func (g *HotfixGenerator) writePlanJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix plan \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	g.writeComponentFlag(sb, "            ")
 	sb.WriteString("            --commits \"$HOTFIX_COMMIT\" \\\n")
 	sb.WriteString("            --target-env \"$HOTFIX_TARGET_ENV\" \\\n")
 	// --repo wires the single-flight PR lookup to a real REST-backed checker.
@@ -560,7 +608,15 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	// ".$MANIFEST_KEY.state.<env>.sha" read.
 	fmt.Fprintf(sb, "          MANIFEST_FILE=\"%s\"\n", g.getManifestFilePath())
 	fmt.Fprintf(sb, "          MANIFEST_KEY=\"%s\"\n", g.config.GetManifestKey())
-	sb.WriteString("          ROLLBACK_SHA=$(yq eval \".$MANIFEST_KEY.state.${TARGET_ENV}.sha // \\\"\\\"\" \"$MANIFEST_FILE\")\n")
+	// Component-scoped state nests under state.components.<name>.<env>; the
+	// single-component form is the flat state.<env>. The read must match the scope
+	// the finalize CLI wrote at so auto-rollback resolves this component's own N-1
+	// SHA (and cannot read a sibling's).
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "          ROLLBACK_SHA=$(yq eval \".$MANIFEST_KEY.state.components.%s.${TARGET_ENV}.sha // \\\"\\\"\" \"$MANIFEST_FILE\")\n", g.componentName)
+	} else {
+		sb.WriteString("          ROLLBACK_SHA=$(yq eval \".$MANIFEST_KEY.state.${TARGET_ENV}.sha // \\\"\\\"\" \"$MANIFEST_FILE\")\n")
+	}
 	sb.WriteString("          if [ \"$ROLLBACK_SHA\" = \"null\" ]; then ROLLBACK_SHA=\"\"; fi\n")
 	sb.WriteString("          {\n")
 	sb.WriteString("            echo \"target_env=${TARGET_ENV}\"\n")
@@ -755,6 +811,7 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade hotfix finalize \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	g.writeComponentFlag(sb, "            ")
 	sb.WriteString("            --target-env \"$TARGET_ENV\" \\\n")
 	sb.WriteString("            --merge-sha \"$MERGE_SHA\" \\\n")
 	sb.WriteString("            --fix-sha \"$FIX_SHA\" \\\n")

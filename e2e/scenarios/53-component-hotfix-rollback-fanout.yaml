@@ -1,0 +1,134 @@
+name: "Per-Component Hotfix and Rollback Generation"
+description: |
+  Exercises per-component hotfix and rollback workflow generation (#293, #294). The
+  manifest declares two components, each owning a path subtree with a distinct tag
+  prefix. Generation fans the hotfix lane out to one cascade-hotfix-<name>.yaml per
+  component (cascade-hotfix-api.yaml, cascade-hotfix-web.yaml) and the rollback lane
+  out to one cascade-rollback-<name>.yaml per component, emitting no repo-wide
+  cascade-hotfix.yaml or cascade-rollback.yaml. Each per-component hotfix workflow
+  drives its plan and finalize CLI steps with its own --component flag, reads the
+  component's own N-1 state subtree (state.components.<name>.<env>) for
+  auto-rollback, and carries a component-scoped concurrency group. Each rollback
+  workflow drives its preflight and finalize CLI steps with its own --component flag
+  and carries a rollback-namespaced per-component concurrency group (rollback-<name>)
+  distinct from the component's orchestrate and promote lanes, so a rollback run and
+  an orchestrate or promote run for one component never serialize against each other
+  on a shared repo-global lane. The scenario seeds both subtrees, proves the
+  multi-component generate then verify roundtrip is drift-free, and asserts each
+  fanned-out file carries its own --component invocation, state subtree, and
+  concurrency group and not the sibling's. Deep per-file structure and the
+  manifest-global concurrency composition are asserted in the generator unit tests;
+  act cannot yet execute a specific per-component hotfix or rollback workflow, so
+  this scenario proves the generated wiring and isolation rather than executing a
+  per-component lifecycle.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Each per-component hotfix workflow scopes its own state and lane"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # The observable, harness-robust proof of the hotfix fan-out is the emitted file
+    # set plus each file's CLI wiring: generation produced one hotfix workflow per
+    # component and no repo-wide cascade-hotfix.yaml. Each cascade-hotfix-<name>.yaml
+    # runs the hotfix CLI with --component <name> (the flag that scopes plan and
+    # finalize state to that component's subtree at runtime), reads its own N-1 state
+    # under state.components.<name> for auto-rollback, and carries a component-scoped
+    # concurrency group. The run lines, the yq state read, and the concurrency group
+    # are never rewritten by the harness (only the top-level name: is suffixed and
+    # setup-cli@ref localized), so these substrings are stable. not_contains proves
+    # neither file carries the sibling's scope.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-hotfix-api.yaml"
+          contains:
+            - "--component api"
+            - "state.components.api."
+            - "hotfix-finalize-api-"
+          not_contains:
+            - "--component web"
+            - "state.components.web."
+            - "hotfix-finalize-web-"
+        - path: ".github/workflows/cascade-hotfix-web.yaml"
+          contains:
+            - "--component web"
+            - "state.components.web."
+            - "hotfix-finalize-web-"
+          not_contains:
+            - "--component api"
+            - "state.components.api."
+            - "hotfix-finalize-api-"
+        - path: ".github/workflows/cascade-hotfix.yaml"
+          not_exists: true
+
+  - name: "Each per-component rollback workflow scopes its own state and lane"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # Mirror of the hotfix assertion for the rollback fan-out. Each
+    # cascade-rollback-<name>.yaml runs the rollback CLI (preflight and finalize) with
+    # --component <name> and carries a rollback-namespaced concurrency group
+    # (rollback-<name>). not_contains proves neither file carries the sibling's scope
+    # and that the rollback group never reuses the orchestrate or promote lane.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-rollback-api.yaml"
+          contains:
+            - "--component api"
+            - "group: rollback-api"
+          not_contains:
+            - "--component web"
+            - "group: rollback-web"
+            - "group: orchestrate-"
+            - "group: promote-"
+        - path: ".github/workflows/cascade-rollback-web.yaml"
+          contains:
+            - "--component web"
+            - "group: rollback-web"
+          not_contains:
+            - "--component api"
+            - "group: rollback-api"
+            - "group: orchestrate-"
+            - "group: promote-"
+        - path: ".github/workflows/cascade-rollback.yaml"
+          not_exists: true
