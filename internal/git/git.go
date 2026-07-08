@@ -95,6 +95,37 @@ func GetCommits(baseSHA, headSHA string, excludePaths []string) ([]Commit, error
 	return parseCommits(output), nil
 }
 
+// GetCommitsForPaths returns commits between two SHAs whose changes touch at
+// least one of includePaths, emitting `git log ... base..head -- <p1> <p2>`. It
+// is the include-path sibling of GetCommits (which appends pathspecs only as
+// exclusions): a component's version derivation passes its own path so a commit
+// touching only a sibling component's subtree is invisible to it. With an empty
+// includePaths the argv carries no `--` separator, so the result is identical to
+// GetCommits(base, head, nil) and the single-component path is unchanged.
+func GetCommitsForPaths(baseSHA, headSHA string, includePaths []string) ([]Commit, error) {
+	format := "%H\x1f%s\x1f%an\x1f%ae\x1f%b\x1e"
+
+	args := []string{"log", fmt.Sprintf("--format=%s", format), fmt.Sprintf("%s..%s", baseSHA, headSHA)}
+
+	// Add include paths as a trailing pathspec so only commits touching one of
+	// them are reported.
+	if len(includePaths) > 0 {
+		args = append(args, "--")
+		args = append(args, includePaths...)
+	}
+
+	cmd := exec.Command("git", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// A non-zero exit is a real git failure (bad base SHA, shallow clone, or
+		// "not a git repository"); an empty range exits 0. Surface it rather than
+		// masking it as "no commits" (mirrors GetCommits).
+		return nil, fmt.Errorf("git log: %w", err)
+	}
+
+	return parseCommits(output), nil
+}
+
 func parseCommits(data []byte) []Commit {
 	var commits []Commit
 
@@ -158,9 +189,25 @@ func GetInitialCommit() (string, error) {
 // to the process working directory. Returns empty string if no matching tags
 // found.
 func GetLatestTag(dir, prefix string) (string, string, error) {
-	// Get all tags matching prefix, sorted by version descending
-	// --sort=-v:refname sorts by version in descending order
-	cmd := exec.Command("git", "tag", "-l", prefix+"*", "--sort=-v:refname")
+	// The historical contract validates candidates under the default (permissive)
+	// grammar with the caller's prefix glob, so a hyphenated or foreign-cased tag
+	// still reads as today. GetLatestTagSpec carries that behavior verbatim when
+	// given a permissive default spec.
+	spec := taggrammar.Default()
+	spec.Prefix = prefix
+	return GetLatestTagSpec(dir, spec)
+}
+
+// GetLatestTagSpec is GetLatestTag under a caller-supplied grammar. The prefix
+// glob widens the candidate set to every tag leading with spec.Prefix; the tag
+// predicate then narrows it to a version-parseable tag under spec, so a strict
+// per-component prefix (StrictPrefix) accepts only that component's tags and can
+// never read a sibling component's namespace. Returns empty string if no
+// matching version tag is found.
+func GetLatestTagSpec(dir string, spec taggrammar.Spec) (string, string, error) {
+	// Get all tags matching the prefix glob, sorted by version descending.
+	// --sort=-v:refname sorts by version in descending order.
+	cmd := exec.Command("git", "tag", "-l", spec.Prefix+"*", "--sort=-v:refname")
 	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
@@ -171,9 +218,9 @@ func GetLatestTag(dir, prefix string) (string, string, error) {
 
 	// The prefix glob can still match non-version tags (for example a
 	// vX.Y.Z-dryrun.N exercise tag or a "vnightly" alias). Skip anything that is
-	// not a canonical cascade version so it can never be read as the latest one.
+	// not a version tag under spec so it can never be read as the latest one.
 	for _, tag := range tags {
-		if !IsValidVersionTag(tag) {
+		if !IsValidVersionTagSpec(spec, tag) {
 			continue
 		}
 

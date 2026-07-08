@@ -1,0 +1,117 @@
+name: "Per-Component Version Scoping"
+description: |
+  Exercises per-component version scoping (#287). The manifest declares two
+  components, each owning a path subtree with its own strict tag namespace. Each
+  generated per-component orchestrate workflow drives its setup step with its own
+  --component flag, so at runtime that component's version is derived from only its
+  path-scoped commits and its strict tag prefix (api-* never reads web-*, and vice
+  versa). The scenario seeds both subtrees, proves the multi-component generate then
+  verify roundtrip is drift-free, and asserts each orchestrate-<name>.yaml carries
+  its own --component invocation and path filter and not the sibling's. It then
+  advances only one component's subtree and reconfirms the drift-free roundtrip,
+  showing each component advances on its own path independently. The version math
+  itself (a commit under one component's path bumps only that component, in its own
+  tag namespace) is asserted in the git, config, version, and orchestrate unit
+  tests, which drive the computation directly; act cannot yet run a specific
+  per-component orchestrate workflow, so this scenario proves the generated wiring
+  and path isolation rather than executing the per-component version calculation.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Each per-component workflow scopes its own version derivation"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # The observable, harness-robust proof of per-component version scoping is the
+    # emitted setup invocation: each orchestrate-<name>.yaml runs `cascade
+    # orchestrate setup ... --component <name>`, the flag that scopes that
+    # component's version to its own path and strict tag namespace at runtime. The
+    # run line is never rewritten by the harness (only the top-level name: is
+    # suffixed and setup-cli@ref localized), so these substrings are stable. The
+    # path filter and per-component concurrency group cross-check isolation, and
+    # not_contains proves neither file carries the sibling's scope.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate-api.yaml"
+          contains:
+            - "--component api"
+            - "- 'services/api/**'"
+            - "group: orchestrate-api-"
+          not_contains:
+            - "--component web"
+            - "services/web"
+        - path: ".github/workflows/orchestrate-web.yaml"
+          contains:
+            - "--component web"
+            - "- 'services/web/**'"
+            - "group: orchestrate-web-"
+          not_contains:
+            - "--component api"
+            - "services/api"
+        - path: ".github/workflows/orchestrate.yaml"
+          not_exists: true
+
+  - name: "Advance only the api subtree"
+    action: commit
+    commit:
+      message: "feat: add api handler"
+      files:
+        services/api/handler.go: |
+          package main
+
+          func handler() {}
+
+  - name: "Roundtrip stays drift-free after an isolated per-component change"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # A source-only commit under one component's path does not alter the generated
+    # workflow set, and the api workflow still owns its own --component scope. This
+    # demonstrates each component advances on its own path independently.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate-api.yaml"
+          contains:
+            - "--component api"
+          not_contains:
+            - "--component web"

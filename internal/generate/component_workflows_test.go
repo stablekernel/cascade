@@ -115,6 +115,32 @@ func TestOrchestrateTargets_Components_FanOut(t *testing.T) {
 	if strings.Contains(api, "orchestrate-web-${{ github.ref }}") {
 		t.Errorf("api workflow must not carry web's concurrency group (isolation)")
 	}
+
+	// Version scoping: each workflow passes its own --component so the setup step
+	// derives that component's version from its own path and tag namespace.
+	if !strings.Contains(api, "--component api") {
+		t.Errorf("api workflow setup missing --component api")
+	}
+	if strings.Contains(api, "--component web") {
+		t.Errorf("api workflow must not carry web's --component (isolation)")
+	}
+	if !strings.Contains(web, "--component web") {
+		t.Errorf("web workflow setup missing --component web")
+	}
+}
+
+// TestGenerator_SingleComponent_NoComponentFlag proves the single-component
+// orchestrate workflow emits no --component flag, keeping its setup invocation
+// byte-identical to the pre-component generator.
+func TestGenerator_SingleComponent_NoComponentFlag(t *testing.T) {
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}}
+	got, err := NewGenerator(cfg, "").Generate()
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(got, "--component") {
+		t.Errorf("single-component workflow must not carry a --component flag")
+	}
 }
 
 // TestPlan_Components_MatchesGeneratedBytes proves that for a components:

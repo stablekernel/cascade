@@ -18,6 +18,7 @@ var (
 	manifestKey string
 	environment string
 	headSHA     string
+	component   string
 	ghaOutput   bool
 )
 
@@ -59,6 +60,7 @@ Examples:
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "Path to CI/CD config file (auto-detects .github/manifest.yaml or .github/cicd.yaml)")
 	cmd.PersistentFlags().StringVar(&manifestKey, "manifest-key", config.DefaultManifestKey, "Key in manifest file containing CI config")
 	cmd.PersistentFlags().StringVar(&environment, "environment", "", "Target environment (empty for no-environment setup)")
+	cmd.PersistentFlags().StringVar(&component, "component", "", "Declared component to scope this orchestration to (multi-component manifests)")
 	cmd.PersistentFlags().BoolVar(&ghaOutput, "gha-output", false, "Write outputs to $GITHUB_OUTPUT for workflow consumption")
 
 	// Add subcommands
@@ -147,8 +149,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		log.Info("%sRunning in dry-run mode", log.DryRunPrefix())
 	}
 
-	// Create orchestrator
-	orch, err := NewOrchestrator(configPath, manifestKey, environment)
+	// Create orchestrator. WithComponent("") is a no-op, so the single-component
+	// path is unchanged; a per-component generated workflow passes --component to
+	// scope version derivation to that component's path and tag namespace.
+	orch, err := NewOrchestrator(configPath, manifestKey, environment, WithComponent(component))
 	if err != nil {
 		return fmt.Errorf("initializing orchestrator: %w", err)
 	}
