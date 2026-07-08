@@ -21,16 +21,59 @@ type PromoteGenerator struct {
 	// ${{ state.<env>.<field> }} references in deploy inputs at generation
 	// time. Optional: nil when no state is threaded.
 	state map[string]*config.EnvState
+	// componentName, when non-empty, names the component this promote workflow
+	// is generated for. It namespaces the emitted workflow name, scopes the
+	// promotion CLI steps with --component so promotion records state under this
+	// component's subtree, and switches writeConcurrency into a promote-namespaced
+	// per-component group. It is set only via WithPromoteComponentName by the
+	// per-component fan-out.
+	componentName string
+	// globalConcurrencyGroup carries the manifest-global concurrency.group as
+	// declared on the shared top-level config, captured before per-component
+	// resolution overwrites it. In component mode it is composed with the
+	// component identity so a global group scopes per component rather than
+	// collapsing every component's promote onto one repo-global lane. It is set
+	// only via WithPromoteGlobalConcurrencyGroup.
+	globalConcurrencyGroup string
 }
 
-// NewPromoteGenerator creates a new promote workflow generator
-func NewPromoteGenerator(cfg *config.TrunkConfig, baseDir string) *PromoteGenerator {
-	return &PromoteGenerator{
+// PromoteGeneratorOption customizes a PromoteGenerator. Options are the additive,
+// variadic tail of NewPromoteGenerator so new behavior never changes the
+// two-argument signature callers already depend on.
+type PromoteGeneratorOption func(*PromoteGenerator)
+
+// WithPromoteComponentName namespaces the generated promote workflow to a
+// declared component so a multi-component manifest emits one distinct
+// promote-<name>.yaml per component. It sets the emitted workflow name, threads
+// --component through the promotion CLI steps, and selects the promote-namespaced
+// per-component concurrency group.
+func WithPromoteComponentName(name string) PromoteGeneratorOption {
+	return func(g *PromoteGenerator) { g.componentName = name }
+}
+
+// WithPromoteGlobalConcurrencyGroup supplies the manifest-global
+// concurrency.group as declared on the shared top-level config. The
+// per-component fan-out captures it before resolution overwrites the group, so
+// component-mode writeConcurrency can compose it with the component identity
+// instead of honoring it bare (which would collapse every component's promote
+// onto one lane).
+func WithPromoteGlobalConcurrencyGroup(group string) PromoteGeneratorOption {
+	return func(g *PromoteGenerator) { g.globalConcurrencyGroup = group }
+}
+
+// NewPromoteGenerator creates a new promote workflow generator. Optional behavior
+// is supplied through the variadic PromoteGeneratorOption tail.
+func NewPromoteGenerator(cfg *config.TrunkConfig, baseDir string, opts ...PromoteGeneratorOption) *PromoteGenerator {
+	g := &PromoteGenerator{
 		config:         cfg,
 		baseDir:        baseDir,
 		inputs:         make(map[string][]string),
 		requiredInputs: make(map[string][]string),
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // SetState threads the manifest state block into the promote generator so
@@ -87,6 +130,16 @@ func (g *PromoteGenerator) getManifestFilePath() string {
 // getActionPath returns the path to the manage-release action
 func (g *PromoteGenerator) getActionPath() string {
 	return fmt.Sprintf("./.github/actions/%s", g.config.GetActionFolder())
+}
+
+// writeComponentFlag emits a "--component <name> \" line at the given indent when
+// this promote workflow is scoped to a component, so the promotion CLI records
+// state under that component's subtree. The single-component workflow emits
+// nothing, keeping its CLI invocations byte-identical.
+func (g *PromoteGenerator) writeComponentFlag(sb *strings.Builder, indent string) {
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "%s--component %s \\\n", indent, g.componentName)
+	}
 }
 
 // Generate creates the promote workflow content
@@ -528,7 +581,11 @@ func (g *PromoteGenerator) writeHeader(sb *strings.Builder) {
 }
 
 func (g *PromoteGenerator) writeWorkflowTriggers(sb *strings.Builder) {
-	sb.WriteString("name: Promote\n\n")
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "name: Promote (%s)\n\n", g.componentName)
+	} else {
+		sb.WriteString("name: Promote\n\n")
+	}
 	sb.WriteString("on:\n")
 	sb.WriteString("  workflow_dispatch:\n")
 	sb.WriteString("    inputs:\n")
@@ -684,6 +741,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	fmt.Fprintf(sb, "            --mode \"${PROMOTION_MODE:-default}\" \\\n")
 	sb.WriteString("            --force=\"${PROMOTION_FORCE:-false}\" \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	g.writeComponentFlag(sb, "            ")
 	sb.WriteString("            --allow-breaking=\"${ALLOW_BREAKING:-false}\" \\\n")
 	sb.WriteString("            --deploys=\"${DEPLOYS:-all}\" \\\n")
 	sb.WriteString("            --rollback-on-failure=\"${ROLLBACK_ON_FAILURE:-true}\" \\\n")
@@ -1305,6 +1363,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	fmt.Fprintf(sb, "          cascade promote finalize \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	g.writeComponentFlag(sb, "            ")
 	sb.WriteString("            --promotion-result \"$PROMOTION_RESULT\" \\\n")
 	sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 	sb.WriteString("            --run-id \"${{ github.run_id }}\" \\\n")
@@ -1371,6 +1430,30 @@ func (g *PromoteGenerator) writeNativeDeploymentSteps(sb *strings.Builder) {
 // state and tags, so abandoning a mid-flight run leaves state partially written.
 func (g *PromoteGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
+
+	// Component mode: emit a promote-namespaced per-component group and ignore
+	// the resolved config's group entirely. Two traps make the resolved group
+	// unusable here (see PromoteConcurrencyGroup):
+	//   - the resolved config carries an orchestrate-<name>-... group, so
+	//     honoring it would serialize this component's promote against its own
+	//     orchestrate run (repo-global lane collision);
+	//   - a manifest-global concurrency.group emitted bare would collapse every
+	//     component's promote onto one literal lane.
+	// The composed key always carries the component identity, so two components
+	// never share a lane, and it never collides with the orchestrate namespace.
+	// cancel-in-progress stays false: promote mutates durable env state and tags,
+	// so queueing is safer than cancelling a mid-flight run.
+	if g.componentName != "" {
+		group := config.PromoteConcurrencyGroup(g.componentName)
+		if g.globalConcurrencyGroup != "" {
+			group = fmt.Sprintf("%s-%s", g.globalConcurrencyGroup, group)
+		}
+		fmt.Fprintf(sb, "  group: %s\n", group)
+		sb.WriteString("  cancel-in-progress: false\n")
+		sb.WriteString("\n")
+		return
+	}
+
 	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
 		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
 	} else {

@@ -1,0 +1,94 @@
+name: "Per-Component Promote Generation"
+description: |
+  Exercises per-component promote workflow generation (#291). The manifest declares
+  two components, each owning a path subtree with a distinct tag prefix. Generation
+  fans the promote lane out to one promote-<name>.yaml per component
+  (promote-api.yaml, promote-web.yaml) and emits no repo-wide promote.yaml. Each
+  per-component promote workflow drives its promotion CLI steps with its own
+  --component flag, so at runtime that component's promotion records state under
+  only its own subtree, and carries a promote-namespaced concurrency group
+  (promote-<name>) that is distinct from the component's orchestrate lane, so a
+  promote run and an orchestrate run for one component never serialize against each
+  other on a shared repo-global lane. The scenario seeds both subtrees, proves the
+  multi-component generate then verify roundtrip is drift-free, and asserts each
+  promote-<name>.yaml carries its own --component invocation and promote group and
+  not the sibling's. Deep per-file structure and the manifest-global concurrency
+  composition are asserted in the generator unit tests; act cannot yet execute a
+  specific per-component promote workflow, so this scenario proves the generated
+  wiring and isolation rather than executing a per-component promotion.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Each per-component promote workflow scopes its own promotion state"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # The observable, harness-robust proof of the promote fan-out is the emitted
+    # file set plus each file's CLI wiring: generation produced one promote workflow
+    # per component and no repo-wide promote.yaml. Each promote-<name>.yaml runs the
+    # promotion CLI with --component <name> (the flag that scopes that component's
+    # promotion state to its own subtree at runtime) and carries a promote-namespaced
+    # concurrency group. The run line and the concurrency group are never rewritten
+    # by the harness (only the top-level name: is suffixed and setup-cli@ref
+    # localized), so these substrings are stable. not_contains proves neither file
+    # carries the sibling's scope, and that the promote group never reuses the
+    # orchestrate lane.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote-api.yaml"
+          contains:
+            - "--component api"
+            - "group: promote-api"
+          not_contains:
+            - "--component web"
+            - "group: promote-web"
+            - "group: orchestrate-"
+        - path: ".github/workflows/promote-web.yaml"
+          contains:
+            - "--component web"
+            - "group: promote-web"
+          not_contains:
+            - "--component api"
+            - "group: promote-api"
+            - "group: orchestrate-"
+        - path: ".github/workflows/promote.yaml"
+          not_exists: true
