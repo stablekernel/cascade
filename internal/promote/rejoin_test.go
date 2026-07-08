@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,8 +18,13 @@ type recordingCleaner struct {
 	cleanedReleases []CleanReleasesRequest
 }
 
-func (c *recordingCleaner) DeleteEnvBranch(env string) error {
-	c.deletedBranches = append(c.deletedBranches, env)
+// DeleteEnvBranch records the fully composed integration branch name
+// (hotfix.EnvBranchName(component, env)) rather than the bare env, so tests can
+// assert the component was threaded through and the branch targeted its own
+// namespace: env/<env> for the default component, env/<component>/<env> for a
+// named one.
+func (c *recordingCleaner) DeleteEnvBranch(component, env string) error {
+	c.deletedBranches = append(c.deletedBranches, hotfix.EnvBranchName(component, env))
 	return nil
 }
 
@@ -108,7 +114,7 @@ func TestRejoin_DeletesEnvBranch(t *testing.T) {
 
 	require.NoError(t, fin.Run())
 
-	require.Equal(t, []string{"test"}, cleaner.deletedBranches,
+	require.Equal(t, []string{"env/test"}, cleaner.deletedBranches,
 		"the rejoined env's integration branch must be deleted exactly once")
 }
 
@@ -167,7 +173,7 @@ func TestRejoin_PreservesOtherEnvsDivergence(t *testing.T) {
 	require.Equal(t, []string{"patchY"}, uat.Patches)
 
 	// Cleanup must only have touched the rejoined env.
-	require.Equal(t, []string{"test"}, cleaner.deletedBranches)
+	require.Equal(t, []string{"env/test"}, cleaner.deletedBranches)
 	require.Len(t, cleaner.cleanedReleases, 1)
 	require.Equal(t, "test", cleaner.cleanedReleases[0].Environment)
 }

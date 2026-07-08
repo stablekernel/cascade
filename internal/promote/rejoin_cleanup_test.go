@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/release"
 	"github.com/stretchr/testify/require"
 )
@@ -130,8 +131,8 @@ type failingTagCleaner struct {
 	failOnEnv       string
 }
 
-func (c *failingTagCleaner) DeleteEnvBranch(env string) error {
-	c.deletedBranches = append(c.deletedBranches, env)
+func (c *failingTagCleaner) DeleteEnvBranch(component, env string) error {
+	c.deletedBranches = append(c.deletedBranches, hotfix.EnvBranchName(component, env))
 	return nil
 }
 
@@ -161,7 +162,7 @@ func TestRunLifecycleCleanup_BestEffort_DoesNotStrandOtherEnvs(t *testing.T) {
 	err := f.runLifecycleCleanup()
 	require.NoError(t, err, "a cleanup failure for one env must not abort finalize")
 
-	require.Contains(t, cleaner.deletedBranches, "test")
-	require.Contains(t, cleaner.deletedBranches, "uat", "the second env's branch must still be cleaned after the first env's cleanup error")
+	require.Contains(t, cleaner.deletedBranches, "env/test")
+	require.Contains(t, cleaner.deletedBranches, "env/uat", "the second env's branch must still be cleaned after the first env's cleanup error")
 	require.Contains(t, cleaner.cleaned, "uat", "the second env's hotfix releases must still be cleaned")
 }

@@ -88,7 +88,7 @@ func TestFinalize_HotfixRejoin_DeletesBranch(t *testing.T) {
 
 	// A hotfix-origin rejoin still deletes the integration branch and cleans
 	// its hotfix releases exactly as before.
-	require.Equal(t, []string{"test"}, cleaner.deletedBranches,
+	require.Equal(t, []string{"env/test"}, cleaner.deletedBranches,
 		"hotfix rejoin must delete the integration branch exactly once")
 	require.Len(t, cleaner.cleanedReleases, 1,
 		"hotfix rejoin must clean its hotfix releases")
