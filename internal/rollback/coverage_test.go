@@ -349,26 +349,26 @@ func TestCommitAndPush_NoChangesIsNoOp(t *testing.T) {
 
 func TestExtractEnvState_EdgeCases(t *testing.T) {
 	// Invalid YAML returns nil.
-	if s := extractEnvState([]byte("::: not yaml :::"), config.DefaultManifestKey, "prod"); s != nil {
+	if s := extractEnvState([]byte("::: not yaml :::"), config.DefaultManifestKey, "", "prod"); s != nil {
 		t.Errorf("invalid yaml = %+v, want nil", s)
 	}
 	// Missing top-level key returns nil.
-	if s := extractEnvState([]byte("other:\n  state: {}\n"), config.DefaultManifestKey, "prod"); s != nil {
+	if s := extractEnvState([]byte("other:\n  state: {}\n"), config.DefaultManifestKey, "", "prod"); s != nil {
 		t.Errorf("missing key = %+v, want nil", s)
 	}
 	// Env absent returns nil.
 	missingEnv := []byte("ci:\n  state:\n    dev:\n      sha: x\n")
-	if s := extractEnvState(missingEnv, config.DefaultManifestKey, "prod"); s != nil {
+	if s := extractEnvState(missingEnv, config.DefaultManifestKey, "", "prod"); s != nil {
 		t.Errorf("absent env = %+v, want nil", s)
 	}
 	// Empty (zero-value) env state returns nil.
 	emptyEnv := []byte("ci:\n  state:\n    prod: {}\n")
-	if s := extractEnvState(emptyEnv, config.DefaultManifestKey, "prod"); s != nil {
+	if s := extractEnvState(emptyEnv, config.DefaultManifestKey, "", "prod"); s != nil {
 		t.Errorf("empty env state = %+v, want nil", s)
 	}
 	// A populated env state is returned, and an empty manifest key defaults.
 	good := []byte("ci:\n  state:\n    prod:\n      sha: prodsha9999999\n      version: v1.9.0\n")
-	s := extractEnvState(good, "", "prod")
+	s := extractEnvState(good, "", "", "prod")
 	if s == nil || s.SHA != "prodsha9999999" {
 		t.Errorf("populated env state not returned: %+v", s)
 	}

@@ -17,10 +17,16 @@ import (
 type gitHistoryReader struct {
 	configPath  string
 	manifestKey string
+	// component, when non-empty, scopes historical reads to
+	// state.components.<component>.<env> so a component's rollback recovers only
+	// its own prior deployments, never a sibling's or the flat history. An empty
+	// value reads the flat state.<env> history, byte-identical to the
+	// single-component behaviour.
+	component string
 }
 
-func newGitHistoryReader(configPath, manifestKey string) *gitHistoryReader {
-	return &gitHistoryReader{configPath: configPath, manifestKey: manifestKey}
+func newGitHistoryReader(configPath, manifestKey, component string) *gitHistoryReader {
+	return &gitHistoryReader{configPath: configPath, manifestKey: manifestKey, component: component}
 }
 
 // PriorStates returns historical EnvState snapshots for env from the manifest's
@@ -64,7 +70,7 @@ func (g *gitHistoryReader) PriorStates(env string) ([]*config.EnvState, error) {
 		if err != nil {
 			continue // file may not exist at that revision
 		}
-		state := extractEnvState(blob, g.manifestKey, env)
+		state := extractEnvState(blob, g.manifestKey, g.component, env)
 		if state == nil {
 			continue
 		}
@@ -81,8 +87,20 @@ func (g *gitHistoryReader) PriorStates(env string) ([]*config.EnvState, error) {
 
 // extractEnvState parses a manifest blob and returns the EnvState for env, or
 // nil when the manifest can't be parsed or the env isn't recorded. The manifest
-// key is honoured so wrapped (ci:) manifests parse correctly.
-func extractEnvState(blob []byte, manifestKey, env string) *config.EnvState {
+// key is honoured so wrapped (ci:) manifests parse correctly. When component is
+// non-empty the env is resolved from state.components.<component>.<env> via the
+// same overlay path rollback and finalize use, so a component's history stays
+// scoped to its own subtree; an empty component reads the flat state.<env>,
+// byte-identical to the single-component behaviour.
+func extractEnvState(blob []byte, manifestKey, component, env string) *config.EnvState {
+	if component != "" {
+		compState, err := config.ReadComponentState(blob, manifestKey, component)
+		if err != nil {
+			return nil
+		}
+		return meaningfulEnvState(compState[env])
+	}
+
 	key := manifestKey
 	if key == "" {
 		key = config.DefaultManifestKey
@@ -98,8 +116,14 @@ func extractEnvState(blob []byte, manifestKey, env string) *config.EnvState {
 	if !ok {
 		return nil
 	}
-	state, ok := inner.State[env]
-	if !ok || state == nil {
+	return meaningfulEnvState(inner.State[env])
+}
+
+// meaningfulEnvState returns state when it records a deployment (a sha, version,
+// or per-deployable entry) and nil otherwise, so an empty placeholder row is
+// treated as absent history.
+func meaningfulEnvState(state *config.EnvState) *config.EnvState {
+	if state == nil {
 		return nil
 	}
 	if state.SHA == "" && state.Version == "" && len(state.Deploys) == 0 {

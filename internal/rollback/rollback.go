@@ -137,7 +137,7 @@ func New(opts Options) (*Rollbacker, error) {
 
 	history := opts.HistoryReader
 	if history == nil {
-		history = newGitHistoryReader(configPath, key)
+		history = newGitHistoryReader(configPath, key, opts.Component)
 	}
 
 	// Resolve the effective environment ladder the eligibility and first-env guards

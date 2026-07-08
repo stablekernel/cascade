@@ -122,7 +122,7 @@ func TestGitHistoryReader_RecoversPriorVersion_Subdir(t *testing.T) {
 
 	path := filepath.Join(dir, rel)
 
-	reader := newGitHistoryReader(path, config.DefaultManifestKey)
+	reader := newGitHistoryReader(path, config.DefaultManifestKey, "")
 	states, err := reader.PriorStates("prod")
 	if err != nil {
 		t.Fatalf("PriorStates: %v", err)
