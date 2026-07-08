@@ -44,6 +44,19 @@ func ComponentConcurrencyGroup(name string) string {
 	return fmt.Sprintf("orchestrate-%s-${{ github.ref }}", name)
 }
 
+// PromoteConcurrencyGroup derives the promote concurrency group for a named
+// component. It lives in a dedicated "promote-" namespace, deliberately distinct
+// from ComponentConcurrencyGroup's "orchestrate-" namespace, because GitHub
+// concurrency groups are repo-global across workflows: a promote workflow that
+// reused the orchestrate key would silently serialize or cancel against that
+// component's orchestrate run. Like the single-component promote lane (which
+// keys on the bare workflow name to serialize every promote run), this carries
+// no ref or mode axis, so all of a component's promote runs serialize against
+// each other; the component identity keeps two components from sharing a lane.
+func PromoteConcurrencyGroup(name string) string {
+	return fmt.Sprintf("promote-%s", name)
+}
+
 // GetComponentTagPrefix returns the declared tag_prefix for the named component,
 // the tag namespace that component's versions and tags live under. It errors when
 // the component is not declared. Version and tag discovery use this so a

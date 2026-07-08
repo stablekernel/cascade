@@ -193,40 +193,53 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
-	// Generate promote/release workflow based on number of environments
+	// Generate promote/release workflow based on number of environments. A
+	// single-environment manifest gets one Release workflow; a multi-environment
+	// manifest gets the Promote workflow, fanned out to one promote-<name>.yaml
+	// per component when components: is declared (byte-identical single
+	// promote.yaml otherwise).
 	if generatePromote {
-		var content string
-		var err error
-		var workflowName string
-
 		if cfg.IsSingleEnvironment() {
-			// Single-environment projects get a simpler Release workflow
-			releaseGen := NewReleaseGenerator(cfg, baseDir)
-			content, err = releaseGen.Generate()
-			workflowName = "release"
-		} else {
-			// Multi-environment projects get the full Promote workflow
-			promoteGen := NewPromoteGenerator(cfg, baseDir)
-			promoteGen.SetState(manifestState)
-			content, err = promoteGen.Generate()
-			workflowName = "promote"
-		}
-
-		if err != nil {
-			return fmt.Errorf("generating %s workflow: %w", workflowName, err)
-		}
-
-		if opts.dryRun {
-			if generateOrchestrate {
-				fmt.Printf("\n=== %s.yaml ===\n", workflowName)
+			// Single-environment projects get a simpler Release workflow.
+			content, err := NewReleaseGenerator(cfg, baseDir).Generate()
+			if err != nil {
+				return fmt.Errorf("generating release workflow: %w", err)
 			}
-			fmt.Print(content)
-		} else {
-			if err := writeWorkflow(opts.promoteOutputPath, content, opts.force); err != nil {
-				return err
+			if opts.dryRun {
+				if generateOrchestrate {
+					fmt.Printf("\n=== release.yaml ===\n")
+				}
+				fmt.Print(content)
+			} else {
+				if err := writeWorkflow(opts.promoteOutputPath, content, opts.force); err != nil {
+					return err
+				}
+				generatedFiles = append(generatedFiles, opts.promoteOutputPath)
+				fmt.Printf("Generated workflow: %s\n", opts.promoteOutputPath)
 			}
-			generatedFiles = append(generatedFiles, opts.promoteOutputPath)
-			fmt.Printf("Generated workflow: %s\n", opts.promoteOutputPath)
+		} else {
+			promoteTargets, perr := promoteTargets(cfg, baseDir, opts.promoteOutputPath, manifestState)
+			if perr != nil {
+				return fmt.Errorf("planning promote workflow: %w", perr)
+			}
+			for _, t := range promoteTargets {
+				content, err := t.Gen.Generate()
+				if err != nil {
+					return fmt.Errorf("generating promote workflow %s: %w", t.Path, err)
+				}
+				if opts.dryRun {
+					if generateOrchestrate {
+						fmt.Printf("\n=== %s ===\n", filepath.Base(t.Path))
+					}
+					fmt.Print(content)
+				} else {
+					if err := writeWorkflow(t.Path, content, opts.force); err != nil {
+						return err
+					}
+					generatedFiles = append(generatedFiles, t.Path)
+					fmt.Printf("Generated workflow: %s\n", t.Path)
+				}
+			}
 		}
 	}
 

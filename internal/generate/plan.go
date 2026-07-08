@@ -117,21 +117,29 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 		planned = append(planned, PlannedFile{Path: t.Path, Content: content})
 	}
 
-	// 2. promote (multi-env) or release (single-env) -> promoteOutputPath.
+	// 2. promote (multi-env) or release (single-env). A single-env manifest keeps
+	//    the single release workflow. A multi-env manifest with components: fans
+	//    out to one promote-<name>.yaml per component; otherwise a single
+	//    promote.yaml, byte-identical to today.
 	if cfg.IsSingleEnvironment() {
 		content, err = NewReleaseGenerator(cfg, baseDir).Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating release workflow: %w", err)
 		}
+		planned = append(planned, PlannedFile{Path: promoteOutputPath, Content: content})
 	} else {
-		promoteGen := NewPromoteGenerator(cfg, baseDir)
-		promoteGen.SetState(manifestState)
-		content, err = promoteGen.Generate()
-		if err != nil {
-			return nil, fmt.Errorf("generating promote workflow: %w", err)
+		promoteTargets, perr := promoteTargets(cfg, baseDir, promoteOutputPath, manifestState)
+		if perr != nil {
+			return nil, perr
+		}
+		for _, t := range promoteTargets {
+			content, err = t.Gen.Generate()
+			if err != nil {
+				return nil, fmt.Errorf("generating promote workflow: %w", err)
+			}
+			planned = append(planned, PlannedFile{Path: t.Path, Content: content})
 		}
 	}
-	planned = append(planned, PlannedFile{Path: promoteOutputPath, Content: content})
 
 	// 3. external-update -> .github/workflows/external-update.yaml when primary.
 	if cfg.IsPrimary() {
@@ -278,6 +286,67 @@ func orchestrateTargets(cfg *config.TrunkConfig, baseDir, outputPath string, sta
 // base output path: the base directory plus orchestrate-<name>.yaml.
 func componentWorkflowPath(outputPath, name string) string {
 	return filepath.Join(filepath.Dir(outputPath), fmt.Sprintf("orchestrate-%s.yaml", name))
+}
+
+// promoteTarget pairs a rendered promote workflow's target path with the
+// generator that produces it, mirroring orchestrateTarget so the generate command
+// and Plan share one fan-out decision for the promote surface.
+type promoteTarget struct {
+	Path string
+	Gen  *PromoteGenerator
+}
+
+// promoteTargets returns the promote workflow target(s) the manifest emits,
+// mirroring orchestrateTargets. A manifest with no components: block yields
+// exactly one target at outputPath, byte-identical to the pre-component promote
+// generator. A manifest that declares components yields one promote-<name>.yaml
+// per component (sorted by name) and no repo-wide promote file, each generated
+// from the resolved per-component config and scoped with --component so promotion
+// records state under that component's subtree. The manifest-global
+// concurrency.group is captured before resolution so the per-component promote
+// group can compose it instead of collapsing onto it. Both the generate command
+// and Plan call this, so they can never disagree on the promote file set.
+//
+// Callers gate on IsSingleEnvironment before invoking this: single-env manifests
+// keep the release-workflow branch, so promoteTargets only ever runs on the
+// multi-env promote path.
+func promoteTargets(cfg *config.TrunkConfig, baseDir, outputPath string, state map[string]*config.EnvState) ([]promoteTarget, error) {
+	if !cfg.HasComponents() {
+		gen := NewPromoteGenerator(cfg, baseDir)
+		gen.SetState(state)
+		return []promoteTarget{{Path: outputPath, Gen: gen}}, nil
+	}
+
+	var globalGroup string
+	if cfg.Concurrency != nil {
+		globalGroup = cfg.Concurrency.Group
+	}
+
+	names := make([]string, 0, len(cfg.Components))
+	for name := range cfg.Components {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	targets := make([]promoteTarget, 0, len(names))
+	for _, name := range names {
+		resolved, err := cfg.ResolveComponent(name)
+		if err != nil {
+			return nil, fmt.Errorf("resolving component %q: %w", name, err)
+		}
+		gen := NewPromoteGenerator(resolved.Config, baseDir,
+			WithPromoteComponentName(name),
+			WithPromoteGlobalConcurrencyGroup(globalGroup))
+		gen.SetState(state)
+		targets = append(targets, promoteTarget{Path: promoteComponentWorkflowPath(outputPath, name), Gen: gen})
+	}
+	return targets, nil
+}
+
+// promoteComponentWorkflowPath derives a per-component promote workflow path from
+// the base output path: the base directory plus promote-<name>.yaml.
+func promoteComponentWorkflowPath(outputPath, name string) string {
+	return filepath.Join(filepath.Dir(outputPath), fmt.Sprintf("promote-%s.yaml", name))
 }
 
 // ResolveBaseDir reports the repo root the generate command resolves workflow
