@@ -26,6 +26,7 @@ func newPreflightCommand() *cobra.Command {
 		env         string
 		to          string
 		deployable  string
+		component   string
 		ghaOutput   bool
 		jsonOutput  bool
 	)
@@ -46,6 +47,7 @@ target_version, and can_proceed to $GITHUB_OUTPUT. It writes no manifest state.`
 				env:         env,
 				to:          to,
 				deployable:  deployable,
+				component:   component,
 				ghaOutput:   ghaOutput,
 				jsonOutput:  jsonOutput,
 			})
@@ -57,6 +59,7 @@ target_version, and can_proceed to $GITHUB_OUTPUT. It writes no manifest state.`
 	cmd.Flags().StringVar(&env, "env", "", "Target environment to roll back (required)")
 	cmd.Flags().StringVar(&to, "to", "", "Prior version or SHA to re-promote (optional; defaults to the previous version)")
 	cmd.Flags().StringVar(&deployable, "deployable", "", "Scope the rollback to a single deployable")
+	cmd.Flags().StringVar(&component, "component", "", "Scope the rollback to a declared component")
 	cmd.Flags().BoolVar(&ghaOutput, "gha-output", false, "Write resolved target to $GITHUB_OUTPUT")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print the resolved plan as JSON")
 
@@ -71,6 +74,7 @@ type preflightOptions struct {
 	env         string
 	to          string
 	deployable  string
+	component   string
 	ghaOutput   bool
 	jsonOutput  bool
 }
@@ -79,6 +83,7 @@ func runPreflight(opts preflightOptions) error {
 	rb, err := New(Options{
 		ConfigPath:  opts.configPath,
 		ManifestKey: opts.manifestKey,
+		Component:   opts.component,
 	})
 	if err != nil {
 		if opts.ghaOutput {
@@ -136,6 +141,7 @@ func newFinalizeCommand() *cobra.Command {
 		env         string
 		to          string
 		deployable  string
+		component   string
 		actor       string
 		commitPush  bool
 	)
@@ -156,6 +162,7 @@ promotion guards treat it as off-trunk until a promotion rejoins it), and, with
 				env:         env,
 				to:          to,
 				deployable:  deployable,
+				component:   component,
 				actor:       actor,
 				commitPush:  commitPush,
 			})
@@ -167,6 +174,7 @@ promotion guards treat it as off-trunk until a promotion rejoins it), and, with
 	cmd.Flags().StringVar(&env, "env", "", "Target environment to roll back (required)")
 	cmd.Flags().StringVar(&to, "to", "", "Prior version or SHA to re-promote (optional; defaults to the previous version)")
 	cmd.Flags().StringVar(&deployable, "deployable", "", "Scope the rollback to a single deployable")
+	cmd.Flags().StringVar(&component, "component", "", "Scope the rollback to a declared component")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the rollback (default: $GITHUB_ACTOR)")
 	cmd.Flags().BoolVar(&commitPush, "commit-push", false, "Commit and push the updated manifest to the trunk branch")
 
@@ -181,6 +189,7 @@ type finalizeOptions struct {
 	env         string
 	to          string
 	deployable  string
+	component   string
 	actor       string
 	commitPush  bool
 }
@@ -190,6 +199,7 @@ func runFinalize(opts finalizeOptions) error {
 		ConfigPath:  opts.configPath,
 		ManifestKey: opts.manifestKey,
 		Actor:       opts.actor,
+		Component:   opts.component,
 	})
 	if err != nil {
 		return err
@@ -214,7 +224,7 @@ func runFinalize(opts finalizeOptions) error {
 	}
 
 	if opts.commitPush {
-		if err := commitAndPush(rb.ConfigPath(), plan.Environment, rb.GitIdentity()); err != nil {
+		if err := rb.CommitAndPush(); err != nil {
 			return fmt.Errorf("failed to commit and push: %w", err)
 		}
 		fmt.Printf("State updated and committed for %s\n", plan.Environment)

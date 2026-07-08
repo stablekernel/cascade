@@ -18,6 +18,7 @@ func NewCommand() *cobra.Command {
 		env         string
 		to          string
 		deployable  string
+		component   string
 		actor       string
 		dryRun      bool
 		jsonOutput  bool
@@ -62,6 +63,7 @@ Examples:
 				env:         env,
 				to:          to,
 				deployable:  deployable,
+				component:   component,
 				actor:       actor,
 				dryRun:      dryRun,
 				jsonOutput:  jsonOutput,
@@ -74,6 +76,7 @@ Examples:
 	cmd.Flags().StringVar(&env, "env", "", "Target environment to roll back (required)")
 	cmd.Flags().StringVar(&to, "to", "", "Prior version or SHA to re-promote (optional; defaults to the previous version)")
 	cmd.Flags().StringVar(&deployable, "deployable", "", "Scope the rollback to a single deployable")
+	cmd.Flags().StringVar(&component, "component", "", "Scope the rollback to a declared component (reads and records state.components.<component>.<env>)")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the rollback (default: $GITHUB_ACTOR)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Resolve and print the plan without modifying the manifest")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output the resolved plan as JSON")
@@ -96,6 +99,7 @@ type runOptions struct {
 	env         string
 	to          string
 	deployable  string
+	component   string
 	actor       string
 	dryRun      bool
 	jsonOutput  bool
@@ -106,6 +110,7 @@ func run(opts runOptions) error {
 		ConfigPath:  opts.configPath,
 		ManifestKey: opts.manifestKey,
 		Actor:       opts.actor,
+		Component:   opts.component,
 	})
 	if err != nil {
 		return err

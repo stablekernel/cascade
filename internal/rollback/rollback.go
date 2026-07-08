@@ -12,6 +12,7 @@ package rollback
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -58,6 +59,13 @@ type Options struct {
 	ManifestKey string
 	// Actor is recorded as committed_by / deployed_by on the re-promotion.
 	Actor string
+	// Component, when non-empty, names the declared component this rollback is
+	// scoped to. An empty value selects the single-component path, byte-identical
+	// to today. When set, the rollback reads and records state under
+	// state.components.<component>.<env>, resolves the deploy-history ring and
+	// first-environment eligibility against the component's own environment
+	// subset, and namespaces the divergence ref as rollback/<component>/<env>.
+	Component string
 	// HistoryReader resolves prior states from manifest git history. When nil,
 	// a git-backed reader rooted at the manifest is used.
 	HistoryReader HistoryReader
@@ -81,6 +89,28 @@ type Rollbacker struct {
 	actor       string
 	cicdFile    *config.CICDFile
 	history     HistoryReader
+
+	// component names the declared component this rollback is scoped to, or "" for
+	// the single-component path. When set, state is read and recorded under
+	// state.components.<component>.<env> via config.WriteScopedState, whose
+	// node-patch preserves every sibling component verbatim under the
+	// concurrent-finalize retry loop.
+	component string
+	// environments is the effective environment ladder eligibility and first-env
+	// checks are judged against: the component's own subset when a component is
+	// selected, otherwise the global ladder. It is empty when no config is parsed,
+	// leaving the guards inert.
+	environments []string
+	// appliedEnv records the environment the most recent Apply mutated, so the
+	// component-scoped state write and the trunk commit message address the right
+	// leaf. It is set by Apply before any serialization.
+	appliedEnv string
+	// contentsClient overrides the GitHub Contents client used by the
+	// component-scoped API write path. It is nil in production (the default gh-CLI
+	// client is constructed on demand) and set only by tests to drive the
+	// optimistic-lock retry against a fake that simulates a concurrent finalizer's
+	// 409.
+	contentsClient statewrite.ContentsClient
 }
 
 // New constructs a Rollbacker, loading and parsing the manifest.
@@ -110,12 +140,54 @@ func New(opts Options) (*Rollbacker, error) {
 		history = newGitHistoryReader(configPath, key)
 	}
 
+	// Resolve the effective environment ladder the eligibility and first-env guards
+	// judge against. For a component it is the component's own subset (its override
+	// or the inherited default); for the single-component path it is the global
+	// ladder, so the guards behave byte-identically to before.
+	var environments []string
+	if cicdFile.Config != nil {
+		environments = cicdFile.Config.Environments
+		if opts.Component != "" {
+			resolved, err := cicdFile.Config.ResolveComponent(opts.Component)
+			if err != nil {
+				return nil, fmt.Errorf("resolving component %q: %w", opts.Component, err)
+			}
+			environments = resolved.Config.Environments
+		}
+	}
+
+	// Overlay the component's recorded per-env rows, read from
+	// state.components.<component>.<env>, into the flat working state map so every
+	// State[env] lookup (target resolution, the deploy-history ring, current state)
+	// transparently sees that component's seed. It is a no-op for the empty
+	// component, keeping the single-component path byte-identical. This mirrors the
+	// promote/hotfix component-state overlay: the read counterpart to the
+	// component-scoped WriteScopedState writes.
+	if opts.Component != "" {
+		raw, err := os.ReadFile(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading manifest for component state: %w", err)
+		}
+		compState, err := config.ReadComponentState(raw, key, opts.Component)
+		if err != nil {
+			return nil, fmt.Errorf("reading component %q state: %w", opts.Component, err)
+		}
+		if cicdFile.State == nil {
+			cicdFile.State = make(map[string]*config.EnvState)
+		}
+		for env, st := range compState {
+			cicdFile.State[env] = st
+		}
+	}
+
 	return &Rollbacker{
-		configPath:  configPath,
-		manifestKey: key,
-		actor:       actor,
-		cicdFile:    cicdFile,
-		history:     history,
+		configPath:   configPath,
+		manifestKey:  key,
+		actor:        actor,
+		cicdFile:     cicdFile,
+		history:      history,
+		component:    opts.Component,
+		environments: environments,
 	}, nil
 }
 
@@ -401,6 +473,10 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 		return nil
 	}
 
+	// Record the env this Apply mutates so the component-scoped state write and the
+	// trunk commit message address the right leaf.
+	r.appliedEnv = plan.Environment
+
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 
 	if r.cicdFile.State == nil {
@@ -457,8 +533,10 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 		// this from a hotfix divergence (no integration branch, tags, or drafts),
 		// so the rejoin cleanup can skip the hotfix-specific teardown. No patches
 		// are recorded: a rollback re-points at a prior SHA, it does not stack
-		// commits on a base.
-		env.Ref = promote.RollbackRefPrefix + plan.Environment
+		// commits on a base. The ref is namespaced to the component when one is
+		// selected (rollback/<component>/<env>), mirroring the hotfix env-branch
+		// namespacing, and is byte-identical (rollback/<env>) otherwise.
+		env.Ref = promote.RollbackRef(r.component, plan.Environment)
 		env.BaseSHA = prevSHA
 	}
 
@@ -481,7 +559,7 @@ func (r *Rollbacker) writeConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to read manifest: %w", err)
 	}
-	data, err := config.WriteManifestState(current, key, r.cicdFile.State, r.cicdFile.LatestRelease)
+	data, err := r.serializeState(current, key)
 	if err != nil {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
@@ -489,6 +567,120 @@ func (r *Rollbacker) writeConfig() error {
 		return fmt.Errorf("failed to write manifest: %w", err)
 	}
 	return nil
+}
+
+// serializeState rewrites current with this rollback's owned state. In the
+// single-component form (component == "") it reconciles the whole flat state node
+// via WriteManifestState, byte-identical to the historical behavior. In the
+// component-scoped form it node-patches only state.components.<component>.<env>
+// through WriteScopedState, so a sibling component present in current survives
+// verbatim.
+func (r *Rollbacker) serializeState(current []byte, key string) ([]byte, error) {
+	if r.component != "" {
+		return config.WriteScopedState(current, key, r.ownedStateWrites()...)
+	}
+	return config.WriteManifestState(current, key, r.cicdFile.State, r.cicdFile.LatestRelease)
+}
+
+// ownedStateWrites builds the component-scoped write this rollback owns from its
+// already-mutated in-memory state: a single directive addressing
+// state.components.<component>.<appliedEnv>. It is re-appliable, so
+// CommitWithRetry invokes it again against re-fetched trunk bytes on a 409 and
+// deterministically re-derives the same owned leaf, leaving a concurrent sibling
+// component's subtree untouched. It returns nil when no env has been applied or
+// its state is unexpectedly absent, so an empty write never becomes an accidental
+// node delete.
+func (r *Rollbacker) ownedStateWrites() []config.StateWrite {
+	if r.appliedEnv == "" {
+		return nil
+	}
+	st := r.cicdFile.State[r.appliedEnv]
+	if st == nil {
+		return nil
+	}
+	return []config.StateWrite{{Component: r.component, Env: r.appliedEnv, State: st}}
+}
+
+// stateMutation returns the re-appliable CommitWithRetry closure that node-patches
+// only state.components.<component>.<appliedEnv> onto whatever trunk bytes the
+// retry loop fetches. It never deserializes or rebuilds a sibling component, so on
+// a 409 the loser re-reads the winner's committed sibling subtree and re-applies
+// only its own leaf, leaving the sibling verbatim, including keys this binary does
+// not model. It is used only on the component-scoped API write path.
+func (r *Rollbacker) stateMutation(key string) statewrite.Mutate {
+	return func(current []byte) ([]byte, error) {
+		data, err := config.WriteScopedState(current, key, r.ownedStateWrites()...)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+		}
+		return data, nil
+	}
+}
+
+// resolvedManifestKey returns the manifest key state writes address, honoring an
+// explicit config override and falling back to the configured default.
+func (r *Rollbacker) resolvedManifestKey() string {
+	key := r.manifestKey
+	if key == "" {
+		key = config.DefaultManifestKey
+	}
+	if r.cicdFile.Config != nil && r.cicdFile.Config.ManifestKey != "" {
+		key = r.cicdFile.Config.ManifestKey
+	}
+	return key
+}
+
+// CommitAndPush persists the post-rollback manifest back to the trunk branch. The
+// single-component path is unchanged: it commits the on-disk file (already written
+// by Apply) exactly as before. The component-scoped path goes through the shared
+// optimistic-lock retry so two components rolling back concurrently merge rather
+// than clobber each other on the file blob SHA: on real GitHub it re-applies its
+// own component leaf over re-fetched trunk bytes via the Contents API, and in the
+// act/gitea environment it commits the scoped on-disk file with plain git.
+func (r *Rollbacker) CommitAndPush() error {
+	if r.component == "" {
+		return commitAndPush(r.configPath, r.appliedEnv, r.GitIdentity())
+	}
+
+	status, err := exec.Command("git", "status", "--porcelain", r.configPath).Output()
+	if err != nil {
+		return fmt.Errorf("git status failed: %w", err)
+	}
+	if len(status) == 0 {
+		return nil // No changes
+	}
+
+	message := fmt.Sprintf("chore: update state after rollback of %s [skip ci]", r.appliedEnv)
+	if isRealGitHub() {
+		return r.writeStateViaAPI(message)
+	}
+	return commitAndPushGit(r.configPath, message, r.GitIdentity())
+}
+
+// writeStateViaAPI writes the manifest to the trunk branch through the GitHub
+// Contents REST API using the shared optimistic-lock retry loop, node-patching
+// only this rollback's component leaf so a concurrent sibling component's write is
+// preserved rather than clobbered. It is the component-scoped counterpart to the
+// single-component free writeStateViaAPI; the Contents client is injectable so the
+// 409 re-apply can be exercised without a live API.
+func (r *Rollbacker) writeStateViaAPI(message string) error {
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if repo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
+	}
+	client := r.contentsClient
+	if client == nil {
+		client = statewrite.NewGHClient()
+	}
+	return statewrite.CommitWithRetry(statewrite.Options{
+		Client:  client,
+		Repo:    repo,
+		Path:    r.configPath,
+		Ref:     trunkBranchFromEnv(),
+		Message: message,
+		Author:  r.GitIdentity(),
+		Mutate:  r.stateMutation(r.resolvedManifestKey()),
+	})
 }
 
 // firstEnvErr returns a guard error when env is the first (build target)
@@ -499,27 +691,33 @@ func (r *Rollbacker) writeConfig() error {
 // environment is a revert merge to the trunk branch, not a rollback. The guard
 // is inert when no parsed config is available to identify the first environment,
 // so a state-only manifest still resolves through the normal path.
+//
+// Eligibility is judged against the effective ladder: the selected component's own
+// environment subset when a component is set, otherwise the global ladder. A
+// component whose ladder starts at a different environment than the global build
+// target is thus judged on its own first environment, not the global one. The
+// guard is inert when no ladder is available (a state-only manifest), so it
+// resolves through the normal path.
 func (r *Rollbacker) firstEnvErr(env string) error {
-	if r.cicdFile == nil || r.cicdFile.Config == nil {
+	if len(r.environments) == 0 {
 		return nil
 	}
-	if r.cicdFile.Config.IsFirstEnvironment(env) {
+	if r.environments[0] == env {
 		return fmt.Errorf("environment %q is the first environment; it tracks trunk and is never promoted into, so it has no rollback history. Revert it with a merge to the trunk branch instead of a rollback", env)
 	}
 	return nil
 }
 
-// knownEnvironment reports whether env is declared in config.environments or
-// has recorded state.
+// knownEnvironment reports whether env is in the effective environment ladder (the
+// selected component's subset, or the global ladder for the single-component path)
+// or has recorded state.
 func (r *Rollbacker) knownEnvironment(env string) bool {
 	if r.cicdFile.State[env] != nil {
 		return true
 	}
-	if r.cicdFile.Config != nil {
-		for _, e := range r.cicdFile.Config.Environments {
-			if e == env {
-				return true
-			}
+	for _, e := range r.environments {
+		if e == env {
+			return true
 		}
 	}
 	return false
