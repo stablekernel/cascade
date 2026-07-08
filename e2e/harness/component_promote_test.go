@@ -196,3 +196,98 @@ func TestRunner_AssertStep_ComponentState_Unchanged(t *testing.T) {
 	assert.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Error(), "components/web/dev")
 }
+
+// TestHotfixWorkflowPath verifies the hotfix workflow path selection mirrors
+// promote: an empty component keeps the repo-wide cascade-hotfix.yaml
+// (byte-identical single-component behavior), a named component selects its
+// fanned-out cascade-hotfix-<name>.yaml.
+func TestHotfixWorkflowPath(t *testing.T) {
+	cases := []struct {
+		name      string
+		component string
+		want      string
+	}{
+		{name: "single component keeps repo-wide file", component: "", want: ".github/workflows/cascade-hotfix.yaml"},
+		{name: "named component selects fanned-out file", component: "api", want: ".github/workflows/cascade-hotfix-api.yaml"},
+		{name: "second component selects its own file", component: "web", want: ".github/workflows/cascade-hotfix-web.yaml"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, hotfixWorkflowPath(tc.component))
+		})
+	}
+}
+
+// TestRollbackWorkflowPath verifies the rollback workflow path selection mirrors
+// hotfix: empty keeps cascade-rollback.yaml, a component selects its
+// cascade-rollback-<name>.yaml.
+func TestRollbackWorkflowPath(t *testing.T) {
+	cases := []struct {
+		name      string
+		component string
+		want      string
+	}{
+		{name: "single component keeps repo-wide file", component: "", want: ".github/workflows/cascade-rollback.yaml"},
+		{name: "named component selects fanned-out file", component: "api", want: ".github/workflows/cascade-rollback-api.yaml"},
+		{name: "second component selects its own file", component: "web", want: ".github/workflows/cascade-rollback-web.yaml"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, rollbackWorkflowPath(tc.component))
+		})
+	}
+}
+
+// TestEnvBranchName verifies the integration-branch namespace: single-component
+// stays flat env/<env> (byte-identical), a component nests env/<component>/<env>
+// so two components' branches never collide.
+func TestEnvBranchName(t *testing.T) {
+	assert.Equal(t, "env/prod", envBranchName("", "prod"))
+	assert.Equal(t, "env/api/prod", envBranchName("api", "prod"))
+	assert.Equal(t, "env/web/prod", envBranchName("web", "prod"))
+	assert.NotEqual(t, envBranchName("api", "prod"), envBranchName("web", "prod"))
+}
+
+// TestHotfixBranchName verifies the throwaway cherry-pick branch namespace:
+// single-component stays hotfix/<env>/<short> (byte-identical), a component nests
+// hotfix/<component>/<env>/<short> so two components hotfixing the same env at the
+// same source commit push disjoint branches and never collide.
+func TestHotfixBranchName(t *testing.T) {
+	assert.Equal(t, "hotfix/prod/abc12345", hotfixBranchName("", "prod", "abc12345"))
+	assert.Equal(t, "hotfix/api/prod/abc12345", hotfixBranchName("api", "prod", "abc12345"))
+	// The exact collision the generator fix closes: same env, same source short SHA,
+	// two components -> two distinct branches.
+	assert.NotEqual(t,
+		hotfixBranchName("api", "prod", "abc12345"),
+		hotfixBranchName("web", "prod", "abc12345"))
+}
+
+// TestParseComponentStates_Divergence confirms the component subtree parse reads
+// the hotfix/rollback divergence fields (ref/base_sha/patches) so a per-component
+// lifecycle scenario can assert a hotfixed component tracks its own env branch.
+func TestParseComponentStates_Divergence(t *testing.T) {
+	manifest := `ci:
+  state:
+    components:
+      api:
+        prod:
+          sha: apiprodsha
+          version: api-v0.1.0
+          ref: env/api/prod
+          base_sha: apibasesha
+          patches:
+            - apipatchsha
+      web:
+        prod:
+          sha: webprodsha
+          version: web-v0.1.0
+`
+	components, err := parseComponentStates(manifest, "ci")
+	require.NoError(t, err)
+	assert.Equal(t, "env/api/prod", components["api"]["prod"].Ref)
+	assert.Equal(t, "apibasesha", components["api"]["prod"].BaseSHA)
+	assert.Equal(t, []string{"apipatchsha"}, components["api"]["prod"].Patches)
+	// The undiverged sibling carries no divergence fields.
+	assert.Empty(t, components["web"]["prod"].Ref)
+	assert.Empty(t, components["web"]["prod"].Patches)
+}

@@ -112,6 +112,20 @@ func (g *HotfixGenerator) envBranchRef() string {
 	return g.envBranchPrefix() + "${env}"
 }
 
+// hotfixBranchPrefix returns the throwaway cherry-pick branch name prefix the
+// apply lane pushes to: single-component yields "hotfix/" (byte-identical to the
+// historical form), a component yields "hotfix/<component>/" so two components
+// cherry-picking the same env at the same source commit push disjoint branches
+// and never collide on a shared hotfix/<env>/<sha> ref. It mirrors
+// envBranchPrefix so the apply branch namespace tracks the integration-branch
+// namespace.
+func (g *HotfixGenerator) hotfixBranchPrefix() string {
+	if g.componentName != "" {
+		return "hotfix/" + g.componentName + "/"
+	}
+	return "hotfix/"
+}
+
 // getStateTokenRef returns the token expression used to merge the clean-path
 // resolution PR. It mirrors the release and promote generators: users configure
 // the full expression via the state_token config option, and it defaults to the
@@ -480,7 +494,7 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("            fi\n")
 	sb.WriteString("            FIRST_COMMIT=$(echo \"$COMMITS\" | cut -d',' -f1)\n")
 	sb.WriteString("            SHORT_SHA=$(echo \"$FIRST_COMMIT\" | cut -c1-8)\n")
-	sb.WriteString("            BRANCH=\"hotfix/${env}/${SHORT_SHA}\"\n")
+	fmt.Fprintf(sb, "            BRANCH=\"%s${env}/${SHORT_SHA}\"\n", g.hotfixBranchPrefix())
 	// Materialize env/<env> at the planner's validated base if origin lacks it,
 	// so the resolution PR has a base branch; the plan enforces tip == BASE when
 	// the branch already exists, so this is a no-op create in that case.

@@ -8,8 +8,41 @@ import (
 	"time"
 )
 
-// hotfixWorkflowPath is the generated hotfix workflow's path inside the repo.
-const hotfixWorkflowPath = ".github/workflows/cascade-hotfix.yaml"
+// hotfixWorkflowPath returns the generated hotfix workflow's path inside the
+// repo for a component. An empty component selects the repo-wide
+// cascade-hotfix.yaml (byte-identical single-component behavior); a named
+// component selects the fanned-out cascade-hotfix-<name>.yaml the generator emits
+// for a manifest with a components: block. It mirrors promoteWorkflowPath.
+func hotfixWorkflowPath(component string) string {
+	if component == "" {
+		return ".github/workflows/cascade-hotfix.yaml"
+	}
+	return ".github/workflows/cascade-hotfix-" + component + ".yaml"
+}
+
+// envBranchName returns the per-environment integration branch a hotfix operates
+// on. The default (empty) component yields env/<env>, byte-identical to the
+// historical single-component form; a named component yields env/<component>/<env>
+// so each component's integration branches occupy a disjoint namespace. It
+// mirrors hotfix.EnvBranchName in internal/hotfix/lifecycle.go.
+func envBranchName(component, env string) string {
+	if component == "" {
+		return "env/" + env
+	}
+	return "env/" + component + "/" + env
+}
+
+// hotfixBranchName returns the throwaway cherry-pick branch a hotfix apply pushes.
+// The default component yields hotfix/<env>/<short>, byte-identical to the
+// historical form; a named component yields hotfix/<component>/<env>/<short> so
+// two components cherry-picking the same env at the same source commit push
+// disjoint branches. It mirrors the generator's hotfixBranchPrefix + envBranchRef.
+func hotfixBranchName(component, env, short string) string {
+	if component == "" {
+		return "hotfix/" + env + "/" + short
+	}
+	return "hotfix/" + component + "/" + env + "/" + short
+}
 
 // resolveCommit resolves a commit reference to its SHA via the execution
 // context, falling back to treating the reference as a literal SHA.
@@ -104,7 +137,7 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 	}
 
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
-		WorkflowPath: hotfixWorkflowPath,
+		WorkflowPath: hotfixWorkflowPath(step.Component),
 		Event:        "workflow_dispatch",
 		Inputs: map[string]string{
 			"commit":     sha,
@@ -165,16 +198,23 @@ func (r *Runner) executeHotfixPlan(ctx context.Context, step *HotfixPlanStep) er
 // conflict into an empty (clean) cherry-pick and flipping the resulting PR label
 // run-to-run. An empty resolution returns an error so the race surfaces loudly
 // instead of being masked by a non-deterministic anchor.
-func (r *Runner) resolveEnvAnchor(env, baseRef string) (string, error) {
+func (r *Runner) resolveEnvAnchor(component, env, baseRef string) (string, error) {
 	if baseRef != "" {
 		if anchor := r.resolveCommit(baseRef); anchor != "" {
 			return anchor, nil
 		}
 	}
-	if anchor := r.ctx.GetState(env).SHA; anchor != "" {
+	// For a component the recorded state lives under the composite key
+	// components/<component>/<env>; the single-component path keeps the flat env
+	// key, so the fallback tracks whichever namespace the hotfix targets.
+	stateKey := env
+	if component != "" {
+		stateKey = componentStateKey(component, env)
+	}
+	if anchor := r.ctx.GetState(stateKey).SHA; anchor != "" {
 		return anchor, nil
 	}
-	return "", fmt.Errorf("hotfix_apply: cannot anchor env/%s: no base_ref given and recorded state SHA for %q is empty (likely a gitea state sync race); pin the scenario step's base_ref to make the cherry-pick outcome deterministic", env, env)
+	return "", fmt.Errorf("hotfix_apply: cannot anchor %s: no base_ref given and recorded state SHA for %q is empty (likely a gitea state sync race); pin the scenario step's base_ref to make the cherry-pick outcome deterministic", envBranchName(component, env), stateKey)
 }
 
 // executeHotfixApply performs a harness-driven cherry-pick of a trunk commit onto
@@ -196,10 +236,11 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	commits := strings.Split(commitList, ",")
 	commit := commits[0]
 	env := step.TargetEnv
-	envBranch := "env/" + env
+	component := step.Component
+	envBranch := envBranchName(component, env)
 	short := shortSHA(commit)
-	hotfixBranch := "hotfix/" + env + "/" + short
-	r.t.Logf("  HotfixApply: commits=%s env=%s branch=%s", commitList, env, hotfixBranch)
+	hotfixBranch := hotfixBranchName(component, env, short)
+	r.t.Logf("  HotfixApply: component=%q commits=%s env=%s branch=%s", component, commitList, env, hotfixBranch)
 
 	// Determine whether env/<env> already exists so we know whether to seed it.
 	branches, err := r.harness.gitea.ListBranches(ctx, r.harness.repo)
@@ -214,7 +255,7 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	// anchor is unresolvable, surfacing sync races loudly.
 	var anchorSHA string
 	if needsSeedEnvBranch {
-		anchorSHA, err = r.resolveEnvAnchor(env, step.BaseRef)
+		anchorSHA, err = r.resolveEnvAnchor(component, env, step.BaseRef)
 		if err != nil {
 			return err
 		}
@@ -347,6 +388,7 @@ func (r *Runner) executeHotfixApply(ctx context.Context, step *HotfixApplyStep) 
 	r.lastPRConflict = conflict
 	r.lastHotfixBranch = hotfixBranch
 	r.lastHotfixEnv = env
+	r.lastHotfixComponent = component
 	r.lastHotfixBody = body
 	if r.prByLabel == nil {
 		r.prByLabel = make(map[string]int64)
@@ -389,10 +431,10 @@ func (r *Runner) executeMergePR(ctx context.Context, step *MergePRStep) error {
 	// branch back, so this SHA is not an ancestor of any trunk commit. Scenarios
 	// reference it as an off-trunk patch to exercise the patch-containment guard.
 	if r.lastHotfixEnv != "" {
-		envBranch := "env/" + r.lastHotfixEnv
+		envBranch := envBranchName(r.lastHotfixComponent, r.lastHotfixEnv)
 		if branchSHA, err := r.harness.gitea.GetBranchSHA(ctx, r.harness.repo, envBranch); err == nil {
 			r.ctx.RecordCommit("hotfix_head", branchSHA)
-			r.t.Logf("  MergePR: recorded hotfix_head=%s (post-merge env/%s tip)", truncateSHA(branchSHA), r.lastHotfixEnv)
+			r.t.Logf("  MergePR: recorded hotfix_head=%s (post-merge %s tip)", truncateSHA(branchSHA), envBranch)
 		}
 	}
 	return nil
@@ -425,7 +467,7 @@ func (r *Runner) executeResolveConflict(ctx context.Context, step *ResolveConfli
 		"pull_request": map[string]any{
 			"number": r.lastPRIndex,
 			"merged": false,
-			"base":   map[string]any{"ref": "env/" + r.lastHotfixEnv},
+			"base":   map[string]any{"ref": envBranchName(r.lastHotfixComponent, r.lastHotfixEnv)},
 			"head":   map[string]any{"ref": r.lastHotfixBranch},
 			"labels": []map[string]any{{"name": "cascade-hotfix-conflict"}},
 		},
@@ -436,7 +478,7 @@ func (r *Runner) executeResolveConflict(ctx context.Context, step *ResolveConfli
 	}
 
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
-		WorkflowPath: hotfixWorkflowPath,
+		WorkflowPath: hotfixWorkflowPath(r.lastHotfixComponent),
 		Event:        "pull_request",
 		EventJSON:    string(eventJSON),
 		Env:          r.repoEnv(),
@@ -465,7 +507,7 @@ func (r *Runner) executeHotfixMerged(ctx context.Context, step *HotfixMergedStep
 	}
 
 	env := step.TargetEnv
-	envBranch := "env/" + env
+	envBranch := envBranchName(step.Component, env)
 
 	// The squash merge advanced env/<env>; its tip is the merge commit SHA.
 	mergeSHA, err := r.harness.gitea.GetBranchSHA(ctx, r.harness.repo, envBranch)
@@ -496,7 +538,7 @@ func (r *Runner) executeHotfixMerged(ctx context.Context, step *HotfixMergedStep
 
 	r.t.Logf("  HotfixMerged: replaying merged PR #%d for %s (merge_sha=%s)", r.lastPRIndex, env, truncateSHA(mergeSHA))
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
-		WorkflowPath: hotfixWorkflowPath,
+		WorkflowPath: hotfixWorkflowPath(step.Component),
 		Event:        "pull_request",
 		EventJSON:    string(eventJSON),
 		Env:          r.repoEnv(),

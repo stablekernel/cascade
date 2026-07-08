@@ -20,12 +20,13 @@ type Runner struct {
 	lastWorkflowResult *ExtendedWorkflowResult
 	// Hotfix apply bookkeeping, carried across steps so merge_pr,
 	// resolve_conflict, and hotfix_merged can act on the most recent apply.
-	lastPRIndex      int64            // PR index opened by the most recent hotfix_apply
-	lastPRConflict   bool             // whether that apply hit a cherry-pick conflict
-	lastHotfixBranch string           // head branch of that apply
-	lastHotfixEnv    string           // target env of that apply
-	lastHotfixBody   string           // PR body (with trailers) of that apply
-	prByLabel        map[string]int64 // label -> most recent PR index opened with it
+	lastPRIndex         int64            // PR index opened by the most recent hotfix_apply
+	lastPRConflict      bool             // whether that apply hit a cherry-pick conflict
+	lastHotfixBranch    string           // head branch of that apply
+	lastHotfixEnv       string           // target env of that apply
+	lastHotfixComponent string           // component of that apply ("" for single-component)
+	lastHotfixBody      string           // PR body (with trailers) of that apply
+	prByLabel           map[string]int64 // label -> most recent PR index opened with it
 }
 
 // NewRunner creates a new scenario runner
@@ -714,6 +715,13 @@ type componentEnvStateYAML struct {
 	Deploys map[string]struct {
 		SHA string `yaml:"sha"`
 	} `yaml:"deploys"`
+	// Divergence fields written by the per-component hotfix and rollback finalize
+	// steps, mirroring the flat parse's ref/base_sha/patches. Component-scoped
+	// divergence nests under state.components.<name>.<env>, so a scenario can assert
+	// a hotfixed component tracks env/<name>/<env> while a sibling stays undiverged.
+	Ref     string   `yaml:"ref"`
+	BaseSHA string   `yaml:"base_sha"`
+	Patches []string `yaml:"patches"`
 }
 
 // parseComponentStates extracts ci.state.components.<name>.<env> rows from a
@@ -1380,6 +1388,15 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 			r.ctx.RecordState(key, st.SHA, st.Version)
 			r.t.Logf("  Synced state.components[%s][%s] = %s @ %s",
 				comp, env, truncateSHA(st.SHA), st.Version)
+			// Record component-scoped divergence so a per-component hotfix or
+			// rollback assertion (ref/base_sha/patches under the composite key) can
+			// observe the diverged component while a sibling's subtree stays
+			// undiverged. Mirrors the flat parse above.
+			if st.Ref != "" || st.BaseSHA != "" || len(st.Patches) > 0 {
+				r.ctx.RecordStateDivergence(key, st.Ref, st.BaseSHA, st.Patches, "")
+				r.t.Logf("  Synced state.components[%s][%s] divergence ref=%s base=%s patches=%d",
+					comp, env, st.Ref, truncateSHA(st.BaseSHA), len(st.Patches))
+			}
 			for deployName, deployState := range st.Deploys {
 				r.ctx.RecordDeployState(key, deployName, deployState.SHA)
 				r.t.Logf("  Synced state.components[%s][%s].deploys[%s] = %s",

@@ -8,6 +8,7 @@ package hotfix
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -220,9 +221,19 @@ func NewPlanner(opts PlannerOptions, options ...Option) (*Planner, error) {
 		key = config.DefaultManifestKey
 	}
 
-	cicd, err := config.ParseManifestFile(opts.ConfigPath, key)
+	// Read raw bytes rather than delegating straight to config.ParseManifestFile
+	// so a component-scoped planner can overlay state.components.<component>.<env>
+	// below; ParseManifestFile alone discards the bytes needed for that read.
+	raw, err := os.ReadFile(opts.ConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest file: %w", err)
+	}
+	cicd, err := config.ParseManifestBytes(raw, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+	if cicd.Config != nil {
+		cicd.Config.ManifestFile = opts.ConfigPath
 	}
 
 	actor := opts.Actor
@@ -240,6 +251,20 @@ func NewPlanner(opts PlannerOptions, options ...Option) (*Planner, error) {
 	for _, o := range options {
 		o(p)
 	}
+
+	// A component-scoped plan reads its prior env state from
+	// state.components.<component>.<env>, not the flat state.<env> node (which a
+	// multi-component manifest never populates for a declared component). Overlay
+	// it into the flat map so Plan and PlanChain's State[env] lookups transparently
+	// see the component's recorded row, mirroring the finalize path's
+	// overlayComponentState. A no-op for the single-component default.
+	if p.cicd.State == nil {
+		p.cicd.State = make(map[string]*config.EnvState)
+	}
+	if err := overlayComponentState(p.cicd, raw, key, p.component); err != nil {
+		return nil, err
+	}
+
 	return p, nil
 }
 

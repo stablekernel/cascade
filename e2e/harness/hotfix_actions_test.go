@@ -309,14 +309,14 @@ func TestResolveEnvAnchor(t *testing.T) {
 		r.ctx.RecordCommit("commit1", "base1111aaaa")
 		r.ctx.RecordState("test", "tip2222bbbb", "v0.1.0")
 
-		anchor, err := r.resolveEnvAnchor("test", "commit1")
+		anchor, err := r.resolveEnvAnchor("", "test", "commit1")
 		require.NoError(t, err)
 		assert.Equal(t, "base1111aaaa", anchor, "base_ref must take precedence over the recorded state SHA")
 	})
 
 	t.Run("base_ref literal SHA when not a known reference", func(t *testing.T) {
 		r := NewRunner(t, nil)
-		anchor, err := r.resolveEnvAnchor("test", "literalsha9999")
+		anchor, err := r.resolveEnvAnchor("", "test", "literalsha9999")
 		require.NoError(t, err)
 		assert.Equal(t, "literalsha9999", anchor)
 	})
@@ -324,14 +324,25 @@ func TestResolveEnvAnchor(t *testing.T) {
 	t.Run("falls back to recorded state SHA when no base_ref", func(t *testing.T) {
 		r := NewRunner(t, nil)
 		r.ctx.RecordState("test", "tip2222bbbb", "v0.1.0")
-		anchor, err := r.resolveEnvAnchor("test", "")
+		anchor, err := r.resolveEnvAnchor("", "test", "")
 		require.NoError(t, err)
 		assert.Equal(t, "tip2222bbbb", anchor)
 	})
 
+	t.Run("component falls back to its composite-key state SHA", func(t *testing.T) {
+		r := NewRunner(t, nil)
+		// The flat env key must be ignored for a component apply; only the
+		// components/<name>/<env> composite key seeds the anchor.
+		r.ctx.RecordState("prod", "flataaaa0000", "v0.1.0")
+		r.ctx.RecordState(componentStateKey("api", "prod"), "apitip111", "api-0.1.0")
+		anchor, err := r.resolveEnvAnchor("api", "prod", "")
+		require.NoError(t, err)
+		assert.Equal(t, "apitip111", anchor, "a component apply must anchor on its own subtree, not the flat env row")
+	})
+
 	t.Run("errors when no base_ref and state SHA empty (no trunk-HEAD fallback)", func(t *testing.T) {
 		r := NewRunner(t, nil)
-		anchor, err := r.resolveEnvAnchor("test", "")
+		anchor, err := r.resolveEnvAnchor("", "test", "")
 		require.Error(t, err)
 		assert.Empty(t, anchor)
 		assert.Contains(t, err.Error(), "base_ref")

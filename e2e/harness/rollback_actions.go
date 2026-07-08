@@ -6,8 +6,17 @@ import (
 	"strings"
 )
 
-// rollbackWorkflowPath is the generated rollback workflow's path inside the repo.
-const rollbackWorkflowPath = ".github/workflows/cascade-rollback.yaml"
+// rollbackWorkflowPath returns the generated rollback workflow's path inside the
+// repo for a component. An empty component selects the repo-wide
+// cascade-rollback.yaml (byte-identical single-component behavior); a named
+// component selects the fanned-out cascade-rollback-<name>.yaml the generator
+// emits for a manifest with a components: block. It mirrors promoteWorkflowPath.
+func rollbackWorkflowPath(component string) string {
+	if component == "" {
+		return ".github/workflows/cascade-rollback.yaml"
+	}
+	return ".github/workflows/cascade-rollback-" + component + ".yaml"
+}
 
 // executeRollback dispatches the cascade-rollback workflow for an environment.
 // It mirrors executePromote: it builds the workflow_dispatch inputs (omitting
@@ -30,8 +39,8 @@ func (r *Runner) executeRollback(ctx context.Context, rollback *RollbackStep, co
 	if rollback.DryRun {
 		dryRun = "true"
 	}
-	r.t.Logf("  Rollback: running workflow (env=%s, target=%s, deployable=%s, dry_run=%s)",
-		rollback.Environment, rollback.Target, rollback.Deployable, dryRun)
+	r.t.Logf("  Rollback: running %s (env=%s, target=%s, deployable=%s, dry_run=%s)",
+		rollbackWorkflowPath(rollback.Component), rollback.Environment, rollback.Target, rollback.Deployable, dryRun)
 
 	// Sync the repo to act container before running workflow.
 	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
@@ -62,7 +71,7 @@ func (r *Runner) executeRollback(ctx context.Context, rollback *RollbackStep, co
 	}
 
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
-		WorkflowPath: rollbackWorkflowPath,
+		WorkflowPath: rollbackWorkflowPath(rollback.Component),
 		Event:        "workflow_dispatch",
 		Inputs:       inputs,
 		Env: map[string]string{
