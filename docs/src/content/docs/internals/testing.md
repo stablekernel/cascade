@@ -60,6 +60,7 @@ The example repositories span the supported pipeline shapes, so each topology is
 | `cascade-example-primary` | Primary repository receiving external-update and notify handoffs from satellites |
 | `cascade-example-artifact-a`, `cascade-example-artifact-b` | Satellite repositories in an artifact-dependency graph that notify the primary |
 | `cascade-example-rollback-dispatch` | The automated rollback entry point, where a real `repository_dispatch` payload drives a rollback and the reverted state is read back |
+| `cascade-example-monorepo` | One repository with several components, each versioned, promoted, hotfixed, and rolled back independently in its own namespace |
 
 The `no-environment` library shape is covered today in the act plus gitea harness; the other topologies above are validated in both layers.
 
