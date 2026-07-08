@@ -129,6 +129,71 @@ func TestOrchestrateTargets_Components_FanOut(t *testing.T) {
 	}
 }
 
+// updateManifestStep extracts the Update Manifest step body from a generated
+// orchestrate workflow so state-write assertions stay focused on the yq edits.
+func updateManifestStep(t *testing.T, workflow string) string {
+	t.Helper()
+	idx := strings.Index(workflow, "- name: Update Manifest")
+	require.GreaterOrEqual(t, idx, 0, "Update Manifest step missing")
+	return workflow[idx:]
+}
+
+// TestOrchestrate_Components_ScopeSeedStateWrite proves each per-component
+// orchestrate workflow records its seeded env under
+// state.components.<name>.<env> in the Update Manifest step, and never writes the
+// shared flat state.<env> row. This is the seed-state isolation: two components
+// orchestrating the same env write disjoint subtrees, so neither overwrites the
+// other's row (the coupling that previously forced scenarios to interleave).
+func TestOrchestrate_Components_ScopeSeedStateWrite(t *testing.T) {
+	cfg := twoComponentConfig()
+
+	targets, err := orchestrateTargets(cfg, "", ".github/workflows/orchestrate.yaml", nil, false)
+	require.NoError(t, err)
+
+	byPath := map[string]string{}
+	for _, tg := range targets {
+		content, gerr := tg.Gen.Generate()
+		require.NoError(t, gerr)
+		byPath[tg.Path] = content
+	}
+
+	api := updateManifestStep(t, byPath[".github/workflows/orchestrate-api.yaml"])
+	web := updateManifestStep(t, byPath[".github/workflows/orchestrate-web.yaml"])
+
+	// api seeds only its own subtree.
+	require.Contains(t, api, "state.components.api.$ENVIRONMENT.sha",
+		"api orchestrate must record its seed under state.components.api")
+	require.Contains(t, api, "state.components.api.$ENVIRONMENT.version")
+	require.NotContains(t, api, "state.components.web",
+		"api orchestrate must not touch web's subtree (isolation)")
+
+	// The flat env row must not be written by a component orchestrate: a bare
+	// state.$ENVIRONMENT would let two components clobber the same row.
+	require.NotContains(t, api, "state.$ENVIRONMENT.sha",
+		"component orchestrate must not write the shared flat state.<env> row")
+
+	// web seeds only its own subtree.
+	require.Contains(t, web, "state.components.web.$ENVIRONMENT.sha",
+		"web orchestrate must record its seed under state.components.web")
+	require.NotContains(t, web, "state.components.api",
+		"web orchestrate must not touch api's subtree (isolation)")
+}
+
+// TestOrchestrate_SingleComponent_SeedStateWriteStaysFlat proves a manifest with
+// no components: block keeps writing the flat state.<env> row, byte-identical to
+// the historical behavior (no state.components. path leaks in).
+func TestOrchestrate_SingleComponent_SeedStateWriteStaysFlat(t *testing.T) {
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}}
+	workflow, err := NewGenerator(cfg, "").Generate()
+	require.NoError(t, err)
+	step := updateManifestStep(t, workflow)
+
+	require.Contains(t, step, "state.$ENVIRONMENT.sha",
+		"single-component orchestrate must keep the flat state.<env> write")
+	require.NotContains(t, step, "state.components.",
+		"single-component orchestrate must not emit any component-scoped state path")
+}
+
 // TestGenerator_SingleComponent_NoComponentFlag proves the single-component
 // orchestrate workflow emits no --component flag, keeping its setup invocation
 // byte-identical to the pre-component generator.

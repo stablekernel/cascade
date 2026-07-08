@@ -1684,19 +1684,32 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	sb.WriteString("          apply_state_edits() {\n")
 	sb.WriteString("            TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)\n")
 
+	// A per-component orchestrate scopes its seed under state.components.<name>.<env>
+	// so two components seeding the same environment write disjoint subtrees and
+	// never overwrite each other's row. The single-component workflow keeps the
+	// flat state.<env> path (empty segment), byte-identical to the historical
+	// output. The name is a generation-time literal validated by the component
+	// grammar, matching how deploy/build names are already interpolated into these
+	// yq paths.
+	stateComp := ""
+	if g.componentName != "" {
+		stateComp = "components." + g.componentName + "."
+	}
+
 	if len(g.config.Environments) > 0 {
+		envSel := ".$MANIFEST_KEY.state." + stateComp + "$ENVIRONMENT"
 		sb.WriteString("            # Update environment-level state (committed, not deployed)\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.version = \\\"$VERSION\\\"\" \"$MANIFEST_FILE\"\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.committed_at = \\\"$TIMESTAMP\\\"\" \"$MANIFEST_FILE\"\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.committed_by = \\\"${{ github.actor }}\\\"\" \"$MANIFEST_FILE\"\n")
+		fmt.Fprintf(sb, "            yq eval -i \"%s.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n", envSel)
+		fmt.Fprintf(sb, "            yq eval -i \"%s.version = \\\"$VERSION\\\"\" \"$MANIFEST_FILE\"\n", envSel)
+		fmt.Fprintf(sb, "            yq eval -i \"%s.committed_at = \\\"$TIMESTAMP\\\"\" \"$MANIFEST_FILE\"\n", envSel)
+		fmt.Fprintf(sb, "            yq eval -i \"%s.committed_by = \\\"${{ github.actor }}\\\"\" \"$MANIFEST_FILE\"\n", envSel)
 
 		for _, d := range g.config.Deploys {
 			envName := strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_"))
 			fmt.Fprintf(sb, "            if [[ \"$%s_RESULT\" == \"success\" ]]; then\n", envName)
-			fmt.Fprintf(sb, "              yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.deploys.%s.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n", d.Name)
-			fmt.Fprintf(sb, "              yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.deploys.%s.deployed_at = \\\"$TIMESTAMP\\\"\" \"$MANIFEST_FILE\"\n", d.Name)
-			fmt.Fprintf(sb, "              yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.deploys.%s.deployed_by = \\\"${{ github.actor }}\\\"\" \"$MANIFEST_FILE\"\n", d.Name)
+			fmt.Fprintf(sb, "              yq eval -i \"%s.deploys.%s.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n", envSel, d.Name)
+			fmt.Fprintf(sb, "              yq eval -i \"%s.deploys.%s.deployed_at = \\\"$TIMESTAMP\\\"\" \"$MANIFEST_FILE\"\n", envSel, d.Name)
+			fmt.Fprintf(sb, "              yq eval -i \"%s.deploys.%s.deployed_by = \\\"${{ github.actor }}\\\"\" \"$MANIFEST_FILE\"\n", envSel, d.Name)
 			sb.WriteString("            fi\n")
 		}
 
@@ -1706,8 +1719,8 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 				if out == "artifact_id" {
 					envName := strings.ToUpper(strings.ReplaceAll(b.Name, "-", "_"))
 					fmt.Fprintf(sb, "            if [[ -n \"$BUILD_ARTIFACT_%s\" ]]; then\n", envName)
-					fmt.Fprintf(sb, "              yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.builds.%s.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n", b.Name)
-					fmt.Fprintf(sb, "              yq eval -i \".$MANIFEST_KEY.state.$ENVIRONMENT.builds.%s.artifact_id = \\\"$BUILD_ARTIFACT_%s\\\"\" \"$MANIFEST_FILE\"\n", b.Name, envName)
+					fmt.Fprintf(sb, "              yq eval -i \"%s.builds.%s.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n", envSel, b.Name)
+					fmt.Fprintf(sb, "              yq eval -i \"%s.builds.%s.artifact_id = \\\"$BUILD_ARTIFACT_%s\\\"\" \"$MANIFEST_FILE\"\n", envSel, b.Name, envName)
 					sb.WriteString("            fi\n")
 					break
 				}
@@ -1715,11 +1728,12 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 		}
 	} else {
 		// No environments - update state under 'prerelease' key (consistent with orchestrator.DefaultStateKey)
+		preSel := ".$MANIFEST_KEY.state." + stateComp + "prerelease"
 		sb.WriteString("            # Update state under prerelease key (no environments)\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.prerelease.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.prerelease.version = \\\"$VERSION\\\"\" \"$MANIFEST_FILE\"\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.prerelease.committed_at = \\\"$TIMESTAMP\\\"\" \"$MANIFEST_FILE\"\n")
-		sb.WriteString("            yq eval -i \".$MANIFEST_KEY.state.prerelease.committed_by = \\\"${{ github.actor }}\\\"\" \"$MANIFEST_FILE\"\n")
+		fmt.Fprintf(sb, "            yq eval -i \"%s.sha = \\\"$HEAD_SHA\\\"\" \"$MANIFEST_FILE\"\n", preSel)
+		fmt.Fprintf(sb, "            yq eval -i \"%s.version = \\\"$VERSION\\\"\" \"$MANIFEST_FILE\"\n", preSel)
+		fmt.Fprintf(sb, "            yq eval -i \"%s.committed_at = \\\"$TIMESTAMP\\\"\" \"$MANIFEST_FILE\"\n", preSel)
+		fmt.Fprintf(sb, "            yq eval -i \"%s.committed_by = \\\"${{ github.actor }}\\\"\" \"$MANIFEST_FILE\"\n", preSel)
 	}
 
 	sb.WriteString("          }\n")

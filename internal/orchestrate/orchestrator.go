@@ -590,7 +590,7 @@ func (o *Orchestrator) writeConfig() error {
 		return fmt.Errorf("failed to read config: %w", err)
 	}
 
-	data, err := config.WriteManifestState(current, key, o.cicdFile.State, o.cicdFile.LatestRelease)
+	data, err := o.serializeState(current, key)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -601,6 +601,39 @@ func (o *Orchestrator) writeConfig() error {
 
 	log.Debug("Wrote updated config to %s", o.configPath)
 	return nil
+}
+
+// serializeState rewrites current with the orchestrator's owned state. In the
+// single-component form (component == "") it reconciles the whole flat state node
+// via WriteManifestState, byte-identical to the historical behavior. In the
+// component-scoped form it node-patches only state.components.<component>.<env>
+// through WriteScopedState, so a sibling component present in current survives
+// verbatim, including keys this binary does not model.
+func (o *Orchestrator) serializeState(current []byte, key string) ([]byte, error) {
+	if o.component != "" {
+		return config.WriteScopedState(current, key, o.componentStateWrites()...)
+	}
+	return config.WriteManifestState(current, key, o.cicdFile.State, o.cicdFile.LatestRelease)
+}
+
+// componentStateWrites builds the component-scoped write the orchestrator owns
+// from its in-memory state: one state directive addressing
+// state.components.<component>.<env> for the orchestrated environment. It is
+// re-appliable: the rebase-retry loop reruns writeConfig against the re-fetched
+// trunk bytes on a rejected push, and each call deterministically re-derives the
+// same owned leaf, so a concurrent sibling component's subtree is never rebuilt
+// or dropped. A missing env state yields no write (a nil State on a StateWrite
+// means delete), so an unexpected miss never becomes an accidental node delete.
+func (o *Orchestrator) componentStateWrites() []config.StateWrite {
+	st := o.cicdFile.State[o.environment]
+	if st == nil {
+		return nil
+	}
+	return []config.StateWrite{{
+		Component: o.component,
+		Env:       o.environment,
+		State:     st,
+	}}
 }
 
 // commitAndPush commits and pushes state changes.

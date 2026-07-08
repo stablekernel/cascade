@@ -197,8 +197,12 @@ func runFinalize(version, deployResults, buildResults string) error {
 		log.Info("%sRunning in dry-run mode", log.DryRunPrefix())
 	}
 
-	// Create orchestrator
-	orch, err := NewOrchestrator(configPath, manifestKey, environment)
+	// Create orchestrator. WithComponent("") is a no-op, so the single-component
+	// path is unchanged; a per-component generated workflow passes --component so
+	// the seeded state is recorded under state.components.<component>.<env> rather
+	// than the shared flat state.<env>, keeping two components from overwriting
+	// each other's seed row.
+	orch, err := NewOrchestrator(configPath, manifestKey, environment, WithComponent(component))
 	if err != nil {
 		return fmt.Errorf("initializing orchestrator: %w", err)
 	}
