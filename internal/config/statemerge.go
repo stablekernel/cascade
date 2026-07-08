@@ -277,7 +277,7 @@ func existingChild(parent *yaml.Node, key, child string) *yaml.Node {
 // applies to latest_release against nil. manifestKey defaults to
 // DefaultManifestKey when empty.
 func WriteManifestState(current []byte, manifestKey string, state map[string]*EnvState, latest *LatestReleaseState) ([]byte, error) {
-	writes := make([]StateWrite, 0, len(state)+1)
+	writes := make([]StateWrite, 0, len(state))
 	for env, st := range state {
 		writes = append(writes, StateWrite{Env: env, State: st})
 	}
