@@ -60,6 +60,14 @@ func runPreflight(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// A component-scoped preflight reads its source and target env state from
+	// state.components.<component>.<env>; overlay those rows into the working flat
+	// state map so the source-env deployment check and version comparison resolve
+	// the component's seed. A no-op for a single-component (empty) preflight.
+	if err := overlayComponentState(cicdFile, configPath, componentName); err != nil {
+		return err
+	}
+
 	// Parse and validate mode
 	// Mode can be "default" for sequential promotion, or a cascade target like "dev-to-prod"
 	var mode PromotionMode

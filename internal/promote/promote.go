@@ -92,6 +92,16 @@ func NewPromoter(opts PromoterOptions, options ...Option) (*Promoter, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// For a component-scoped promotion the recorded source and target env state
+	// lives under state.components.<component>.<env>, not the flat state.<env>
+	// rows the promotion reads. Overlay the component's own rows into the working
+	// state map so every existing State[env] lookup transparently sees that
+	// component's seed. The write path stays component-scoped, so the overlaid
+	// rows never leak back into the manifest as flat state.
+	if err := overlayComponentState(cicdFile, opts.ConfigPath, opts.Component); err != nil {
+		return nil, err
+	}
+
 	actor := opts.Actor
 	if actor == "" {
 		actor = "github-actions[bot]"
@@ -108,6 +118,35 @@ func NewPromoter(opts PromoterOptions, options ...Option) (*Promoter, error) {
 		ancestor:   gc.ancestor,
 		component:  opts.Component,
 	}, nil
+}
+
+// overlayComponentState overlays a component's recorded per-env state, read from
+// the manifest at configPath under state.components.<component>.<env>, into the
+// working flat state map. Every State[env] lookup in preflight and promotion then
+// sees that component's seed without teaching each lookup about the components
+// subtree. It is a no-op when component is empty, keeping the single-component
+// path byte-identical. It is the read counterpart to the component-scoped state
+// writes: those keep the persisted form component-scoped, so an overlaid row is
+// never round-tripped back to the manifest as a flat state.<env> node.
+func overlayComponentState(cicdFile *config.CICDFile, configPath, component string) error {
+	if component == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config for component state: %w", err)
+	}
+	compState, err := config.ReadComponentState(raw, config.DefaultManifestKey, component)
+	if err != nil {
+		return fmt.Errorf("failed to read component state: %w", err)
+	}
+	if cicdFile.State == nil {
+		cicdFile.State = make(map[string]*config.EnvState)
+	}
+	for env, st := range compState {
+		cicdFile.State[env] = st
+	}
+	return nil
 }
 
 // Promote executes a promotion and returns the result

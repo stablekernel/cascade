@@ -1,0 +1,93 @@
+name: "Per-Component Orchestrate Seed Isolation"
+description: |
+  Proves two components seed the same first environment independently, each
+  recording its version under only its own state.components.<name>.<dev> subtree,
+  so neither overwrites the other's seed row. The manifest declares two components
+  (api, web), each owning a path subtree with its own strict tag namespace, sharing
+  the dev to prod ladder on its own version line. Generation fans the orchestrate
+  lane out to one orchestrate-<name>.yaml per component.
+
+  api and web are seeded, then each is orchestrated to dev in turn with NO
+  interleaving promotion between them. Before, an orchestrate recorded its built
+  version into the shared flat state.dev row, so web's orchestrate would overwrite
+  api's seed and the two could not both be observed at dev at once; a scenario had
+  to promote api out of dev before touching web to avoid the clobber. Here both
+  orchestrate to dev back to back, and the proof is that after web's orchestrate,
+  api's dev seed still reads its own api-0.1.0-rc.0 line under state.components.api,
+  coexisting with web's web-0.1.0-rc.0 under state.components.web: the seed write is
+  scoped per component, not shared and flat.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so
+  # the per-component workflows executed below are the pristine generated output.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  # Cut api's dev prerelease on its own version line. The seed lands under
+  # state.components.api.dev, not the shared flat state.dev.
+  - name: "Orchestrate api to seed its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+    expect:
+      state:
+        api-dev:
+          component: api
+          env: dev
+          version: "api-0.1.0-rc.0"
+
+  # Cut web's dev prerelease WITHOUT first promoting api out of dev. web writes
+  # only state.components.web.dev; api's seed row must survive untouched. Before the
+  # per-component seed write, web's orchestrate would have overwritten the shared
+  # flat state.dev and api's seed would be gone.
+  - name: "Orchestrate web to seed its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: web
+    expect:
+      state:
+        web-dev:
+          component: web
+          env: dev
+          version: "web-0.1.0-rc.0"
+        api-dev:
+          component: api
+          env: dev
+          version: "api-0.1.0-rc.0"
+          unchanged: true

@@ -382,6 +382,37 @@ func deleteMappingKey(m *yaml.Node, key string) {
 	}
 }
 
+// ReadComponentState reads the recorded per-env state a single component owns
+// under state.components.<component>.<env>, returning an env-keyed map of the
+// same EnvState shape the flat state.<env> rows use. It is the read counterpart
+// to the component-scoped WriteScopedState: a consumer that works against the
+// flat state map (promotion, orchestration) can overlay a component's seed into
+// its working map so every existing state.<env> lookup transparently sees that
+// component's rows, without teaching each lookup about the components subtree.
+//
+// A manifest with no components subtree, or no rows for the named component,
+// yields a nil map and no error. manifestKey defaults to DefaultManifestKey when
+// empty. YAML parse failures are wrapped with %w. Sibling components are ignored;
+// only the named component's rows are returned.
+func ReadComponentState(current []byte, manifestKey, component string) (map[string]*EnvState, error) {
+	if manifestKey == "" {
+		manifestKey = DefaultManifestKey
+	}
+	var doc map[string]struct {
+		State struct {
+			Components map[string]map[string]*EnvState `yaml:"components"`
+		} `yaml:"state"`
+	}
+	if err := yaml.Unmarshal(current, &doc); err != nil {
+		return nil, fmt.Errorf("parsing component state: %w", err)
+	}
+	section, ok := doc[manifestKey]
+	if !ok {
+		return nil, nil
+	}
+	return section.State.Components[component], nil
+}
+
 // valueNode marshals v through YAML and returns the resulting value node, so a
 // typed value can be spliced into the document tree.
 func valueNode(v any) (*yaml.Node, error) {
