@@ -1,0 +1,118 @@
+name: "Per-Component Promotion Isolation"
+description: |
+  Proves per-component promotion records state under only its own subtree and
+  never disturbs a sibling (#290, #292). The manifest declares two components (api,
+  web), each owning a path subtree with its own strict tag namespace, promoting
+  through the same dev to prod ladder on its own version line. Generation fans the
+  promote lane out to one promote-<name>.yaml per component; this scenario executes
+  a specific component's promote workflow through act, which the generation-only
+  component scenarios could not yet do.
+
+  Each component is seeded by its own orchestrate-<name>.yaml and then promoted to
+  prod by its own promote-<name>.yaml. api is advanced end to end first, then web
+  is advanced through its full seed-and-promote cycle. The proof is that api's
+  recorded prod state stays byte-identical (its own api-0.1.0 version line) across
+  web's entire orchestrate-and-promote cycle, and web lands its own web-0.1.0 line
+  under only its own subtree: neither promotion rebuilds, moves, or drops the
+  other's state.components.<name> subtree.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so
+  # the per-component workflows executed below are the pristine generated output.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  # Cut api's dev prerelease on its own version line.
+  - name: "Orchestrate api to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+
+  # Promote api from dev to prod. Its promote-api.yaml runs the promotion CLI with
+  # --component api, so the published state lands only under state.components.api.
+  # web has not been touched yet, so its subtree must be absent.
+  - name: "Promote api from dev to prod"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: api
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          version: "api-0.1.0"
+        web-prod:
+          component: web
+          env: prod
+          wiped: true
+
+  # Now advance web through its own full cycle. Cutting web's dev prerelease
+  # rewrites the shared flat dev row, but must not touch api's recorded subtree.
+  - name: "Orchestrate web to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: web
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true
+
+  # Promote web from dev to prod. Its promote-web.yaml writes only
+  # state.components.web; api's prod subtree must survive byte-identical, on its own
+  # api-0.1.0 version line, distinct from web's web-0.1.0.
+  - name: "Promote web from dev to prod"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: web
+    expect:
+      state:
+        web-prod:
+          component: web
+          env: prod
+          version: "web-0.1.0"
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true
