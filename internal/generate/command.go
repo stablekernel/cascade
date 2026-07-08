@@ -149,18 +149,19 @@ func runGenerateWorkflow(opts generateOptions) error {
 	generateOrchestrate := !opts.promoteOnly
 	generatePromote := !opts.orchestrateOnly
 
-	// Create orchestrate generator and validate
-	var orchestrateGen *Generator
+	// Create orchestrate generator target(s) and validate. A manifest declaring
+	// components: fans out to one path-scoped orchestrate-<name>.yaml per
+	// component; otherwise a single orchestrate.yaml, byte-identical to today.
+	var orchTargets []orchestrateTarget
 	if generateOrchestrate {
-		var orchestrateOpts []GeneratorOption
-		if opts.ownRepo {
-			orchestrateOpts = append(orchestrateOpts, WithOwnRepoRelease())
+		orchTargets, err = orchestrateTargets(cfg, baseDir, opts.outputPath, manifestState, opts.ownRepo)
+		if err != nil {
+			return fmt.Errorf("planning orchestrate workflow: %w", err)
 		}
-		orchestrateGen = NewGenerator(cfg, baseDir, orchestrateOpts...)
-		orchestrateGen.SetState(manifestState)
-		warnings := orchestrateGen.Validate()
-		for _, w := range warnings {
-			fmt.Fprintf(os.Stderr, "%s\n", w)
+		for _, t := range orchTargets {
+			for _, w := range t.Gen.Validate() {
+				fmt.Fprintf(os.Stderr, "%s\n", w)
+			}
 		}
 	}
 
@@ -171,22 +172,24 @@ func runGenerateWorkflow(opts generateOptions) error {
 
 	var generatedFiles []string
 
-	// Generate orchestrate workflow
+	// Generate orchestrate workflow(s)
 	if generateOrchestrate {
-		content, err := orchestrateGen.Generate()
-		if err != nil {
-			return fmt.Errorf("generating orchestrate workflow: %w", err)
-		}
-
-		if opts.dryRun {
-			fmt.Println("=== orchestrate.yaml ===")
-			fmt.Print(content)
-		} else {
-			if err := writeWorkflow(opts.outputPath, content, opts.force); err != nil {
-				return err
+		for _, t := range orchTargets {
+			content, err := t.Gen.Generate()
+			if err != nil {
+				return fmt.Errorf("generating orchestrate workflow %s: %w", t.Path, err)
 			}
-			generatedFiles = append(generatedFiles, opts.outputPath)
-			fmt.Printf("Generated workflow: %s\n", opts.outputPath)
+
+			if opts.dryRun {
+				fmt.Printf("=== %s ===\n", filepath.Base(t.Path))
+				fmt.Print(content)
+			} else {
+				if err := writeWorkflow(t.Path, content, opts.force); err != nil {
+					return err
+				}
+				generatedFiles = append(generatedFiles, t.Path)
+				fmt.Printf("Generated workflow: %s\n", t.Path)
+			}
 		}
 	}
 

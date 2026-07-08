@@ -1,11 +1,14 @@
-name: "Components Reserved Shape"
+name: "Per-Component Workflow Generation"
 description: |
-  Exercises the reserved per-component descriptor map (config.components, #176).
-  Each component carries a path subtree and an optional tag_prefix. This block is
-  reserved and shape-only today: it parses and passes structural validation, but
-  carries no generator, state, or runtime behavior. The scenario declares two
-  components, generates the workflows, then regenerates and proves the output is
-  byte-identical with no drift.
+  Exercises per-component orchestrate workflow generation (#283). The manifest
+  declares two components, each owning a path subtree with a distinct tag prefix.
+  Generation fans the orchestrate lane out to one path-scoped, concurrency-isolated
+  workflow per component (orchestrate-api.yaml, orchestrate-web.yaml) and emits no
+  repo-wide orchestrate.yaml. The scenario seeds both subtrees, proves the
+  multi-component generate then verify roundtrip is drift-free and deterministic,
+  and proves the per-component files are distinct isolated artifacts. Deep per-file
+  structure (path filter, per-component concurrency group, namespaced workflow name)
+  is asserted in the generator unit tests.
 
 config:
   trunk_branch: main
@@ -27,18 +30,55 @@ config:
       tag_prefix: web-
 
 steps:
-  - name: "Seed a minimal source tree"
+  - name: "Seed both component subtrees"
     action: commit
     commit:
-      message: "seed source"
+      message: "seed component sources"
       files:
-        src/main.go: |
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
           package main
 
           func main() {}
 
-  - name: "Regenerate and confirm no drift"
+  - name: "Regenerate the per-component set and confirm no drift"
     action: verify
     verify:
       regenerate: true
       expect_exit: 0
+
+  - name: "Prove both per-component workflows exist as distinct isolated files"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # The observable, harness-robust proof of the fan-out is the emitted file set
+    # itself: generation produced one path-scoped, concurrency-isolated workflow
+    # per component and no repo-wide orchestrate.yaml. Each file is asserted on the
+    # concurrency group and path filter, which the harness never rewrites (only the
+    # top-level name: is suffixed post-generation). not_contains cross-checks that
+    # neither file is a copy of the other, so the assertion still fails if the set
+    # collapses to one component or an empty set. File-set isolation on mutation is
+    # proven at the unit level (TestPlan_Components_MatchesGeneratedBytes and the
+    # deep-copy no-bleed tests), so it is not re-proven here via a plan diff.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate-api.yaml"
+          contains:
+            - "group: orchestrate-api-"
+            - "- 'services/api/**'"
+          not_contains:
+            - "group: orchestrate-web-"
+            - "services/web"
+        - path: ".github/workflows/orchestrate-web.yaml"
+          contains:
+            - "group: orchestrate-web-"
+            - "- 'services/web/**'"
+          not_contains:
+            - "group: orchestrate-api-"
+            - "services/api"
+        - path: ".github/workflows/orchestrate.yaml"
+          not_exists: true

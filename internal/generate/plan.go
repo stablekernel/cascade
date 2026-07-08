@@ -101,18 +101,21 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 
 	var planned []PlannedFile
 
-	// 1. orchestrate -> outputPath (verify always treats the full set as enabled).
-	var orchestrateOpts []GeneratorOption
-	if opts.OwnRepo {
-		orchestrateOpts = append(orchestrateOpts, WithOwnRepoRelease())
-	}
-	orchestrateGen := NewGenerator(cfg, baseDir, orchestrateOpts...)
-	orchestrateGen.SetState(manifestState)
-	content, err := orchestrateGen.Generate()
+	// 1. orchestrate -> outputPath, or one path-scoped orchestrate-<name>.yaml per
+	//    component when the manifest declares components: (verify always treats the
+	//    full set as enabled).
+	orchTargets, err := orchestrateTargets(cfg, baseDir, outputPath, manifestState, opts.OwnRepo)
 	if err != nil {
-		return nil, fmt.Errorf("generating orchestrate workflow: %w", err)
+		return nil, err
 	}
-	planned = append(planned, PlannedFile{Path: outputPath, Content: content})
+	var content string
+	for _, t := range orchTargets {
+		content, err = t.Gen.Generate()
+		if err != nil {
+			return nil, fmt.Errorf("generating orchestrate workflow: %w", err)
+		}
+		planned = append(planned, PlannedFile{Path: t.Path, Content: content})
+	}
 
 	// 2. promote (multi-env) or release (single-env) -> promoteOutputPath.
 	if cfg.IsSingleEnvironment() {
@@ -214,6 +217,67 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	})
 
 	return planned, nil
+}
+
+// orchestrateTarget pairs a rendered orchestrate workflow's target path with the
+// generator that produces it. The generator is returned unrendered so callers can
+// validate it (generate command) or render it (Plan) without duplicating the
+// component fan-out decision.
+type orchestrateTarget struct {
+	Path string
+	Gen  *Generator
+}
+
+// orchestrateTargets returns the orchestrate workflow target(s) the manifest
+// emits. A manifest with no components: block yields exactly one target at
+// outputPath, byte-identical to the pre-component generator. A manifest that
+// declares components yields one path-scoped, concurrency-isolated,
+// component-namespaced orchestrate-<name>.yaml per component (sorted by name) and
+// no repo-wide orchestrate file, because the repo is no longer a single
+// orchestration unit. Both the generate command and Plan (verify's enumeration)
+// call this, so they can never disagree on the per-component file set.
+//
+// This is the structural fan-out only. Per-component version, promotion, hotfix,
+// and rollback semantics are deferred to their owning stages; the CLI invocations
+// inside each generated workflow are unchanged from the single-component path.
+func orchestrateTargets(cfg *config.TrunkConfig, baseDir, outputPath string, state map[string]*config.EnvState, ownRepo bool) ([]orchestrateTarget, error) {
+	var baseOpts []GeneratorOption
+	if ownRepo {
+		baseOpts = append(baseOpts, WithOwnRepoRelease())
+	}
+
+	if !cfg.HasComponents() {
+		gen := NewGenerator(cfg, baseDir, baseOpts...)
+		gen.SetState(state)
+		return []orchestrateTarget{{Path: outputPath, Gen: gen}}, nil
+	}
+
+	names := make([]string, 0, len(cfg.Components))
+	for name := range cfg.Components {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	targets := make([]orchestrateTarget, 0, len(names))
+	for _, name := range names {
+		resolved, err := cfg.ResolveComponent(name)
+		if err != nil {
+			return nil, fmt.Errorf("resolving component %q: %w", name, err)
+		}
+		genOpts := make([]GeneratorOption, 0, len(baseOpts)+1)
+		genOpts = append(genOpts, baseOpts...)
+		genOpts = append(genOpts, WithComponentName(name))
+		gen := NewGenerator(resolved.Config, baseDir, genOpts...)
+		gen.SetState(state)
+		targets = append(targets, orchestrateTarget{Path: componentWorkflowPath(outputPath, name), Gen: gen})
+	}
+	return targets, nil
+}
+
+// componentWorkflowPath derives a per-component orchestrate workflow path from the
+// base output path: the base directory plus orchestrate-<name>.yaml.
+func componentWorkflowPath(outputPath, name string) string {
+	return filepath.Join(filepath.Dir(outputPath), fmt.Sprintf("orchestrate-%s.yaml", name))
 }
 
 // ResolveBaseDir reports the repo root the generate command resolves workflow

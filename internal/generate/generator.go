@@ -144,6 +144,13 @@ type Generator struct {
 	// mode, set only via WithOwnRepoRelease. See that option for the full
 	// rationale.
 	ownRepo bool
+	// componentName, when non-empty, names the component this orchestrate
+	// workflow is generated for. It namespaces the emitted workflow name so two
+	// components' orchestrate files are distinct. It is set only via
+	// WithComponentName by the per-component fan-out; the concurrency group and
+	// tag prefix already come from the resolved per-component config, so this
+	// affects the emitted name only.
+	componentName string
 }
 
 // GeneratorOption customizes a Generator. Options are the additive, variadic
@@ -168,6 +175,14 @@ type GeneratorOption func(*Generator)
 // allow two functions named WithOwnRepo with different signatures).
 func WithOwnRepoRelease() GeneratorOption {
 	return func(g *Generator) { g.ownRepo = true }
+}
+
+// WithComponentName namespaces the generated orchestrate workflow to a declared
+// component so a multi-component manifest emits one distinct orchestrate file per
+// component. It sets the emitted workflow name; the per-component concurrency
+// group and tag prefix already flow through the resolved per-component config.
+func WithComponentName(name string) GeneratorOption {
+	return func(g *Generator) { g.componentName = name }
 }
 
 // NewGenerator creates a new workflow generator. Optional behavior is supplied
@@ -662,7 +677,11 @@ func (g *Generator) writeHeader(sb *strings.Builder) {
 }
 
 func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
-	sb.WriteString("name: Orchestrate CI/CD\n\n")
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "name: Orchestrate CI/CD (%s)\n\n", g.componentName)
+	} else {
+		sb.WriteString("name: Orchestrate CI/CD\n\n")
+	}
 	sb.WriteString("on:\n")
 
 	// release_trigger: dispatch drops the push: trigger so orchestrate runs only
