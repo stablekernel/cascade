@@ -1242,13 +1242,13 @@ type ComponentConfig struct {
 	Extra map[string]any `yaml:",inline" json:"-"`
 }
 
-// ComponentState is the reserved per-component recorded-state entry.
-type ComponentState struct {
-	Version     string `yaml:"version,omitempty" json:"version,omitempty"`
-	SHA         string `yaml:"sha,omitempty" json:"sha,omitempty"`
-	CommittedAt string `yaml:"committed_at,omitempty" json:"committed_at,omitempty"`
-	CommittedBy string `yaml:"committed_by,omitempty" json:"committed_by,omitempty"`
-}
+// ComponentState is the per-component recorded-state entry. It is the full
+// EnvState surface: the multi-component form serializes state.components.<name>.<env>
+// as a complete EnvState (version, sha, builds, deploys, external, ref, base_sha,
+// patches, previous ring), which the lifecycle needs for promotion, hotfix,
+// rollback, and divergence to work per component. It aliases EnvState so the wide
+// shape is defined in exactly one place; the reserved name is retained.
+type ComponentState = EnvState
 
 // ComponentReleaseState is the reserved per-component published-release entry.
 type ComponentReleaseState struct {

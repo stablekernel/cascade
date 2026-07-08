@@ -445,6 +445,15 @@ func (f *Finalizer) writeStateViaAPI(message string) error {
 // latest_release) so a concurrent finalizer's keys on into are preserved. It is
 // re-appliable: CommitWithRetry calls it again against re-fetched trunk bytes on
 // a 409, and each call deterministically re-derives the same owned keys.
+//
+// The publish transition deletes the prerelease marker from into.State by
+// omission. That deletion is realized through WriteManifestState's
+// reconcile-to-map contract: the wrapper rebuilds the state node from into.State
+// alone and emits an explicit StateWrite delete (State == nil) for any env or
+// marker key present in the fetched bytes but absent from the map, so the dropped
+// prerelease key is removed rather than surviving as a stale node. The caller must
+// therefore express a removal as a map deletion here, not rely on any whole-node
+// replacement.
 func (f *Finalizer) overlayOwnedState(into *config.CICDFile) {
 	if into.State == nil {
 		into.State = make(map[string]*config.EnvState)
@@ -457,6 +466,8 @@ func (f *Finalizer) overlayOwnedState(into *config.CICDFile) {
 	if f.promotionResult != nil && f.promotionResult.ReleaseAction == "publish" {
 		into.LatestRelease = f.cicdFile.LatestRelease
 		into.State["release"] = f.cicdFile.State["release"]
+		// Removal by map deletion; the wrapper's reconcile-to-map contract turns
+		// this into an explicit node delete (see the doc comment above).
 		delete(into.State, "prerelease")
 	}
 }
