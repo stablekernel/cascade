@@ -462,9 +462,12 @@ func hotfixVersionCandidate(spec taggrammar.Spec, envVersion string) (string, er
 	return v.WithGrammar(spec).NextHotfix().String(), nil
 }
 
-// envBranch returns the integration branch name for an environment.
+// envBranch returns the integration branch name for an environment. It routes
+// through EnvBranchName with the default (empty) component, so the single-
+// component name env/<env> is preserved; component threading arrives with the
+// component-aware finalize path.
 func envBranch(env string) string {
-	return "env/" + env
+	return EnvBranchName("", env)
 }
 
 // protectionSuggestions returns ready-to-run gh CLI commands an operator can
