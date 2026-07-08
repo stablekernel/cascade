@@ -49,7 +49,7 @@ flowchart LR
 | `primary` | Runs first and must pass before its dependents start. |
 | `dependents` | `artifact-a` and `artifact-b` mutate the primary's shared external state, so they run only after the primary is green. The two run together, which is the lane that defines the fleet's peak of about two repositories. |
 | `heavy` | `4env` is the heaviest and most fragile repository, so it runs alone in its own job, sequenced after the dependents lane so the two never stack. |
-| `remainder` | The light repositories (`3env`, `2env`, `single-env`, `release-only`, `no-env`, `callbacks`, `rollback-dispatch`) run in a matrix capped at two in flight via `max-parallel`, sequenced after the heavy lane. |
+| `remainder` | The light repositories (`3env`, `2env`, `single-env`, `release-only`, `no-env`, `callbacks`, `rollback-dispatch`, `monorepo`) run in a matrix capped at two in flight via `max-parallel`, sequenced after the heavy lane. |
 | `aggregate` | The Fleet gate. It needs every lane, so a green gate means every selected repository passed. Auto-promote keys off this conclusion. |
 
 The fleet triggers on completion of the Release workflow for a release-candidate or

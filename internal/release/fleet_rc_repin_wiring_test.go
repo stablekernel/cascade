@@ -117,6 +117,7 @@ func TestSuiteRCRepin_IsReusableAndCoversRoster(t *testing.T) {
 	roster := []string{
 		"primary", "artifact-a", "artifact-b", "4env", "3env", "2env",
 		"single-env", "release-only", "no-env", "callbacks", "rollback-dispatch",
+		"monorepo",
 	}
 	// Assert the roster appears as one whitespace-separated REPOS list so a
 	// dropped repo is caught, not merely mentioned somewhere in a comment.

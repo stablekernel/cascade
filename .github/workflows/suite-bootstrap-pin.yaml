@@ -36,7 +36,7 @@ permissions:
 
 concurrency:
   # One bump at a time, and do not cancel an in-flight bump: each targets a
-  # specific release and pushes to eleven external repos, so a later release
+  # specific release and pushes to twelve external repos, so a later release
   # queues behind an earlier one rather than interrupting it mid-fan-out.
   group: suite-bootstrap-pin
   cancel-in-progress: false
@@ -134,10 +134,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The full roster of eleven example repos. Every repo whose suite
+          # The full roster of twelve example repos. Every repo whose suite
           # bootstraps a pinned cascade CLI belongs here; keep it in sync with
           # the fleet repin roster in fleet-e2e.yaml.
-          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch"
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch monorepo"
 
           # Repos whose main rejects a direct push (branch protection requires a
           # PR). These take the PR path up front. Any OTHER repo that

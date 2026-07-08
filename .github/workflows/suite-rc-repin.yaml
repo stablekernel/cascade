@@ -161,7 +161,7 @@ jobs:
           # push only if something changed. Every hand-written suite feature is
           # preserved: regeneration only rewrites the generated workflows, and
           # nothing else is touched.
-          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch"
+          REPOS="primary artifact-a artifact-b 4env 3env 2env single-env release-only no-env callbacks rollback-dispatch monorepo"
 
           # Apply the repin mutation to the checkout in the current directory:
           # point cli_version at the rc, rewrite any other in-repo rc refs, then
