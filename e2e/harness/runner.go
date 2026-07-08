@@ -370,7 +370,7 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 	case "commit":
 		return r.executeCommit(ctx, step.Commit)
 	case "orchestrate":
-		return r.executeOrchestrate(ctx, config, step.ExpectFailure)
+		return r.executeOrchestrate(ctx, config, step.ExpectFailure, step.Orchestrate)
 	case "promote":
 		return r.executePromote(ctx, step.Promote, config)
 	case "hotfix_plan":
@@ -675,6 +675,69 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// orchestrateWorkflowPath returns the repo-relative orchestrate workflow path for
+// a component. An empty component selects the repo-wide orchestrate.yaml; a named
+// component selects the fanned-out orchestrate-<name>.yaml the generator emits for
+// a manifest with a components: block.
+func orchestrateWorkflowPath(component string) string {
+	if component == "" {
+		return ".github/workflows/orchestrate.yaml"
+	}
+	return fmt.Sprintf(".github/workflows/orchestrate-%s.yaml", component)
+}
+
+// promoteWorkflowPath returns the repo-relative promote workflow path for a
+// component. An empty component selects the repo-wide promote.yaml; a named
+// component selects the fanned-out promote-<name>.yaml the generator emits for a
+// manifest with a components: block.
+func promoteWorkflowPath(component string) string {
+	if component == "" {
+		return ".github/workflows/promote.yaml"
+	}
+	return fmt.Sprintf(".github/workflows/promote-%s.yaml", component)
+}
+
+// componentStateKey composes the ExecutionContext key under which a component's
+// per-environment state is recorded. Component-scoped state lives at
+// state.components.<component>.<env> in the manifest; the harness records it under
+// this composite key so the flat state.<env> path is untouched and every existing
+// state helper (record/get/clone/unchanged) keeps working without change.
+func componentStateKey(component, env string) string {
+	return "components/" + component + "/" + env
+}
+
+// componentEnvStateYAML is the subset of a component's per-env manifest row the
+// harness reads back. It mirrors the flat env row parsed in syncStateFromGitea.
+type componentEnvStateYAML struct {
+	SHA     string `yaml:"sha"`
+	Version string `yaml:"version"`
+	Deploys map[string]struct {
+		SHA string `yaml:"sha"`
+	} `yaml:"deploys"`
+}
+
+// parseComponentStates extracts ci.state.components.<name>.<env> rows from a
+// manifest document under manifestKey (typically config.DefaultManifestKey). A
+// manifest with no components subtree yields an empty map and no error. It is a
+// pure function so the component-scoped readback is unit-testable without a live
+// gitea/harness. The flat state.<env> rows alongside components are ignored here:
+// they are read by the existing flat parse in syncStateFromGitea.
+func parseComponentStates(manifestContent, manifestKey string) (map[string]map[string]componentEnvStateYAML, error) {
+	var doc map[string]struct {
+		State struct {
+			Components map[string]map[string]componentEnvStateYAML `yaml:"components"`
+		} `yaml:"state"`
+	}
+	if err := yaml.Unmarshal([]byte(manifestContent), &doc); err != nil {
+		return nil, err
+	}
+	section, ok := doc[manifestKey]
+	if !ok {
+		return nil, nil
+	}
+	return section.State.Components, nil
+}
+
 // consistencyReport mirrors the JSON shape printed by `cascade status
 // consistency --json`. Only the fields the harness asserts on are modeled.
 type consistencyReport struct {
@@ -902,11 +965,20 @@ func (r *Runner) executeStageDivergence(ctx context.Context, step *StageDivergen
 // executeOrchestrate runs the orchestrate workflow via ActRunner. When
 // expectFailure is set, a failure conclusion is the success path (mirrors
 // executePromote's ExpectFailure handling) and a success conclusion is an error.
-func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFailure bool) error {
+// When orch names a component, it runs that component's fanned-out
+// orchestrate-<name>.yaml instead of the repo-wide orchestrate.yaml, so a
+// components: manifest can seed one component's version line independently.
+func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFailure bool, orch *OrchestrateStep) error {
 	if r.harness == nil || r.harness.act == nil {
 		r.t.Log("  Would execute orchestrate workflow (no harness)")
 		return nil
 	}
+
+	component := ""
+	if orch != nil {
+		component = orch.Component
+	}
+	workflowPath := orchestrateWorkflowPath(component)
 
 	// Get the current HEAD SHA for later reference
 	sha, err := r.harness.gitea.getHeadSHA(ctx, r.harness.repo)
@@ -914,7 +986,11 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 		return fmt.Errorf("failed to get HEAD SHA: %w", err)
 	}
 
-	r.t.Logf("  Orchestrate: running workflow for SHA %s", truncateSHA(sha))
+	if component != "" {
+		r.t.Logf("  Orchestrate: running %s for SHA %s", workflowPath, truncateSHA(sha))
+	} else {
+		r.t.Logf("  Orchestrate: running workflow for SHA %s", truncateSHA(sha))
+	}
 
 	// Sync the repo to act container before running workflow
 	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
@@ -922,7 +998,7 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 	}
 
 	// Debug: check what's in /tmp/repo
-	debugCmd := []string{"bash", "-c", "cd /tmp/repo && git branch -a && ls -la .github/actions/ && ls -la .github/actions/setup-cli/ && cat .github/workflows/orchestrate.yaml | head -50"}
+	debugCmd := []string{"bash", "-c", "cd /tmp/repo && git branch -a && ls -la .github/actions/ && ls -la .github/actions/setup-cli/ && cat " + workflowPath + " | head -50"}
 	_, debugReader, _ := r.harness.act.Container().Exec(ctx, debugCmd)
 	if debugReader != nil {
 		var debugOut bytes.Buffer
@@ -938,7 +1014,7 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 
 	// Run the actual orchestrate workflow via ActRunner
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
-		WorkflowPath: ".github/workflows/orchestrate.yaml",
+		WorkflowPath: workflowPath,
 		Event:        "push",
 		Env: map[string]string{
 			"GITHUB_SHA":        sha,
@@ -999,15 +1075,25 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 		return nil
 	}
 
-	r.t.Logf("  Promote: running workflow (mode=%s, target=%s)", promote.Mode, promote.Target)
+	// Select the promote workflow. A component-scoped step runs that component's
+	// fanned-out promote-<name>.yaml (emitted for a components: manifest); the
+	// single-component default is the repo-wide promote.yaml, byte-identical to
+	// before. The workflow's dispatch inputs (mode/force/...) are identical across
+	// both shapes, so only the path changes here.
+	workflowPath := promoteWorkflowPath(promote.Component)
+
+	r.t.Logf("  Promote: running %s (mode=%s, target=%s, component=%s)",
+		workflowPath, promote.Mode, promote.Target, promote.Component)
 
 	// Sync the repo to act container before running workflow
 	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
 		return fmt.Errorf("failed to sync repo: %w", err)
 	}
 
-	// Debug: Check if promote.yaml exists
-	debugCmd := []string{"bash", "-c", "ls -la /tmp/repo/.github/workflows/ && head -30 /tmp/repo/.github/workflows/promote.yaml 2>&1 || echo 'promote.yaml not found'"}
+	// Debug: Check if the selected promote workflow exists
+	debugCmd := []string{"bash", "-c", fmt.Sprintf(
+		"ls -la /tmp/repo/.github/workflows/ && head -30 /tmp/repo/%s 2>&1 || echo '%s not found'",
+		workflowPath, workflowPath)}
 	_, debugReader, _ := r.harness.act.Container().Exec(ctx, debugCmd)
 	if debugReader != nil {
 		var debugOut bytes.Buffer
@@ -1087,7 +1173,7 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 
 	// Run the actual promote workflow via ActRunner
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
-		WorkflowPath: ".github/workflows/promote.yaml",
+		WorkflowPath: workflowPath,
 		Event:        "workflow_dispatch",
 		Inputs:       inputs,
 		Env: map[string]string{
@@ -1241,6 +1327,12 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	r.ctx.ClearState()
 
 	for env, state := range ciData.State {
+		// "components" is not an environment: it is the per-component subtree
+		// (state.components.<name>.<env>), read separately below via
+		// parseComponentStates. Skip it here so it is not recorded as a junk env.
+		if env == "components" {
+			continue
+		}
 		r.ctx.RecordState(env, state.SHA, state.Version)
 		r.t.Logf("  Synced state[%s] = %s @ %s", env, truncateSHA(state.SHA), state.Version)
 
@@ -1268,6 +1360,32 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	if lr := ciData.LatestRelease; lr.Version != "" || lr.SHA != "" {
 		r.ctx.RecordState("release", lr.SHA, lr.Version)
 		r.t.Logf("  Synced state[release] (from latest_release) = %s @ %s", truncateSHA(lr.SHA), lr.Version)
+	}
+
+	// Read component-scoped state (state.components.<name>.<env>) written by a
+	// per-component promote finalize, recording each row under a composite key so
+	// component-scoped assertions can observe that one component advanced while a
+	// sibling's subtree stayed byte-intact. ClearState above already dropped any
+	// prior composite keys, so wiped/unchanged assertions see a faithful rebuild.
+	// The manifest key is "ci" by default, matching the flat parse above (the
+	// config parameter shadows the config package here, so use the literal).
+	components, err := parseComponentStates(manifestContent, "ci")
+	if err != nil {
+		r.t.Logf("  Note: could not parse component state: %v", err)
+		return nil
+	}
+	for comp, envs := range components {
+		for env, st := range envs {
+			key := componentStateKey(comp, env)
+			r.ctx.RecordState(key, st.SHA, st.Version)
+			r.t.Logf("  Synced state.components[%s][%s] = %s @ %s",
+				comp, env, truncateSHA(st.SHA), st.Version)
+			for deployName, deployState := range st.Deploys {
+				r.ctx.RecordDeployState(key, deployName, deployState.SHA)
+				r.t.Logf("  Synced state.components[%s][%s].deploys[%s] = %s",
+					comp, env, deployName, truncateSHA(deployState.SHA))
+			}
+		}
 	}
 
 	return nil
@@ -1333,19 +1451,32 @@ func (r *Runner) assertStep(ctx context.Context, step *Step, preState *Execution
 	var allErrs []error
 	expect := step.Expect
 
-	// Assert state
-	for env, stateExpect := range expect.State {
+	// Assert state. The map key is the flat env for a single-component scenario;
+	// when the expectation names a Component, the lookup is redirected to that
+	// component's composite key (state.components.<component>.<env>), where env
+	// defaults to the map key unless an explicit Env disambiguates two components
+	// asserted at the same env in one step.
+	for key, stateExpect := range expect.State {
+		lookupKey := key
+		if stateExpect.Component != "" {
+			env := stateExpect.Env
+			if env == "" {
+				env = key
+			}
+			lookupKey = componentStateKey(stateExpect.Component, env)
+		}
+
 		// Handle "unchanged" expectation
 		if stateExpect.Unchanged {
-			preEnvState := preState.GetState(env)
-			currentState := r.ctx.GetState(env)
+			preEnvState := preState.GetState(lookupKey)
+			currentState := r.ctx.GetState(lookupKey)
 			if preEnvState.SHA != currentState.SHA || preEnvState.Version != currentState.Version {
 				allErrs = append(allErrs, fmt.Errorf("state[%s] expected unchanged but changed from %s/%s to %s/%s",
-					env, preEnvState.SHA, preEnvState.Version, currentState.SHA, currentState.Version))
+					lookupKey, preEnvState.SHA, preEnvState.Version, currentState.SHA, currentState.Version))
 			}
 			continue
 		}
-		errs := AssertState(r.ctx, env, stateExpect)
+		errs := AssertState(r.ctx, lookupKey, stateExpect)
 		allErrs = append(allErrs, errs...)
 	}
 

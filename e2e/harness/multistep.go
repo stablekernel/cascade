@@ -69,6 +69,12 @@ type Step struct {
 	Action  string       `yaml:"action"` // commit, orchestrate, promote, hotfix_plan, hotfix_apply, merge_pr, resolve_conflict, hotfix_merged
 	Commit  *CommitStep  `yaml:"commit,omitempty"`
 	Promote *PromoteStep `yaml:"promote,omitempty"`
+	// Orchestrate optionally configures an "orchestrate" action. It is not
+	// required: an orchestrate step with no config runs the repo-wide
+	// orchestrate.yaml exactly as before. It exists so a component: manifest,
+	// whose orchestrate lane is fanned out into one orchestrate-<name>.yaml per
+	// component, can seed a specific component's version line independently.
+	Orchestrate *OrchestrateStep `yaml:"orchestrate,omitempty"`
 	// Rollback configures a "rollback" action: a workflow_dispatch run of the
 	// cascade-rollback workflow that re-points an environment at a prior version
 	// or SHA, re-runs its deploys at that target, and marks the environment
@@ -125,10 +131,10 @@ type Step struct {
 // workflow's plan job. CommitRef is the trunk commit to plan a hotfix for and is
 // resolved via the execution context (falling back to a literal SHA).
 type HotfixPlanStep struct {
-	CommitRef        string `yaml:"commit_ref"`
-	TargetEnv        string `yaml:"target_env"`
-	DryRun           bool   `yaml:"dry_run,omitempty"`
-	ExpectFailure    bool   `yaml:"expect_failure,omitempty"`
+	CommitRef     string `yaml:"commit_ref"`
+	TargetEnv     string `yaml:"target_env"`
+	DryRun        bool   `yaml:"dry_run,omitempty"`
+	ExpectFailure bool   `yaml:"expect_failure,omitempty"`
 	// AssertBranchReset, when true, asserts that the plan workflow logged the
 	// orphan self-heal diagnostic line (branch_reset=true), confirming the heal
 	// fired rather than the plan merely succeeding for another reason.
@@ -192,9 +198,25 @@ type CommitStep struct {
 	Files   map[string]string `yaml:"files"`
 }
 
+// OrchestrateStep configures an "orchestrate" action. Component, when set,
+// targets the per-component orchestrate workflow
+// .github/workflows/orchestrate-<Component>.yaml (emitted for a manifest with a
+// components: block) instead of the repo-wide orchestrate.yaml, so a scenario can
+// seed one component's version line without touching a sibling. Empty selects the
+// repo-wide orchestrate.yaml, byte-identical to an orchestrate step with no config.
+type OrchestrateStep struct {
+	Component string `yaml:"component,omitempty"`
+}
+
 // PromoteStep defines a promote action
 type PromoteStep struct {
 	Mode string `yaml:"mode"` // default, cascade
+	// Component, when set, targets the per-component promote workflow
+	// .github/workflows/promote-<Component>.yaml (emitted for a manifest with a
+	// components: block) instead of the repo-wide promote.yaml, and that
+	// component's promotion records state under state.components.<Component>.<env>.
+	// Empty selects the single-component promote.yaml, byte-identical to today.
+	Component string `yaml:"component,omitempty"`
 	// Target is the destination env for a cascade promote; the harness builds the
 	// "<source>-to-<target>" mode string from Source and Target.
 	Target string `yaml:"target,omitempty"`
@@ -379,6 +401,17 @@ type WorkflowFileExpect struct {
 
 // StateExpect defines expected state for an environment
 type StateExpect struct {
+	// Component, when set, scopes this expectation to a declared component's state
+	// subtree at state.components.<Component>.<Env> rather than the flat
+	// state.<env>. It is how a scenario asserts per-component promotion isolation:
+	// component A advancing must leave component B's subtree byte-intact.
+	Component string `yaml:"component,omitempty"`
+	// Env names the environment within the component subtree when Component is set.
+	// When empty it defaults to the map key this expectation is filed under, so a
+	// component-free scenario (the common case) never sets it and is unaffected.
+	// It exists only to let a single step assert two components at the SAME env,
+	// which the env-keyed map alone cannot express.
+	Env       string                   `yaml:"env,omitempty"`
 	SHA       string                   `yaml:"sha,omitempty"` // Can be "commit1", "commit2", etc.
 	Version   string                   `yaml:"version,omitempty"`
 	Wiped     bool                     `yaml:"wiped,omitempty"`     // State should not exist
