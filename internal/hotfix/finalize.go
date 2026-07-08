@@ -218,6 +218,23 @@ type Finalizer struct {
 	actor       string
 	dryRun      bool
 
+	// component, when non-empty, names the declared component this hotfix is
+	// scoped to. It is set only via WithComponent by a per-component generated
+	// hotfix workflow. An empty value selects the single-component path, whose
+	// state write and env-branch name are byte-identical to the historical
+	// behavior. A non-empty value records state under
+	// state.components.<component>.<env> via WriteScopedState (preserving every
+	// sibling component subtree under the concurrent-finalize retry loop),
+	// resolves the hotfix version and tag in the component's own tag namespace,
+	// and names the integration branch env/<component>/<env>.
+	component string
+
+	// trunkRaw holds the raw manifest bytes read from the trunk branch. It is the
+	// write basis for the component-scoped local write so a node-patch preserves
+	// every sibling component's trunk-recorded subtree rather than overwriting it
+	// with the lagging env-branch checkout.
+	trunkRaw []byte
+
 	deployResults map[string]string
 	buildResults  map[string]string
 
@@ -247,6 +264,14 @@ type FinalizeOption func(*Finalizer)
 // release objects.
 func WithFinalizeDryRun(dryRun bool) FinalizeOption {
 	return func(f *Finalizer) { f.dryRun = dryRun }
+}
+
+// WithComponent scopes the finalize to a declared component. It records state
+// under state.components.<name>.<env>, resolves the hotfix version and tag in the
+// component's tag namespace, and names the integration branch env/<name>/<env>.
+// An empty name (the default) keeps the single-component behavior byte-identical.
+func WithComponent(name string) FinalizeOption {
+	return func(f *Finalizer) { f.component = name }
 }
 
 // WithReleaseManager injects the release operations. When unset, finalize builds
@@ -398,11 +423,12 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 	// WRITE basis below so mutating only the target env preserves every other
 	// env's recorded trunk state. Writing the lagging env-branch manifest to
 	// trunk would clobber the non-target envs.
-	trunkCICD, err := f.readTrunkManifest(trunk)
+	trunkRaw, trunkCICD, err := f.readTrunkManifest(trunk)
 	if err != nil {
 		return err
 	}
 	f.cicd = trunkCICD
+	f.trunkRaw = trunkRaw
 	cfg = f.cicd.Config
 	if cfg == nil {
 		return fmt.Errorf("trunk manifest has no config block")
@@ -411,12 +437,19 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 	if f.cicd.State == nil {
 		f.cicd.State = make(map[string]*config.EnvState)
 	}
+	// For a component-scoped hotfix the prior env state lives under
+	// state.components.<component>.<env>, not the flat state.<env> node. Overlay it
+	// into the flat map so the prior-state read, idempotency gate, and Previous
+	// ring below see the component's recorded row.
+	if err := overlayComponentState(f.cicd, trunkRaw, f.manifestKey, f.component); err != nil {
+		return err
+	}
 	prior := f.cicd.State[targetEnv]
 	if prior == nil || prior.SHA == "" {
 		return fmt.Errorf("environment %q has no recorded state SHA", targetEnv)
 	}
 
-	branch := envBranch(targetEnv)
+	branch := f.envBranch(targetEnv)
 
 	// Idempotency gate: if state already records the merge SHA, finalize already
 	// ran for these inputs. Re-running must not double-apply.
@@ -458,7 +491,7 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 		return err
 	}
 
-	if err := f.writeConfig(); err != nil {
+	if err := f.writeConfig(targetEnv); err != nil {
 		return err
 	}
 
@@ -466,27 +499,10 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 
 	pusher := f.pusher
 	if !f.pusherInjected && isRealGitHub() {
-		capturedVersion := hotfixVersion
-		capturedTimestamp := timestamp
-		capturedBaseSHA := baseSHA
-		capturedFixSHAs := append([]string(nil), fixSHAs...)
-		capturedTarget := targetEnv
-		capturedMerge := mergeSHA
-		key := f.manifestKey
-		pusher = apiStatePusher{author: gitIdentity(f.cicd.Config), mutate: func(current []byte) ([]byte, error) {
-			fresh, err := config.ParseManifestBytes(current, key)
-			if err != nil {
-				return nil, fmt.Errorf("parsing current manifest: %w", err)
-			}
-			if err := f.applyHotfixState(fresh, capturedTarget, capturedMerge, capturedVersion, capturedBaseSHA, capturedTimestamp, capturedFixSHAs); err != nil {
-				return nil, err
-			}
-			data, err := config.WriteManifestState(current, key, fresh.State, fresh.LatestRelease)
-			if err != nil {
-				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
-			}
-			return data, nil
-		}}
+		pusher = apiStatePusher{
+			author: gitIdentity(f.cicd.Config),
+			mutate: f.hotfixMutation(targetEnv, mergeSHA, hotfixVersion, baseSHA, timestamp, fixSHAs),
+		}
 	}
 	if err := pusher.CommitAndPush(f.configPath, trunk, message); err != nil {
 		return fmt.Errorf("committing hotfix state: %w", err)
@@ -523,7 +539,7 @@ func (f *Finalizer) applyHotfixState(cicd *config.CICDFile, targetEnv, mergeSHA,
 		prior.BaseSHA = baseSHA
 	}
 	prior.Patches = append(prior.Patches, fixSHAs...)
-	prior.Ref = envBranch(targetEnv)
+	prior.Ref = f.envBranch(targetEnv)
 	prior.SHA = mergeSHA
 	prior.Version = hotfixVersion
 	prior.CommittedAt = timestamp
@@ -532,22 +548,118 @@ func (f *Finalizer) applyHotfixState(cicd *config.CICDFile, targetEnv, mergeSHA,
 	return nil
 }
 
+// hotfixMutation returns the re-appliable CommitWithRetry closure that merges
+// this hotfix's owned env state onto whatever trunk bytes the loop fetches.
+//
+// Single-component form (component == ""): re-parse the fetched bytes, re-apply
+// the hotfix state mutation for the target env, and reconcile the whole flat
+// state node via WriteManifestState. Sibling envs survive because the re-read
+// carries them into the typed map. This is byte-identical to the historical
+// closure.
+//
+// Component-scoped form (component != ""): overlay the component's persisted env
+// rows from the fetched bytes, re-apply the hotfix mutation, then node-patch only
+// state.components.<component>.<targetEnv> via WriteScopedState. It never
+// deserializes or rebuilds a sibling component subtree, so on a 409 the loser
+// re-reads the winner's committed sibling rows and re-applies only its own leaf,
+// leaving every sibling component verbatim, including keys this binary does not
+// model.
+func (f *Finalizer) hotfixMutation(targetEnv, mergeSHA, hotfixVersion, baseSHA, timestamp string, fixSHAs []string) statewrite.Mutate {
+	key := f.manifestKey
+	component := f.component
+	capturedFixSHAs := append([]string(nil), fixSHAs...)
+	return func(current []byte) ([]byte, error) {
+		fresh, err := config.ParseManifestBytes(current, key)
+		if err != nil {
+			return nil, fmt.Errorf("parsing current manifest: %w", err)
+		}
+		if err := overlayComponentState(fresh, current, key, component); err != nil {
+			return nil, err
+		}
+		if err := f.applyHotfixState(fresh, targetEnv, mergeSHA, hotfixVersion, baseSHA, timestamp, capturedFixSHAs); err != nil {
+			return nil, err
+		}
+		if component != "" {
+			data, err := config.WriteScopedState(current, key, f.hotfixStateWrites(fresh, targetEnv)...)
+			if err != nil {
+				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+			}
+			return data, nil
+		}
+		data, err := config.WriteManifestState(current, key, fresh.State, fresh.LatestRelease)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+		}
+		return data, nil
+	}
+}
+
+// hotfixStateWrites builds the component-scoped write this finalize owns from its
+// already-mutated env state: one directive addressing
+// state.components.<component>.<targetEnv>. It is re-appliable, so CommitWithRetry
+// re-derives the same owned leaf on a 409 and never rebuilds a sibling subtree. A
+// nil target leaf (an unexpected miss) contributes no directive rather than an
+// accidental node delete.
+func (f *Finalizer) hotfixStateWrites(cicd *config.CICDFile, targetEnv string) []config.StateWrite {
+	st := cicd.State[targetEnv]
+	if st == nil {
+		return nil
+	}
+	return []config.StateWrite{{
+		Component: f.component,
+		Env:       targetEnv,
+		State:     st,
+	}}
+}
+
 // readTrunkManifest fetches the manifest as it exists on the trunk branch and
 // returns the parsed manifest. It is read from trunk because promote finalize
 // writes env state only to trunk; the env branch the hotfix merged into lags
 // trunk and can record stale or absent state. The returned manifest is both the
 // source of the prior env state and the WRITE basis, so mutating only the target
 // env preserves every other env's recorded trunk state.
-func (f *Finalizer) readTrunkManifest(trunk string) (*config.CICDFile, error) {
+func (f *Finalizer) readTrunkManifest(trunk string) ([]byte, *config.CICDFile, error) {
 	data, err := f.trunkReader.ReadManifest(f.configPath, trunk)
 	if err != nil {
-		return nil, fmt.Errorf("reading trunk state: %w", err)
+		return nil, nil, fmt.Errorf("reading trunk state: %w", err)
 	}
 	cicd, err := config.ParseManifestBytes(data, f.manifestKey)
 	if err != nil {
-		return nil, fmt.Errorf("parsing trunk manifest: %w", err)
+		return nil, nil, fmt.Errorf("parsing trunk manifest: %w", err)
 	}
-	return cicd, nil
+	return data, cicd, nil
+}
+
+// overlayComponentState overlays the named component's recorded per-env rows,
+// read from state.components.<component>.<env> in raw, into cicd's flat state map
+// so every State[env] lookup in Finalize transparently sees that component's
+// seed. It is a no-op when component is empty, keeping the single-component path
+// byte-identical. It mirrors promote's component-state overlay: the read
+// counterpart to the component-scoped WriteScopedState writes.
+func overlayComponentState(cicd *config.CICDFile, raw []byte, manifestKey, component string) error {
+	if component == "" {
+		return nil
+	}
+	compState, err := config.ReadComponentState(raw, manifestKey, component)
+	if err != nil {
+		return fmt.Errorf("reading component %q state: %w", component, err)
+	}
+	if cicd.State == nil {
+		cicd.State = make(map[string]*config.EnvState)
+	}
+	for env, st := range compState {
+		cicd.State[env] = st
+	}
+	return nil
+}
+
+// envBranch returns the integration branch name for env under this finalize's
+// component. The default (empty) component yields env/<env>, byte-identical to
+// the historical single-component name; a named component yields
+// env/<component>/<env> so each component's integration branches occupy a
+// disjoint namespace.
+func (f *Finalizer) envBranch(env string) string {
+	return EnvBranchName(f.component, env)
 }
 
 // allocateVersion returns the next free hotfix version over priorVersion.
@@ -561,7 +673,10 @@ func (f *Finalizer) allocateVersion(priorVersion string) (string, error) {
 	if priorVersion == "" {
 		return "", fmt.Errorf("target environment has no recorded version; cannot allocate a hotfix version")
 	}
-	spec := resolveTagGrammar(f.cicd)
+	spec, err := resolveFinalizeSpec(f.cicd, f.component)
+	if err != nil {
+		return "", err
+	}
 	v, err := version.ParseWithGrammar(spec, priorVersion)
 	if err != nil {
 		return "", fmt.Errorf("parsing target version %q: %w", priorVersion, err)
@@ -720,7 +835,27 @@ func (f *Finalizer) isPrereleaseEnv(cfg *config.TrunkConfig, env string) bool {
 // mutable state subtree so any configuration this binary does not model is
 // preserved rather than dropped. It matches the layout promote's finalize
 // produces.
-func (f *Finalizer) writeConfig() error {
+//
+// Single-component form (component == ""): reconcile the whole flat state node
+// against the on-disk manifest via WriteManifestState, byte-identical to the
+// historical behavior.
+//
+// Component-scoped form (component != ""): node-patch only
+// state.components.<component>.<targetEnv> onto the trunk manifest bytes via
+// WriteScopedState. The trunk bytes are the write basis (not the lagging
+// env-branch checkout) so every sibling component's trunk-recorded subtree is
+// preserved verbatim when the git push lands this file on trunk.
+func (f *Finalizer) writeConfig(targetEnv string) error {
+	if f.component != "" {
+		data, err := config.WriteScopedState(f.trunkRaw, f.manifestKey, f.hotfixStateWrites(f.cicd, targetEnv)...)
+		if err != nil {
+			return fmt.Errorf("marshaling manifest: %w", err)
+		}
+		if err := os.WriteFile(f.configPath, data, 0o600); err != nil {
+			return fmt.Errorf("writing manifest: %w", err)
+		}
+		return nil
+	}
 	current, err := os.ReadFile(f.configPath)
 	if err != nil {
 		return fmt.Errorf("reading manifest: %w", err)

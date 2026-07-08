@@ -19,6 +19,26 @@ func resolveTagGrammar(f *config.CICDFile) taggrammar.Spec {
 	return f.Config.ResolveTagGrammar()
 }
 
+// resolveFinalizeSpec returns the tag grammar a hotfix finalize reads and emits
+// its versions and tags under. For the default (empty) component it is the
+// manifest's permissive grammar, byte-identical to the single-component
+// behavior. For a named component it is that component's resolved grammar with a
+// strict prefix, so a hotfix version and tag land in and are looked up from the
+// component's own namespace and never cross-match a sibling component's tags.
+func resolveFinalizeSpec(f *config.CICDFile, component string) (taggrammar.Spec, error) {
+	if component == "" {
+		return resolveTagGrammar(f), nil
+	}
+	if f == nil || f.Config == nil {
+		return taggrammar.Spec{}, fmt.Errorf("component %q requested but manifest has no config block", component)
+	}
+	resolved, err := f.Config.ResolveComponent(component)
+	if err != nil {
+		return taggrammar.Spec{}, fmt.Errorf("resolving component %q tag grammar: %w", component, err)
+	}
+	return resolved.TagGrammarSpec(), nil
+}
+
 // EnvBranchPrefix is the prefix of the per-environment integration branches a
 // hotfix creates (for example env/test). A branch carrying this prefix exists
 // only while its environment is diverged; once the env rejoins trunk the branch
