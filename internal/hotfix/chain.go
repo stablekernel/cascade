@@ -216,7 +216,7 @@ func (p *Planner) PlanChain(refs []string, targetEnv string) (*PlanChainResult, 
 		// singleFlightChecked) and safe (an open resolution PR aborts the plan
 		// exactly as the single-env path does, so a live hotfix is never reset).
 		diverged := state.IsDiverged()
-		singleFlightChecked, err := p.checkSingleFlight(envBranch(env))
+		singleFlightChecked, err := p.checkSingleFlight(p.envBranch(env))
 		if err != nil {
 			return nil, err
 		}
@@ -227,14 +227,14 @@ func (p *Planner) PlanChain(refs []string, targetEnv string) (*PlanChainResult, 
 		// tip has diverged the cherry-pick lands on a stale base and the PR is
 		// unmergeable, surfacing only as a merge-poll timeout. An abandoned orphan
 		// tip is self-healed; an in-progress hotfix stays fail-closed.
-		reset, err := p.verifyRemoteEnvTip(envBranch(env), baseSHA, diverged, singleFlightChecked)
+		reset, err := p.verifyRemoteEnvTip(p.envBranch(env), baseSHA, diverged, singleFlightChecked)
 		if err != nil {
 			return nil, err
 		}
 
 		ep := EnvPlan{
 			Env:         env,
-			Branch:      envBranch(env),
+			Branch:      p.envBranch(env),
 			BaseSHA:     baseSHA,
 			BranchReset: reset,
 			Commits:     make([]string, 0, len(shas)),

@@ -157,6 +157,13 @@ type Planner struct {
 	// only when a real checker actually proved no resolution PR is open.
 	realPRChecker bool
 	gitRunner     gitRunner
+	// component, when non-empty, names the declared component this hotfix is
+	// scoped to. It is set only via WithPlanComponent by a per-component generated
+	// hotfix workflow. An empty value selects the single-component path, whose
+	// integration branch is env/<env>; a named component names the integration
+	// branch env/<component>/<env> so each component's branches occupy a disjoint
+	// namespace and agree with the component-aware finalize path.
+	component string
 }
 
 // PlannerOptions carries the required inputs for NewPlanner.
@@ -193,6 +200,17 @@ func WithRemote(remote string) Option {
 			p.remote = remote
 		}
 	}
+}
+
+// WithPlanComponent scopes the plan to a declared component. It names the
+// integration branch env/<component>/<env> so the plan agrees with the
+// component-aware finalize path and each component's branches occupy a disjoint
+// namespace. An empty name (the default) keeps the single-component behavior
+// byte-identical, naming the branch env/<env>. This mirrors the finalize
+// package option WithComponent; the two names differ only because the plan and
+// finalize option types are distinct.
+func WithPlanComponent(name string) Option {
+	return func(p *Planner) { p.component = name }
 }
 
 // NewPlanner constructs a Planner from the manifest at opts.ConfigPath.
@@ -300,7 +318,7 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 	}
 	baseSHA := state.SHA
 
-	branch := envBranch(targetEnv)
+	branch := p.envBranch(targetEnv)
 	result := &PlanResult{
 		TargetEnv:             targetEnv,
 		FixSHA:                fixSHA,
@@ -462,12 +480,13 @@ func hotfixVersionCandidate(spec taggrammar.Spec, envVersion string) (string, er
 	return v.WithGrammar(spec).NextHotfix().String(), nil
 }
 
-// envBranch returns the integration branch name for an environment. It routes
-// through EnvBranchName with the default (empty) component, so the single-
-// component name env/<env> is preserved; component threading arrives with the
-// component-aware finalize path.
-func envBranch(env string) string {
-	return EnvBranchName("", env)
+// envBranch returns the integration branch name for env under this planner's
+// component. The default (empty) component yields env/<env>, byte-identical to
+// the historical single-component name; a named component yields
+// env/<component>/<env> so the plan agrees with the component-aware finalize
+// path and each component's integration branches occupy a disjoint namespace.
+func (p *Planner) envBranch(env string) string {
+	return EnvBranchName(p.component, env)
 }
 
 // protectionSuggestions returns ready-to-run gh CLI commands an operator can
