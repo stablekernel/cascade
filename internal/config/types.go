@@ -1182,14 +1182,64 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 	return JobID(CallbackTypeExternal, depRef), nil
 }
 
-// ComponentConfig is the reserved per-component descriptor. Only the addressing
-// shape is frozen in v1; richer per-component config lands post-1.0 additively.
+// ComponentConfig is the per-component descriptor for a manifest that declares a
+// components: block. Under schema_version 1 a components: block turns the
+// top-level config into the shared defaults every component inherits.
+//
+// Fields fall into three kinds:
+//
+//   - Required: Path and TagPrefix, which have no sensible shared value and must
+//     be set on every component.
+//   - Inheritable overrides: the remaining fields below. A nil pointer, nil map,
+//     nil slice, or empty string means the component inherits the shared
+//     top-level default; a set value overrides it for that component only. Use
+//     ResolveComponent to fold the shared defaults and a component's overrides
+//     into the component's effective configuration.
+//   - Rejected: top-level-only (global) fields never appear here. An attempt to
+//     set one per component lands in Extra and is rejected by validateComponents.
+//
+// The concurrency group is not overridable to a shared literal: it is derived
+// per component (ComponentConcurrencyGroup) so two components never serialize on
+// one lane. A component's concurrency block may only carry cancel_in_progress.
 type ComponentConfig struct {
-	// Path is the subtree this component owns within the repo (reserved).
+	// Path is the subtree this component owns within the repo. Required.
 	Path string `yaml:"path,omitempty" json:"path,omitempty"`
-	// TagPrefix is the per-component version tag prefix (reserved). Empty means
-	// inherit the manifest-level tag_prefix.
+	// TagPrefix is the per-component version tag prefix. Required, and distinct
+	// across components so their tag namespaces never collide.
 	TagPrefix string `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`
+
+	// Inheritable overrides. Each defaults to the shared top-level value.
+	TagGrammar           *TagGrammarConfig            `yaml:"tag_grammar,omitempty" json:"tag_grammar,omitempty"`
+	Environments         []string                     `yaml:"environments,omitempty" json:"environments,omitempty"`
+	ReleaseTrigger       string                       `yaml:"release_trigger,omitempty" json:"release_trigger,omitempty"`
+	AllowBreakingChanges *bool                        `yaml:"allow_breaking_changes,omitempty" json:"allow_breaking_changes,omitempty"`
+	Validate             *ValidateConfig              `yaml:"validate,omitempty" json:"validate,omitempty"`
+	Builds               []BuildConfig                `yaml:"builds,omitempty" json:"builds,omitempty"`
+	Deploys              []DeployConfig               `yaml:"deploys,omitempty" json:"deploys,omitempty"`
+	Publish              *PublishConfig               `yaml:"publish,omitempty" json:"publish,omitempty"`
+	External             []ExternalRepoConfig         `yaml:"external,omitempty" json:"external,omitempty"`
+	Notify               *NotifyConfig                `yaml:"notify,omitempty" json:"notify,omitempty"`
+	Release              *ReleaseConfig               `yaml:"release,omitempty" json:"release,omitempty"`
+	Changelog            *ChangelogConfig             `yaml:"changelog,omitempty" json:"changelog,omitempty"`
+	Concurrency          *ConcurrencyConfig           `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	RunsOn               *RunsOn                      `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
+	JobTimeoutMinutes    *int                         `yaml:"job_timeout_minutes,omitempty" json:"job_timeout_minutes,omitempty"`
+	DispatchInputs       map[string]DispatchInput     `yaml:"dispatch_inputs,omitempty" json:"dispatch_inputs,omitempty"`
+	ExtraTriggers        *ExtraTriggers               `yaml:"extra_triggers,omitempty" json:"extra_triggers,omitempty"`
+	PRPreview            *PRPreviewConfig             `yaml:"pr_preview,omitempty" json:"pr_preview,omitempty"`
+	ValidateCheck        *ValidateCheckConfig         `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
+	Rollback             *RollbackConfig              `yaml:"rollback,omitempty" json:"rollback,omitempty"`
+	Deployments          *DeploymentsConfig           `yaml:"deployments,omitempty" json:"deployments,omitempty"`
+	EnvironmentConfig    map[string]EnvironmentConfig `yaml:"environment_config,omitempty" json:"environment_config,omitempty"`
+	Triggers             []string                     `yaml:"triggers,omitempty" json:"triggers,omitempty"`
+	ReleaseToken         string                       `yaml:"release_token,omitempty" json:"release_token,omitempty"`
+	ReleaseTokenApp      *AppTokenSource              `yaml:"release_token_app,omitempty" json:"release_token_app,omitempty"`
+
+	// Extra captures any manifest key set on a component that is not a modeled
+	// per-component field, so a per-component override of a top-level-only
+	// (global) field is rejected by validateComponents rather than silently
+	// ignored. It is never serialized.
+	Extra map[string]any `yaml:",inline" json:"-"`
 }
 
 // ComponentState is the reserved per-component recorded-state entry.

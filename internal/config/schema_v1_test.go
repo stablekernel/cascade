@@ -969,6 +969,7 @@ components:
     tag_prefix: api-v
   worker:
     path: services/worker
+    tag_prefix: worker-v
 `)
 		if cfg.Components == nil {
 			t.Fatal("Components map should be parsed")

@@ -187,7 +187,7 @@
         "components": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/componentConfig" },
-          "description": "Reserved per-component descriptor map keyed by component name (#176). Reserved shape only: parse and structural validation, no generator, state, or runtime behavior."
+          "description": "Per-component descriptor map keyed by component name (#176). When present, the top-level config is the shared default set each component inherits, and each component overrides fields where set. Component names must be job-ID-safe."
         }
       }
     },
@@ -520,10 +520,36 @@
     "componentConfig": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Reserved per-component descriptor for independently versioned components sharing one manifest (#176). Reserved shape only: parse and structural validation, no generator, state, or runtime behavior.",
+      "required": ["path", "tag_prefix"],
+      "description": "Per-component descriptor for independently versioned components sharing one manifest (#176). When a components: block is present the top-level config is the shared default set each component inherits. path and tag_prefix are required per component; the remaining fields override the shared default only where set. Top-level-only (global) fields cannot appear here, and concurrency may carry only cancel_in_progress (the group is derived per component).",
       "properties": {
-        "path": { "type": "string", "description": "Subtree this component owns within the repo (reserved)." },
-        "tag_prefix": { "type": "string", "description": "Per-component version tag prefix (reserved). Empty inherits the manifest-level tag_prefix." }
+        "path": { "type": "string", "description": "Subtree this component owns within the repo. Required." },
+        "tag_prefix": { "type": "string", "description": "Per-component version tag prefix. Required, and distinct across components so their tag namespaces never collide." },
+        "tag_grammar": { "$ref": "#/definitions/tagGrammarConfig" },
+        "environments": { "type": "array", "items": { "type": "string" }, "description": "Overrides the shared promotion environments for this component." },
+        "release_trigger": { "type": "string", "enum": ["push", "dispatch"], "description": "Overrides how this component's orchestrate workflow fires." },
+        "allow_breaking_changes": { "type": "boolean", "description": "Overrides the shared breaking-change promote gate for this component." },
+        "validate": { "$ref": "#/definitions/validateConfig" },
+        "builds": { "type": "array", "items": { "$ref": "#/definitions/buildConfig" }, "description": "Overrides the shared build callbacks for this component." },
+        "deploys": { "type": "array", "items": { "$ref": "#/definitions/deployConfig" }, "description": "Overrides the shared deploy callbacks for this component." },
+        "publish": { "$ref": "#/definitions/publishConfig" },
+        "external": { "type": "array", "items": { "$ref": "#/definitions/externalRepoConfig" }, "description": "Overrides the shared external repositories for this component." },
+        "notify": { "$ref": "#/definitions/notifyConfig" },
+        "release": { "$ref": "#/definitions/releaseConfig" },
+        "changelog": { "$ref": "#/definitions/changelogConfig" },
+        "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
+        "runs_on": { "$ref": "#/definitions/runsOn" },
+        "job_timeout_minutes": { "type": "integer", "description": "Overrides the shared default timeout-minutes for this component's cascade-owned jobs." },
+        "dispatch_inputs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/dispatchInput" }, "description": "Overrides the shared operator-facing manual-run inputs for this component." },
+        "extra_triggers": { "$ref": "#/definitions/extraTriggers" },
+        "pr_preview": { "$ref": "#/definitions/prPreviewConfig" },
+        "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
+        "rollback": { "$ref": "#/definitions/rollbackConfig" },
+        "deployments": { "$ref": "#/definitions/deploymentsConfig" },
+        "environment_config": { "type": "object", "additionalProperties": { "$ref": "#/definitions/environmentConfig" }, "description": "Overrides the shared per-environment settings for this component." },
+        "triggers": { "type": "array", "items": { "type": "string" }, "description": "Overrides the shared orchestrate path filter for this component." },
+        "release_token": { "type": "string", "description": "Overrides the shared release-operations token expression for this component." },
+        "release_token_app": { "$ref": "#/definitions/appTokenSource" }
       }
     },
     "changelogConfig": {

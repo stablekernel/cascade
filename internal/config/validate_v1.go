@@ -769,23 +769,66 @@ func safeSecretName(name string) bool {
 	return true
 }
 
-// validateComponents validates the reserved top-level components map (#176).
-// Rules frozen at v1: component names must be job-ID-safe (so a future
-// generator can key job IDs on the name without breakage), and any configured
-// Path must be a clean relative path (no leading slash, no ".." segments).
+// validateComponents validates the top-level components map (#176). When a
+// components: block is present the top-level config is the shared default set
+// and each component inherits it, so the rules enforced here are:
+//
+//   - Component names must be job-ID-safe (so a generator can key job IDs on the
+//     name without breakage).
+//   - path and tag_prefix are required per component; path must be a clean
+//     relative path (no leading slash, no ".." segments).
+//   - Per-component tag prefixes must be distinct, so no two components share a
+//     tag namespace and reap or read each other's tags.
+//   - A component may not override a top-level-only (global) field, and may not
+//     pin the concurrency group to a shared literal (only cancel_in_progress is
+//     overridable; the group is derived per component).
+//   - A manifest-global concurrency.group literal is rejected while components
+//     are declared, because it would collapse every component onto one lane.
 func validateComponents(cfg *TrunkConfig) []string {
 	if len(cfg.Components) == 0 {
 		return nil
 	}
 	var errs []string
+
+	if cfg.Concurrency != nil && cfg.Concurrency.Group != "" {
+		errs = append(errs, "concurrency.group must not be set to a shared literal when components are declared; "+
+			"the orchestrate group is derived per component so runs never serialize across components")
+	}
+
+	tagPrefixOwner := make(map[string]string, len(cfg.Components))
 	for _, name := range sortedComponentKeys(cfg.Components) {
 		errs = append(errs, validateJobIDSafeName("components."+name, name)...)
 		comp := cfg.Components[name]
-		if comp.Path != "" {
-			if strings.HasPrefix(comp.Path, "/") {
-				errs = append(errs, fmt.Sprintf("components.%s.path must be a relative path, not absolute", name))
-			} else if strings.Contains(comp.Path, "..") {
-				errs = append(errs, fmt.Sprintf("components.%s.path must not contain '..' segments", name))
+
+		if comp.Path == "" {
+			errs = append(errs, fmt.Sprintf("components.%s.path is required", name))
+		} else if strings.HasPrefix(comp.Path, "/") {
+			errs = append(errs, fmt.Sprintf("components.%s.path must be a relative path, not absolute", name))
+		} else if strings.Contains(comp.Path, "..") {
+			errs = append(errs, fmt.Sprintf("components.%s.path must not contain '..' segments", name))
+		}
+
+		if comp.TagPrefix == "" {
+			errs = append(errs, fmt.Sprintf("components.%s.tag_prefix is required so each component has its own tag namespace", name))
+		} else if prior, seen := tagPrefixOwner[comp.TagPrefix]; seen {
+			errs = append(errs, fmt.Sprintf(
+				"components.%s.tag_prefix %q collides with component %q; each component needs a distinct tag namespace",
+				name, comp.TagPrefix, prior))
+		} else {
+			tagPrefixOwner[comp.TagPrefix] = name
+		}
+
+		if comp.Concurrency != nil && comp.Concurrency.Group != "" {
+			errs = append(errs, fmt.Sprintf(
+				"components.%s.concurrency.group cannot be overridden; the orchestrate group is derived per component", name))
+		}
+
+		for _, key := range sortedKeys(toAnyKeyed(comp.Extra)) {
+			if _, global := globalOnlyComponentFields[key]; global {
+				errs = append(errs, fmt.Sprintf(
+					"components.%s.%s is a top-level-only field and cannot be overridden per component", name, key))
+			} else {
+				errs = append(errs, fmt.Sprintf("components.%s has unknown field %q", name, key))
 			}
 		}
 	}
@@ -845,6 +888,15 @@ func toStringKeyed(m map[string]DispatchInput) map[string]string {
 
 // toEnvKeyed adapts an EnvironmentConfig map to a string-keyed map for sortedKeys.
 func toEnvKeyed(m map[string]EnvironmentConfig) map[string]string {
+	out := make(map[string]string, len(m))
+	for k := range m {
+		out[k] = ""
+	}
+	return out
+}
+
+// toAnyKeyed adapts an inline catch-all map to a string-keyed map for sortedKeys.
+func toAnyKeyed(m map[string]any) map[string]string {
 	out := make(map[string]string, len(m))
 	for k := range m {
 		out[k] = ""
