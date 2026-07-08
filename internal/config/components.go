@@ -1,6 +1,29 @@
 package config
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// clone returns a fully independent deep copy of the config via a JSON round
+// trip. Every TrunkConfig field carries a json tag and none is json:"-" (the
+// sole json:"-" field, ComponentConfig.Extra, lives off this type), so the round
+// trip reproduces the value exactly while breaking every pointer, slice, and map
+// alias. ResolveComponent needs this: a shallow copy (eff := *c) would leave
+// non-overridden pointer/slice/map fields aliasing the shared config, so one
+// component's derivation could bleed into a sibling.
+func (c *TrunkConfig) clone() (*TrunkConfig, error) {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("cloning config: %w", err)
+	}
+	var dup TrunkConfig
+	if err := json.Unmarshal(data, &dup); err != nil {
+		return nil, fmt.Errorf("cloning config: %w", err)
+	}
+	return &dup, nil
+}
 
 // HasComponents reports whether the manifest declares a components: block. When
 // it does not, the component dimension does not exist and the single-component
@@ -46,7 +69,13 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 		return nil, fmt.Errorf("component %q is not declared", name)
 	}
 
-	eff := *c            // shallow copy: global fields carried through verbatim
+	// Deep-copy the shared config so non-overridden pointer/slice/map fields do
+	// not alias across sibling components. Global fields are carried through
+	// verbatim by the copy.
+	eff, err := c.clone()
+	if err != nil {
+		return nil, err
+	}
 	eff.Components = nil // an effective per-component config has no nested components
 
 	// Required per-component tag namespace.
@@ -139,7 +168,16 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 		CancelInProgress: cancel,
 	}
 
-	return &ResolvedComponent{Name: name, Path: comp.Path, Config: &eff}, nil
+	// Derive a path-scoped push-paths filter from the component subtree when
+	// neither the component nor the shared defaults set an explicit triggers
+	// list, so each component's orchestrate workflow fires only on changes under
+	// its own path. An explicit inherited or per-component triggers list (applied
+	// above) still wins.
+	if len(eff.Triggers) == 0 {
+		eff.Triggers = []string{strings.TrimRight(comp.Path, "/") + "/**"}
+	}
+
+	return &ResolvedComponent{Name: name, Path: comp.Path, Config: eff}, nil
 }
 
 // globalOnlyComponentFields is the set of top-level-only (global) manifest keys
