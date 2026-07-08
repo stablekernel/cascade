@@ -1,9 +1,47 @@
 package hotfix
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// writeComponentOnlyManifest writes a manifest whose ONLY recorded state lives
+// under state.components.<name>.<env> for two declared components (api, web); it
+// never populates the flat state.<env> node a real multi-component manifest never
+// writes to for a declared component (orchestrate and promote always record via
+// WriteScopedState). It reproduces the exact shape a per-component hotfix plans
+// against on a real repo, so a planner that reads only the flat map fails closed
+// with "no recorded state SHA" here just as it did on the fleet.
+func writeComponentOnlyManifest(t *testing.T, envs []string, componentState map[string]map[string]string) string {
+	t.Helper()
+
+	var b strings.Builder
+	b.WriteString("ci:\n")
+	b.WriteString("  config:\n")
+	b.WriteString("    environments:\n")
+	for _, e := range envs {
+		b.WriteString("      - " + e + "\n")
+	}
+	b.WriteString("  state:\n")
+	b.WriteString("    components:\n")
+	for comp, state := range componentState {
+		b.WriteString("      " + comp + ":\n")
+		for env, sha := range state {
+			b.WriteString("        " + env + ":\n")
+			b.WriteString("          sha: " + sha + "\n")
+			b.WriteString("          version: v1.0.0-rc.1\n")
+		}
+	}
+
+	path := filepath.Join(".", "manifest.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return path
+}
 
 // TestPlan_Component_UsesComponentScopedEnvBranch proves a planner scoped to a
 // component names the integration branch env/<component>/<env> and creates it at
@@ -93,5 +131,59 @@ func TestPlan_Component_SingleFlightQueriesComponentBranch(t *testing.T) {
 	}
 	if stub.calledWith != "env/web/test" {
 		t.Errorf("single-flight queried %q, want env/web/test", stub.calledWith)
+	}
+}
+
+// TestPlan_Component_ReadsComponentScopedStateOnly is the regression test for the
+// bug the isolation e2e scenario caught: a component-scoped plan must resolve its
+// base SHA from state.components.<component>.<env>, not the flat state.<env> node,
+// which a multi-component manifest never populates for a declared component. The
+// manifest here carries ONLY the components subtree (api and web, both at "test"),
+// reproducing the real generated shape; a planner that reads the flat map alone
+// fails with "no recorded state SHA" even though the component's row exists.
+func TestPlan_Component_ReadsComponentScopedStateOnly(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+
+	manifest := writeComponentOnlyManifest(t, []string{"dev", "test", "prod"}, map[string]map[string]string{
+		"api": {"test": base, "prod": base},
+		"web": {"test": base, "prod": base},
+	})
+
+	p := newPlanner(t, manifest, WithPlanComponent("api"))
+	res, err := p.Plan(fix, "test")
+	if err != nil {
+		t.Fatalf("Plan: %v (component-scoped state must be readable with no flat state.<env> node)", err)
+	}
+	if res.BaseSHA != base {
+		t.Errorf("base_sha = %q, want %q (api's own state.components.api.test.sha)", res.BaseSHA, base)
+	}
+	if res.Branch != "env/api/test" {
+		t.Errorf("branch = %q, want env/api/test", res.Branch)
+	}
+}
+
+// TestPlan_Component_IgnoresSiblingComponentState proves the overlay reads only
+// the named component's subtree: api and web are seeded at DIFFERENT base SHAs, so
+// a plan scoped to api must resolve api's own base, never web's.
+func TestPlan_Component_IgnoresSiblingComponentState(t *testing.T) {
+	newScratchRepo(t)
+	apiBase := commitFile(t, "a.txt", "one", "api base")
+	webBase := commitFile(t, "b.txt", "two", "web base")
+	fix := commitFile(t, "c.txt", "three", "fix")
+
+	manifest := writeComponentOnlyManifest(t, []string{"dev", "test", "prod"}, map[string]map[string]string{
+		"api": {"test": apiBase},
+		"web": {"test": webBase},
+	})
+
+	p := newPlanner(t, manifest, WithPlanComponent("api"))
+	res, err := p.Plan(fix, "test")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if res.BaseSHA != apiBase {
+		t.Errorf("base_sha = %q, want api's own base %q (must not read web's %q)", res.BaseSHA, apiBase, webBase)
 	}
 }

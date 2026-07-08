@@ -131,6 +131,12 @@ type Step struct {
 // workflow's plan job. CommitRef is the trunk commit to plan a hotfix for and is
 // resolved via the execution context (falling back to a literal SHA).
 type HotfixPlanStep struct {
+	// Component, when set, targets the per-component hotfix workflow
+	// .github/workflows/cascade-hotfix-<Component>.yaml (emitted for a manifest
+	// with a components: block) instead of the repo-wide cascade-hotfix.yaml, so a
+	// scenario can drive one component's hotfix plan without touching a sibling.
+	// Empty selects the repo-wide file, byte-identical to today.
+	Component     string `yaml:"component,omitempty"`
 	CommitRef     string `yaml:"commit_ref"`
 	TargetEnv     string `yaml:"target_env"`
 	DryRun        bool   `yaml:"dry_run,omitempty"`
@@ -153,6 +159,12 @@ type HotfixPlanStep struct {
 // the anchor rather than depend on the synced state SHA, which a gitea
 // state-propagation race can momentarily report empty.
 type HotfixApplyStep struct {
+	// Component, when set, scopes the cherry-pick to the component's own
+	// integration-branch namespace: the apply seeds and targets env/<Component>/<env>
+	// and pushes a hotfix/<Component>/<env>/<short> branch, so two components
+	// hotfixing the same env at the same source commit never collide. Empty selects
+	// the flat env/<env> and hotfix/<env>/<short> forms, byte-identical to today.
+	Component string `yaml:"component,omitempty"`
 	TargetEnv string `yaml:"target_env"`
 	CommitRef string `yaml:"commit_ref"`
 	BaseRef   string `yaml:"base_ref,omitempty"`
@@ -174,6 +186,12 @@ type ResolveConflictStep struct {
 // HotfixMergedStep defines a hotfix_merged action: replay of the merged
 // pull_request event for the recorded hotfix PR of TargetEnv.
 type HotfixMergedStep struct {
+	// Component, when set, replays the merged event against the per-component
+	// hotfix workflow (cascade-hotfix-<Component>.yaml) with the merged PR's base
+	// on env/<Component>/<TargetEnv>, so finalize records the diverged state under
+	// state.components.<Component>.<TargetEnv>. Empty selects the repo-wide file and
+	// the flat env branch, byte-identical to today.
+	Component string `yaml:"component,omitempty"`
 	TargetEnv string `yaml:"target_env"`
 }
 
@@ -253,6 +271,12 @@ type PromoteStep struct {
 // substring, so a scenario can prove the run failed for the expected reason (for
 // example the first-environment guard message) rather than an unrelated fault.
 type RollbackStep struct {
+	// Component, when set, targets the per-component rollback workflow
+	// .github/workflows/cascade-rollback-<Component>.yaml (emitted for a manifest
+	// with a components: block) instead of the repo-wide cascade-rollback.yaml, so a
+	// scenario can roll back one component reading and writing only its own state
+	// subtree. Empty selects the repo-wide file, byte-identical to today.
+	Component     string `yaml:"component,omitempty"`
 	Environment   string `yaml:"environment"`
 	Target        string `yaml:"target,omitempty"`
 	Deployable    string `yaml:"deployable,omitempty"`

@@ -1,0 +1,289 @@
+name: "Per-Component Hotfix and Rollback Isolation"
+description: |
+  Proves per-component hotfix and rollback execute end to end against only their
+  own namespace and never disturb a sibling (#296). The manifest declares two
+  components (api, web), each owning a path subtree with its own strict tag
+  namespace, promoting through the same dev to prod ladder on its own version line.
+  Generation fans the hotfix lane out to one cascade-hotfix-<name>.yaml per
+  component and the rollback lane out to one cascade-rollback-<name>.yaml per
+  component. This scenario executes a specific component's rollback and hotfix
+  workflows through act, which the generation-only component scenarios could not
+  yet do.
+
+  Each component is seeded in its own commit and advanced to prod on its own
+  version line, so each component's prod state is anchored on a known commit. Then
+  api is exercised through a rollback and a full hotfix while web is asserted
+  byte-intact, and web is exercised through the mirror while api is asserted
+  byte-intact. The proof is that each component's rollback resolves its target from
+  its own recorded state subtree, each component's hotfix cherry-picks onto its own
+  env/<name>/<env> integration branch and records divergence under only
+  state.components.<name>.<env>, and neither lifecycle rebuilds, moves, or drops the
+  other's state.components.<sibling> subtree or touches the sibling's integration
+  branch.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed the api subtree"
+    action: commit
+    commit:
+      message: "feat: seed api source"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so
+  # the per-component workflows executed below are the pristine generated output.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  # Advance api to prod on its own version line via its own orchestrate and promote
+  # workflows. api orchestrates at the seed commit, so its prod state is anchored on
+  # commit1.
+  - name: "Orchestrate api to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+
+  - name: "Promote api from dev to prod"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: api
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          sha: commit1
+          version: "api-0.1.0"
+
+  # Seed web in its own commit so web orchestrates at a known commit (commit2)
+  # rather than at a state-write commit left behind by api's promotion.
+  - name: "Seed the web subtree"
+    action: commit
+    commit:
+      message: "feat: seed web source"
+      files:
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Orchestrate web to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: web
+
+  - name: "Promote web from dev to prod"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: web
+    expect:
+      state:
+        web-prod:
+          component: web
+          env: prod
+          sha: commit2
+          version: "web-0.1.0"
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true
+
+  # --- Component api lifecycle; web must stay byte-intact throughout. ---
+
+  # Dry-run rollback of api prod targeting its own live-state SHA (commit1). The
+  # per-component cascade-rollback-api.yaml preflight reads only
+  # state.components.api.prod, so it resolves the target from that component's own
+  # state (target_source=state). The dry_run flag suppresses the deploy and finalize
+  # jobs, so web's subtree cannot be touched; the assertion proves the rollback ran
+  # against api's namespace alone.
+  - name: "Rollback api prod resolves target from its own state"
+    action: rollback
+    rollback:
+      component: api
+      environment: prod
+      target: commit1
+      dry_run: true
+      expect_source: state
+    expect:
+      state:
+        web-prod:
+          component: web
+          env: prod
+          unchanged: true
+
+  - name: "Commit an api-only hotfix source"
+    action: commit
+    commit:
+      message: "fix: patch api"
+      files:
+        services/api/fix.go: |
+          package main
+
+          // api patch applied
+
+  - name: "Plan the api hotfix for prod"
+    action: hotfix_plan
+    hotfix_plan:
+      component: api
+      commit_ref: commit3
+      target_env: prod
+      dry_run: true
+
+  # Cherry-pick the api patch onto env/api/prod (seeded at api's own prod anchor,
+  # commit1) and open a cascade-hotfix PR. The sibling's env/web/prod integration
+  # branch must not exist: the hotfix branch namespaces are disjoint per component.
+  - name: "Apply the api hotfix to prod"
+    action: hotfix_apply
+    hotfix_apply:
+      component: api
+      target_env: prod
+      commit_ref: commit3
+      base_ref: commit1
+    expect:
+      branches:
+        exist: ["env/api/prod"]
+        deleted: ["env/web/prod"]
+      prs:
+        open_with_label: "cascade-hotfix"
+
+  - name: "Merge the api hotfix PR"
+    action: merge_pr
+    merge_pr:
+      label: "cascade-hotfix"
+
+  # Finalize the api hotfix. finalize --component api records the divergence under
+  # only state.components.api.prod (tracking env/api/prod, anchored on commit1, with
+  # the api patch applied). web's prod subtree must read byte-unchanged across the
+  # entire api hotfix.
+  - name: "Finalize the api hotfix for prod"
+    action: hotfix_merged
+    hotfix_merged:
+      component: api
+      target_env: prod
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          ref: "env/api/prod"
+          base_sha: commit1
+          patches: [commit3]
+        web-prod:
+          component: web
+          env: prod
+          unchanged: true
+
+  # --- Component web lifecycle (mirror); api must stay byte-intact throughout. ---
+
+  # Dry-run rollback of web prod targeting its own live-state SHA (commit2). api's
+  # prod subtree is diverged from its hotfix above and must read byte-unchanged
+  # across web's rollback, proving the rollback touched only web's namespace.
+  - name: "Rollback web prod resolves target from its own state"
+    action: rollback
+    rollback:
+      component: web
+      environment: prod
+      target: commit2
+      dry_run: true
+      expect_source: state
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true
+
+  - name: "Commit a web-only hotfix source"
+    action: commit
+    commit:
+      message: "fix: patch web"
+      files:
+        services/web/fix.go: |
+          package main
+
+          // web patch applied
+
+  - name: "Plan the web hotfix for prod"
+    action: hotfix_plan
+    hotfix_plan:
+      component: web
+      commit_ref: commit5
+      target_env: prod
+      dry_run: true
+
+  - name: "Apply the web hotfix to prod"
+    action: hotfix_apply
+    hotfix_apply:
+      component: web
+      target_env: prod
+      commit_ref: commit5
+      base_ref: commit2
+    expect:
+      branches:
+        exist: ["env/web/prod", "env/api/prod"]
+      prs:
+        open_with_label: "cascade-hotfix"
+
+  - name: "Merge the web hotfix PR"
+    action: merge_pr
+    merge_pr:
+      label: "cascade-hotfix"
+
+  # Finalize the web hotfix. finalize --component web records divergence under only
+  # state.components.web.prod (tracking env/web/prod). api's prod subtree, already
+  # diverged from its own hotfix, must survive byte-unchanged: web's finalize can
+  # neither clobber nor rejoin it.
+  - name: "Finalize the web hotfix for prod"
+    action: hotfix_merged
+    hotfix_merged:
+      component: web
+      target_env: prod
+    expect:
+      state:
+        web-prod:
+          component: web
+          env: prod
+          ref: "env/web/prod"
+          base_sha: commit2
+          patches: [commit5]
+        # api's sha/version are byte-unchanged across web's finalize.
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true
+        # api's own divergence (from its earlier hotfix) also survives intact:
+        # web's finalize neither clobbers nor rejoins api's env/api/prod tracking.
+        api-prod-divergence:
+          component: api
+          env: prod
+          ref: "env/api/prod"
+          base_sha: commit1
+          patches: [commit3]
