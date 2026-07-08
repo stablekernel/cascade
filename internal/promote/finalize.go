@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/statewrite"
 )
 
@@ -161,14 +162,24 @@ func (f *Finalizer) runLifecycleCleanup() error {
 			// so the rejoin is complete with no side effects to undo.
 			continue
 		}
-		if err := f.cleaner.DeleteEnvBranch(ev.env); err != nil {
+		if err := f.cleaner.DeleteEnvBranch(ev.component, ev.env); err != nil {
 			fmt.Printf("Warning: rejoin cleanup for %s: deleting integration branch: %v\n", ev.env, err)
+		}
+		// Collect hotfix tags under the rejoining branch's component grammar, so a
+		// component's cleanup sees only its own namespace. A resolve failure (for
+		// example a ref naming a component the manifest no longer declares) skips
+		// only the tag cleanup for this env rather than cross-matching a sibling's
+		// tags under the default grammar; the branch delete above already ran.
+		spec, err := resolveRejoinCleanupSpec(f.cicdFile, ev.component)
+		if err != nil {
+			fmt.Printf("Warning: rejoin cleanup for %s: resolving component tag grammar: %v\n", ev.env, err)
+			continue
 		}
 		if err := f.cleaner.CleanHotfixReleases(CleanReleasesRequest{
 			Environment: ev.env,
 			BaseVersion: ev.baseVersion,
 			SHA:         ev.sha,
-			Spec:        resolveTagGrammar(f.cicdFile),
+			Spec:        spec,
 		}); err != nil {
 			fmt.Printf("Warning: rejoin cleanup for %s: cleaning hotfix releases: %v\n", ev.env, err)
 		}
@@ -231,11 +242,20 @@ func (f *Finalizer) updateState() {
 				// integration-branch and hotfix-release cleanup, which apply
 				// only to hotfix divergences.
 				rollbackOrigin := IsRollbackRef(state.Ref)
+				// Recover the component that owns the rejoining integration branch
+				// from the recorded ref (env/<component>/<env>) before it is cleared,
+				// so the cleanup deletes the branch in the component's own namespace
+				// and collects tags under the component's grammar. A single-component
+				// ref (env/<env>) recovers the empty component, keeping cleanup
+				// byte-identical; a rollback ref is not an env/* branch and recovers
+				// the empty component, but its cleanup is skipped by rollbackOrigin.
+				component, _, _ := hotfix.ParseEnvBranch(state.Ref)
 				state.Ref = ""
 				state.BaseSHA = ""
 				state.Patches = nil
 				f.pendingRejoins = append(f.pendingRejoins, rejoinEvent{
 					env:            promo.Environment,
+					component:      component,
 					baseVersion:    priorVersion,
 					sha:            priorSHA,
 					rollbackOrigin: rollbackOrigin,

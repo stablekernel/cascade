@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/release"
@@ -37,8 +38,12 @@ type CleanReleasesRequest struct {
 // to provide one; the production implementation is wired only when finalize runs
 // in a repository with GitHub context.
 type LifecycleCleaner interface {
-	// DeleteEnvBranch deletes the env/<env> integration branch.
-	DeleteEnvBranch(env string) error
+	// DeleteEnvBranch deletes the integration branch for env within component:
+	// env/<component>/<env>, or env/<env> for the default empty component. The
+	// component is recovered from the branch the rejoin is cleaning up so a
+	// component's branch is deleted in its own namespace and a sibling's branch is
+	// never cross-deleted.
+	DeleteEnvBranch(component, env string) error
 	// CleanHotfixReleases deletes the hotfix tags and release drafts for the
 	// rejoining environment's prior base version.
 	CleanHotfixReleases(req CleanReleasesRequest) error
@@ -49,7 +54,7 @@ type LifecycleCleaner interface {
 // for non-diverged promotions.
 type noopLifecycleCleaner struct{}
 
-func (noopLifecycleCleaner) DeleteEnvBranch(string) error                   { return nil }
+func (noopLifecycleCleaner) DeleteEnvBranch(string, string) error           { return nil }
 func (noopLifecycleCleaner) CleanHotfixReleases(CleanReleasesRequest) error { return nil }
 
 // FinalizeOption customizes optional, additive Finalizer behavior. Required
@@ -110,7 +115,13 @@ func withContentsClient(c statewrite.ContentsClient) FinalizeOption {
 // finalization, carrying the data the cleaner needs to remove its branch, tags,
 // and drafts.
 type rejoinEvent struct {
-	env         string
+	env string
+	// component is the declared component that owns the rejoining integration
+	// branch, recovered from the recorded ref (env/<component>/<env>) via
+	// hotfix.ParseEnvBranch. The default single-component form (env/<env>) yields
+	// an empty component, keeping branch deletion and tag collection
+	// byte-identical to the pre-component behavior.
+	component   string
 	baseVersion string
 	// sha is the commit the env pointed at while diverged (its hotfix merge SHA),
 	// passed through to the release cleanup as a lookup fallback so a hotfix
@@ -164,13 +175,37 @@ func newFinalizeCleaner() LifecycleCleaner {
 	return newGitReleaseCleaner("origin", release.NewManager(repo, token))
 }
 
-// DeleteEnvBranch deletes the env/<env> branch on the configured remote.
-func (c *gitReleaseCleaner) DeleteEnvBranch(env string) error {
-	branch := hotfix.EnvBranchPrefix + env
+// DeleteEnvBranch deletes the integration branch for env within component on the
+// configured remote. The branch name is composed with hotfix.EnvBranchName, so a
+// named component targets env/<component>/<env> and the default empty component
+// targets env/<env>, matching exactly what the hotfix finalize created.
+func (c *gitReleaseCleaner) DeleteEnvBranch(component, env string) error {
+	branch := hotfix.EnvBranchName(component, env)
 	if err := git.DeleteRemoteBranch(c.remote, branch); err != nil {
 		return fmt.Errorf("deleting integration branch %s: %w", branch, err)
 	}
 	return nil
+}
+
+// resolveRejoinCleanupSpec returns the tag grammar the divergence-end release
+// cleanup collects hotfix tags under for the rejoining branch's component. The
+// default (empty) component yields the manifest's permissive grammar, so a
+// single-component rejoin collects tags byte-identically to the pre-component
+// behavior. A named component yields that component's resolved grammar with its
+// strict tag prefix, so the cleanup sees only that component's own hotfix tags
+// and never cross-matches a sibling component's namespace.
+func resolveRejoinCleanupSpec(f *config.CICDFile, component string) (taggrammar.Spec, error) {
+	if component == "" {
+		return resolveTagGrammar(f), nil
+	}
+	if f == nil || f.Config == nil {
+		return taggrammar.Spec{}, fmt.Errorf("component %q requested but manifest has no config block", component)
+	}
+	resolved, err := f.Config.ResolveComponent(component)
+	if err != nil {
+		return taggrammar.Spec{}, fmt.Errorf("resolving component %q tag grammar: %w", component, err)
+	}
+	return resolved.TagGrammarSpec(), nil
 }
 
 // CleanHotfixReleases deletes the hotfix release objects for the prior base
