@@ -50,13 +50,35 @@ steps:
       regenerate: true
       expect_exit: 0
 
-  - name: "Prove the per-component workflows are distinct isolated files"
-    action: plan
-    plan:
-      mutate_path: .github/workflows/orchestrate-api.yaml
-      mutate_append: "\n# drift probe\n"
+  - name: "Prove both per-component workflows exist as distinct isolated files"
+    action: verify
+    verify:
+      regenerate: true
       expect_exit: 0
-      expect_contains:
-        - orchestrate-api.yaml
-      expect_not_contains:
-        - orchestrate-web.yaml
+    # The observable, harness-robust proof of the fan-out is the emitted file set
+    # itself: generation produced one path-scoped, concurrency-isolated workflow
+    # per component and no repo-wide orchestrate.yaml. Each file is asserted on the
+    # concurrency group and path filter, which the harness never rewrites (only the
+    # top-level name: is suffixed post-generation). not_contains cross-checks that
+    # neither file is a copy of the other, so the assertion still fails if the set
+    # collapses to one component or an empty set. File-set isolation on mutation is
+    # proven at the unit level (TestPlan_Components_MatchesGeneratedBytes and the
+    # deep-copy no-bleed tests), so it is not re-proven here via a plan diff.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate-api.yaml"
+          contains:
+            - "group: orchestrate-api-"
+            - "- 'services/api/**'"
+          not_contains:
+            - "group: orchestrate-web-"
+            - "services/web"
+        - path: ".github/workflows/orchestrate-web.yaml"
+          contains:
+            - "group: orchestrate-web-"
+            - "- 'services/web/**'"
+          not_contains:
+            - "group: orchestrate-api-"
+            - "services/api"
+        - path: ".github/workflows/orchestrate.yaml"
+          not_exists: true

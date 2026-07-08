@@ -771,11 +771,12 @@ func (h *Harness) waitForBranchHead(ctx context.Context, wantSHA string) error {
 		branchHeadPollAttempts, wantSHA, lastSHA)
 }
 
-// assertOrchestrateGenerated confirms that .github/workflows/orchestrate.yaml
-// exists and is non-empty in the act container's /tmp/repo immediately after
-// generate-workflow. On failure it returns the generate output plus a listing
-// of the workflows directory so the missing-file moment is captured with
-// context rather than surfacing later as an opaque `cat: ... No such file`.
+// assertOrchestrateGenerated confirms that at least one non-empty orchestrate
+// workflow (orchestrate.yaml, or the per-component orchestrate-<name>.yaml set)
+// exists in the act container's /tmp/repo immediately after generate-workflow. On
+// failure it returns the generate output plus a listing of the workflows directory
+// so the missing-file moment is captured with context rather than surfacing later
+// as an opaque `cat: ... No such file`.
 func (h *Harness) assertOrchestrateGenerated(ctx context.Context, genOutput string) error {
 	present, exitCode, err := h.probeOrchestrateWorkflow(ctx)
 	if present {
@@ -789,23 +790,30 @@ func (h *Harness) assertOrchestrateGenerated(ctx context.Context, genOutput stri
 	}
 	return fmt.Errorf(
 		"generate-workflow exited 0 but did not produce %s (exit=%d)\ngenerate output:\n%s\nworkflows dir:\n%s",
-		orchestrateWorkflowPath, exitCode, strings.TrimSpace(genOutput),
+		orchestrateWorkflowGlob, exitCode, strings.TrimSpace(genOutput),
 		strings.TrimSpace(h.workflowsDirListing(ctx)),
 	)
 }
 
-// orchestrateWorkflowPath is the generated workflow whose presence gates every
-// orchestrate run.
-const orchestrateWorkflowPath = ".github/workflows/orchestrate.yaml"
+// orchestrateWorkflowGlob matches the generated orchestrate workflow(s) whose
+// presence gates every orchestrate run: the single-component orchestrate.yaml, or
+// the per-component orchestrate-<name>.yaml set a manifest with components emits
+// (in which case no repo-wide orchestrate.yaml exists).
+const orchestrateWorkflowGlob = ".github/workflows/orchestrate*.yaml"
 
-// probeOrchestrateWorkflow reports whether orchestrate.yaml exists and is
-// non-empty in /tmp/repo. The returned error is a docker-exec transport error
-// (the probe could not be run), which callers treat as retryable and distinct
-// from a clean "file absent" result (present=false, err=nil).
+// probeOrchestrateWorkflow reports whether at least one non-empty orchestrate
+// workflow (orchestrate.yaml or a per-component orchestrate-<name>.yaml) exists in
+// /tmp/repo. The returned error is a docker-exec transport error (the probe could
+// not be run), which callers treat as retryable and distinct from a clean "file
+// absent" result (present=false, err=nil).
 func (h *Harness) probeOrchestrateWorkflow(ctx context.Context) (present bool, exitCode int, err error) {
+	// A non-matching glob stays a literal path, which `test -s` reports absent, so
+	// found stays 0 and the probe fails, preserving the original "generated no
+	// orchestrate workflow at all" guard for both the single- and multi-component
+	// forms.
 	checkCmd := []string{
 		"bash", "-c",
-		"cd /tmp/repo && test -s " + orchestrateWorkflowPath,
+		"cd /tmp/repo && found=0; for f in " + orchestrateWorkflowGlob + "; do [ -s \"$f\" ] && found=1; done; [ \"$found\" = 1 ]",
 	}
 	exitCode, _, err = h.act.Container().Exec(ctx, checkCmd)
 	if err != nil {
@@ -1085,7 +1093,7 @@ func (h *Harness) SyncRepoToActContainer(ctx context.Context) error {
 			lastErr = fmt.Errorf("workflow probe transport error (exit=%d): %w", probeExit, probeErr)
 			continue
 		}
-		lastErr = fmt.Errorf("%s absent after fetch/reset (exit=%d)", orchestrateWorkflowPath, probeExit)
+		lastErr = fmt.Errorf("%s absent after fetch/reset (exit=%d)", orchestrateWorkflowGlob, probeExit)
 	}
 
 	// Distinct from the generation-phase message: this is a sync/lost-commit
