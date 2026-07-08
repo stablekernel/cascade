@@ -17,6 +17,7 @@ func NewCommand() *cobra.Command {
 	var environment string
 	var baseSHA string
 	var headSHA string
+	var component string
 	var outputJSON bool
 
 	cmd := &cobra.Command{
@@ -48,72 +49,36 @@ Examples:
 				return fmt.Errorf("loading config: %w", err)
 			}
 
-			// Find environment index
-			envIndex := -1
-			for i, env := range cfg.Environments {
-				if env == environment {
-					envIndex = i
-					break
-				}
-			}
-			if envIndex == -1 {
-				return fmt.Errorf("environment %q not found in config", environment)
-			}
-
-			// Get current dev version and next env version from state
-			var currentDevVersion, nextEnvVersion, nextEnvSHA string
-
-			// Load state from manifest
-			cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
-			if err == nil && cicdFile.State != nil {
-				// Current environment's version
-				if state, ok := cicdFile.State[environment]; ok {
-					currentDevVersion = state.Version
-				}
-
-				// Next environment's version (for comparison)
-				if envIndex+1 < len(cfg.Environments) {
-					nextEnv := cfg.Environments[envIndex+1]
-					if state, ok := cicdFile.State[nextEnv]; ok {
-						nextEnvVersion = state.Version
-						nextEnvSHA = state.SHA
-					}
-				}
-			}
-
-			// Default base SHA to next env's SHA if not specified
-			if baseSHA == "" {
-				baseSHA = nextEnvSHA
-			}
-
-			// Default head SHA to current HEAD
+			// Default head SHA to current HEAD.
 			if headSHA == "" {
 				headSHA = "HEAD"
 			}
 
-			// Get commits between base and head
+			var currentDevVersion, nextEnvVersion string
 			var commits []changelog.ConventionalCommit
-			if baseSHA == "" {
-				// No base SHA - get all commits from initial commit
-				baseSHA, _ = git.GetInitialCommit()
-			}
-			if baseSHA != "" {
-				gitCommits, err := git.GetCommits(baseSHA, headSHA, nil)
+			var calc *Calculator
+
+			if component != "" && cfg.HasComponents() {
+				// Component-scoped derivation: the version comes only from the
+				// component's path-scoped commits and its strict tag namespace, so
+				// a sibling component's tags and commits are invisible. This mirrors
+				// orchestrate.calculateComponentVersion so the two paths agree.
+				currentDevVersion, nextEnvVersion, commits, calc, err =
+					componentVersionInputs(cfg, component, baseSHA, headSHA)
 				if err != nil {
-					return fmt.Errorf("getting commits: %w", err)
+					return err
 				}
-				// Parse each commit
-				for _, gc := range gitCommits {
-					if cc := changelog.ParseCommit(gc); cc != nil {
-						commits = append(commits, *cc)
-					}
+			} else {
+				// Single-component path, unchanged: version comes from recorded
+				// per-environment state and the whole-repo commit range under the
+				// manifest's resolved (permissive) grammar.
+				currentDevVersion, nextEnvVersion, commits, calc, err =
+					singleComponentVersionInputs(cfg, configPath, environment, baseSHA, headSHA)
+				if err != nil {
+					return err
 				}
 			}
 
-			// Calculate next version under the manifest's resolved tag grammar so
-			// a custom prefix, pre-release token, or separator is honored. With no
-			// tag_grammar block this resolves to the historical default.
-			calc := NewCalculatorWithGrammar(cfg.ResolveTagGrammar())
 			nextVersion, err := calc.CalculateNext(currentDevVersion, nextEnvVersion, commits)
 			if err != nil {
 				return fmt.Errorf("calculating version: %w", err)
@@ -143,11 +108,110 @@ Examples:
 	cmd.Flags().StringVarP(&environment, "environment", "e", "", "Target environment")
 	cmd.Flags().StringVar(&baseSHA, "base-sha", "", "Base SHA for commit analysis (defaults to next env's SHA)")
 	cmd.Flags().StringVar(&headSHA, "head-sha", "", "Head SHA for commit analysis (defaults to HEAD)")
+	cmd.Flags().StringVar(&component, "component", "", "Declared component to scope the version to (multi-component manifests)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 
 	_ = cmd.MarkFlagRequired("environment")
 
 	return cmd
+}
+
+// singleComponentVersionInputs derives the version inputs for the single-component
+// (or no-component) path: recorded per-environment state supplies the current and
+// next-env versions, and the whole-repo commit range under the manifest's resolved
+// grammar supplies the bump. This is the historical next-version behavior, factored
+// out unchanged.
+func singleComponentVersionInputs(cfg *config.TrunkConfig, configPath, environment, baseSHA, headSHA string) (currentDevVersion, nextEnvVersion string, commits []changelog.ConventionalCommit, calc *Calculator, err error) {
+	envIndex := -1
+	for i, env := range cfg.Environments {
+		if env == environment {
+			envIndex = i
+			break
+		}
+	}
+	if envIndex == -1 {
+		return "", "", nil, nil, fmt.Errorf("environment %q not found in config", environment)
+	}
+
+	var nextEnvSHA string
+	cicdFile, perr := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	if perr == nil && cicdFile.State != nil {
+		if state, ok := cicdFile.State[environment]; ok {
+			currentDevVersion = state.Version
+		}
+		if envIndex+1 < len(cfg.Environments) {
+			nextEnv := cfg.Environments[envIndex+1]
+			if state, ok := cicdFile.State[nextEnv]; ok {
+				nextEnvVersion = state.Version
+				nextEnvSHA = state.SHA
+			}
+		}
+	}
+
+	if baseSHA == "" {
+		baseSHA = nextEnvSHA
+	}
+	if baseSHA == "" {
+		baseSHA, _ = git.GetInitialCommit()
+	}
+	if baseSHA != "" {
+		gitCommits, cerr := git.GetCommits(baseSHA, headSHA, nil)
+		if cerr != nil {
+			return "", "", nil, nil, fmt.Errorf("getting commits: %w", cerr)
+		}
+		for _, gc := range gitCommits {
+			if cc := changelog.ParseCommit(gc); cc != nil {
+				commits = append(commits, *cc)
+			}
+		}
+	}
+
+	// Calculate next version under the manifest's resolved tag grammar so a custom
+	// prefix, pre-release token, or separator is honored. With no tag_grammar block
+	// this resolves to the historical default.
+	return currentDevVersion, nextEnvVersion, commits, NewCalculatorWithGrammar(cfg.ResolveTagGrammar()), nil
+}
+
+// componentVersionInputs derives the version inputs for a named component: its
+// current version and release base come from its own strict tag namespace, and the
+// commit range is scoped to the component's path. It mirrors
+// orchestrate.calculateComponentVersion so the CLI and production paths agree on a
+// component's next version. baseSHA, when set, overrides the tag-derived base.
+func componentVersionInputs(cfg *config.TrunkConfig, component, baseSHA, headSHA string) (currentDevVersion, nextEnvVersion string, commits []changelog.ConventionalCommit, calc *Calculator, err error) {
+	resolved, rerr := cfg.ResolveComponent(component)
+	if rerr != nil {
+		return "", "", nil, nil, fmt.Errorf("resolving component %q: %w", component, rerr)
+	}
+	spec := resolved.TagGrammarSpec()
+
+	if latestTag, _, terr := git.GetLatestTagSpec("", spec); terr == nil && latestTag != "" {
+		currentDevVersion = latestTag
+	}
+	var baseTagSHA string
+	if latestRelease, releaseSHA, lerr := git.GetLatestReleaseTagSpec("", spec); lerr == nil && latestRelease != "" {
+		nextEnvVersion = latestRelease
+		baseTagSHA = releaseSHA
+	}
+
+	if baseSHA == "" {
+		baseSHA = baseTagSHA
+	}
+	if baseSHA == "" {
+		baseSHA, _ = git.GetInitialCommit()
+	}
+	if baseSHA != "" {
+		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, headSHA, []string{resolved.Path})
+		if cerr != nil {
+			return "", "", nil, nil, fmt.Errorf("getting commits for component %q: %w", component, cerr)
+		}
+		for _, gc := range gitCommits {
+			if cc := changelog.ParseCommit(gc); cc != nil {
+				commits = append(commits, *cc)
+			}
+		}
+	}
+
+	return currentDevVersion, nextEnvVersion, commits, NewCalculatorWithGrammar(spec), nil
 }
 
 func bumpTypeString(b BumpType) string {

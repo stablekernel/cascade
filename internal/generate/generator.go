@@ -938,6 +938,13 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 		sb.WriteString("          cascade orchestrate setup \\\n")
 	}
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	// A per-component orchestrate workflow scopes version derivation to its own
+	// component (path-scoped commits, strict tag namespace) by passing --component.
+	// The single-component workflow emits no --component line, so its output stays
+	// byte-identical.
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "            --component %s \\\n", g.componentName)
+	}
 	sb.WriteString("            --gha-output\n")
 
 	sb.WriteString("\n")

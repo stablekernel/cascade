@@ -23,17 +23,36 @@ type Orchestrator struct {
 	environment string
 	cicdFile    *config.CICDFile
 	baseDir     string
+	// component, when non-empty, names the declared component this orchestration
+	// is scoped to. It is set only via WithComponent by a per-component generated
+	// workflow; an empty value selects the single-component path, byte-identical
+	// to today. It scopes version derivation to the component's path and strict
+	// tag namespace (calculateComponentVersion).
+	component string
 	// pushBackoff is the delay between state-write push retries. A zero value
 	// selects the shared git package default; tests override it to keep the retry
 	// loop fast. It is threaded into git.PushWithRebaseRetry via git.WithBackoff.
 	pushBackoff time.Duration
 }
 
+// Option configures an Orchestrator at construction. Options are the additive
+// extension point so new per-invocation scoping (such as a component selector) is
+// never a breaking change to NewOrchestrator's positional signature.
+type Option func(*Orchestrator)
+
+// WithComponent scopes the orchestration to the named declared component, so its
+// version is derived from that component's path-scoped commits and strict tag
+// namespace rather than the whole repo. An empty name is a no-op, preserving the
+// single-component path.
+func WithComponent(name string) Option {
+	return func(o *Orchestrator) { o.component = name }
+}
+
 // DefaultStateKey is used for state tracking when no environments are configured.
 const DefaultStateKey = "prerelease"
 
 // NewOrchestrator creates a new Orchestrator.
-func NewOrchestrator(configPath, manifestKey, environment string) (*Orchestrator, error) {
+func NewOrchestrator(configPath, manifestKey, environment string, opts ...Option) (*Orchestrator, error) {
 	log.Debug("Loading config from %s (key: %s)", configPath, manifestKey)
 
 	cicdFile, err := config.ParseManifestFile(configPath, manifestKey)
@@ -56,12 +75,16 @@ func NewOrchestrator(configPath, manifestKey, environment string) (*Orchestrator
 	log.Debug("Environments: %v", cicdFile.Config.Environments)
 	log.Debug("Base directory: %s", baseDir)
 
-	return &Orchestrator{
+	o := &Orchestrator{
 		configPath:  configPath,
 		environment: environment,
 		cicdFile:    cicdFile,
 		baseDir:     baseDir,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o, nil
 }
 
 // Setup runs the setup phase and returns the result.
@@ -329,6 +352,14 @@ func (o *Orchestrator) detectChanges(baseSHA, headSHA string, triggers []string)
 
 // calculateVersion calculates the next version for the environment.
 func (o *Orchestrator) calculateVersion() (string, error) {
+	// A component-scoped orchestration derives its version from only its own
+	// path-scoped commits and strict tag namespace, so one component advancing
+	// never moves a sibling. The single-component path (component == "") is
+	// untouched below.
+	if o.component != "" {
+		return o.calculateComponentVersion()
+	}
+
 	envs := o.cicdFile.Config.Environments
 
 	// Get current environment's version and next env's version
@@ -427,6 +458,77 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 	nextVersion, err := calc.CalculateNext(currentDevVersion, nextEnvVersion, commits)
 	if err != nil {
 		return "", fmt.Errorf("calculating version: %w", err)
+	}
+
+	return nextVersion.String(), nil
+}
+
+// calculateComponentVersion derives the next version for the orchestration's
+// component from that component's own path-scoped commits and strict tag
+// namespace. The base version and its SHA come from the component's latest
+// published release tag (read under the component's strict prefix), the RC counter
+// base from the component's latest tag, and the commit range from
+// GetCommitsForPaths scoped to the component's path. Both tag lookups scope to the
+// component namespace, so component A's release tags and commits never influence
+// component B's computed version (HLD Section 4 row 3, Section 5). This mirrors the
+// no-environment (tag-derived) single-component path; per-component recorded-state
+// promotion coupling is a later stage.
+func (o *Orchestrator) calculateComponentVersion() (string, error) {
+	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
+	if err != nil {
+		return "", fmt.Errorf("resolving component %q: %w", o.component, err)
+	}
+
+	// Strict per-component grammar: the component reads and emits under its own
+	// prefix only, so a sibling's tags are invisible to it.
+	spec := resolved.TagGrammarSpec()
+
+	var currentDevVersion, nextEnvVersion, nextEnvSHA string
+
+	// Current version (RC-counter base) from the component's own tag namespace.
+	if latestTag, _, terr := git.GetLatestTagSpec(o.baseDir, spec); terr != nil {
+		log.Warn("Failed to get latest tag for component %s: %v", o.component, terr)
+	} else if latestTag != "" {
+		currentDevVersion = latestTag
+	}
+
+	// Base version from the component's latest published (non-prerelease) release.
+	if latestRelease, releaseSHA, rerr := git.GetLatestReleaseTagSpec(o.baseDir, spec); rerr != nil {
+		log.Warn("Failed to get latest release tag for component %s: %v", o.component, rerr)
+	} else if latestRelease != "" {
+		nextEnvVersion = latestRelease
+		nextEnvSHA = releaseSHA
+	}
+
+	// Commit range: from the component's release base (or the repo's initial
+	// commit on a fresh component) to HEAD, scoped to the component's path so a
+	// sibling component's commits never register a bump here.
+	baseSHA := nextEnvSHA
+	if baseSHA == "" {
+		baseSHA, _ = git.GetInitialCommit()
+	}
+
+	var commits []changelog.ConventionalCommit
+	if baseSHA != "" {
+		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, "HEAD", []string{resolved.Path})
+		if cerr != nil {
+			log.Warn("Failed to get commits for component %s: %v", o.component, cerr)
+		} else {
+			for _, gc := range gitCommits {
+				if cc := changelog.ParseCommit(gc); cc != nil {
+					commits = append(commits, *cc)
+				}
+			}
+		}
+	}
+
+	log.Debug("Component %s: current=%s base=%s (%d commits under %s)",
+		o.component, currentDevVersion, nextEnvVersion, len(commits), resolved.Path)
+
+	calc := version.NewCalculatorWithGrammar(spec)
+	nextVersion, err := calc.CalculateNext(currentDevVersion, nextEnvVersion, commits)
+	if err != nil {
+		return "", fmt.Errorf("calculating version for component %q: %w", o.component, err)
 	}
 
 	return nextVersion.String(), nil

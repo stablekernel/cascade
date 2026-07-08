@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
 // clone returns a fully independent deep copy of the config via a JSON round
@@ -40,6 +42,18 @@ func (c *TrunkConfig) HasComponents() bool {
 // component identity is always part of the key.
 func ComponentConcurrencyGroup(name string) string {
 	return fmt.Sprintf("orchestrate-%s-${{ github.ref }}", name)
+}
+
+// GetComponentTagPrefix returns the declared tag_prefix for the named component,
+// the tag namespace that component's versions and tags live under. It errors when
+// the component is not declared. Version and tag discovery use this so a
+// component's scan is scoped to its own namespace and never a sibling's.
+func (c *TrunkConfig) GetComponentTagPrefix(name string) (string, error) {
+	comp, ok := c.Components[name]
+	if !ok {
+		return "", fmt.Errorf("component %q is not declared", name)
+	}
+	return comp.TagPrefix, nil
 }
 
 // ResolvedComponent is the effective configuration for one component: its
@@ -178,6 +192,22 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	}
 
 	return &ResolvedComponent{Name: name, Path: comp.Path, Config: eff}, nil
+}
+
+// TagGrammarSpec returns the tag grammar a component reads and emits its versions
+// under: the component's resolved grammar (carrying its required tag_prefix and
+// any inherited or overridden tag_grammar block) with StrictPrefix forced true.
+// The strict flip is the HLD Section 5 isolation invariant: a component with a
+// declared tag_prefix parses its tags literally so api-1.2.3 and web-1.2.3 never
+// cross-match, and a nested-substring prefix (api- vs api-beta-) cannot collide
+// either. It is forced on regardless of whether a tag_grammar block set
+// strict_prefix, because the per-component namespace boundary is not optional. The
+// implicit default (single-component) path does not call this; it keeps the
+// permissive ResolveTagGrammar spec so single-component reads are unchanged.
+func (r *ResolvedComponent) TagGrammarSpec() taggrammar.Spec {
+	spec := r.Config.ResolveTagGrammar()
+	spec.StrictPrefix = true
+	return spec
 }
 
 // globalOnlyComponentFields is the set of top-level-only (global) manifest keys
