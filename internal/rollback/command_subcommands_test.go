@@ -239,6 +239,7 @@ func TestRollbackFinalize_SkippedDeployableNotCounted(t *testing.T) {
 	prod := file.State["prod"]
 	if prod == nil {
 		t.Fatal("prod state missing after finalize")
+		return
 	}
 	// A deployable-scoped rollback re-applies the per-deployable SHA without
 	// touching the env-level pointer. With "services" succeeding and "web-api"
@@ -247,6 +248,7 @@ func TestRollbackFinalize_SkippedDeployableNotCounted(t *testing.T) {
 	ds := prod.Deploys["services"]
 	if ds == nil {
 		t.Fatal("services deploy state missing after finalize")
+		return
 	}
 	if ds.SHA != "prodold1112223" {
 		t.Errorf("services sha = %q, want prodold1112223", ds.SHA)
@@ -281,6 +283,7 @@ func TestRollbackFinalize_AppliesWhenDeploySucceeded(t *testing.T) {
 	prod := file.State["prod"]
 	if prod == nil {
 		t.Fatal("prod state missing after finalize")
+		return
 	}
 	if prod.SHA != "prodold1112223" {
 		t.Errorf("env sha = %q, want prodold1112223", prod.SHA)
@@ -319,6 +322,7 @@ func TestRollbackFinalize_AbortsWhenDeployFailed(t *testing.T) {
 	err = cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when a deploy failed, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "services") || !strings.Contains(err.Error(), "did not succeed") {
 		t.Errorf("error %q should name the failed deploy and say it did not succeed", err.Error())
@@ -389,6 +393,7 @@ func TestRollbackFinalize_NoDeploysConfigured_StillApplies(t *testing.T) {
 	prod := file.State["prod"]
 	if prod == nil {
 		t.Fatal("prod state missing after finalize")
+		return
 	}
 	if prod.SHA != "prodold1112223" {
 		t.Errorf("env sha = %q, want prodold1112223", prod.SHA)

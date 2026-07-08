@@ -973,6 +973,7 @@ components:
 `)
 		if cfg.Components == nil {
 			t.Fatal("Components map should be parsed")
+			return
 		}
 		if cfg.Components["api"].Path != "services/api" {
 			t.Fatalf("unexpected path: %q", cfg.Components["api"].Path)

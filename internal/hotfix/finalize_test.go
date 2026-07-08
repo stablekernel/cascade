@@ -451,6 +451,7 @@ func TestFinalize_MergeSHATipMismatch_Fails(t *testing.T) {
 	err := f.Finalize("test", other, []string{fix}, base)
 	if err == nil {
 		t.Fatal("expected mismatch error when merge SHA is not env/test tip")
+		return
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "tip") {
 		t.Errorf("error %q should mention the branch tip mismatch", err.Error())
@@ -773,6 +774,7 @@ func TestFinalize_TrunkStateAbsent_Errors(t *testing.T) {
 	err := f.Finalize("test", merge, []string{fix}, base)
 	if err == nil {
 		t.Fatal("expected missing-state error when trunk has no recorded SHA for the target env")
+		return
 	}
 	if !strings.Contains(err.Error(), "no recorded state SHA") {
 		t.Errorf("error %q should report the missing recorded state SHA", err.Error())

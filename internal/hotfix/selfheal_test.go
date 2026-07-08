@@ -118,6 +118,7 @@ func TestReconcileBranch_NotCheckedFailsClosedNoReset(t *testing.T) {
 	created, reset, err := p.reconcileBranch("env/test", "basesha", false /*diverged*/, false /*singleFlightChecked*/)
 	if err == nil {
 		t.Fatal("expected fail-closed divergence error, got nil")
+		return
 	}
 	if created || reset {
 		t.Errorf("created=%v reset=%v, both must be false when failing closed", created, reset)
@@ -142,6 +143,7 @@ func TestReconcileBranch_DivergedFailsClosedNoReset(t *testing.T) {
 	created, reset, err := p.reconcileBranch("env/test", "basesha", true /*diverged*/, true /*singleFlightChecked*/)
 	if err == nil {
 		t.Fatal("expected fail-closed divergence error, got nil")
+		return
 	}
 	if created || reset {
 		t.Errorf("created=%v reset=%v, both must be false when failing closed", created, reset)
@@ -179,6 +181,7 @@ func TestReconcileBranch_SelfHealReportsResetError(t *testing.T) {
 	_, _, err := p.reconcileBranch("env/test", "basesha", false, true)
 	if err == nil {
 		t.Fatal("expected the ResetBranch failure to surface")
+		return
 	}
 	if !strings.Contains(err.Error(), "self-healing orphan") {
 		t.Errorf("error %q should wrap the self-heal failure", err.Error())
@@ -226,6 +229,7 @@ func TestVerifyRemoteEnvTip_DivergedFailsClosedNoReset(t *testing.T) {
 	reset, err := p.verifyRemoteEnvTip("env/test", "basesha", true /*diverged*/, true)
 	if err == nil {
 		t.Fatal("expected fail-closed divergence error, got nil")
+		return
 	}
 	if reset {
 		t.Error("reset must be false for a diverged env")
@@ -317,6 +321,7 @@ func TestPlanChain_OrphanRemoteTipNoopCheckerFailsClosed(t *testing.T) {
 	_, err := p.PlanChain([]string{fix}, "test")
 	if err == nil {
 		t.Fatal("expected fail-closed divergence error without a real checker")
+		return
 	}
 	if len(rr.resets) != 0 {
 		t.Fatalf("ResetBranch must NOT be called without a real single-flight check, got %d", len(rr.resets))
@@ -355,6 +360,7 @@ func TestPlanChain_AbortsOnOpenConflictPR(t *testing.T) {
 	_, err := p.PlanChain([]string{fix}, "test")
 	if err == nil {
 		t.Fatal("expected single-flight abort when a conflict-resolution hotfix PR is open")
+		return
 	}
 	if !strings.Contains(err.Error(), "55") {
 		t.Errorf("error %q should reference the open PR number", err.Error())
@@ -388,6 +394,7 @@ func TestPlanChain_AbortsOnOpenHotfixPR(t *testing.T) {
 	_, err := p.PlanChain([]string{fix}, "test")
 	if err == nil {
 		t.Fatal("expected single-flight abort when a hotfix PR is open")
+		return
 	}
 	if !strings.Contains(err.Error(), "77") {
 		t.Errorf("error %q should reference the open PR number", err.Error())

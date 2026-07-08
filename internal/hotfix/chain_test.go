@@ -348,6 +348,7 @@ func TestPlanChain_RejectsNonTrunkCommit(t *testing.T) {
 	_, err := p.PlanChain([]string{fix1, side}, "test")
 	if err == nil {
 		t.Fatal("expected error citing the non-trunk ref")
+		return
 	}
 	if !strings.Contains(err.Error(), "trunk") {
 		t.Errorf("error %q should mention trunk", err.Error())
@@ -396,6 +397,7 @@ func TestPlanChain_RemoteEnvTipDiverged_FailsWithGuidance(t *testing.T) {
 	_, err := p.PlanChain([]string{fix}, "test")
 	if err == nil {
 		t.Fatal("expected divergence error when remote env tip differs from recorded state SHA")
+		return
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "env/test") {

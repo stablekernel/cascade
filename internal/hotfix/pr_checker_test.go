@@ -184,6 +184,7 @@ func TestRestPRChecker_NonOKResponseReturnsError(t *testing.T) {
 	_, err := c.OpenHotfixPRs("env/test")
 	if err == nil {
 		t.Fatal("expected an error for a non-200 response, got nil")
+		return
 	}
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("error %q should reference the HTTP status code", err.Error())

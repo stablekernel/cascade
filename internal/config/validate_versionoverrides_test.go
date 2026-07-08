@@ -87,9 +87,11 @@ release:
 `)
 	if cfg.Release == nil {
 		t.Fatalf("release block did not parse")
+		return
 	}
 	if cfg.Release.VersionOverrides == nil {
 		t.Fatalf("release.version_overrides did not parse")
+		return
 	}
 	if got := cfg.Release.VersionOverrides.Dir; got != ".cascade/version-overrides" {
 		t.Fatalf("release.version_overrides.dir = %q", got)
@@ -121,6 +123,7 @@ release:
 `)
 	if cfg.Release == nil {
 		t.Fatalf("release block did not parse")
+		return
 	}
 	if cfg.Release.VersionOverrides != nil {
 		t.Fatalf("version_overrides should be nil when absent, got %#v", cfg.Release.VersionOverrides)

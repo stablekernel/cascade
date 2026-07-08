@@ -97,6 +97,7 @@ func TestValidateSchemaVersionHelper(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil (warn=%q)", warn)
+					return
 				}
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tt.errContains)
@@ -163,6 +164,7 @@ func TestValidateSchemaVersion(t *testing.T) {
 			if tt.wantFatal {
 				if fatalErr == nil {
 					t.Fatalf("expected fatal error, got nil")
+					return
 				}
 				if tt.errContains != "" && !strings.Contains(fatalErr.Error(), tt.errContains) {
 					t.Fatalf("error %q does not contain %q", fatalErr.Error(), tt.errContains)

@@ -15,6 +15,7 @@ func TestNewCommand_TagOnlyFlag(t *testing.T) {
 	flag := cmd.Flags().Lookup("tag-only")
 	if flag == nil {
 		t.Fatal("expected --tag-only flag to be registered on manage-release")
+		return
 	}
 	if flag.DefValue != "false" {
 		t.Errorf("--tag-only default = %q, want false", flag.DefValue)
@@ -98,6 +99,7 @@ func TestValidateManageReleaseFlags_SHARequiredOnlyForTagCreatingActions(t *test
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for action %q with sha=%q, got nil", tt.action, tt.sha)
+					return
 				}
 				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
 					t.Fatalf("expected error containing %q, got %q", tt.errSubstr, err.Error())
@@ -132,6 +134,7 @@ func TestValidateManageReleaseFlags_OtherRequiredFields(t *testing.T) {
 			err := validateManageReleaseFlags(ActionLock, tt.repo, tt.env, "", tt.tag)
 			if err == nil {
 				t.Fatalf("expected error, got nil")
+				return
 			}
 			if !strings.Contains(err.Error(), tt.errSubstr) {
 				t.Fatalf("expected error containing %q, got %q", tt.errSubstr, err.Error())
@@ -166,6 +169,7 @@ func TestComponentReapOptions_ComponentRequiresConfig(t *testing.T) {
 	_, err := componentReapOptions("", "ci", "api")
 	if err == nil {
 		t.Fatal("expected an error when --component is set without --config")
+		return
 	}
 	if !strings.Contains(err.Error(), "--config is required") {
 		t.Fatalf("expected a --config-required error, got %q", err.Error())
@@ -205,6 +209,7 @@ func TestComponentReapOptions_ThreadsStrictComponentGrammar(t *testing.T) {
 	mgr := NewManager("owner/repo", "tok", opts...)
 	if mgr.grammar == nil {
 		t.Fatal("expected a threaded component grammar, got nil")
+		return
 	}
 	if got := mgr.grammar.Prefix; got != "api-" {
 		t.Errorf("grammar prefix = %q, want api-", got)

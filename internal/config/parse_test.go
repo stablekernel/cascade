@@ -61,6 +61,7 @@ func TestParse(t *testing.T) {
 	// Verify validate config
 	if cfg.Validate == nil {
 		t.Fatal("Validate is nil")
+		return
 	}
 	if cfg.Validate.Workflow != ".github/workflows/validate.yaml" {
 		t.Errorf("Validate.Workflow = %q, want %q", cfg.Validate.Workflow, ".github/workflows/validate.yaml")
@@ -143,6 +144,7 @@ func TestParse_WithInputs(t *testing.T) {
 	// Verify build inputs
 	if cfg.Builds[0].Inputs == nil {
 		t.Fatal("Builds[0].Inputs is nil")
+		return
 	}
 	if cfg.Builds[0].Inputs["dockerfile_path"] != "./src/Dockerfile" {
 		t.Errorf("Builds[0].Inputs[dockerfile_path] = %v, want ./src/Dockerfile", cfg.Builds[0].Inputs["dockerfile_path"])
@@ -154,6 +156,7 @@ func TestParse_WithInputs(t *testing.T) {
 	// Verify deploy inputs
 	if cfg.Deploys[0].Inputs == nil {
 		t.Fatal("Deploys[0].Inputs is nil")
+		return
 	}
 	if cfg.Deploys[0].Inputs["cluster_name"] != "my-cluster" {
 		t.Errorf("Deploys[0].Inputs[cluster_name] = %v, want my-cluster", cfg.Deploys[0].Inputs["cluster_name"])
@@ -162,6 +165,7 @@ func TestParse_WithInputs(t *testing.T) {
 	// Verify env_inputs
 	if cfg.Deploys[0].EnvInputs == nil {
 		t.Fatal("Deploys[0].EnvInputs is nil")
+		return
 	}
 	if cfg.Deploys[0].EnvInputs["dev"]["replicas"] != 1 {
 		t.Errorf("Deploys[0].EnvInputs[dev][replicas] = %v, want 1", cfg.Deploys[0].EnvInputs["dev"]["replicas"])
@@ -499,6 +503,7 @@ func TestParse_ReleaseAndChangelogConfig(t *testing.T) {
 	// Release config
 	if cfg.Release == nil {
 		t.Fatal("Release is nil")
+		return
 	}
 	if cfg.Release.Disabled {
 		t.Error("Release.Disabled should be false (enabled by default)")
@@ -510,6 +515,7 @@ func TestParse_ReleaseAndChangelogConfig(t *testing.T) {
 	// Changelog config
 	if cfg.Changelog == nil {
 		t.Fatal("Changelog is nil")
+		return
 	}
 	if cfg.Changelog.Workflow != ".github/workflows/custom-changelog.yaml" {
 		t.Errorf("Changelog.Workflow = %q, want .github/workflows/custom-changelog.yaml", cfg.Changelog.Workflow)
@@ -544,6 +550,7 @@ func TestParse_ReleaseDisabled(t *testing.T) {
 
 	if cfg.Release == nil {
 		t.Fatal("Release is nil")
+		return
 	}
 	if !cfg.Release.Disabled {
 		t.Error("Release.Disabled should be true")

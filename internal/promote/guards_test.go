@@ -144,6 +144,7 @@ func TestPromote_IntoDivergedEnv_MissingPatch_Blocked(t *testing.T) {
 	_, err := pf.Run()
 	if err == nil {
 		t.Fatalf("expected preflight to block promotion into diverged env missing a patch")
+		return
 	}
 	if !containsAllOf(err.Error(), "patchsha1") {
 		t.Errorf("error should name the missing patch, got: %q", err.Error())

@@ -23,6 +23,7 @@ func TestParseActOutput(t *testing.T) {
 
 	if result.Jobs["build-app"] == nil {
 		t.Fatal("expected build-app job in result")
+		return
 	}
 	if result.Jobs["build-app"].Conclusion != "success" {
 		t.Errorf("expected build-app conclusion=success, got %s", result.Jobs["build-app"].Conclusion)
@@ -32,6 +33,7 @@ func TestParseActOutput(t *testing.T) {
 	}
 	if result.Jobs["deploy-cdk"] == nil {
 		t.Fatal("expected deploy-cdk job in result")
+		return
 	}
 	if result.Jobs["deploy-cdk"].Conclusion != "skipped" {
 		t.Errorf("expected deploy-cdk conclusion=skipped, got %s", result.Jobs["deploy-cdk"].Conclusion)

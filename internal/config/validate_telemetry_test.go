@@ -130,12 +130,14 @@ telemetry:
 `)
 	if cfg.Telemetry == nil {
 		t.Fatalf("telemetry block did not parse")
+		return
 	}
 	if !cfg.Telemetry.Enabled || cfg.Telemetry.Adapter != TelemetryAdapterNone {
 		t.Fatalf("telemetry enabled/adapter: %#v", cfg.Telemetry)
 	}
 	if cfg.Telemetry.Webhook == nil {
 		t.Fatalf("telemetry.webhook did not parse")
+		return
 	}
 	if cfg.Telemetry.Webhook.URL != "https://metrics.example.com/ingest" {
 		t.Fatalf("telemetry.webhook.url: %q", cfg.Telemetry.Webhook.URL)
