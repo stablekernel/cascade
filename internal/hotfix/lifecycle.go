@@ -25,21 +25,73 @@ func resolveTagGrammar(f *config.CICDFile) taggrammar.Spec {
 // is deleted.
 const EnvBranchPrefix = "env/"
 
-// OrphanEnvBranches returns the env/* branches in branches that have no matching
-// divergence in state. A branch env/<name> is healthy only while state[<name>]
-// reports IsDiverged(); a branch with no diverged env behind it is an orphan
-// left over from an interrupted hotfix or manual meddling and should be flagged.
+// EnvBranchName returns the integration branch name for env within component.
+// The default (empty) component yields env/<env>, byte-identical to the
+// historical single-component form; a named component yields
+// env/<component>/<env> so each component's integration branches occupy a
+// disjoint namespace and a hotfix on one component can never touch another's.
+func EnvBranchName(component, env string) string {
+	if component == "" {
+		return EnvBranchPrefix + env
+	}
+	return EnvBranchPrefix + component + "/" + env
+}
+
+// ParseEnvBranch splits an integration branch name into its component and env,
+// the inverse of EnvBranchName. It reports ok=false for any branch that does not
+// carry EnvBranchPrefix or whose remainder is not a well-formed env/<env> or
+// env/<component>/<env>.
 //
-// Non env/* branches are ignored. The returned slice preserves the input order
-// and is nil when nothing is orphaned, so callers can treat a nil result as
+// env/<env> parses to an empty component and <env>, preserving the historical
+// single-component reading. env/<component>/<env> parses to <component> and
+// <env>. The segment count after the prefix disambiguates the two forms, so a
+// nested branch never has its component folded into the env: env/web/staging
+// parses to component "web" and env "staging", not the naive
+// strings.TrimPrefix("env/") result of env "web/staging". A bare prefix or a
+// more deeply nested name is malformed and reports ok=false.
+func ParseEnvBranch(branch string) (component, env string, ok bool) {
+	rest, found := strings.CutPrefix(branch, EnvBranchPrefix)
+	if !found {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return "", "", false
+		}
+		return "", parts[0], true
+	case 2:
+		if parts[0] == "" || parts[1] == "" {
+			return "", "", false
+		}
+		return parts[0], parts[1], true
+	default:
+		return "", "", false
+	}
+}
+
+// OrphanEnvBranches returns the integration branches in branches that belong to
+// component and have no matching divergence in state. state is component's own
+// env subtree (state.components.<component>.<env>), and for the default empty
+// component it is the historical env-keyed state map. A branch is healthy only
+// while state[<env>] reports IsDiverged(); a branch with no diverged env behind
+// it is an orphan left over from an interrupted hotfix or manual meddling and is
+// flagged.
+//
+// Only branches whose parsed component equals component are considered, so a
+// component never inspects, and never flags, a sibling's env/<other>/<env>
+// branch, and the default component ignores every component-nested branch. Non
+// env/* branches are ignored. The returned slice preserves the input order and
+// is nil when nothing is orphaned, so callers can treat a nil result as
 // "consistent".
-func OrphanEnvBranches(branches []string, state map[string]*config.EnvState) []string {
+func OrphanEnvBranches(component string, branches []string, state map[string]*config.EnvState) []string {
 	var orphans []string
 	for _, branch := range branches {
-		if !strings.HasPrefix(branch, EnvBranchPrefix) {
+		comp, env, ok := ParseEnvBranch(branch)
+		if !ok || comp != component {
 			continue
 		}
-		env := strings.TrimPrefix(branch, EnvBranchPrefix)
 		st := state[env]
 		if st != nil && st.IsDiverged() {
 			continue
@@ -49,22 +101,23 @@ func OrphanEnvBranches(branches []string, state map[string]*config.EnvState) []s
 	return orphans
 }
 
-// HealOrphanEnvBranches deletes every env/* branch that OrphanEnvBranches flags
-// as having no matching divergence, calling del to remove each branch on remote.
-// In production del is git.DeleteRemoteBranch, whose delete of an absent branch
-// is a no-op success, so HealOrphanEnvBranches is idempotent: re-running it, or
-// running it against an orphan that is already gone, deletes nothing further and
-// never errors.
+// HealOrphanEnvBranches deletes every integration branch that OrphanEnvBranches
+// flags for component as having no matching divergence, calling del to remove
+// each branch on remote. In production del is git.DeleteRemoteBranch, whose
+// delete of an absent branch is a no-op success, so HealOrphanEnvBranches is
+// idempotent: re-running it, or running it against an orphan that is already
+// gone, deletes nothing further and never errors.
 //
-// Only orphans are deleted. A branch backing a diverged environment is never
-// touched, because the deletion set comes from OrphanEnvBranches, which excludes
-// it by the same IsDiverged() predicate the hotfix preflight and status
-// consistency classify on. The returned slice lists the branches deleted, in
-// input order, and is nil when nothing was orphaned. On the first delete error
-// the heal stops and returns that error with a nil healed slice.
-func HealOrphanEnvBranches(branches []string, state map[string]*config.EnvState, remote string, del func(remote, branch string) error) ([]string, error) {
+// Only orphans in component's own namespace are deleted. A branch backing a
+// diverged environment, and every sibling component's branch, is never touched,
+// because the deletion set comes from OrphanEnvBranches, which excludes them by
+// the component filter and the same IsDiverged() predicate the hotfix preflight
+// and status consistency classify on. The returned slice lists the branches
+// deleted, in input order, and is nil when nothing was orphaned. On the first
+// delete error the heal stops and returns that error with a nil healed slice.
+func HealOrphanEnvBranches(component string, branches []string, state map[string]*config.EnvState, remote string, del func(remote, branch string) error) ([]string, error) {
 	var healed []string
-	for _, branch := range OrphanEnvBranches(branches, state) {
+	for _, branch := range OrphanEnvBranches(component, branches, state) {
 		if err := del(remote, branch); err != nil {
 			return nil, fmt.Errorf("deleting orphan branch %s on %s: %w", branch, remote, err)
 		}

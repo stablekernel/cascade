@@ -105,11 +105,14 @@ func runConsistency(opts consistencyOptions) error {
 		return fmt.Errorf("listing branches: %w", err)
 	}
 
-	orphans := hotfix.OrphanEnvBranches(branches, file.State)
+	// The default (empty) component covers the single-component manifest, whose
+	// env-keyed state is exactly the default component's env subtree. Per-component
+	// consistency scoping arrives with the component-aware finalize path.
+	orphans := hotfix.OrphanEnvBranches("", branches, file.State)
 
 	var healed []string
 	if opts.fix {
-		healed, err = hotfix.HealOrphanEnvBranches(branches, file.State, opts.remote, opts.deleter)
+		healed, err = hotfix.HealOrphanEnvBranches("", branches, file.State, opts.remote, opts.deleter)
 		if err != nil {
 			return fmt.Errorf("healing orphan branches: %w", err)
 		}
