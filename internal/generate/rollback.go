@@ -21,14 +21,67 @@ import (
 type RollbackGenerator struct {
 	config  *config.TrunkConfig
 	baseDir string
+
+	// componentName, when non-empty, names the component this rollback workflow is
+	// scoped to. It suffixes the workflow name, threads --component through the
+	// rollback CLI steps so preflight and finalize read and record state under this
+	// component's subtree, and switches the concurrency group into a
+	// rollback-namespaced per-component lane. It is set only via
+	// WithRollbackComponentName by the per-component fan-out.
+	componentName string
+
+	// globalConcurrencyGroup is the manifest-global concurrency.group as declared
+	// on the shared top-level config, captured before per-component resolution
+	// overwrites it. ResolveComponent rewrites the resolved config's group to the
+	// orchestrate lane, so component mode cannot honor it bare; instead this
+	// captured value is composed with the rollback-namespaced per-component group
+	// so a shared global group scopes per component rather than collapsing every
+	// component's rollback onto one lane. It is set only via
+	// WithRollbackGlobalConcurrencyGroup.
+	globalConcurrencyGroup string
+}
+
+// RollbackGeneratorOption configures a RollbackGenerator. Options are additive so
+// new per-component capability never breaks the positional constructor signature.
+type RollbackGeneratorOption func(*RollbackGenerator)
+
+// WithRollbackComponentName scopes the generated rollback workflow to a declared
+// component so a multi-component manifest emits one distinct
+// cascade-rollback-<name>.yaml per component. It sets the emitted workflow name,
+// threads --component through the rollback CLI steps, and selects the
+// rollback-namespaced per-component concurrency group.
+func WithRollbackComponentName(name string) RollbackGeneratorOption {
+	return func(g *RollbackGenerator) { g.componentName = name }
+}
+
+// WithRollbackGlobalConcurrencyGroup records the manifest-global concurrency.group
+// before per-component resolution overwrites it, so component-mode writeConcurrency
+// can compose it with the component identity instead of honoring the resolved
+// (orchestrate-namespaced) group or collapsing every component onto one bare lane.
+func WithRollbackGlobalConcurrencyGroup(group string) RollbackGeneratorOption {
+	return func(g *RollbackGenerator) { g.globalConcurrencyGroup = group }
 }
 
 // NewRollbackGenerator creates a rollback-workflow generator bound to the given
 // trunk config and repository base directory.
-func NewRollbackGenerator(cfg *config.TrunkConfig, baseDir string) *RollbackGenerator {
-	return &RollbackGenerator{
+func NewRollbackGenerator(cfg *config.TrunkConfig, baseDir string, opts ...RollbackGeneratorOption) *RollbackGenerator {
+	g := &RollbackGenerator{
 		config:  cfg,
 		baseDir: baseDir,
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
+}
+
+// writeComponentFlag emits a "--component <name> \" continuation line at the given
+// indent when this rollback workflow is scoped to a component, so the rollback CLI
+// reads and records state under that component's subtree. The single-component
+// workflow emits nothing, keeping its CLI invocations byte-identical.
+func (g *RollbackGenerator) writeComponentFlag(sb *strings.Builder, indent string) {
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "%s--component %s \\\n", indent, g.componentName)
 	}
 }
 
@@ -126,7 +179,11 @@ func (g *RollbackGenerator) writeHeader(sb *strings.Builder) {
 }
 
 func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
-	sb.WriteString("name: Rollback\n\n")
+	if g.componentName != "" {
+		fmt.Fprintf(sb, "name: Rollback (%s)\n\n", g.componentName)
+	} else {
+		sb.WriteString("name: Rollback\n\n")
+	}
 	sb.WriteString("on:\n")
 	sb.WriteString("  workflow_dispatch:\n")
 	sb.WriteString("    inputs:\n")
@@ -211,6 +268,28 @@ func (g *RollbackGenerator) writeRepositoryDispatchTrigger(sb *strings.Builder) 
 // overrides it, mirroring the promote generator.
 func (g *RollbackGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
+
+	// Component mode: emit a rollback-namespaced per-component group and ignore the
+	// resolved config's group entirely. ResolveComponent rewrites the resolved
+	// group to the orchestrate lane, so honoring it would serialize this
+	// component's rollback against its own orchestrate run (a repo-global lane
+	// collision); a manifest-global concurrency.group emitted bare would collapse
+	// every component's rollback onto one literal lane. The composed key always
+	// carries the component identity, so two components never share a lane, and it
+	// never collides with the orchestrate or promote namespaces. cancel-in-progress
+	// stays false: rollback mutates durable env state, so queueing is safer than
+	// cancelling a mid-flight run.
+	if g.componentName != "" {
+		group := config.RollbackConcurrencyGroup(g.componentName)
+		if g.globalConcurrencyGroup != "" {
+			group = fmt.Sprintf("%s-%s", g.globalConcurrencyGroup, group)
+		}
+		fmt.Fprintf(sb, "  group: %s\n", group)
+		sb.WriteString("  cancel-in-progress: false\n")
+		sb.WriteString("\n")
+		return
+	}
+
 	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
 		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
 	} else {
@@ -270,6 +349,7 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade rollback preflight \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	g.writeComponentFlag(sb, "            ")
 	sb.WriteString("            --env \"$ENVIRONMENT\" \\\n")
 	sb.WriteString("            --to \"$TARGET\" \\\n")
 	sb.WriteString("            --deployable \"$DEPLOYABLE\" \\\n")
@@ -394,6 +474,7 @@ func (g *RollbackGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade rollback finalize \\\n")
 	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
+	g.writeComponentFlag(sb, "            ")
 	sb.WriteString("            --env \"${{ needs.preflight.outputs.target_env }}\" \\\n")
 	sb.WriteString("            --to \"${{ needs.preflight.outputs.target_sha }}\" \\\n")
 	sb.WriteString("            --deployable \"$DEPLOYABLE\" \\\n")

@@ -308,43 +308,52 @@ func runGenerateWorkflow(opts generateOptions) error {
 		}
 	}
 
-	// Generate the hotfix workflow when 2+ environments are configured (Q1).
-	hotfixGen := NewHotfixGenerator(cfg, baseDir)
-	if hotfixGen.Enabled() {
-		content, err := hotfixGen.Generate()
+	// Generate the hotfix workflow when two or more environments are configured. A
+	// manifest declaring components: fans out to one cascade-hotfix-<name>.yaml per
+	// component; otherwise a single cascade-hotfix.yaml, byte-identical to today.
+	hfTargets, err := hotfixTargets(cfg, baseDir)
+	if err != nil {
+		return fmt.Errorf("planning hotfix workflow: %w", err)
+	}
+	for _, t := range hfTargets {
+		content, err := t.Gen.Generate()
 		if err != nil {
-			return fmt.Errorf("generating hotfix workflow: %w", err)
+			return fmt.Errorf("generating hotfix workflow %s: %w", t.Path, err)
 		}
-		outPath := ".github/workflows/cascade-hotfix.yaml"
 		if opts.dryRun {
-			fmt.Println("\n=== cascade-hotfix.yaml ===")
+			fmt.Printf("\n=== %s ===\n", filepath.Base(t.Path))
 			fmt.Print(content)
 		} else {
-			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+			if err := writeWorkflow(t.Path, content, opts.force); err != nil {
 				return err
 			}
-			generatedFiles = append(generatedFiles, outPath)
-			fmt.Printf("Generated workflow: %s\n", outPath)
+			generatedFiles = append(generatedFiles, t.Path)
+			fmt.Printf("Generated workflow: %s\n", t.Path)
 		}
 	}
 
-	// Generate the rollback workflow when at least one environment is configured.
-	rollbackGen := NewRollbackGenerator(cfg, baseDir)
-	if rollbackGen.Enabled() {
-		content, err := rollbackGen.Generate()
+	// Generate the rollback workflow when two or more environments are configured.
+	// A manifest declaring components: fans out to one cascade-rollback-<name>.yaml
+	// per component; otherwise a single cascade-rollback.yaml, byte-identical to
+	// today.
+	rbTargets, err := rollbackTargets(cfg, baseDir)
+	if err != nil {
+		return fmt.Errorf("planning rollback workflow: %w", err)
+	}
+	for _, t := range rbTargets {
+		content, err := t.Gen.Generate()
 		if err != nil {
-			return fmt.Errorf("generating rollback workflow: %w", err)
+			return fmt.Errorf("generating rollback workflow %s: %w", t.Path, err)
 		}
-		outPath := ".github/workflows/cascade-rollback.yaml"
 		if opts.dryRun {
-			fmt.Println("\n=== cascade-rollback.yaml ===")
+			fmt.Printf("\n=== %s ===\n", filepath.Base(t.Path))
 			fmt.Print(content)
 		} else {
-			if err := writeWorkflow(outPath, content, opts.force); err != nil {
+			if err := writeWorkflow(t.Path, content, opts.force); err != nil {
 				return err
 			}
-			generatedFiles = append(generatedFiles, outPath)
-			fmt.Printf("Generated workflow: %s\n", outPath)
+			generatedFiles = append(generatedFiles, t.Path)
+			fmt.Printf("Generated workflow: %s\n", t.Path)
 		}
 	}
 

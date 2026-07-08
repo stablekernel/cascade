@@ -168,22 +168,34 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-merge-queue.yaml", Content: content})
 	}
 
-	// 6. hotfix -> .github/workflows/cascade-hotfix.yaml when enabled.
-	if gen := NewHotfixGenerator(cfg, baseDir); gen.Enabled() {
-		content, err = gen.Generate()
+	// 6. hotfix -> cascade-hotfix.yaml when enabled, or one path-scoped
+	//    cascade-hotfix-<name>.yaml per component when the manifest declares
+	//    components:.
+	hfTargets, err := hotfixTargets(cfg, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range hfTargets {
+		content, err = t.Gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating hotfix workflow: %w", err)
 		}
-		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-hotfix.yaml", Content: content})
+		planned = append(planned, PlannedFile{Path: t.Path, Content: content})
 	}
 
-	// 7. rollback -> .github/workflows/cascade-rollback.yaml when enabled.
-	if gen := NewRollbackGenerator(cfg, baseDir); gen.Enabled() {
-		content, err = gen.Generate()
+	// 7. rollback -> cascade-rollback.yaml when enabled, or one path-scoped
+	//    cascade-rollback-<name>.yaml per component when the manifest declares
+	//    components:.
+	rbTargets, err := rollbackTargets(cfg, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range rbTargets {
+		content, err = t.Gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating rollback workflow: %w", err)
 		}
-		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-rollback.yaml", Content: content})
+		planned = append(planned, PlannedFile{Path: t.Path, Content: content})
 	}
 
 	// 8. pr-preview -> .github/workflows/cascade-pr-preview.yaml when enabled.
@@ -347,6 +359,129 @@ func promoteTargets(cfg *config.TrunkConfig, baseDir, outputPath string, state m
 // the base output path: the base directory plus promote-<name>.yaml.
 func promoteComponentWorkflowPath(outputPath, name string) string {
 	return filepath.Join(filepath.Dir(outputPath), fmt.Sprintf("promote-%s.yaml", name))
+}
+
+// hotfixWorkflowPath and rollbackWorkflowPath are the canonical single-component
+// output locations for the hotfix and rollback workflows. The generate command
+// and Plan both anchor their fan-out on these so the two never disagree.
+const (
+	hotfixWorkflowPath   = ".github/workflows/cascade-hotfix.yaml"
+	rollbackWorkflowPath = ".github/workflows/cascade-rollback.yaml"
+)
+
+// hotfixTarget pairs a rendered hotfix workflow's target path with the generator
+// that produces it, mirroring promoteTarget so the generate command and Plan share
+// one fan-out decision for the hotfix surface.
+type hotfixTarget struct {
+	Path string
+	Gen  *HotfixGenerator
+}
+
+// hotfixTargets returns the hotfix workflow target(s) the manifest emits,
+// mirroring promoteTargets. A manifest with no components: block yields exactly
+// one target at the canonical path (byte-identical to the pre-component
+// generator), or no targets when the single-component hotfix is not enabled
+// (fewer than two environments). A manifest that declares components yields one
+// cascade-hotfix-<name>.yaml per component whose resolved config enables the
+// hotfix workflow (sorted by name) and no repo-wide hotfix file, each generated
+// from the resolved per-component config and scoped with --component so plan and
+// finalize record state under that component's subtree. Both the generate command
+// and Plan call this, so they can never disagree on the hotfix file set.
+func hotfixTargets(cfg *config.TrunkConfig, baseDir string) ([]hotfixTarget, error) {
+	if !cfg.HasComponents() {
+		gen := NewHotfixGenerator(cfg, baseDir)
+		if !gen.Enabled() {
+			return nil, nil
+		}
+		return []hotfixTarget{{Path: hotfixWorkflowPath, Gen: gen}}, nil
+	}
+
+	names := make([]string, 0, len(cfg.Components))
+	for name := range cfg.Components {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	targets := make([]hotfixTarget, 0, len(names))
+	for _, name := range names {
+		resolved, err := cfg.ResolveComponent(name)
+		if err != nil {
+			return nil, fmt.Errorf("resolving component %q: %w", name, err)
+		}
+		gen := NewHotfixGenerator(resolved.Config, baseDir, WithHotfixComponentName(name))
+		if !gen.Enabled() {
+			continue
+		}
+		targets = append(targets, hotfixTarget{Path: hotfixComponentWorkflowPath(name), Gen: gen})
+	}
+	return targets, nil
+}
+
+// hotfixComponentWorkflowPath derives a per-component hotfix workflow path from the
+// canonical output path: the base directory plus cascade-hotfix-<name>.yaml.
+func hotfixComponentWorkflowPath(name string) string {
+	return filepath.Join(filepath.Dir(hotfixWorkflowPath), fmt.Sprintf("cascade-hotfix-%s.yaml", name))
+}
+
+// rollbackTarget pairs a rendered rollback workflow's target path with the
+// generator that produces it, mirroring promoteTarget.
+type rollbackTarget struct {
+	Path string
+	Gen  *RollbackGenerator
+}
+
+// rollbackTargets returns the rollback workflow target(s) the manifest emits,
+// mirroring promoteTargets. A manifest with no components: block yields exactly
+// one target at the canonical path (byte-identical to the pre-component
+// generator), or no targets when the single-component rollback is not enabled. A
+// manifest that declares components yields one cascade-rollback-<name>.yaml per
+// component whose resolved config enables the rollback workflow (sorted by name)
+// and no repo-wide rollback file, each generated from the resolved per-component
+// config and scoped with --component. The manifest-global concurrency.group is
+// captured before resolution so the per-component rollback group can compose it
+// instead of collapsing onto it. Both the generate command and Plan call this, so
+// they can never disagree on the rollback file set.
+func rollbackTargets(cfg *config.TrunkConfig, baseDir string) ([]rollbackTarget, error) {
+	if !cfg.HasComponents() {
+		gen := NewRollbackGenerator(cfg, baseDir)
+		if !gen.Enabled() {
+			return nil, nil
+		}
+		return []rollbackTarget{{Path: rollbackWorkflowPath, Gen: gen}}, nil
+	}
+
+	var globalGroup string
+	if cfg.Concurrency != nil {
+		globalGroup = cfg.Concurrency.Group
+	}
+
+	names := make([]string, 0, len(cfg.Components))
+	for name := range cfg.Components {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	targets := make([]rollbackTarget, 0, len(names))
+	for _, name := range names {
+		resolved, err := cfg.ResolveComponent(name)
+		if err != nil {
+			return nil, fmt.Errorf("resolving component %q: %w", name, err)
+		}
+		gen := NewRollbackGenerator(resolved.Config, baseDir,
+			WithRollbackComponentName(name),
+			WithRollbackGlobalConcurrencyGroup(globalGroup))
+		if !gen.Enabled() {
+			continue
+		}
+		targets = append(targets, rollbackTarget{Path: rollbackComponentWorkflowPath(name), Gen: gen})
+	}
+	return targets, nil
+}
+
+// rollbackComponentWorkflowPath derives a per-component rollback workflow path from
+// the canonical output path: the base directory plus cascade-rollback-<name>.yaml.
+func rollbackComponentWorkflowPath(name string) string {
+	return filepath.Join(filepath.Dir(rollbackWorkflowPath), fmt.Sprintf("cascade-rollback-%s.yaml", name))
 }
 
 // ResolveBaseDir reports the repo root the generate command resolves workflow
