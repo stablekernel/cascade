@@ -84,6 +84,18 @@ A primary repo coordinates deploys in other repos through the external lane: whe
 
 Every field above is documented in full in the [manifest reference](/cascade/reference/manifest/), and every generated file's internal anatomy is in [generated workflows reference](/cascade/reference/generated-workflows/).
 
+## One repo, several components
+
+Everything above describes one unit moving through one chain. If a repository holds
+more than one thing to ship, such as an API and a web frontend, a `components:`
+block gives each its own version line, environment ladder, and promotion, hotfix,
+and rollback history, all from the same trunk and the same manifest. Each component
+runs the model on this page in its own isolated namespace.
+
+Components are additive: a manifest with no `components:` block is a single implicit
+component that spans the whole repository and behaves exactly as described here. See
+[Split a repo into components](/cascade/guides/components/) for the walkthrough.
+
 ---
 
 **Prerequisite:** [Why Cascade](/cascade/start/why-cascade/).

@@ -761,6 +761,85 @@ The check validates cascade's own configuration only, requests `contents: read` 
 
 The lane is read-only. This block owns the lane behavior; the raw `merge_group` trigger is expressible separately under `extra_triggers.merge_group`, and the two are intentionally distinct.
 
+## components
+
+A `components:` block declares several independently versioned components in one
+repository. When it is present, the top-level config becomes the shared default
+set every component inherits, and each entry overrides those defaults where it
+sets a value. A manifest with no `components:` block is one implicit component
+spanning the whole repository and generates byte-identical output, so components
+are strictly additive. See [Split a repo into
+components](/cascade/guides/components/) for the operator walkthrough.
+
+```yaml
+ci:
+  config:
+    environments: [dev, staging, prod]
+    components:
+      api:
+        path: api/
+        tag_prefix: api-
+        builds:
+          - name: api
+            workflow: .github/workflows/build-api.yaml
+            triggers: ["api/**"]
+      web:
+        path: web/
+        tag_prefix: web-
+        environments: [dev, prod]
+```
+
+`components` is a map keyed by component name. Each name must be identifier-safe
+(letters, digits, and underscores). Each entry accepts two required fields plus
+any inheritable field it overrides.
+
+| Field | Status | Type | Required | Description |
+|-------|--------|------|----------|-------------|
+| `path` | emitted (behavior) | string | Yes | The subtree this component owns. Relative, with no `..` segments. Scopes the component's version commit walk and its default push-paths trigger. |
+| `tag_prefix` | emitted (behavior) | string | Yes | The component's version-tag prefix. Must be distinct from every other component's prefix so their tag namespaces never collide. |
+
+### Inheritable overrides
+
+A component inherits every shared top-level field and may override the ones below
+where an override is meaningful. An unset field takes the shared top-level value.
+
+`tag_grammar`, `environments`, `release_trigger`, `allow_breaking_changes`,
+`validate`, `builds`, `deploys`, `publish`, `external`, `notify`, `release`,
+`changelog`, `runs_on`, `job_timeout_minutes`, `dispatch_inputs`,
+`extra_triggers`, `pr_preview`, `validate_check`, `rollback`, `deployments`,
+`environment_config`, `triggers`, `release_token`, and `release_token_app`.
+
+`concurrency.cancel_in_progress` is inheritable, but `concurrency.group` is not:
+the orchestrate, promote, and rollback groups are derived per component so runs
+never serialize across components. Setting a component `concurrency.group` is a
+parse error.
+
+### Repository-wide fields
+
+These fields are set once at the top level and cannot be overridden per component,
+because they describe the repository or the single writer of shared state rather
+than one component: `schema_version`, `trunk_branch`, `cli_version`,
+`cli_version_sha`, `state_token`, `state_token_app`, `manifest_file`,
+`manifest_key`, `action_folder`, `git`, `drift_check`, `reconcile`, `pin_mode`,
+`action_pins`, `telemetry`, and `merge_queue`. Setting any of them under a
+component is a parse error, as is any unknown field.
+
+### Validation rules
+
+`cascade parse-config` rejects a `components:` block that breaks isolation:
+
+- Each component must set `path` (relative, no `..`) and `tag_prefix`.
+- Component names must be identifier-safe.
+- Two components must not share a `tag_prefix`; a collision is a parse error, not
+  a silently shared namespace.
+- A top-level `concurrency.group` must not be set when components are declared,
+  and a component may not set its own `concurrency.group`.
+- A repository-wide field or an unknown field set under a component is rejected.
+
+Per-component versioning, state (`state.components.<name>.<env>`), and tag
+namespaces are covered in [Per-component
+versioning](/cascade/reference/versioning/#per-component-versioning).
+
 ## Shared policy and pattern reference
 
 ### Policy fields
@@ -834,7 +913,7 @@ Reserved fields parse but have zero generator consumption today. They reserve a 
 | `release.version_overrides` | `release` | Reserved pointer to version-intent override files. |
 | `deploy_target` | `deploys[]` | Reserved shape for the GitOps mirror pattern. |
 
-The full reserved-shapes catalog, including per-component versioning and the canary sub-fields (`steps`, `analysis`, `percent`, `bake_time`, `promote_callback`, `rollback_callback`), lives in [Versioning and schema](/cascade/reference/versioning/).
+The full reserved-shapes catalog, including the canary sub-fields (`steps`, `analysis`, `percent`, `bake_time`, `promote_callback`, `rollback_callback`), lives in [Versioning and schema](/cascade/reference/versioning/).
 
 ## State section (managed)
 
