@@ -48,7 +48,7 @@ func TestNewCommand(t *testing.T) {
 func TestNewPlanCommand_Flags(t *testing.T) {
 	cmd := newPlanCommand()
 	assert.Equal(t, "plan", cmd.Name())
-	for _, name := range []string{"config", "key", "commit", "commits", "target-env", "actor", "remote", "repo", "dry-run", "json", "gha-output"} {
+	for _, name := range []string{"config", "key", "commit", "commits", "target-env", "actor", "remote", "repo", "component", "dry-run", "json", "gha-output"} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "plan flag %q should exist", name)
 	}
 }

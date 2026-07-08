@@ -143,6 +143,7 @@ func newPlanCommand() *cobra.Command {
 		actor       string
 		remote      string
 		repo        string
+		component   string
 		dryRun      bool
 		jsonOutput  bool
 		ghaOutput   bool
@@ -169,6 +170,7 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 			opts := []Option{
 				WithDryRun(dryRun),
 				WithRemote(remote),
+				WithPlanComponent(component),
 			}
 			if repo != "" {
 				opts = append(opts, WithPRChecker(newRestPRChecker(repo)))
@@ -230,6 +232,7 @@ With --dry-run nothing is mutated (the env branch is planned but not created).`,
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the plan (default: $GITHUB_ACTOR)")
 	cmd.Flags().StringVar(&remote, "remote", defaultRemote, "Git remote env branches live on")
 	cmd.Flags().StringVar(&repo, "repo", "", "owner/repo for single-flight PR lookup via the REST API (default: skip the check)")
+	cmd.Flags().StringVar(&component, "component", "", "Declared component to scope the hotfix to (default: single-component manifest)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Compute the plan without mutating anything")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output the plan as JSON")
 	cmd.Flags().BoolVar(&ghaOutput, "gha-output", false, "Write outputs to $GITHUB_OUTPUT for workflow consumption")

@@ -86,6 +86,32 @@ func (g *HotfixGenerator) writeComponentFlag(sb *strings.Builder, indent string)
 	}
 }
 
+// envBranchPrefix returns the env-integration-branch name prefix this hotfix
+// workflow operates under, mirroring hotfix.EnvBranchName(component, ""):
+// single-component yields "env/" (byte-identical to the historical flat form),
+// a component yields "env/<component>/" so each component's integration branches
+// occupy a disjoint namespace that agrees with the component-aware plan and
+// finalize CLI paths. The apply lane appends the ${env} loop variable to form
+// the branch, and the context job recovers TARGET_ENV by stripping this prefix
+// from the merged resolution PR's base ref.
+//
+// The literal must stay in sync with hotfix.EnvBranchName in
+// internal/hotfix/lifecycle.go, the same cross-package convention the hotfix
+// label constants above follow.
+func (g *HotfixGenerator) envBranchPrefix() string {
+	if g.componentName != "" {
+		return "env/" + g.componentName + "/"
+	}
+	return "env/"
+}
+
+// envBranchRef returns the shell expression naming the env integration branch
+// for the apply lane's ${env} loop variable: env/${env} single-component
+// (byte-identical), env/<component>/${env} for a component.
+func (g *HotfixGenerator) envBranchRef() string {
+	return g.envBranchPrefix() + "${env}"
+}
+
 // getStateTokenRef returns the token expression used to merge the clean-path
 // resolution PR. It mirrors the release and promote generators: users configure
 // the full expression via the state_token config option, and it defaults to the
@@ -402,11 +428,11 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("        continue-on-error: true\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          for env in $(echo \"$ENV_SEQUENCE\" | tr ',' '\\n'); do\n")
-	sb.WriteString("            PROT_PATH=\"repos/${{ github.repository }}/branches/env%2F${env}/protection\"\n")
+	fmt.Fprintf(sb, "            PROT_PATH=\"repos/${{ github.repository }}/branches/%s${env}/protection\"\n", strings.ReplaceAll(g.envBranchPrefix(), "/", "%2F"))
 	sb.WriteString("            PROT=$(gh api \"$PROT_PATH\" 2>/dev/null || echo '')\n")
 	sb.WriteString("            CHECKS=$(echo \"$PROT\" | jq -r '.required_status_checks.contexts[]? // empty' 2>/dev/null || echo '')\n")
 	sb.WriteString("            if [ -z \"$PROT\" ] || [ -z \"$CHECKS\" ]; then\n")
-	sb.WriteString("              echo \"::warning::Branch env/${env} has no required status checks; hotfix auto-merge will NOT be gated by required checks.\"\n")
+	fmt.Fprintf(sb, "              echo \"::warning::Branch %s has no required status checks; hotfix auto-merge will NOT be gated by required checks.\"\n", g.envBranchRef())
 	sb.WriteString("              echo \"::warning::Configure protection: gh api \\\"$PROT_PATH\\\" -X PUT -f required_status_checks.strict=true -F required_status_checks.contexts[]=hotfix-check\"\n")
 	sb.WriteString("            fi\n")
 	sb.WriteString("          done\n")
@@ -449,7 +475,7 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	// A no-op env (all requested commits already present) has an empty commit
 	// list; skip it and continue the chain to the next env.
 	sb.WriteString("            if [ -z \"$COMMITS\" ]; then\n")
-	sb.WriteString("              echo \"::notice::env/${env}: all commits already present, skipping\"\n")
+	fmt.Fprintf(sb, "              echo \"::notice::%s: all commits already present, skipping\"\n", g.envBranchRef())
 	sb.WriteString("              continue\n")
 	sb.WriteString("            fi\n")
 	sb.WriteString("            FIRST_COMMIT=$(echo \"$COMMITS\" | cut -d',' -f1)\n")
@@ -458,9 +484,9 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	// Materialize env/<env> at the planner's validated base if origin lacks it,
 	// so the resolution PR has a base branch; the plan enforces tip == BASE when
 	// the branch already exists, so this is a no-op create in that case.
-	sb.WriteString("            if ! git rev-parse --verify --quiet \"refs/remotes/origin/env/${env}\" >/dev/null; then\n")
-	sb.WriteString("              git push origin \"${BASE}:refs/heads/env/${env}\"\n")
-	sb.WriteString("              git fetch origin \"+refs/heads/env/${env}:refs/remotes/origin/env/${env}\"\n")
+	fmt.Fprintf(sb, "            if ! git rev-parse --verify --quiet \"refs/remotes/origin/%s\" >/dev/null; then\n", g.envBranchRef())
+	fmt.Fprintf(sb, "              git push origin \"${BASE}:refs/heads/%s\"\n", g.envBranchRef())
+	fmt.Fprintf(sb, "              git fetch origin \"+refs/heads/%s:refs/remotes/origin/%s\"\n", g.envBranchRef(), g.envBranchRef())
 	sb.WriteString("            fi\n")
 	sb.WriteString("            git switch -c \"$BRANCH\" \"$BASE\"\n")
 	// The PR-body trailers carry the full comma-joined set of applied trunk
@@ -484,7 +510,7 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("            if $CLEAN; then\n")
 	sb.WriteString("              git push origin \"$BRANCH\"\n")
 	sb.WriteString("              gh pr create \\\n")
-	sb.WriteString("                --base \"env/${env}\" \\\n")
+	fmt.Fprintf(sb, "                --base \"%s\" \\\n", g.envBranchRef())
 	sb.WriteString("                --head \"$BRANCH\" \\\n")
 	fmt.Fprintf(sb, "                --label %s \\\n", hotfixLabel)
 	sb.WriteString("                --title \"hotfix(${env}): cherry-pick ${SHORT_SHA}\" \\\n")
@@ -518,11 +544,11 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	// just-merged tip.
 	sb.WriteString("              git fetch origin '+refs/heads/env/*:refs/remotes/origin/env/*' --tags\n")
 	sb.WriteString("            else\n")
-	sb.WriteString("              echo \"::warning::Cherry-pick conflicted on env/${env}; opening resolution PR and halting chain\"\n")
+	fmt.Fprintf(sb, "              echo \"::warning::Cherry-pick conflicted on %s; opening resolution PR and halting chain\"\n", g.envBranchRef())
 	sb.WriteString("              git push origin \"$BRANCH\"\n")
 	sb.WriteString("              CONFLICT_BODY=$(printf '%s\\n\\nConflicting files:\\n%s\\n\\nThis resolves %s.\\n\\nEnvironments still pending: %s.\\n\\nAfter merge, re-engage the hotfix workflow targeting %s.\\n\\nResolve locally:\\n  git fetch && git switch %s\\n  # resolve conflicts, then\\n  git push --force-with-lease\\n' \"$BODY\" \"$CONFLICTS\" \"$env\" \"$REMAINING\" \"$HOTFIX_TARGET_ENV\" \"$BRANCH\")\n")
 	sb.WriteString("              gh pr create \\\n")
-	sb.WriteString("                --base \"env/${env}\" \\\n")
+	fmt.Fprintf(sb, "                --base \"%s\" \\\n", g.envBranchRef())
 	sb.WriteString("                --head \"$BRANCH\" \\\n")
 	fmt.Fprintf(sb, "                --label %s \\\n", hotfixConflictLabel)
 	sb.WriteString("                --title \"hotfix(${env}): cherry-pick $(echo \"$CONFLICT_COMMIT\" | cut -c1-8) (conflicts)\" \\\n")
@@ -592,7 +618,7 @@ func (g *HotfixGenerator) writeContextJob(sb *strings.Builder) {
 	sb.WriteString("          BASE_REF: ${{ github.event.pull_request.base.ref }}\n")
 	sb.WriteString("          PR_BODY: ${{ github.event.pull_request.body }}\n")
 	sb.WriteString("        run: |\n")
-	sb.WriteString("          TARGET_ENV=\"${BASE_REF#env/}\"\n")
+	fmt.Fprintf(sb, "          TARGET_ENV=\"${BASE_REF#%s}\"\n", g.envBranchPrefix())
 	// Recover the full comma-joined set of trunk fix commits and the trunk base
 	// anchor from the trailers the apply job stamped into the resolution PR body.
 	// The Source trailer carries every applied commit, so keeping the whole value
