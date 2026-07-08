@@ -67,6 +67,9 @@ func runFinalize() error {
 	// hotfix tags, and drafts. Without GitHub context the no-op default is kept,
 	// so non-diverged promotions and unit-test runs are unaffected.
 	var finalizeOpts []FinalizeOption
+	if componentName != "" {
+		finalizeOpts = append(finalizeOpts, WithComponent(componentName))
+	}
 	if commitPush {
 		if cleaner := newFinalizeCleaner(); cleaner != nil {
 			finalizeOpts = append(finalizeOpts, WithLifecycleCleaner(cleaner))

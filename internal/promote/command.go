@@ -7,11 +7,12 @@ import (
 
 // Shared flags across subcommands
 var (
-	configPath string
-	dryRun     bool
-	jsonOutput bool
-	ghaOutput  bool
-	actor      string
+	configPath    string
+	dryRun        bool
+	jsonOutput    bool
+	ghaOutput     bool
+	actor         string
+	componentName string
 )
 
 // NewCommand creates the promote parent command with subcommands.
@@ -41,6 +42,7 @@ The preflight and finalize subcommands are designed for GitHub Actions workflows
 	cmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output result as JSON")
 	cmd.PersistentFlags().BoolVar(&ghaOutput, "gha-output", false, "Write to $GITHUB_OUTPUT")
 	cmd.PersistentFlags().StringVar(&actor, "actor", "", "Actor performing action (default: from GITHUB_ACTOR)")
+	cmd.PersistentFlags().StringVar(&componentName, "component", "", "Declared component to scope promotion state to (default: single-component)")
 
 	// Add subcommands
 	cmd.AddCommand(newPreflightCommand())

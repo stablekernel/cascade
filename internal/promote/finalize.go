@@ -33,6 +33,20 @@ type Finalizer struct {
 	actor           string
 	overrideSHA     string // non-empty when an auto-committing callback advanced HEAD
 
+	// component, when non-empty, names the declared component this finalization is
+	// scoped to. It is set only via WithComponent by a per-component generated
+	// promote workflow; an empty value selects the single-component path,
+	// byte-identical to today. When set, promoted state is serialized under
+	// state.components.<component>.<env> (and latest_release.components.<component>)
+	// through config.WriteScopedState, whose node-patch preserves every sibling
+	// component verbatim under the concurrent-finalize retry loop.
+	component string
+	// contentsClient overrides the GitHub Contents client used by writeStateViaAPI.
+	// It is nil in production (the default gh-CLI client is constructed on demand)
+	// and set only by tests via withContentsClient to drive the optimistic-lock
+	// retry against a fake that simulates a concurrent finalizer's 409.
+	contentsClient statewrite.ContentsClient
+
 	// cleaner performs the divergence-end side effects (delete env branch, hotfix
 	// tags, drafts) when a promotion rejoins a diverged env to trunk. The default
 	// is a no-op so non-diverged promotions are unaffected.
@@ -339,7 +353,7 @@ func (f *Finalizer) WriteConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to read config: %w", err)
 	}
-	data, err := config.WriteManifestState(current, key, f.cicdFile.State, f.cicdFile.LatestRelease)
+	data, err := f.serializeState(current, key)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -347,6 +361,60 @@ func (f *Finalizer) WriteConfig() error {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 	return nil
+}
+
+// serializeState rewrites current with this finalizer's owned state. In the
+// single-component form (component == "") it reconciles the whole flat state node
+// via WriteManifestState, byte-identical to the historical behavior. In the
+// component-scoped form it node-patches only state.components.<component>.<env>
+// (and latest_release.components.<component>) through WriteScopedState, so a
+// sibling component present in current survives verbatim.
+func (f *Finalizer) serializeState(current []byte, key string) ([]byte, error) {
+	if f.component != "" {
+		return config.WriteScopedState(current, key, f.componentStateWrites()...)
+	}
+	return config.WriteManifestState(current, key, f.cicdFile.State, f.cicdFile.LatestRelease)
+}
+
+// componentStateWrites builds the component-scoped writes this finalizer owns
+// from its already-mutated in-memory state: one state directive per promoted env
+// addressing state.components.<component>.<env>, plus a latest_release directive
+// addressing latest_release.components.<component> on a publish. It is
+// re-appliable: CommitWithRetry invokes it again against re-fetched trunk bytes
+// on a 409, and each call deterministically re-derives the same owned leaves, so
+// a concurrent sibling component's subtree is never rebuilt or dropped.
+//
+// The global "release"/"prerelease" markers that updateState maintains in the
+// flat in-memory map are intentionally NOT emitted here: whether those markers
+// become per-component or stay global is a release-pipeline decision, so this
+// scopes the component write to the env ladder plus
+// latest_release.components.<component>.
+func (f *Finalizer) componentStateWrites() []config.StateWrite {
+	if f.promotionResult == nil {
+		return nil
+	}
+	writes := make([]config.StateWrite, 0, len(f.promotionResult.Promotions))
+	for _, promo := range f.promotionResult.Promotions {
+		// A promoted env is always populated in State by updateState. Guard against
+		// a nil state so an unexpected miss never becomes an accidental node delete
+		// (a nil State on a StateWrite means delete).
+		st := f.cicdFile.State[promo.Environment]
+		if st == nil {
+			continue
+		}
+		writes = append(writes, config.StateWrite{
+			Component: f.component,
+			Env:       promo.Environment,
+			State:     st,
+		})
+	}
+	if f.promotionResult.ReleaseAction == "publish" {
+		writes = append(writes, config.StateWrite{
+			Component: f.component,
+			Latest:    f.cicdFile.LatestRelease,
+		})
+	}
+	return writes
 }
 
 // CommitAndPush persists the manifest changes back to the trunk branch.
@@ -417,26 +485,54 @@ func (f *Finalizer) writeStateViaAPI(message string) error {
 	if f.cicdFile.Config != nil && f.cicdFile.Config.ManifestKey != "" {
 		key = f.cicdFile.Config.ManifestKey
 	}
+	client := f.contentsClient
+	if client == nil {
+		client = statewrite.NewGHClient()
+	}
 	return statewrite.CommitWithRetry(statewrite.Options{
-		Client:  statewrite.NewGHClient(),
+		Client:  client,
 		Repo:    repo,
 		Path:    f.configPath,
 		Ref:     branch,
 		Message: message,
 		Author:  gitIdentity(f.cicdFile.Config),
-		Mutate: func(current []byte) ([]byte, error) {
-			into, err := config.ParseManifestBytes(current, key)
-			if err != nil {
-				return nil, fmt.Errorf("parsing current manifest: %w", err)
-			}
-			f.overlayOwnedState(into)
-			data, err := config.WriteManifestState(current, key, into.State, into.LatestRelease)
+		Mutate:  f.stateMutation(key),
+	})
+}
+
+// stateMutation returns the re-appliable CommitWithRetry closure that merges this
+// finalizer's owned state onto whatever trunk bytes the retry loop fetches.
+//
+// Single-component form: re-parse the fetched bytes into a full manifest, overlay
+// only the owned envs (overlayOwnedState), and reconcile the whole flat state node
+// via WriteManifestState. Sibling envs survive because the re-read carries them
+// into the typed map.
+//
+// Component-scoped form: node-patch only state.components.<component>.<env> (and
+// latest_release.components.<component>) via WriteScopedState. It never
+// deserializes or rebuilds a sibling component, so on a 409 the loser re-reads the
+// winner's committed sibling subtree and re-applies only its own leaf, leaving the
+// sibling verbatim, including keys this binary does not model.
+func (f *Finalizer) stateMutation(key string) statewrite.Mutate {
+	return func(current []byte) ([]byte, error) {
+		if f.component != "" {
+			data, err := config.WriteScopedState(current, key, f.componentStateWrites()...)
 			if err != nil {
 				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
 			}
 			return data, nil
-		},
-	})
+		}
+		into, err := config.ParseManifestBytes(current, key)
+		if err != nil {
+			return nil, fmt.Errorf("parsing current manifest: %w", err)
+		}
+		f.overlayOwnedState(into)
+		data, err := config.WriteManifestState(current, key, into.State, into.LatestRelease)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+		}
+		return data, nil
+	}
 }
 
 // overlayOwnedState copies the state this finalizer owns from its in-memory,
