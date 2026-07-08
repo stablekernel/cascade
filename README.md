@@ -128,6 +128,7 @@ Opt-in companions (drift-check, PR-preview, pin-reconcile) are emitted only when
 | Artifact passing | The `artifact_id` output from a build is stored in state and forwarded to deploys and publish. |
 | GitHub Environments | The `environments` command emits per-environment config (`required_reviewers`, `wait_timer`, `branch_policy`) for you to apply. |
 | Schema enforcement | Every CLI invocation checks `schema_version` and rejects incompatible manifests with a clear error. |
+| Multi-component repos | A `components:` block versions, promotes, hotfixes, and rolls back several independent components from one manifest, each in its own tag and state namespace. Omit it for a single-component repo and output is byte-identical. |
 
 A manifest that puts a few of these to work: `web` builds only after `api`, and each build and deploy runs only when its `triggers` match the changed paths.
 

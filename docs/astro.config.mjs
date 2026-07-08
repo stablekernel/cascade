@@ -100,6 +100,7 @@ export default defineConfig({
             { label: 'Roll back an environment',   link: '/guides/rollback/' },
             { label: 'Simulate and verify',        link: '/guides/simulate-and-verify/' },
             { label: 'Coordinate multiple repos',  link: '/guides/multi-repo/' },
+            { label: 'Split a repo into components', link: '/guides/components/' },
             { label: 'Visualize the pipeline',     link: '/guides/visualize/' },
         ]},
         { label: 'Reference', items: [

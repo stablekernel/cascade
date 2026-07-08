@@ -57,16 +57,6 @@ A CLI supports the current schema version and the immediately preceding one (N-1
 
 These fields parse and pass structural validation today but carry no generator, state, or runtime behavior. A manifest declaring them produces byte-identical generated workflows, so adopting the shape now is safe. Attaching behavior to any of them later is additive and does not bump `schema_version`.
 
-### Per-component versioning
-
-Three slots are frozen at `schema_version` 1 for independently versioned components that share one manifest:
-
-- A top-level `components` map, keyed by component name, where each entry carries an optional `path` (the subtree the component owns) and `tag_prefix` (its version-tag prefix).
-- A matching `state.<env>.components` map that records the per-component version and SHA for an environment.
-- A `latest_release.components` map that records the per-component published release.
-
-Component names must be job-ID-safe (letters, digits, hyphens, underscores), and a configured `path` must be relative with no `..` segments.
-
 ### Progressive rollout: canary and blue/green
 
 A deploy may declare a `rollout:` block with a `type` of `default`, `rolling`, `canary`, or `blue_green`. Two fields on `rollout:` are live (see [Progressive rollout](#progressive-rollout) below); the type-specific sub-blocks are reserved.
@@ -117,6 +107,39 @@ Only the addressing pointer is frozen in v1. The override-file format and the fo
 Two fields on `rollout:` are live today, not reserved. `rollout.fail_fast` and `rollout.max_parallel` (deploys and publish only) are emitted directly into the deploy job's `strategy:` block: `fail_fast` sets `strategy.fail-fast` (defaulting to `false` when unset), and `max_parallel`, when greater than zero, sets `strategy.max-parallel`. A manifest that sets either field changes the generated workflow.
 
 Only the `type`, `canary`, and `blue_green` sub-blocks remain reserved and inert, as described above. Setting `type: canary` or populating a `canary:`/`blue_green:` sub-block parses and validates but has no effect on generated output today.
+
+## Per-component versioning
+
+A manifest may declare several independently versioned components under a
+top-level `components:` map (see [Split a repo into
+components](/cascade/guides/components/) for the walkthrough and the [`components`
+field reference](/cascade/reference/manifest/#components) for the field surface).
+Each component versions in its own namespace, and the single-component default is
+unchanged.
+
+**Path-scoped version computation.** Cascade scopes each component's commit walk
+to its `path`, so only changes under that subtree bump that component's version.
+Two components version on separate lines from the same trunk.
+
+**Strict per-component tag namespace.** Each component reads and emits tags under
+its own `tag_prefix`, parsed strictly. `svc-1.2.3` and `web-1.2.3` never
+cross-match, and a prefix that is a substring of another (such as `svc-` against
+`svc-beta-`) cannot collide. Release-candidate cleanup is scoped the same way, so
+publishing one component's release reaps only that component's prerelease tags. A
+component's resolved grammar still honors any inherited or overridden
+[`tag_grammar`](/cascade/reference/manifest/#tag_grammar); the per-component prefix
+is layered on top as a hard namespace boundary.
+
+**The implicit default stays permissive.** A repository with no `components:`
+block keeps the historical permissive prefix parsing (any alphabetic prefix on
+read), so its tags read exactly as before and its output stays byte-identical.
+
+**Per-component state.** Each component's per-environment record lives at
+`state.components.<name>.<env>` and carries the full environment state (version,
+SHA, deploy history, and the rollback ring). Per-component published releases are
+recorded under `latest_release.components.<name>`. Single-component state stays at
+the top-level `state.<env>` and `latest_release`, unchanged. Cascade manages both
+shapes; do not hand-edit them.
 
 ## Migrations
 
