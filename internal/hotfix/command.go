@@ -46,6 +46,7 @@ func newFinalizeCommand() *cobra.Command {
 		fixSHA      string
 		baseSHA     string
 		actor       string
+		component   string
 		dryRun      bool
 		deployFlags []string
 		buildFlags  []string
@@ -67,7 +68,7 @@ After the resolution PR merges and the build and deploy succeed, this command:
 The verb is idempotent on identical inputs: a rerun after the state already
 records the merge SHA is a no-op.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := []FinalizeOption{WithFinalizeDryRun(dryRun)}
+			opts := []FinalizeOption{WithFinalizeDryRun(dryRun), WithComponent(component)}
 
 			finalizer, err := NewFinalizer(FinalizerOptions{
 				ConfigPath:  configPath,
@@ -109,6 +110,7 @@ records the merge SHA is a no-op.`,
 	cmd.Flags().StringVar(&fixSHA, "fix-sha", "", "Trunk commit(s) the hotfix carries; comma-delimited for a multi-commit set (required)")
 	cmd.Flags().StringVar(&baseSHA, "base-sha", "", "Trunk anchor the integration branch diverged from (required)")
 	cmd.Flags().StringVar(&actor, "actor", "", "Actor recorded on the state (default: $GITHUB_ACTOR)")
+	cmd.Flags().StringVar(&component, "component", "", "Declared component to scope the hotfix to (default: single-component manifest)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate and compute without writing state, tags, or releases")
 	cmd.Flags().StringArrayVar(&deployFlags, "deploy-result", nil, "Deploy result as name=result (repeatable)")
 	cmd.Flags().StringArrayVar(&buildFlags, "build-result", nil, "Build result as name=result (repeatable)")
