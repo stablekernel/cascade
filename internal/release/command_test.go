@@ -1,6 +1,8 @@
 package release
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -135,5 +137,82 @@ func TestValidateManageReleaseFlags_OtherRequiredFields(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tt.errSubstr, err.Error())
 			}
 		})
+	}
+}
+
+// TestComponentReapOptions_NoComponentIsSingleComponentPath asserts that without
+// a declared component the reaper keeps its single-component behavior: no options
+// are threaded, so the resulting Manager carries no grammar (nil) and reaps
+// exactly as the historical permissive path did.
+func TestComponentReapOptions_NoComponentIsSingleComponentPath(t *testing.T) {
+	opts, err := componentReapOptions("", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts != nil {
+		t.Fatalf("expected no options for the single-component path, got %d", len(opts))
+	}
+
+	mgr := NewManager("owner/repo", "tok", opts...)
+	if mgr.grammar != nil {
+		t.Fatalf("expected nil grammar (legacy path), got %+v", *mgr.grammar)
+	}
+}
+
+// TestComponentReapOptions_ComponentRequiresConfig asserts a named component
+// without --config is a loud configuration error rather than silently falling
+// back to permissive reaping.
+func TestComponentReapOptions_ComponentRequiresConfig(t *testing.T) {
+	_, err := componentReapOptions("", "ci", "api")
+	if err == nil {
+		t.Fatal("expected an error when --component is set without --config")
+	}
+	if !strings.Contains(err.Error(), "--config is required") {
+		t.Fatalf("expected a --config-required error, got %q", err.Error())
+	}
+}
+
+// TestComponentReapOptions_ThreadsStrictComponentGrammar asserts that a declared
+// component's resolved grammar reaches the Manager: the option threads a strict
+// grammar carrying the component's prefix and custom pre-release token, so the
+// reaper is scoped to that component's namespace.
+func TestComponentReapOptions_ThreadsStrictComponentGrammar(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.yaml")
+	manifest := `ci:
+  config:
+    trunk_branch: main
+    environments: [dev, prod]
+    components:
+      api:
+        path: services/api
+        tag_prefix: api-
+        tag_grammar:
+          prerelease_token: beta
+`
+	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+		t.Fatalf("writing manifest: %v", err)
+	}
+
+	opts, err := componentReapOptions(path, "ci", "api")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(opts) != 1 {
+		t.Fatalf("expected exactly one option, got %d", len(opts))
+	}
+
+	mgr := NewManager("owner/repo", "tok", opts...)
+	if mgr.grammar == nil {
+		t.Fatal("expected a threaded component grammar, got nil")
+	}
+	if got := mgr.grammar.Prefix; got != "api-" {
+		t.Errorf("grammar prefix = %q, want api-", got)
+	}
+	if got := mgr.grammar.PreReleaseToken; got != "beta" {
+		t.Errorf("grammar pre-release token = %q, want beta", got)
+	}
+	if !mgr.grammar.StrictPrefix {
+		t.Error("expected StrictPrefix to be forced on for a declared component")
 	}
 }

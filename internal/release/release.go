@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stablekernel/cascade/internal/version"
 )
 
@@ -38,38 +39,71 @@ type Manager struct {
 	baseURL string
 	token   string
 	repo    string
+	// grammar, when set, is the resolved per-component tag grammar the RC-tag
+	// reaper parses tags through. It is nil for the single-component (default)
+	// path, which keeps the historical permissive matching so single-component
+	// reaping is behavior-identical to before component threading existed. A
+	// declared component supplies a strict-prefix grammar via WithTagGrammar so
+	// reaping stays exact to that component's tag namespace.
+	grammar *taggrammar.Spec
 	// sleepFn is called between retry attempts in findReleaseByTagOrSHA to give
 	// GitHub's release-list endpoint time to reflect a recently created draft.
 	// Defaults to time.Sleep; tests inject a no-op to keep test runs fast.
 	sleepFn func(time.Duration)
 }
 
+// Option configures a Manager at construction. Options follow the functional
+// options pattern so new per-component capability is additive and never a
+// breaking change to the constructor signature.
+type Option func(*Manager)
+
+// WithTagGrammar scopes the Manager's RC-tag reaper to a component's tag
+// namespace by parsing candidate tags through spec instead of the historical
+// permissive matcher. spec is expected to be a strict-prefix grammar (see
+// config.ResolvedComponent.TagGrammarSpec), so a component reaps only its own RC
+// tags and never a sibling component's. Omitting this option keeps the
+// single-component permissive behavior unchanged.
+func WithTagGrammar(spec taggrammar.Spec) Option {
+	return func(m *Manager) {
+		s := spec
+		m.grammar = &s
+	}
+}
+
 // NewManager creates a new release manager.
 // It respects GITHUB_API_URL for GitHub Enterprise or test environments.
-func NewManager(repo, token string) *Manager {
+func NewManager(repo, token string, opts ...Option) *Manager {
 	baseURL := "https://api.github.com"
 	if envURL := os.Getenv("GITHUB_API_URL"); envURL != "" {
 		baseURL = strings.TrimSuffix(envURL, "/")
 	}
-	return &Manager{
+	m := &Manager{
 		client:  &http.Client{},
 		baseURL: baseURL,
 		token:   token,
 		repo:    repo,
 		sleepFn: time.Sleep,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // NewManagerWithURL creates a release manager with a custom API URL.
 // Use this for testing or when GITHUB_API_URL isn't set.
-func NewManagerWithURL(repo, token, baseURL string) *Manager {
-	return &Manager{
+func NewManagerWithURL(repo, token, baseURL string, opts ...Option) *Manager {
+	m := &Manager{
 		client:  &http.Client{},
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		token:   token,
 		repo:    repo,
 		sleepFn: time.Sleep,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // isGitHubHost reports whether the API base URL points at GitHub (github.com or
@@ -235,9 +269,14 @@ func (m *Manager) deleteGitTag(tagName string) error {
 //
 // This is called after publishing a release to clean up the RC tags.
 func (m *Manager) cleanupRCTags(publishedTag string) error {
-	publishedPrefix, published, err := splitVersionPrefix(publishedTag)
+	// Build the predicate that decides which listed RC tags this publish
+	// supersedes. When a per-component grammar is threaded (WithTagGrammar) the
+	// predicate parses candidates through that strict grammar so reaping stays
+	// exact to the component's namespace; otherwise it reproduces the historical
+	// permissive matching byte for byte.
+	supersedes, err := m.supersededRCMatcher(publishedTag)
 	if err != nil {
-		return fmt.Errorf("parsing published version %q: %w", publishedTag, err)
+		return err
 	}
 
 	// List all tags in the repository
@@ -246,23 +285,8 @@ func (m *Manager) cleanupRCTags(publishedTag string) error {
 		return fmt.Errorf("listing tags: %w", err)
 	}
 
-	// Reap every RC tag whose base is <= the published version (same prefix).
 	for _, tag := range tags {
-		tagBase, _, ok := parseRCTag(tag)
-		if !ok {
-			continue // Not a plain RC tag (or a hotfix variant)
-		}
-		basePrefix, base, err := splitVersionPrefix(tagBase)
-		if err != nil {
-			continue // Unparseable base - leave it alone
-		}
-		// A different prefix names a separate release line; never compare across
-		// prefixes since version.Compare is prefix-agnostic.
-		if basePrefix != publishedPrefix {
-			continue
-		}
-		// Preserve bases strictly greater than the published version (future work).
-		if base.Compare(published) > 0 {
+		if !supersedes(tag) {
 			continue
 		}
 		fmt.Printf("Cleaning up RC tag: %s\n", tag)
@@ -273,6 +297,103 @@ func (m *Manager) cleanupRCTags(publishedTag string) error {
 	}
 
 	return nil
+}
+
+// supersededRCMatcher returns a predicate reporting whether a listed tag is a
+// plain RC tag in the published tag's namespace whose base version is at or below
+// it, and therefore superseded by the publish. When the Manager carries a
+// per-component grammar the match is strict to that component's prefix and
+// pre-release token; otherwise it is the historical permissive match. It errors
+// only when the published tag itself is not parseable under the active grammar,
+// so a misconfigured publish fails loudly rather than reaping nothing.
+func (m *Manager) supersededRCMatcher(publishedTag string) (func(tag string) bool, error) {
+	if m.grammar != nil {
+		return strictSupersededRCMatcher(*m.grammar, publishedTag)
+	}
+	return legacySupersededRCMatcher(publishedTag)
+}
+
+// legacySupersededRCMatcher reproduces the historical permissive reaper: it
+// splits the numeric core off any prefix, requires a string-equal prefix, and
+// reaps every plain RC tag whose base is at or below the published base. It is
+// the single-component path and is behavior-identical to the pre-threading code.
+func legacySupersededRCMatcher(publishedTag string) (func(string) bool, error) {
+	publishedPrefix, published, err := splitVersionPrefix(publishedTag)
+	if err != nil {
+		return nil, fmt.Errorf("parsing published version %q: %w", publishedTag, err)
+	}
+	return func(tag string) bool {
+		tagBase, _, ok := parseRCTag(tag)
+		if !ok {
+			return false // Not a plain RC tag (or a hotfix variant)
+		}
+		basePrefix, base, err := splitVersionPrefix(tagBase)
+		if err != nil {
+			return false // Unparseable base - leave it alone
+		}
+		// A different prefix names a separate release line; never compare across
+		// prefixes since version.Compare is prefix-agnostic.
+		if basePrefix != publishedPrefix {
+			return false
+		}
+		// Preserve bases strictly greater than the published version (future work).
+		return base.Compare(published) <= 0
+	}, nil
+}
+
+// strictSupersededRCMatcher parses candidates through a component's strict tag
+// grammar. Because the grammar's prefix is matched literally, a sibling
+// component's tags never parse and so are never enumerated, let alone reaped;
+// this closes the cross-namespace hazard the permissive string-prefix compare
+// left open. A custom pre-release token is matched because the token comes from
+// the grammar rather than a hardcoded "-rc.", so custom-grammar RC tags reap
+// instead of accumulating.
+func strictSupersededRCMatcher(spec taggrammar.Spec, publishedTag string) (func(string) bool, error) {
+	published, ok := spec.Parse(publishedTag)
+	if !ok {
+		return nil, fmt.Errorf("published version %q is not a valid tag under the component tag grammar", publishedTag)
+	}
+	return func(tag string) bool {
+		p, ok := spec.Parse(tag)
+		if !ok {
+			return false // Foreign namespace or foreign shape - not ours.
+		}
+		if p.PreRelease < 0 {
+			return false // A published base tag, not an RC tag.
+		}
+		if p.Hotfix >= 0 {
+			return false // Hotfix variant - reaped by the hotfix-rejoin path.
+		}
+		// Preserve bases strictly greater than the published version (future work).
+		return compareParsedBase(p, published) <= 0
+	}, nil
+}
+
+// compareParsedBase returns -1, 0, or +1 comparing only the numeric
+// major.minor.patch cores of a and b, ignoring pre-release and hotfix segments.
+// It mirrors the base comparison the permissive path performs via version.Compare
+// on two pre-release-stripped versions.
+func compareParsedBase(a, b taggrammar.Parsed) int {
+	if c := compareInt(a.Major, b.Major); c != 0 {
+		return c
+	}
+	if c := compareInt(a.Minor, b.Minor); c != 0 {
+		return c
+	}
+	return compareInt(a.Patch, b.Patch)
+}
+
+// compareInt returns -1, 0, or +1 reporting whether a is less than, equal to, or
+// greater than b.
+func compareInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // splitVersionPrefix splits a base version tag into its tag prefix and the
@@ -446,12 +567,51 @@ func parseRCTag(tag string) (baseVersion string, rcNumber int, ok bool) {
 	return matches[1], rc, true
 }
 
+// parseRCTag extracts the base version and RC number from an RC tag under the
+// Manager's active grammar. With a per-component grammar (WithTagGrammar) it
+// parses strictly so a sibling component's tags and a custom pre-release token
+// are handled; without one it falls back to the historical permissive
+// package-level parseRCTag, keeping single-component behavior identical.
+func (m *Manager) parseRCTag(tag string) (baseVersion string, rcNumber int, ok bool) {
+	if m.grammar != nil {
+		return parseRCTagStrict(*m.grammar, tag)
+	}
+	return parseRCTag(tag)
+}
+
+// isRCTag reports whether tag is a plain RC tag under the Manager's active
+// grammar.
+func (m *Manager) isRCTag(tag string) bool {
+	_, _, ok := m.parseRCTag(tag)
+	return ok
+}
+
+// parseRCTagStrict extracts the base version (including its literal prefix) and
+// RC number from tag under spec. A tag that is not a version tag, that carries no
+// pre-release, or that is a nested hotfix variant is rejected, matching the plain
+// RC-tag contract of the permissive parseRCTag. The base is rendered through the
+// grammar so it carries the component's prefix.
+func parseRCTagStrict(spec taggrammar.Spec, tag string) (baseVersion string, rcNumber int, ok bool) {
+	p, matched := spec.Parse(tag)
+	if !matched || p.PreRelease < 0 || p.Hotfix >= 0 {
+		return "", -1, false
+	}
+	base := spec.Format(taggrammar.Parsed{
+		Major:      p.Major,
+		Minor:      p.Minor,
+		Patch:      p.Patch,
+		PreRelease: -1,
+		Hotfix:     -1,
+	})
+	return base, p.PreRelease, true
+}
+
 // cleanupStaleDrafts deletes draft releases with the SAME base version but LOWER RC number.
 // For example, when creating v1.3.0-rc.3, it deletes v1.3.0-rc.0, v1.3.0-rc.1, v1.3.0-rc.2.
 // Drafts with different base versions (e.g., v1.2.0-rc.5) are preserved - they represent
 // work that has been promoted to a different environment.
 func (m *Manager) cleanupStaleDrafts(environment, currentTag string) error {
-	currentBase, currentRC, ok := parseRCTag(currentTag)
+	currentBase, currentRC, ok := m.parseRCTag(currentTag)
 	if !ok {
 		// Not an RC tag, nothing to clean up
 		return nil
@@ -470,12 +630,12 @@ func (m *Manager) cleanupStaleDrafts(environment, currentTag string) error {
 
 		// Get the tag to check - prefer tag_name, fallback to name
 		tagToCheck := release.TagName
-		if !isRCTag(tagToCheck) && isRCTag(release.Name) {
+		if !m.isRCTag(tagToCheck) && m.isRCTag(release.Name) {
 			tagToCheck = release.Name
 		}
 
 		// Parse the release tag
-		releaseBase, releaseRC, ok := parseRCTag(tagToCheck)
+		releaseBase, releaseRC, ok := m.parseRCTag(tagToCheck)
 		if !ok {
 			// Not an RC tag, skip
 			continue
