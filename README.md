@@ -89,7 +89,7 @@ A single `generate-workflow` run compiles the manifest into the orchestrate, pro
 ## Highlights
 
 - **Compiler model.** One manifest compiles into a full multi-environment pipeline of native GitHub Actions workflows.
-- **Monorepo-native multi-component.** Version, promote, hotfix, and roll back several independent components from one manifest, each in its own tag and state namespace. See [Components](https://stablekernel.github.io/cascade/guides/components/).
+- **Single or multi-component.** A single-component repo is the default; declare more to version, promote, hotfix, and roll back each independently from one manifest, each in its own tag and state namespace. Monorepos are native, not bolted on. See [Components](https://stablekernel.github.io/cascade/guides/components/).
 - **SHA-keyed promotion ladder.** Promote the exact bytes that passed the previous environment, never a per-stage rebuild. See [Promote a release](https://stablekernel.github.io/cascade/guides/promote/).
 - **Security by construction.** Every caller job carries a per-callback least-privilege `permissions:` block, including OIDC `id-token: write`. See [Callback contract](https://stablekernel.github.io/cascade/reference/callbacks/).
 - **Self-healing supply chain.** Third-party action pins live in one source of truth, and a reconcile companion adopts external pin bumps back into the manifest. See [Action pins](https://stablekernel.github.io/cascade/guides/action-pins/).
