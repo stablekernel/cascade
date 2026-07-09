@@ -26,6 +26,17 @@ type fakeContents struct {
 	// past the slice default to applying successfully.
 	putErrs []error
 
+	// getErrs is consumed one entry per GetContent call: a non-nil entry forces
+	// that GET to return an error (a transient re-fetch failure). Entries past the
+	// slice default to a successful read of the stored content.
+	getErrs []error
+	// getContents is consumed one entry per GetContent call: a non-nil entry
+	// overrides the bytes that GET returns (an empty string models a transient
+	// empty body). A nil entry, or an index past the slice, reads the stored
+	// content. It is a pointer slice so an empty override is distinguishable from
+	// "use the stored content".
+	getContents []*string
+
 	puts    int        // number of PutContent calls
 	gets    int        // number of GetContent calls
 	putSeen []string   // content bytes presented to each PutContent
@@ -34,9 +45,20 @@ type fakeContents struct {
 }
 
 func (f *fakeContents) GetContent(_, _, _ string) ([]byte, string, error) {
+	i := f.gets
 	f.gets++
+	if i < len(f.getErrs) && f.getErrs[i] != nil {
+		return nil, "", f.getErrs[i]
+	}
+	if i < len(f.getContents) && f.getContents[i] != nil {
+		return []byte(*f.getContents[i]), f.sha, nil
+	}
 	return []byte(f.content), f.sha, nil
 }
+
+// strptr is a tiny helper so a test can script an exact GET body (including the
+// empty string that models a transient empty re-fetch).
+func strptr(s string) *string { return &s }
 
 func (f *fakeContents) PutContent(_, _, _, sha, _ string, content []byte, author Identity) error {
 	f.puts++
@@ -398,6 +420,133 @@ func TestCommitWithRetry_RetriesOnBranchRefCAS409(t *testing.T) {
 	// Merge semantics: both writers' state survives the re-fetch and re-apply.
 	assert.Contains(t, fake.content, "ci.state.test: A", "the other writer's state must survive")
 	assert.Contains(t, fake.content, "ci.state.staging: B", "this caller's state must be written")
+}
+
+// parseGuardMutate mimics the real state mutations (WriteScopedState /
+// serializeState), which parse the current bytes and reject an empty manifest
+// with the config parser's "missing required 'ci' key" error. It is the exact
+// failure that a spurious empty re-fetch surfaced on real GitHub, so a test that
+// injects an empty re-fetch and asserts this error never escapes proves the
+// guard.
+func parseGuardMutate(line string) Mutate {
+	return func(current []byte) ([]byte, error) {
+		if len(bytes.TrimSpace(current)) == 0 {
+			return nil, fmt.Errorf("parsing current manifest: manifest file missing required 'ci' key at top level")
+		}
+		return appendLine(line)(current)
+	}
+}
+
+func TestCommitWithRetry_RetriesOnEmptyRefetchThenSucceeds(t *testing.T) {
+	// The first GET returns an empty body (a transient Contents-API read that the
+	// gh client turns into empty content with a nil error), the second returns the
+	// real manifest. An empty re-fetch must NOT be parsed as a manifest: doing so
+	// emits a spurious "missing 'ci' key". The writer must retry the fetch and
+	// ultimately succeed against the real bytes.
+	fake := &fakeContents{
+		content:     "ci.state.test: A\n",
+		sha:         "sha-0",
+		getContents: []*string{strptr("")}, // first GET is empty, then the stored content
+	}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state on staging",
+		Mutate:  parseGuardMutate("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, fake.gets, 2, "an empty re-fetch must be retried, not parsed")
+	assert.Equal(t, 1, fake.puts, "exactly one PUT lands once a valid manifest is fetched")
+	assert.Contains(t, fake.content, "ci.state.test: A", "the real manifest must survive")
+	assert.Contains(t, fake.content, "ci.state.staging: B", "this caller's state must be written")
+}
+
+func TestCommitWithRetry_RetriesOnErroredRefetchThenSucceeds(t *testing.T) {
+	// The first GET fails with a transient error; the second succeeds. A transient
+	// re-fetch error is retryable exactly like a 409: the writer must retry within
+	// the bounded loop rather than aborting the whole write on a blip.
+	fake := &fakeContents{
+		content: "ci.state.test: A\n",
+		sha:     "sha-0",
+		getErrs: []error{errors.New("HTTP 502: Bad Gateway")}, // first GET errors, then succeeds
+	}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state on staging",
+		Mutate:  parseGuardMutate("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, fake.gets, 2, "a transient GET error must be retried")
+	assert.Equal(t, 1, fake.puts, "exactly one PUT lands once the GET recovers")
+	assert.Contains(t, fake.content, "ci.state.staging: B", "this caller's state must be written")
+}
+
+func TestCommitWithRetry_EmptyRefetchExhaustsWithNonParseError(t *testing.T) {
+	// A re-fetch that stays empty for every attempt must exhaust the bound with a
+	// clear, non-corrupting error: it must NEVER surface the spurious "missing 'ci'
+	// key" parse error, and must NEVER PUT garbage derived from nothing.
+	empties := make([]*string, maxAttempts)
+	for i := range empties {
+		empties[i] = strptr("")
+	}
+	fake := &fakeContents{content: "ci.state.test: A\n", sha: "sha-0", getContents: empties}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state",
+		Mutate:  parseGuardMutate("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "missing required 'ci' key",
+		"an empty re-fetch must never surface the spurious parse error")
+	assert.Equal(t, 0, fake.puts, "the writer must never PUT bytes derived from an empty re-fetch")
+}
+
+func TestCommitWithRetry_InvalidNonEmptyManifestStillErrors(t *testing.T) {
+	// Guard against masking real invalidity: a genuinely invalid but NON-empty
+	// committed manifest must still error immediately (as today), not be retried
+	// away. The empty-guard must only catch an empty/absent re-fetch.
+	fake := &fakeContents{content: "this is not a manifest\n", sha: "sha-0"}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client: fake,
+		Repo:   "owner/name",
+		Path:   ".github/manifest.yaml",
+		Ref:    "main",
+		Message: "chore: record state",
+		Mutate: func(current []byte) ([]byte, error) {
+			// A non-empty but invalid manifest: the parser rejects it. This models
+			// WriteScopedState refusing a manifest whose ci key is absent.
+			return nil, fmt.Errorf("parsing current manifest: manifest file missing required 'ci' key at top level")
+		},
+		Sleep: noSleep(&slept),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required 'ci' key",
+		"a real invalid manifest must still surface the parse error, not be masked")
+	assert.Equal(t, 1, fake.gets, "a Mutate error on valid-length bytes must not be retried")
+	assert.Equal(t, 0, fake.puts, "no PUT on an invalid manifest")
 }
 
 func TestIsConflict(t *testing.T) {

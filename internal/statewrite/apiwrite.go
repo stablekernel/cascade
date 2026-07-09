@@ -203,7 +203,31 @@ func CommitWithRetry(opts Options) error {
 
 		current, sha, err := opts.Client.GetContent(opts.Repo, opts.Path, opts.Ref)
 		if err != nil {
-			return fmt.Errorf("reading current manifest for state write: %w", err)
+			// A re-fetch failure (a transient non-2xx or transport blip from the
+			// Contents-API GET) is retryable exactly like a 409: retry within the
+			// bounded loop rather than aborting the whole write on a blip. Crucially,
+			// a failed fetch must never be parsed as a manifest.
+			lastErr = fmt.Errorf("reading current manifest for state write: %w", err)
+			log.Info("cascade-state-write: refetch-error attempt=%d/%d", attempt, maxAttempts)
+			if attempt < maxAttempts {
+				sleep(backoffForAttempt(retryBaseBackoff, attempt-1))
+			}
+			continue
+		}
+		if len(strings.TrimSpace(string(current))) == 0 {
+			// An empty body from a successful-looking GET is a transient read, not a
+			// real manifest: the state-write path only ever targets an already
+			// committed manifest, and Mutate derives its bytes by parsing the current
+			// manifest, so it cannot produce anything valid from nothing. Parsing the
+			// empty content would surface a spurious "missing 'ci' key" and, worse,
+			// risk PUTting bytes derived from garbage. Treat it as a retryable
+			// re-fetch, never as content.
+			lastErr = fmt.Errorf("re-fetched current manifest for state write was empty")
+			log.Info("cascade-state-write: refetch-empty attempt=%d/%d", attempt, maxAttempts)
+			if attempt < maxAttempts {
+				sleep(backoffForAttempt(retryBaseBackoff, attempt-1))
+			}
+			continue
 		}
 
 		next, err := opts.Mutate(current)
@@ -230,7 +254,12 @@ func CommitWithRetry(opts Options) error {
 	}
 
 	log.Info("cascade-state-write: exhausted attempts=%d", maxAttempts)
-	return fmt.Errorf("state write via API still conflicting after %d attempts: %w", maxAttempts, lastErr)
+	if IsConflict(lastErr) {
+		return fmt.Errorf("state write via API still conflicting after %d attempts: %w", maxAttempts, lastErr)
+	}
+	// Exhaustion driven by a persistently empty or errored re-fetch: surface a
+	// distinct, non-corrupting error rather than a spurious parse failure.
+	return fmt.Errorf("state write via API could not obtain a valid current manifest after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // backoffForAttempt returns the delay before the retry following a zero-based
