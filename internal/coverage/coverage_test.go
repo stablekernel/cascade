@@ -6,37 +6,11 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 )
-
-// workflowPathLit matches a repo-relative generated-workflow path literal and
-// captures its basename. Anchoring the whole literal excludes component-templated
-// paths (orchestrate-%s.yaml), stub references, and doc examples, which are not
-// full .github/workflows/<name>.yaml literals.
-var workflowPathLit = regexp.MustCompile(`^\.github/workflows/([a-z0-9-]+)\.yaml$`)
-
-// coreWorkflowKinds are the three generated workflows whose names predate the
-// cascade- lane-naming convention. Every other generated workflow is cascade-
-// prefixed, so these plus that prefix classify a basename as a generated kind.
-var coreWorkflowKinds = map[string]struct{}{
-	"orchestrate":     {},
-	"promote":         {},
-	"external-update": {},
-}
-
-// isGeneratedKind reports whether a workflow basename is a cascade-generated
-// workflow kind rather than a user stub (build.yaml, deploy.yaml) or a doc
-// example.
-func isGeneratedKind(base string) bool {
-	if _, ok := coreWorkflowKinds[base]; ok {
-		return true
-	}
-	return strings.HasPrefix(base, "cascade-")
-}
 
 // emittedWorkflowKinds derives the set of generated workflow kinds directly from
 // the generator source. It parses every non-test Go file under internal/generate
@@ -72,12 +46,8 @@ func emittedWorkflowKinds(t *testing.T) map[string]struct{} {
 			if uerr != nil {
 				return true
 			}
-			m := workflowPathLit.FindStringSubmatch(val)
-			if m == nil {
-				return true
-			}
-			if isGeneratedKind(m[1]) {
-				kinds[m[1]] = struct{}{}
+			if kind, ok := workflowKindFromLiteral(val); ok {
+				kinds[kind] = struct{}{}
 			}
 			return true
 		})
@@ -160,6 +130,48 @@ func TestCoverage_RegistryReferencesResolve(t *testing.T) {
 			if _, ok := KnownFleetLanes[lane]; !ok {
 				t.Errorf("kind %q references fleet lane %q that is not a known lane", kind, lane)
 			}
+		}
+	}
+}
+
+// TestWorkflowKindFromLiteral_TemplatedOnlyKindIsCaptured drives the real
+// derivation function to prove a component-templated path literal with no bare
+// sibling still yields its bare kind, so a future workflow emitted only through a
+// format string cannot slip past the coverage denominator. It also proves no
+// printf verb ever survives into a derived kind.
+func TestWorkflowKindFromLiteral_TemplatedOnlyKindIsCaptured(t *testing.T) {
+	// A synthetic templated-only literal (no bare cascade-synthetic.yaml
+	// sibling) must resolve to its bare kind.
+	kind, ok := workflowKindFromLiteral(".github/workflows/cascade-synthetic-%s.yaml")
+	if !ok {
+		t.Fatalf("templated-only literal derived no kind; the gate would skip such a workflow")
+	}
+	if kind != "cascade-synthetic" {
+		t.Errorf("derived kind = %q, want %q", kind, "cascade-synthetic")
+	}
+	if strings.ContainsRune(kind, '%') {
+		t.Errorf("derived kind %q retains a printf verb; a phantom kind escaped", kind)
+	}
+
+	// Repeated trailing templated segments strip down to the same bare stem.
+	if k, ok := workflowKindFromLiteral(".github/workflows/cascade-synthetic-%d-%s.yaml"); !ok || k != "cascade-synthetic" {
+		t.Errorf("multi-segment literal derived (%q, %v), want (cascade-synthetic, true)", k, ok)
+	}
+
+	// The existing bare-literal path still resolves to its kind.
+	if k, ok := workflowKindFromLiteral(".github/workflows/cascade-rollback.yaml"); !ok || k != "cascade-rollback" {
+		t.Errorf("bare literal derived (%q, %v), want (cascade-rollback, true)", k, ok)
+	}
+
+	// A raw %-bearing name with no strippable trailing segment never becomes a
+	// kind, so no phantom cascade-...-%s kind is ever produced.
+	for _, bad := range []string{
+		".github/workflows/cascade-foo%s.yaml",
+		".github/workflows/cascade-%2s.yaml",
+		".github/workflows/%s.yaml",
+	} {
+		if k, ok := workflowKindFromLiteral(bad); ok {
+			t.Errorf("literal %q produced phantom kind %q, want no kind", bad, k)
 		}
 	}
 }

@@ -9,9 +9,68 @@ package coverage
 import (
 	_ "embed"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// workflowPathLit matches a repo-relative generated-workflow path literal and
+// captures its name segment. The name may carry printf verbs, as in a
+// component-templated cascade-<kind>-%s.yaml path, which workflowKindFromLiteral
+// strips to recover the bare kind. Anchoring the whole literal excludes stub
+// references and doc examples that are not full .github/workflows/<name>.yaml
+// literals.
+var workflowPathLit = regexp.MustCompile(`^\.github/workflows/([a-z0-9%-]+)\.yaml$`)
+
+// templatedSegment matches one trailing "-%<verb>" printf segment on a workflow
+// name, covering verbs such as "-%s", "-%v", and "-%02d".
+var templatedSegment = regexp.MustCompile(`-%[0-9]*[a-z]$`)
+
+// coreWorkflowKinds are the three generated workflows whose names predate the
+// cascade- lane-naming convention. Every other generated workflow is cascade-
+// prefixed, so these plus that prefix classify a name as a generated kind.
+var coreWorkflowKinds = map[string]struct{}{
+	"orchestrate":     {},
+	"promote":         {},
+	"external-update": {},
+}
+
+// isGeneratedKind reports whether a workflow name is a cascade-generated
+// workflow kind rather than a user stub (build.yaml, deploy.yaml) or a doc
+// example.
+func isGeneratedKind(name string) bool {
+	if _, ok := coreWorkflowKinds[name]; ok {
+		return true
+	}
+	return strings.HasPrefix(name, "cascade-")
+}
+
+// workflowKindFromLiteral extracts the cascade-generated workflow kind named by
+// a string literal shaped like ".github/workflows/<name>.yaml". It resolves both
+// bare literals (cascade-rollback.yaml -> cascade-rollback) and component-
+// templated literals whose name carries a trailing printf segment
+// (cascade-rollback-%s.yaml -> cascade-rollback), stripping any repeated
+// trailing "-%<verb>" segments to recover the bare stem. It returns ok only when
+// the stem classifies as a generated kind and no printf verb survives, so a raw
+// %-bearing string never becomes a phantom kind.
+func workflowKindFromLiteral(val string) (string, bool) {
+	m := workflowPathLit.FindStringSubmatch(val)
+	if m == nil {
+		return "", false
+	}
+	name := m[1]
+	for templatedSegment.MatchString(name) {
+		name = templatedSegment.ReplaceAllString(name, "")
+	}
+	if name == "" || strings.ContainsRune(name, '%') {
+		return "", false
+	}
+	if !isGeneratedKind(name) {
+		return "", false
+	}
+	return name, true
+}
 
 //go:embed registry.yaml
 var registryYAML []byte
