@@ -1,0 +1,79 @@
+# Workflow-kind coverage registry.
+#
+# Every workflow kind the generator emits is listed here with the executing
+# coverage that exercises it: the e2e scenarios under e2e/scenarios/, the e2e
+# harness tests under e2e/, and the fleet lanes that run it against real GitHub.
+# The companion test derives the full set of emitted kinds straight from the
+# generator source, so an emitted workflow that is not recorded here fails the
+# build. A referenced scenario, harness test, or fleet lane that does not exist
+# also fails the build, so an entry cannot drift away from what it points at.
+#
+# When you add a generated workflow kind, add its entry here pointing at the
+# scenario or fleet lane that runs it.
+kinds:
+  orchestrate:
+    summary: Trunk orchestration workflow that drafts, versions, builds, and deploys the first environment.
+    scenarios:
+      - 02-two-env-repo.yaml
+      - 03-three-env-repo.yaml
+
+  promote:
+    summary: Environment-to-environment promotion workflow for multi-environment repositories.
+    scenarios:
+      - 04-cascade-promotion.yaml
+      - 50-component-promote-fanout.yaml
+
+  external-update:
+    summary: Primary-repo coordination workflow that adopts deploy updates from external repositories.
+    scenarios:
+      - 21-cross-repo-callback.yaml
+      - multi-repo/external-update-deploys-component.yaml
+
+  cascade-validate:
+    summary: Opt-in pull_request check that validates the manifest before merge.
+    scenarios:
+      - 14-validate-check.yaml
+
+  cascade-merge-queue:
+    summary: Opt-in merge-queue validation lane fired by the merge_group trigger.
+    scenarios:
+      - 15-merge-queue.yaml
+
+  cascade-pr-preview:
+    summary: Opt-in pull_request preview-environment workflow.
+    scenarios:
+      - 16-pr-preview.yaml
+
+  cascade-drift-check:
+    summary: Opt-in pull_request lane that runs verify and fails the check on generated-workflow drift.
+    scenarios:
+      - 28-drift-check.yaml
+
+  cascade-drift-comment:
+    summary: Fork-safe workflow_run companion that posts the drift-check result as a sticky pull-request comment.
+    scenarios:
+      - 28-drift-check.yaml
+
+  cascade-hotfix:
+    summary: Hotfix workflow that applies a targeted fix to a promoted environment and rejoins the trunk line.
+    scenarios:
+      - hotfix/hotfix-multi-env-clean.yaml
+      - hotfix/hotfix-clean-apply.yaml
+      - 53-component-hotfix-rollback-fanout.yaml
+
+  cascade-rollback:
+    summary: Rollback workflow that re-points a promoted environment at a prior deployment.
+    scenarios:
+      - rollback/rollback-deploys-prior.yaml
+      - 32-rollback-repository-dispatch.yaml
+      - 53-component-hotfix-rollback-fanout.yaml
+
+  cascade-reconcile-check:
+    summary: Opt-in pull_request detector for an external governed-pin change to a generated workflow.
+    e2e_tests:
+      - pin_reconcile_test.go
+
+  cascade-reconcile-companion:
+    summary: workflow_run companion that adopts an external governed-pin change back into the manifest.
+    e2e_tests:
+      - pin_reconcile_test.go
