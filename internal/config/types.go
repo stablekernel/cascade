@@ -189,6 +189,14 @@ type TrunkConfig struct {
 	// one manifest (#176). v1 contract: parse + structural validation only; no
 	// generator, state, or runtime behavior is attached. Absent by default.
 	Components map[string]ComponentConfig `yaml:"components,omitempty" json:"components,omitempty"`
+	// SharedPaths lists repo-relative globs that every component depends on, such as
+	// a shared library or a root build file. Each entry is fanned into every
+	// component's effective path set at resolution, so a commit touching only a
+	// shared path fires each component's orchestrate workflow and counts toward each
+	// component's version bump. It is top-level sugar for repeating the same glob in
+	// every component's extra_paths, and applies only when a components block is
+	// present. Empty by default, so a manifest without it is unchanged.
+	SharedPaths []string `yaml:"shared_paths,omitempty" json:"shared_paths,omitempty"`
 }
 
 // ConcurrencyConfig overrides the default concurrency: block emitted on the
@@ -1232,6 +1240,12 @@ type ComponentConfig struct {
 	Deployments          *DeploymentsConfig           `yaml:"deployments,omitempty" json:"deployments,omitempty"`
 	EnvironmentConfig    map[string]EnvironmentConfig `yaml:"environment_config,omitempty" json:"environment_config,omitempty"`
 	Triggers             []string                     `yaml:"triggers,omitempty" json:"triggers,omitempty"`
+	// ExtraPaths lists repo-relative globs beyond this component's own path that both
+	// fire its orchestrate workflow and count toward its version bump, so a change to
+	// a shared dependency this component consumes bumps it correctly. It is additive
+	// to the component's path and to any top-level shared_paths; it never replaces the
+	// path-scoped default. Empty by default.
+	ExtraPaths           []string                     `yaml:"extra_paths,omitempty" json:"extra_paths,omitempty"`
 	ReleaseToken         string                       `yaml:"release_token,omitempty" json:"release_token,omitempty"`
 	ReleaseTokenApp      *AppTokenSource              `yaml:"release_token_app,omitempty" json:"release_token_app,omitempty"`
 

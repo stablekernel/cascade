@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/taggrammar"
@@ -89,9 +90,16 @@ func (c *TrunkConfig) GetComponentTagPrefix(name string) (string, error) {
 // per-component axis with no home on TrunkConfig, so it is carried here rather
 // than folded into Config; downstream stages scope version and state work to it.
 type ResolvedComponent struct {
-	Name   string
-	Path   string
-	Config *TrunkConfig
+	Name string
+	Path string
+	// ExtraPaths is the component's effective additional path set: its own
+	// extra_paths unioned with the manifest's top-level shared_paths, deduplicated
+	// and deterministically ordered. It is additive to Path. Version derivation and
+	// change detection scope to Path plus ExtraPaths so a shared-dependency change
+	// bumps and fires this component; it is empty when neither field is declared,
+	// keeping the single-component and no-shared-path shapes unchanged.
+	ExtraPaths []string
+	Config     *TrunkConfig
 }
 
 // ResolveComponent returns the effective configuration for the named component:
@@ -117,7 +125,8 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	if err != nil {
 		return nil, err
 	}
-	eff.Components = nil // an effective per-component config has no nested components
+	eff.Components = nil  // an effective per-component config has no nested components
+	eff.SharedPaths = nil // top-level sugar, expanded into per-component extra paths below
 
 	// Required per-component tag namespace.
 	eff.TagPrefix = comp.TagPrefix
@@ -218,7 +227,48 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 		eff.Triggers = []string{strings.TrimRight(comp.Path, "/") + "/**"}
 	}
 
-	return &ResolvedComponent{Name: name, Path: comp.Path, Config: eff}, nil
+	// Effective additional paths: the component's own extra_paths unioned with the
+	// manifest's top-level shared_paths, deduplicated and sorted for a single stable
+	// downstream representation. These fire the workflow (folded into the push
+	// filter below) and, threaded by the orchestrator, count toward the version bump
+	// and change detection. When both are empty this is nil and nothing changes.
+	extraPaths := mergePaths(comp.ExtraPaths, c.SharedPaths)
+
+	// Fold the extra paths into the push-paths filter so a shared-dependency change
+	// fires this component's orchestrate workflow. GetAllTriggers reads eff.Triggers,
+	// so appending here reaches the emitted on.push.paths block. Deduplicated so an
+	// extra path that already equals a trigger is not repeated.
+	if len(extraPaths) > 0 {
+		eff.Triggers = mergePaths(eff.Triggers, extraPaths)
+	}
+
+	return &ResolvedComponent{Name: name, Path: comp.Path, ExtraPaths: extraPaths, Config: eff}, nil
+}
+
+// mergePaths returns the union of the given path lists with duplicates removed and
+// a deterministic (sorted) order, or nil when the union is empty. It backs the
+// shared_paths fan-out and the push-filter fold so every downstream sink sees one
+// stable representation of a component's effective additional paths.
+func mergePaths(lists ...[]string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, list := range lists {
+		for _, p := range list {
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TagGrammarSpec returns the tag grammar a component reads and emits its versions
@@ -260,4 +310,5 @@ var globalOnlyComponentFields = map[string]struct{}{
 	"telemetry":       {},
 	"merge_queue":     {},
 	"components":      {},
+	"shared_paths":    {},
 }

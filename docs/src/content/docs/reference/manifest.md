@@ -800,6 +800,7 @@ any inheritable field it overrides.
 |-------|--------|------|----------|-------------|
 | `path` | emitted (behavior) | string | Yes | The subtree this component owns. Relative, with no `..` segments. Scopes the component's version commit walk and its default push-paths trigger. |
 | `tag_prefix` | emitted (behavior) | string | Yes | The component's version-tag prefix. Must be distinct from every other component's prefix so their tag namespaces never collide. |
+| `extra_paths` | emitted (behavior) | list | No | Additional globs beyond `path` that both fire this component's orchestrate workflow and count toward its version bump. Use it when a component depends on a shared library or a root build file outside its own subtree. See [Shared paths](#shared-paths). |
 
 ### Inheritable overrides
 
@@ -824,8 +825,48 @@ because they describe the repository or the single writer of shared state rather
 than one component: `schema_version`, `trunk_branch`, `cli_version`,
 `cli_version_sha`, `state_token`, `state_token_app`, `manifest_file`,
 `manifest_key`, `action_folder`, `git`, `drift_check`, `reconcile`, `pin_mode`,
-`action_pins`, `telemetry`, and `merge_queue`. Setting any of them under a
-component is a parse error, as is any unknown field.
+`action_pins`, `telemetry`, `merge_queue`, and `shared_paths`. Setting any of them
+under a component is a parse error, as is any unknown field.
+
+### Shared paths
+
+A change to a shared dependency, a common library, a proto package, or a root
+build file, lives outside every component's own `path`. Without help it fires no
+component and bumps no version, so a busy shared subtree ships nothing. Two fields
+close that gap by widening a component's effective path set beyond its `path`:
+
+- `extra_paths` on a component adds globs that only that component depends on.
+- `shared_paths` at the top level adds globs that every component depends on. It
+  is sugar for repeating the same glob in every component's `extra_paths`, and
+  applies only when a `components:` block is present.
+
+Each glob in a component's effective set (its `path`, its `extra_paths`, and the
+top-level `shared_paths`) reaches all three places a path matters: the emitted
+`push` paths filter that fires the workflow, the per-callback change detection that
+decides which builds and deploys run, and the commit range that computes the
+version bump. A breaking (`feat!:` or `fix!:`) commit under a shared path bumps the
+major of exactly the components that declare it, and leaves the rest untouched.
+
+```yaml
+ci:
+  config:
+    environments: [dev, prod]
+    shared_paths:
+      - libs/common/**   # every component depends on this
+    components:
+      api:
+        path: services/api
+        tag_prefix: api-
+        extra_paths:
+          - libs/proto/**  # only api depends on the proto package
+      web:
+        path: services/web
+        tag_prefix: web-
+```
+
+Here a commit under `libs/common/` bumps both `api` and `web`; a commit under
+`libs/proto/` bumps only `api`. When neither field is set the effective path set is
+just each component's `path`, byte-identical to before the fields existed.
 
 ### Validation rules
 
