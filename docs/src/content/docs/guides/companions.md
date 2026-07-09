@@ -18,7 +18,7 @@ ci:
       comment: true
 ```
 
-Enable it when the generated workflows are committed to the repository, which is the normal case, and you want a hard gate against silent hand-edits and forgotten regenerates. The check job is read-only (`contents: read`). Setting `comment: true` also emits a fork-safe companion that posts the result as a sticky pull request comment, so a contributor sees the drift inline rather than digging into a failed check. When you turn the comment on, consider [`pin_mode: sha`](/cascade/reference/manifest/#pin_mode) to remove floating-tag exposure on that one write-scoped job.
+Enable it when the generated workflows are committed to the repository, which is the normal case, and you want a hard gate against silent hand-edits and forgotten regenerates. The check job is read-only (`contents: read`). Setting `comment: true` also emits a fork-safe companion that posts the result as a sticky pull request comment, so a contributor sees the drift inline rather than digging into a failed check. When you turn the comment on, consider [`pin_mode: sha`](/cascade/reference/manifest/#action-pinning) to remove floating-tag exposure on that one write-scoped job.
 
 ## PR preview: see the plan before merge
 

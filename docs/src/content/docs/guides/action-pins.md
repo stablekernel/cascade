@@ -3,7 +3,7 @@ title: Pin and reconcile actions
 description: Pin every third-party action from one manifest source, choose tag or resolved-SHA mode, and adopt an external pin bump back into the manifest.
 ---
 
-Cascade owns the third-party action references inside the workflows it generates. Rather than let `uses:` pins scatter and drift across many files, every pin resolves from one place: the manifest and a single committed pin table. This guide covers setting the pin style, overriding an individual action, and adopting an outside pin bump (for example a Dependabot update) back into the manifest so generated output agrees again. For the field definitions, see the [`pin_mode`](/cascade/reference/manifest/#pin_mode) and [`action_pins`](/cascade/reference/manifest/#action_pins) reference.
+Cascade owns the third-party action references inside the workflows it generates. Rather than let `uses:` pins scatter and drift across many files, every pin resolves from one place: the manifest and a single committed pin table. This guide covers setting the pin style, overriding an individual action, and adopting an outside pin bump (for example a Dependabot update) back into the manifest so generated output agrees again. For the field definitions, see the [`pin_mode`](/cascade/reference/manifest/#action-pinning) and [`action_pins`](/cascade/reference/manifest/#action-pinning) reference.
 
 ## One source for every pin
 
@@ -76,4 +76,4 @@ ci:
 
 **Related:** [Governance companions](/cascade/guides/companions/) for the drift and preview checks that keep generated output honest on every pull request.
 
-**Reference:** [`pin_mode`](/cascade/reference/manifest/#pin_mode), [`action_pins`](/cascade/reference/manifest/#action_pins), and [`cascade reconcile`](/cascade/reference/cli/#reconcile).
+**Reference:** [`pin_mode`](/cascade/reference/manifest/#action-pinning), [`action_pins`](/cascade/reference/manifest/#action-pinning), and [`cascade reconcile`](/cascade/reference/cli/#reconcile).
