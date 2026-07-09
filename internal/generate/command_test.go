@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -434,7 +435,6 @@ func TestRunGenerateWorkflow_ExtraTriggers(t *testing.T) {
       workflow_run:
         workflows: ["Upstream CI"]
         types: [completed]
-      merge_group: {}
 `
 	configPath := filepath.Join(tmpDir, "manifest.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte(manifestContent), 0644))
@@ -470,11 +470,57 @@ func TestRunGenerateWorkflow_ExtraTriggers(t *testing.T) {
 	assert.Contains(t, content, "  workflow_run:\n", "workflow_run block must be emitted")
 	assert.Contains(t, content, "      - 'Upstream CI'\n", "workflow_run workflow name must appear")
 	assert.Contains(t, content, "      - completed\n", "workflow_run type must appear")
-	assert.Contains(t, content, "  merge_group:\n", "merge_group trigger must be emitted")
 
 	// Lane behavior must not be conflated with raw trigger emission.
 	assert.NotContains(t, content, "merge_queue:", "merge_queue lane config must not appear here")
 
 	// Must still be valid YAML structure with a jobs: section.
 	assert.Contains(t, content, "jobs:\n", "jobs section must be present")
+}
+
+// TestRunGenerateWorkflow_MergeGroupRejected asserts that extra_triggers.merge_group
+// is refused by generate-workflow: it would attach the raw merge_group event to the
+// side-effecting orchestrate workflow, so a speculative merge-queue build could
+// publish a real release. The error must point the operator at merge_queue.enabled,
+// the supported read-only lane.
+func TestRunGenerateWorkflow_MergeGroupRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifestContent := `ci:
+  config:
+    trunk_branch: main
+    environments: [dev]
+    builds:
+      - name: app
+        workflow: .github/workflows/build.yaml
+        triggers: ["src/**"]
+    extra_triggers:
+      merge_group: {}
+`
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(manifestContent), 0644))
+
+	// generate-workflow prints each validation error to stderr and returns a
+	// generic "config validation failed"; capture stderr to assert the operator
+	// sees the actionable merge_queue.enabled pointer.
+	origStderr := os.Stderr
+	rPipe, wPipe, pipeErr := os.Pipe()
+	require.NoError(t, pipeErr)
+	os.Stderr = wPipe
+
+	opts := defaultOpts(configPath, "")
+	opts.validateOnly = true
+	err := runGenerateWorkflow(opts)
+
+	require.NoError(t, wPipe.Close())
+	os.Stderr = origStderr
+	captured, readErr := io.ReadAll(rPipe)
+	require.NoError(t, readErr)
+	stderr := string(captured)
+
+	require.Error(t, err, "extra_triggers.merge_group on the orchestrate workflow must be rejected")
+	assert.Contains(t, err.Error(), "validation failed")
+	assert.Contains(t, stderr, "extra_triggers.merge_group")
+	assert.Contains(t, stderr, "merge_queue.enabled",
+		"the rejection must point the operator at the merge_queue.enabled read-only lane")
 }

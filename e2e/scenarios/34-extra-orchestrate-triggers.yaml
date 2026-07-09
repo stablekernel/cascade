@@ -4,11 +4,15 @@ description: |
   on: entry into the generated orchestrate workflow alongside the baseline
   push and workflow_dispatch triggers (#324).
 
-  Covers all four extra trigger kinds in one manifest:
+  Covers the legitimate extra trigger kinds in one manifest:
   - schedule with cron expressions
   - repository_dispatch with event types
   - workflow_run with workflows and types
-  - merge_group (bare presence)
+
+  merge_group is intentionally absent: it attaches the raw merge_group event to
+  the side-effecting orchestrate workflow, so cascade rejects it at validate and
+  points the operator at merge_queue.enabled instead. The rejection is covered by
+  the config validation unit tests and by generate-workflow's validate path.
 
   Generator-output verification only.
 
@@ -32,7 +36,6 @@ config:
         - Upstream CI
       types:
         - completed
-    merge_group: {}
 
 steps:
   - name: "Initial commit; assert every extra trigger is emitted in orchestrate.yaml"
@@ -61,5 +64,3 @@ steps:
             - "  workflow_run:\n"
             - "      - 'Upstream CI'\n"
             - "      - completed\n"
-            # merge_group extra trigger (bare presence).
-            - "  merge_group:\n"

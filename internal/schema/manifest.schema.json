@@ -680,7 +680,7 @@
         "merge_group": {
           "type": "object",
           "additionalProperties": false,
-          "description": "When present (even empty), wires the merge-queue trigger."
+          "description": "Not allowed: extra_triggers attaches to the side-effecting orchestrate workflow, which cuts release tags, publishes releases, and runs deploys while writing state, so a speculative merge-queue build could publish a real release from a candidate commit. cascade rejects this at validate. To gate pull requests inside a merge queue, set merge_queue.enabled, which emits a read-only validation lane."
         }
       }
     },

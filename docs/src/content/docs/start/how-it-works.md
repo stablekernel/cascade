@@ -36,7 +36,7 @@ Every push to your trunk branch runs the orchestrate workflow, which builds and 
 
 - **Manifest field:** `trunk_branch`, with the paths filter from `triggers` (or the per-callback triggers).
 - **Generated file:** `orchestrate.yaml`.
-- **Fires on:** `push` to `trunk_branch` (filtered by `triggers`) and `workflow_dispatch`. Optional `repository_dispatch`, `workflow_run`, and `merge_group` triggers come from `extra_triggers`.
+- **Fires on:** `push` to `trunk_branch` (filtered by `triggers`) and `workflow_dispatch`. Optional `repository_dispatch` and `workflow_run` triggers come from `extra_triggers`. To participate in a merge queue, set `merge_queue.enabled` for the read-only validation lane; attaching a raw `merge_group` trigger to this side-effecting workflow is rejected at validate.
 
 The `environments` list is the spine of the graph. Its order is the promotion order: a change moves from each environment to the next, one step at a time, carrying the same built artifact forward.
 

@@ -433,6 +433,7 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateActionFolder(cfg.ActionFolder)...)
 	errs = append(errs, validateReconcile(cfg.Reconcile)...)
 	errs = append(errs, validateTagGrammar(cfg)...)
+	errs = append(errs, validateExtraTriggers("extra_triggers", cfg.ExtraTriggers)...)
 
 	return errs
 }
@@ -581,6 +582,28 @@ func validateRepositoryDispatchTypes(prefix string, rd *RepositoryDispatchTrigge
 		}
 	}
 	return errs
+}
+
+// validateExtraTriggers checks an extra_triggers block. The only rule is on
+// merge_group: extra_triggers attaches its events to the orchestrate workflow,
+// which cuts release tags, publishes releases, and runs deploys while writing
+// state. A raw merge_group trigger there lets a speculative merge-queue build on
+// a candidate branch that may never land publish a real release and write real
+// state, because orchestrate derives its target branch from the run ref with no
+// gh-readonly-queue guard. The supported way to gate pull requests inside a
+// merge queue is the read-only merge_queue.enabled lane, so merge_group under
+// extra_triggers is rejected and the user is pointed at it. The prefix carries
+// the component scope (or the top-level path) for an actionable message.
+func validateExtraTriggers(prefix string, et *ExtraTriggers) []string {
+	if et == nil || et.MergeGroup == nil {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"%s.merge_group is not allowed: extra_triggers attaches to the orchestrate workflow, "+
+			"which cuts release tags, publishes releases, and runs deploys while writing state, so a "+
+			"speculative merge-queue build could publish a real release from a candidate commit. To gate "+
+			"pull requests inside a merge queue, set merge_queue.enabled, which emits a read-only validation lane.",
+		prefix)}
 }
 
 // validateRollback checks the opt-in rollback configuration. A nil block is the
@@ -822,6 +845,8 @@ func validateComponents(cfg *TrunkConfig) []string {
 			errs = append(errs, fmt.Sprintf(
 				"components.%s.concurrency.group cannot be overridden; the orchestrate group is derived per component", name))
 		}
+
+		errs = append(errs, validateExtraTriggers(fmt.Sprintf("components.%s.extra_triggers", name), comp.ExtraTriggers)...)
 
 		for _, key := range sortedKeys(toAnyKeyed(comp.Extra)) {
 			if _, global := globalOnlyComponentFields[key]; global {
