@@ -28,6 +28,9 @@ cd e2e && go test -v -timeout 20m ./...
 
 # Lint
 golangci-lint run ./...
+
+# Regenerate cascade's own workflows (cascade compiles its own)
+go run ./cmd/cascade generate-workflow --config .github/manifest.yaml -f
 ```
 
 ## Making a change
@@ -43,6 +46,16 @@ golangci-lint run ./...
 ## API design
 
 Public APIs follow a functional-options style: required inputs are positional and optional or extensible behavior arrives as a variadic `...Option` tail, so new capability is additive and never a breaking signature change. Cross-cutting concerns are small interfaces with no-op defaults rather than forced dependencies.
+
+## Project conventions
+
+cascade holds to a few conventions in its own codebase and in the workflows it generates:
+
+- **Additive manifest changes**: new fields are always optional with sensible defaults, so existing manifest files keep working across minor version bumps.
+- **Callback isolation**: generated workflows call your workflows via `workflow_call`, and cascade never reaches into your callback logic.
+- **Metadata courier**: cascade passes artifact identifiers and versions between stages. It never touches your container registry, package registry, or the systems you deploy to directly.
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), as noted under [Making a change](#making-a-change); the changelog and version bumps are derived from them.
 
 ## Governed action pins
 
