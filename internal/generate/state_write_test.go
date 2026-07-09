@@ -251,6 +251,54 @@ func TestStateWriteRetryCeilingAndConvergenceMarker(t *testing.T) {
 	assert.NotContains(t, content, "RANDOM % 5 + 2", "the fixed RANDOM sleep must be replaced by exponential jittered backoff")
 }
 
+// TestStateWriteEmitsSkipCIMarker asserts the generated state-write step stamps
+// the [skip ci] marker on the commit message in BOTH the git-push (act/gitea)
+// path and the Contents-API (real GitHub) path. The marker is load-bearing: it
+// suppresses the tag-push CI trigger on the state commit so the candidate release
+// is dispatched explicitly rather than racing a native tag-push trigger. A
+// regression dropping it would let a state commit re-trigger the pipeline. The
+// marker was previously asserted nowhere on the generator emission.
+func TestStateWriteEmitsSkipCIMarker(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+	content, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	// git-push path (act/gitea): the shell commit carries the marker.
+	assert.Contains(t, content, `git commit -m "chore: update state for $ENVIRONMENT [skip ci]"`,
+		"git-push state commit must carry [skip ci] to suppress the tag-push trigger")
+	// Contents-API path (real GitHub): the API message carries the marker.
+	assert.Contains(t, content, `message=chore: update state for $ENVIRONMENT [skip ci]`,
+		"Contents-API state commit must carry [skip ci] to suppress the tag-push trigger")
+}
+
+// TestHotfixCherryPickCommitOmitsSkipCIMarker is the negative half of the skip-ci
+// contract: a hotfix cherry-pick conflict commit is a real code commit that must
+// flow through CI, so it must NOT carry the [skip ci] state-suppression marker.
+// This guards against a blanket marker stamp leaking onto a non-state commit.
+func TestHotfixCherryPickCommitOmitsSkipCIMarker(t *testing.T) {
+	content, err := NewHotfixGenerator(threeEnvHotfixConfig(), "").Generate()
+	require.NoError(t, err)
+	require.Contains(t, content, "cherry-pick",
+		"hotfix workflow should emit the cherry-pick recovery commit")
+
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, "cherry-pick") && strings.Contains(line, "git commit -m") {
+			assert.NotContains(t, line, "[skip ci]",
+				"hotfix cherry-pick conflict commit must not carry [skip ci]; it is a real commit that must trigger CI")
+		}
+	}
+}
+
 // TestStateWriteNoEmDash guards the hard project rule that generated output
 // contains no em dashes.
 func TestStateWriteNoEmDash(t *testing.T) {

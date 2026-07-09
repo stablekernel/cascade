@@ -7,10 +7,72 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/stablekernel/cascade/internal/config"
 )
+
+// TestCommitAndPush_StateCommitCarriesSkipCIMarker drives the runtime reset commit
+// path and asserts the landed commit subject carries the [skip ci] marker. The
+// marker suppresses CI on the state commit; a regression dropping it would let
+// every reset re-trigger the pipeline. The runtime emission was previously
+// asserted nowhere.
+func TestCommitAndPush_StateCommitCarriesSkipCIMarker(t *testing.T) {
+	const relPath = "manifest.yaml"
+
+	origin := t.TempDir()
+	if out, err := exec.Command("git", "init", "--bare", "-b", "main", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+
+	const seed = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+  state:
+    dev:
+      sha: seedsha
+      version: v1.0.0
+`
+	bootstrap := t.TempDir()
+	gitInDir(t, "", "clone", origin, bootstrap)
+	configureGitIdentity(t, bootstrap)
+	require.NoError(t, os.WriteFile(filepath.Join(bootstrap, relPath), []byte(seed), 0o600))
+	gitInDir(t, bootstrap, "add", relPath)
+	gitInDir(t, bootstrap, "commit", "-m", "seed manifest")
+	gitInDir(t, bootstrap, "push", "origin", "HEAD:main")
+
+	resetRepo := t.TempDir()
+	gitInDir(t, "", "clone", origin, resetRepo)
+	configureGitIdentity(t, resetRepo)
+
+	configPath := filepath.Join(resetRepo, relPath)
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	r := &Resetter{
+		opts:        Options{RepoPath: resetRepo, ResetState: true, Push: true},
+		repoPath:    resetRepo,
+		repoOwner:   "test",
+		repoName:    "repo",
+		configPath:  configPath,
+		manifestKey: config.DefaultManifestKey,
+		cicdFile:    cicdFile,
+	}
+
+	// The reset clears state on disk, producing a diff for commitAndPush to land.
+	require.NoError(t, r.resetState())
+	require.NoError(t, r.commitAndPush())
+
+	out, err := exec.Command("git", "-C", origin, "log", "-1", "--format=%B", "main").Output()
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "[skip ci]",
+		"runtime reset state commit must carry [skip ci] to suppress CI on the state write")
+	assert.Equal(t, resetCommitMessage, strings.TrimSpace(string(out)),
+		"reset commit subject must be the skip-ci state message")
+}
 
 // gitInDir runs a git command scoped to dir (matching how the Resetter scopes
 // every git invocation to r.repoPath) and fails the test on error.
