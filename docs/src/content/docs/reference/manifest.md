@@ -153,8 +153,10 @@ release.
 grammar regardless of what a driven repository configures. `tag_grammar` reshapes the tags a
 driven repository's pipeline cuts, not cascade's own release process.
 
-See [Versioning and schema](/cascade/reference/versioning/) for the hotfix version grammar
-and the full reserved-shapes catalog.
+See [Tag grammar](/cascade/reference/versioning/#tag-grammar) for the concept in one place,
+including the default `-rc.N` behavior and how this block fits an existing tagging convention,
+and [Versioning and schema](/cascade/reference/versioning/) for the hotfix version grammar and
+the full reserved-shapes catalog.
 
 :::note[Tag grammar is not version selection]
 `tag_grammar` answers how a tag is shaped, not which versions are selected. Constraints or

@@ -45,21 +45,6 @@ Read [How Cascade works](https://stablekernel.github.io/cascade/start/how-it-wor
 
 ---
 
-## Is cascade for you?
-
-cascade earns its keep when you promote a built artifact through a chain of environments. It is a strong fit when most of these hold:
-
-- You deploy to **two or more environments** (say dev, test, prod) and want the *same* artifact promoted through them, never rebuilt per stage.
-- You are on **GitHub Actions** and would rather own your deploy logic in reusable workflows than run a separate CD platform.
-- You want **promotion gates, hotfix-to-any-environment, and rollback** without hand-wiring that state machine.
-- You can adopt **conventional commits** (cascade derives versions, changelogs, and the breaking-change gate from them).
-
-It is likely overkill for a single environment with a plain build-and-release on push. A repo with no deployments at all is a different case: the no-environment mode is a supported shape that still gives you conventional-commit versioning and releases.
-
-Already running a pipeline? See the [adoption guide](https://stablekernel.github.io/cascade/guides/adopt/) for migrating without a rewrite.
-
----
-
 ## Quickstart
 
 ```bash
@@ -97,40 +82,22 @@ The full walkthrough, including `cascade init` scaffolding and the four topology
 
 ## What cascade generates
 
-A `generate-workflow` run emits, unconditionally:
-
-| File | Purpose |
-|---|---|
-| `.github/workflows/orchestrate.yaml` | Runs on merge to trunk: validate, build, deploy to the first environment, finalize state. |
-| `.github/workflows/promote.yaml` | Manually dispatched: cascades the same built artifact through the rest of the environment chain. |
-| `.github/workflows/cascade-hotfix.yaml` | Patches a single environment out of band without touching the others. |
-| `.github/workflows/cascade-rollback.yaml` | Rolls an environment back to its previous deployed version. |
-| `.github/actions/manage-release/action.yaml` | Composite action that creates, updates, and publishes the GitHub release. |
-
-Opt-in companions (drift-check, PR-preview, pin-reconcile) are emitted only when their manifest block is present. See [Generated workflows](https://stablekernel.github.io/cascade/reference/generated-workflows/) for the full anatomy of each file.
+A single `generate-workflow` run compiles the manifest into the orchestrate, promote, hotfix, and rollback workflows plus the release composite action, with opt-in companions emitted only when their manifest block is present. See [Generated workflows](https://stablekernel.github.io/cascade/reference/generated-workflows/) for the full anatomy of each file.
 
 ---
 
-## Capabilities
+## Highlights
 
-| Capability | What it does |
-|---|---|
-| Change detection | Builds and deploys run only when their declared `triggers` match changed paths. |
-| Dependency ordering | `depends_on` and `optional_depends_on` chain builds and deploys in the right order. |
-| Matrix builds | Fan a single build out over a matrix of `dimensions`, with `max_parallel` and `fail_fast`. |
-| Concurrency control | Configurable group and `cancel_in_progress` on orchestrate, promote, hotfix, rollback, release, and external-update workflows. |
-| Extra triggers | Attach `schedule`, `repository_dispatch`, `workflow_run`, and `merge_group` events to orchestration. |
-| Least-privilege permissions | Per-callback `permissions:` blocks scope each caller job, including OIDC `id-token: write`. |
-| Action pinning | `pin_mode: tag` (default) or `sha`, with an embedded action-pins manifest and an opt-in reconcile companion. |
-| PR plan preview | An opt-in comment on each PR shows which builds and deploys would run. |
-| Breaking-change gate | `feat!:` or `BREAKING CHANGE:` commits block the prerelease-to-release boundary unless overridden. |
-| Tag grammar | Release tags follow `vX.Y.Z-rc.N` by default; the prefix, prerelease token, and separator are configurable via `tag_grammar`, and an omitted block reproduces today's shape exactly. |
-| Artifact passing | The `artifact_id` output from a build is stored in state and forwarded to deploys and publish. |
-| GitHub Environments | The `environments` command emits per-environment config (`required_reviewers`, `wait_timer`, `branch_policy`) for you to apply. |
-| Schema enforcement | Every CLI invocation checks `schema_version` and rejects incompatible manifests with a clear error. |
-| Multi-component repos | A `components:` block versions, promotes, hotfixes, and rolls back several independent components from one manifest, each in its own tag and state namespace. Omit it for a single-component repo and output is byte-identical. |
+- **Compiler model.** One manifest compiles into a full multi-environment pipeline of native GitHub Actions workflows.
+- **Monorepo-native multi-component.** Version, promote, hotfix, and roll back several independent components from one manifest, each in its own tag and state namespace. See [Components](https://stablekernel.github.io/cascade/guides/components/).
+- **SHA-keyed promotion ladder.** Promote the exact bytes that passed the previous environment, never a per-stage rebuild. See [Promote a release](https://stablekernel.github.io/cascade/guides/promote/).
+- **Security by construction.** Every caller job carries a per-callback least-privilege `permissions:` block, including OIDC `id-token: write`. See [Callback contract](https://stablekernel.github.io/cascade/reference/callbacks/).
+- **Self-healing supply chain.** Third-party action pins live in one source of truth, and a reconcile companion adopts external pin bumps back into the manifest. See [Action pins](https://stablekernel.github.io/cascade/guides/action-pins/).
+- **Hotfix and rollback, race-safe.** Patch or revert a single environment with correct, race-safe concurrency. See [Run a hotfix](https://stablekernel.github.io/cascade/guides/hotfix/) and [Roll back an environment](https://stablekernel.github.io/cascade/guides/rollback/).
 
-A manifest that puts a few of these to work: `web` builds only after `api`, and each build and deploy runs only when its `triggers` match the changed paths.
+Preview a pipeline before you merge: [`simulate`](https://stablekernel.github.io/cascade/guides/simulate-and-verify/) traces what a change would build and deploy, and [`graph`](https://stablekernel.github.io/cascade/guides/visualize/) renders the environment chain.
+
+A fuller manifest puts a few fields to work: `web` builds only after `api`, and each build and deploy runs only when its `triggers` match the changed paths.
 
 ```yaml
 # .github/manifest.yaml
@@ -181,38 +148,6 @@ Full field-by-field detail lives in the [manifest reference](https://stablekerne
 | [Generated workflows](https://stablekernel.github.io/cascade/reference/generated-workflows/) | The exact file set and the anatomy of each generated workflow. |
 
 See the [full sidebar](https://stablekernel.github.io/cascade/) for the rest, including security and internals.
-
----
-
-## Conventions
-
-cascade follows these conventions in its own codebase and in the generated workflows it produces:
-
-- **Additive manifest changes**: new fields are always optional with sensible defaults, so existing manifest files keep working across minor version bumps.
-- **Conventional commits**: commit messages follow `type: subject` (for example `feat:`, `fix:`, `docs:`), and the changelog generator reads this format.
-- **Callback isolation**: generated workflows call your workflows via `workflow_call`, and cascade never reaches into your callback logic.
-- **Metadata courier**: cascade passes artifact identifiers and versions between stages. It never touches your container registry, package registry, or deployment target directly.
-
----
-
-## Development
-
-```bash
-# Build
-go build -o cascade ./cmd/cascade
-
-# Test (all packages)
-go test ./...
-
-# E2E tests (requires Docker)
-cd e2e && go test -v -timeout 20m ./...
-
-# Lint
-golangci-lint run ./...
-
-# Regenerate cascade's own workflows (uses itself)
-go run ./cmd/cascade generate-workflow --config .github/manifest.yaml -f
-```
 
 ---
 

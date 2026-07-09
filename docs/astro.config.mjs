@@ -99,6 +99,8 @@ export default defineConfig({
             { label: 'Run a hotfix',               link: '/guides/hotfix/' },
             { label: 'Roll back an environment',   link: '/guides/rollback/' },
             { label: 'Simulate and verify',        link: '/guides/simulate-and-verify/' },
+            { label: 'Governance companions',      link: '/guides/companions/' },
+            { label: 'Pin and reconcile actions',  link: '/guides/action-pins/' },
             { label: 'Coordinate multiple repos',  link: '/guides/multi-repo/' },
             { label: 'Split a repo into components', link: '/guides/components/' },
             { label: 'Visualize the pipeline',     link: '/guides/visualize/' },

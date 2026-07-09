@@ -1,6 +1,6 @@
 ---
 title: Split a repo into components
-description: Version, promote, hotfix, and roll back several independent components from one manifest, each in its own isolated tag and state namespace.
+description: Run a monorepo from one manifest. Version, promote, hotfix, and roll back several independent components, each in its own isolated tag and state namespace.
 ---
 
 A single repository often holds more than one deliverable: an API and a web
