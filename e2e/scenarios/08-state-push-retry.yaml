@@ -29,7 +29,10 @@ steps:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
             - "Update Manifest"
-            - "for attempt in 1 2 3 4 5"
+            - "for attempt in 1 2 3 4 5 6 7 8 9 10"
+            - "cascade-state-write: attempt=$attempt/10"
+            - "cascade-state-write: ok attempt=$attempt"
+            - "cascade-state-write: exhausted attempts=10"
             - "git fetch origin"
             - "git reset --hard"
             - "apply_state_edits"

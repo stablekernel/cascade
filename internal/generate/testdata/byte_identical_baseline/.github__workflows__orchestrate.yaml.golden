@@ -264,7 +264,8 @@ jobs:
           if [[ "$GITHUB_SERVER_URL" != "https://github.com" ]]; then
             # act/gitea e2e: no GitHub API, and the trunk is neither protected nor
             # signature-checked, so push the state commit directly with retries.
-            for attempt in 1 2 3 4 5; do
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              echo "cascade-state-write: attempt=$attempt/10"
               git fetch origin "$BRANCH"
               git reset --hard "origin/$BRANCH"
               apply_state_edits
@@ -276,19 +277,24 @@ jobs:
               git commit -m "chore: update state for $ENVIRONMENT [skip ci]"
               if git push origin "HEAD:$BRANCH"; then
                 echo "Pushed state on attempt $attempt"
+                echo "cascade-state-write: ok attempt=$attempt"
                 exit 0
               fi
               echo "Push attempt $attempt rejected (likely concurrent run); retrying..." >&2
-              sleep $((RANDOM % 5 + 2))
+              backoff=$(( 1 << (attempt - 1) ))
+              if [ "$backoff" -gt 8 ]; then backoff=8; fi
+              sleep $(( backoff + RANDOM % 2 ))
             done
-            echo "::error::Failed to push state after 5 attempts" >&2
+            echo "cascade-state-write: exhausted attempts=10" >&2
+            echo "::error::Failed to push state after 10 attempts" >&2
             exit 1
           fi
           
           # Real GitHub: write state through the Contents REST API. API commits are
           # signed by GitHub (Verified) and, with a bypass-capable token, update the
           # trunk even when a required status check protects it.
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            echo "cascade-state-write: attempt=$attempt/10"
             git fetch origin "$BRANCH"
             git reset --hard "origin/$BRANCH"
             apply_state_edits
@@ -311,12 +317,16 @@ jobs:
             fi
             if gh api "${API_ARGS[@]}" >/dev/null; then
               echo "Pushed state via API on attempt $attempt"
+              echo "cascade-state-write: ok attempt=$attempt"
               exit 0
             fi
             echo "State write attempt $attempt failed (likely concurrent run); retrying..." >&2
-            sleep $((RANDOM % 5 + 2))
+            backoff=$(( 1 << (attempt - 1) ))
+            if [ "$backoff" -gt 8 ]; then backoff=8; fi
+            sleep $(( backoff + RANDOM % 2 ))
           done
-          echo "::error::Failed to write state via API after 5 attempts" >&2
+          echo "cascade-state-write: exhausted attempts=10" >&2
+          echo "::error::Failed to write state via API after 10 attempts" >&2
           exit 1
       - name: Check for Failures
         if: contains(fromJSON('["failure", "cancelled"]'), needs.build-image.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-bundle.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-docs.result) || contains(fromJSON('["failure", "cancelled"]'), needs.deploy-app.result) || contains(fromJSON('["failure", "cancelled"]'), needs.deploy-sidecar.result)

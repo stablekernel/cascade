@@ -13,18 +13,30 @@ package statewrite
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
+
+	"github.com/stablekernel/cascade/internal/log"
 )
 
-// maxAttempts bounds the read-modify-write retry loop. Five attempts comfortably
-// absorbs the handful of envs that can finalize in parallel without masking a
-// genuinely stuck write.
-const maxAttempts = 5
+// maxAttempts bounds the read-modify-write retry loop. It is sized to survive a
+// realistic concurrent wave (every component of a monorepo racing to write its
+// own leaf into one shared manifest file on trunk) rather than only the handful
+// of envs that finalize in parallel, and is aligned with the git push-retry
+// ceiling in internal/git so a single grep of the "cascade-state-write" marker
+// covers every write path.
+const maxAttempts = 10
 
-// retryBackoff is the base delay between optimistic-lock retries. Attempt N
-// waits N*retryBackoff so concurrent writers stagger rather than re-collide.
-const retryBackoff = 500 * time.Millisecond
+// retryBaseBackoff is the base delay between optimistic-lock retries. The
+// effective wait grows exponentially per attempt (capped at maxRetryBackoff) and
+// carries a random jitter of up to the base, so concurrent writers de-synchronize
+// rather than colliding again in lockstep. See backoffForAttempt.
+const retryBaseBackoff = 250 * time.Millisecond
+
+// maxRetryBackoff caps the exponential growth of the per-attempt backoff so a
+// late retry never sleeps for an unbounded stretch.
+const maxRetryBackoff = 8 * time.Second
 
 // defaultBotName and defaultBotEmail are the identity stamped on a state commit
 // when the manifest git config supplies no override. They match the identity the
@@ -184,6 +196,11 @@ func CommitWithRetry(opts Options) error {
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// A stable, greppable marker per attempt lets a live concurrency proof
+		// confirm every lane converged: the same token the git push-retry path
+		// emits, so one grep covers all write paths.
+		log.Info("cascade-state-write: attempt=%d/%d", attempt, maxAttempts)
+
 		current, sha, err := opts.Client.GetContent(opts.Repo, opts.Path, opts.Ref)
 		if err != nil {
 			return fmt.Errorf("reading current manifest for state write: %w", err)
@@ -196,6 +213,7 @@ func CommitWithRetry(opts Options) error {
 
 		err = opts.Client.PutContent(opts.Repo, opts.Path, opts.Ref, sha, opts.Message, next, author)
 		if err == nil {
+			log.Info("cascade-state-write: ok attempt=%d", attempt)
 			return nil
 		}
 		if !IsConflict(err) {
@@ -207,9 +225,30 @@ func CommitWithRetry(opts Options) error {
 		// merges rather than one being dropped.
 		lastErr = err
 		if attempt < maxAttempts {
-			sleep(time.Duration(attempt) * retryBackoff)
+			sleep(backoffForAttempt(retryBaseBackoff, attempt-1))
 		}
 	}
 
+	log.Info("cascade-state-write: exhausted attempts=%d", maxAttempts)
 	return fmt.Errorf("state write via API still conflicting after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// backoffForAttempt returns the delay before the retry following a zero-based
+// attempt index: an exponential growth of base (base * 2^attempt) capped at
+// maxRetryBackoff, plus a random jitter of up to base so concurrent writers
+// racing the same trunk de-synchronize instead of colliding again in lockstep.
+// It matches the git push-retry backoff shape so both live write paths behave
+// identically under a wave.
+func backoffForAttempt(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		base = retryBaseBackoff
+	}
+	d := base
+	for i := 0; i < attempt && d < maxRetryBackoff; i++ {
+		d *= 2
+	}
+	if d > maxRetryBackoff {
+		d = maxRetryBackoff
+	}
+	return d + time.Duration(rand.Int64N(int64(base)+1))
 }
