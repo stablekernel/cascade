@@ -92,9 +92,12 @@ func (e *ConflictError) Error() string {
 func (e *ConflictError) Unwrap() error { return e.Err }
 
 // IsConflict reports whether err is (or wraps) a Contents API 409 conflict. It
-// recognizes both the typed ConflictError and the raw gh-CLI 409 body, which
-// carries "does not match" and a "409" status, so a client that forwards the
-// gh error verbatim still triggers a retry.
+// recognizes the typed ConflictError and both raw gh-CLI 409 bodies, so a client
+// that forwards the gh error verbatim still triggers a retry: the blob If-Match
+// mismatch carries "does not match", and the branch-ref compare-and-swap failure
+// two racing finalizes produce reads "... is at X but expected Y ..." with no
+// "does not match". Either lock marker alongside a "409" or "Conflict" status is
+// a conflict; this mirrors classifyPutError exactly.
 func IsConflict(err error) bool {
 	if err == nil {
 		return false
@@ -104,7 +107,8 @@ func IsConflict(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "does not match") && strings.Contains(msg, "409")
+	return (strings.Contains(msg, "does not match") || strings.Contains(msg, "is at")) &&
+		(strings.Contains(msg, "409") || strings.Contains(msg, "Conflict"))
 }
 
 // asConflict is a tiny errors.As wrapper kept local so the package has no hard

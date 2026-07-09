@@ -75,6 +75,15 @@ func rawConflict() error {
 	return &ConflictError{Err: errors.New(`{"message":".github/manifest.yaml does not match abc123","status":"409"}`)}
 }
 
+// branchRefCAS409Body mirrors the second 409 shape GitHub returns: a branch-ref
+// compare-and-swap failure whose body reads "... is at X but expected Y ..."
+// and carries NO "does not match" substring. Two component finalizes racing to
+// update one trunk branch produce this shape, so the classifier must recognize
+// it as a conflict from the "is at" marker alongside the 409/Conflict status.
+func branchRefCAS409Body() string {
+	return `PUT https://api.github.com/repos/x/y/contents/state.json: 409 Conflict [] {"message":"Update is at abc123 but expected def456","documentation_url":"https://docs.github.com"}`
+}
+
 // noSleep is an injected sleep that records that it was called but lets no real
 // time pass, keeping the test fast and deterministic.
 func noSleep(calls *int) func(time.Duration) {
@@ -246,6 +255,54 @@ func TestCommitWithRetry_IdentityPersistsAcrossRetries(t *testing.T) {
 		assert.Equal(t, Identity{Name: "release-bot", Email: "release-bot@example.com"}, got,
 			"attempt %d must carry the configured identity", i+1)
 	}
+}
+
+func TestIsConflict_BranchRefCAS409(t *testing.T) {
+	body := branchRefCAS409Body()
+	// Typed path: a client that wraps the branch-ref 409 in ConflictError.
+	assert.True(t, IsConflict(&ConflictError{Err: errors.New(body)}),
+		"a typed conflict wrapping the branch-ref 409 must be recognized")
+	// String path: a client forwarding the raw gh body verbatim, which carries
+	// no "does not match" substring, must still be recognized as a conflict.
+	assert.True(t, IsConflict(errors.New(body)),
+		"the raw branch-ref 409 body must be recognized without a \"does not match\" substring")
+	// Negative: a genuine non-409 error must not classify as a conflict.
+	assert.False(t, IsConflict(errors.New("HTTP 500 Internal Server Error")),
+		"a 500 is not a conflict")
+	assert.False(t, IsConflict(errors.New("the runner is at the front of the queue")),
+		"an \"is at\" message without a 409/Conflict marker is not a conflict")
+}
+
+func TestCommitWithRetry_RetriesOnBranchRefCAS409(t *testing.T) {
+	// The first PUT loses a branch-ref compare-and-swap race: GitHub returns a
+	// 409 whose body reads "... is at X but expected Y ..." with NO "does not
+	// match" substring. The forwarded raw error must still be recognized as a
+	// conflict so the writer re-fetches, re-applies, and succeeds on the retry
+	// rather than hard-failing after a single attempt.
+	fake := &fakeContents{
+		content: "ci.state.test: A\n",
+		sha:     "sha-0",
+		putErrs: []error{errors.New(branchRefCAS409Body())}, // raw forwarded error, not typed
+	}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state on staging",
+		Mutate:  appendLine("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, fake.puts, 2, "the branch-ref 409 must drive at least a second PUT")
+	assert.Equal(t, 2, fake.gets, "writer must re-fetch the manifest after the branch-ref 409")
+	assert.Equal(t, 1, slept, "writer must back off once between the two attempts")
+	// Merge semantics: both writers' state survives the re-fetch and re-apply.
+	assert.Contains(t, fake.content, "ci.state.test: A", "the other writer's state must survive")
+	assert.Contains(t, fake.content, "ci.state.staging: B", "this caller's state must be written")
 }
 
 func TestIsConflict(t *testing.T) {
