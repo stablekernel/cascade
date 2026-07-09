@@ -668,7 +668,6 @@ ci:
         - cron: "0 7 * * *"
       repository_dispatch:
         types: [deploy-request]
-      merge_group: {}
 ```
 
 | Sub-field | Status | Description |
@@ -676,7 +675,9 @@ ci:
 | `schedule` | emitted | List of cron schedule entries. Each entry has one required key, `cron`. |
 | `repository_dispatch` | emitted | Wires the `repository_dispatch` trigger; `types` lists the event types. |
 | `workflow_run` | emitted | Wires the `workflow_run` trigger. |
-| `merge_group` | emitted | Present (even empty) wires the merge-queue trigger. The validation lane behavior lives in the separate `merge_queue` block. |
+| `merge_group` | rejected | Not allowed. `extra_triggers` attaches to the side-effecting orchestrate workflow, which cuts release tags, publishes releases, and runs deploys while writing state, so a speculative merge-queue build could publish a real release from a candidate commit. cascade rejects `extra_triggers.merge_group` at validate. To gate pull requests inside a merge queue, set [`merge_queue.enabled`](#merge_queue), which emits a read-only validation lane. |
+
+Migrating from a manifest that set `extra_triggers.merge_group`: remove that entry and set `merge_queue.enabled: true` instead. The read-only merge-queue lane runs `cascade parse-config` and a dry-run `cascade orchestrate setup` against the queued candidate without cutting tags, publishing releases, or writing state.
 
 ### rollback
 
@@ -761,7 +762,7 @@ The check validates cascade's own configuration only, requests `contents: read` 
 |-------|--------|------|---------|-------------|
 | `enabled` | emitted | bool | false | Emit `.github/workflows/cascade-merge-queue.yaml`, a `merge_group`-triggered lane that runs `cascade parse-config` and a dry-run `cascade orchestrate setup` against the merge-group candidate. |
 
-The lane is read-only. This block owns the lane behavior; the raw `merge_group` trigger is expressible separately under `extra_triggers.merge_group`, and the two are intentionally distinct.
+The lane is read-only, which is exactly what a merge queue needs: it validates the queued candidate without cutting tags, publishing releases, or writing state. This is the supported way to participate in a merge queue. Attaching the raw `merge_group` event to the side-effecting orchestrate workflow through `extra_triggers.merge_group` is rejected at validate, because a speculative merge-queue build could otherwise publish a real release from a candidate commit.
 
 ## components
 

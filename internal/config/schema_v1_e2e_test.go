@@ -36,7 +36,6 @@ const fullSurfaceManifest = `ci:
       workflow_run:
         workflows: [Upstream CI]
         types: [completed]
-      merge_group: {}
     pr_preview:
       enabled: true
       comment: true
@@ -171,7 +170,7 @@ func TestFullSurfaceManifestE2E(t *testing.T) {
 	if cfg.Deploys[0].Rollout.GetType() != "canary" || cfg.Deploys[0].DeployTarget.GetMode() != "gitops" {
 		t.Fatalf("deploy reserved fields not parsed: %#v", cfg.Deploys[0])
 	}
-	if cfg.ExtraTriggers == nil || cfg.ExtraTriggers.MergeGroup == nil {
+	if cfg.ExtraTriggers == nil || cfg.ExtraTriggers.WorkflowRun == nil {
 		t.Fatalf("extra_triggers not parsed: %#v", cfg.ExtraTriggers)
 	}
 	if cfg.Components == nil || cfg.Components["api"].Path != "services/api" {

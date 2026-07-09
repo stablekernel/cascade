@@ -58,7 +58,7 @@ ci:
       enabled: true
 ```
 
-Enable it when you have turned on GitHub merge queues for the repository and want the same manifest and orchestration checks applied to the combined merge candidate, not just to each pull request in isolation. Wiring the merge-queue trigger itself is handled by the `merge_group` entry under [`extra_triggers`](/cascade/reference/manifest/#extra_triggers); this companion adds the validation that runs on it.
+Enable it when you have turned on GitHub merge queues for the repository and want the same manifest and orchestration checks applied to the combined merge candidate, not just to each pull request in isolation. `merge_queue.enabled` wires the `merge_group` trigger onto this read-only lane for you. Attaching a raw `merge_group` trigger to the side-effecting orchestrate workflow through [`extra_triggers`](/cascade/reference/manifest/#extra_triggers) is rejected at validate, because a speculative merge-queue build could otherwise publish a real release from a candidate commit; `merge_queue.enabled` is the supported path.
 
 ## Wayfinding
 
