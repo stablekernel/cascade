@@ -68,15 +68,18 @@ func (ghContents) PutContent(repo, path, ref, sha, message string, content []byt
 }
 
 // classifyPutError maps a gh PUT result to a typed error. A nil err is success.
-// A 409 optimistic-lock failure (the body carries "does not match" alongside a
-// 409, "Conflict", or "is at" marker) becomes a ConflictError so the retry loop
-// re-fetches and re-applies; any other failure is wrapped verbatim.
+// An optimistic-lock failure becomes a ConflictError so the retry loop re-fetches
+// and re-applies; any other failure is wrapped verbatim. GitHub returns two 409
+// shapes for a stale write: a blob If-Match mismatch whose body carries "does not
+// match", and a branch-ref compare-and-swap failure whose body reads "... is at X
+// but expected Y ..." with no "does not match". Either lock marker alongside a
+// 409 or "Conflict" status is recognized so both shapes drive a retry.
 func classifyPutError(out string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(out, "does not match") &&
-		(strings.Contains(out, "409") || strings.Contains(out, "Conflict") || strings.Contains(out, "is at")) {
+	if (strings.Contains(out, "does not match") || strings.Contains(out, "is at")) &&
+		(strings.Contains(out, "409") || strings.Contains(out, "Conflict")) {
 		return &ConflictError{Err: fmt.Errorf("%s: %w", strings.TrimSpace(out), err)}
 	}
 	return fmt.Errorf("%s: %w", strings.TrimSpace(out), err)
