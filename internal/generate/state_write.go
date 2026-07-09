@@ -87,7 +87,8 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	// gitea/act path: keep the existing git fetch/reset/reapply/commit/push loop.
 	w("  # act/gitea e2e: no GitHub API, and the trunk is neither protected nor")
 	w("  # signature-checked, so push the state commit directly with retries.")
-	w("  for attempt in 1 2 3 4 5; do")
+	w("  for attempt in 1 2 3 4 5 6 7 8 9 10; do")
+	w("    echo \"cascade-state-write: attempt=$attempt/10\"")
 	w("    git fetch origin \"$BRANCH\"")
 	w("    git reset --hard \"origin/$BRANCH\"")
 	w("    %s", params.applyFn)
@@ -99,12 +100,14 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	writeShellCommit(sb, indent+"    ", params.commitMessage)
 	w("    if git push origin \"HEAD:$BRANCH\"; then")
 	w("      echo \"%s on attempt $attempt\"", params.successLabel)
+	w("      echo \"cascade-state-write: ok attempt=$attempt\"")
 	w("      exit 0")
 	w("    fi")
 	w("    echo \"Push attempt $attempt rejected (likely concurrent run); retrying...\" >&2")
-	w("    sleep $((RANDOM % 5 + 2))")
+	writeStateBackoffSleep(sb, indent+"    ")
 	w("  done")
-	w("  echo \"::error::Failed to push state after 5 attempts\" >&2")
+	w("  echo \"cascade-state-write: exhausted attempts=10\" >&2")
+	w("  echo \"::error::Failed to push state after 10 attempts\" >&2")
 	w("  exit 1")
 	w("fi")
 	w("")
@@ -113,7 +116,8 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("# Real GitHub: write state through the Contents REST API. API commits are")
 	w("# signed by GitHub (Verified) and, with a bypass-capable token, update the")
 	w("# trunk even when a required status check protects it.")
-	w("for attempt in 1 2 3 4 5; do")
+	w("for attempt in 1 2 3 4 5 6 7 8 9 10; do")
+	w("  echo \"cascade-state-write: attempt=$attempt/10\"")
 	w("  git fetch origin \"$BRANCH\"")
 	w("  git reset --hard \"origin/$BRANCH\"")
 	w("  %s", params.applyFn)
@@ -139,13 +143,29 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("  fi")
 	w("  if gh api \"${API_ARGS[@]}\" >/dev/null; then")
 	w("    echo \"%s via API on attempt $attempt\"", params.successLabel)
+	w("    echo \"cascade-state-write: ok attempt=$attempt\"")
 	w("    exit 0")
 	w("  fi")
 	w("  echo \"State write attempt $attempt failed (likely concurrent run); retrying...\" >&2")
-	w("  sleep $((RANDOM % 5 + 2))")
+	writeStateBackoffSleep(sb, indent+"  ")
 	w("done")
-	w("echo \"::error::Failed to write state via API after 5 attempts\" >&2")
+	w("echo \"cascade-state-write: exhausted attempts=10\" >&2")
+	w("echo \"::error::Failed to write state via API after 10 attempts\" >&2")
 	w("exit 1")
+}
+
+// writeStateBackoffSleep emits an exponential-with-jitter backoff sleep for the
+// state-write retry loop at the given indent. The wait doubles per attempt
+// (1s, 2s, 4s, 8s) capped at eight seconds, plus a random zero-or-one-second
+// jitter, so concurrent writers racing one trunk branch de-synchronize rather
+// than colliding again in lockstep. It mirrors the exponential jittered backoff
+// the git and Contents-API Go write paths use. The loop variable is "$attempt".
+func writeStateBackoffSleep(sb *strings.Builder, indent string) {
+	// These lines contain literal '%' (RANDOM % 2); write them verbatim so the
+	// caller's fmt-based line writer never treats '%' as a format verb.
+	sb.WriteString(indent + "backoff=$(( 1 << (attempt - 1) ))\n")
+	sb.WriteString(indent + "if [ \"$backoff\" -gt 8 ]; then backoff=8; fi\n")
+	sb.WriteString(indent + "sleep $(( backoff + RANDOM % 2 ))\n")
 }
 
 // writeShellCommit emits a `git commit -m` line for a possibly multi-line

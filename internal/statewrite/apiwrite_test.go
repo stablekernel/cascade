@@ -1,12 +1,15 @@
 package statewrite
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -151,6 +154,98 @@ func TestCommitWithRetry_ErrorsAfterBoundedAttempts(t *testing.T) {
 	assert.True(t, IsConflict(err), "the surfaced error must remain recognizable as a 409")
 	assert.Equal(t, maxAttempts, fake.puts, "writer must try exactly the bounded number of times")
 	assert.Equal(t, maxAttempts-1, slept, "writer must back off between attempts but not after the last")
+}
+
+func TestCommitWithRetry_RetryCeilingIsTen(t *testing.T) {
+	// A realistic monorepo wave races every component to write its own leaf into
+	// one manifest on the trunk branch, so the read-modify-write must tolerate far
+	// more than the handful of parallel envs the original bound assumed. Pin the
+	// concrete ceiling so a silent regression back to a low bound is caught.
+	require.Equal(t, 10, maxAttempts, "state-write retry ceiling must be raised to ten")
+
+	errs := make([]error, maxAttempts)
+	for i := range errs {
+		errs[i] = rawConflict()
+	}
+	fake := &fakeContents{content: "ci.state.test: A\n", sha: "sha-0", putErrs: errs}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state",
+		Mutate:  appendLine("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 10, fake.puts, "writer must make ten attempts before exhausting")
+	assert.Equal(t, 9, slept, "writer must back off between attempts but not after the last")
+}
+
+func TestCommitWithRetry_EmitsConvergenceMarker(t *testing.T) {
+	// The retry loop must emit a stable, greppable marker per attempt plus an "ok"
+	// marker on success, so a live concurrency proof can grep every lane and assert
+	// convergence with zero exhaustion. Capture the log output to observe them.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetColors(false)
+	t.Cleanup(func() { log.SetOutput(os.Stderr); log.SetColors(true) })
+
+	fake := &fakeContents{
+		content: "ci.state.test: A\n",
+		sha:     "sha-0",
+		putErrs: []error{rawConflict()}, // first PUT 409s, second succeeds
+	}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state on staging",
+		Mutate:  appendLine("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.NoError(t, err)
+	out := buf.String()
+	assert.Contains(t, out, "cascade-state-write: attempt=1/10", "first attempt marker must be emitted")
+	assert.Contains(t, out, "cascade-state-write: attempt=2/10", "the retry attempt marker must be emitted")
+	assert.Contains(t, out, "cascade-state-write: ok attempt=2", "a successful write must emit the ok marker with its attempt count")
+}
+
+func TestCommitWithRetry_EmitsExhaustionMarker(t *testing.T) {
+	// When every attempt conflicts the loop must emit a stable exhaustion marker so
+	// a live proof asserts convergence by the absence of this token across lanes.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetColors(false)
+	t.Cleanup(func() { log.SetOutput(os.Stderr); log.SetColors(true) })
+
+	errs := make([]error, maxAttempts)
+	for i := range errs {
+		errs[i] = rawConflict()
+	}
+	fake := &fakeContents{content: "ci.state.test: A\n", sha: "sha-0", putErrs: errs}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state",
+		Mutate:  appendLine("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), "cascade-state-write: exhausted attempts=10",
+		"an exhausted retry loop must emit the exhaustion marker")
 }
 
 func TestCommitWithRetry_NonConflictErrorIsNotRetried(t *testing.T) {

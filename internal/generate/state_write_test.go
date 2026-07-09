@@ -212,6 +212,45 @@ func TestStateWriteHonorsCustomGitIdentity(t *testing.T) {
 	assertAPIAuthorStamp(t, content, "release-bot", "release-bot@example.com")
 }
 
+// TestStateWriteRetryCeilingAndConvergenceMarker asserts the emitted state-write
+// loop retries ten times on both the git-push and Contents-API branches, emits
+// the greppable "cascade-state-write: attempt=N/10" marker per attempt, an "ok"
+// marker on success and an "exhausted" marker on failure, and has dropped the old
+// five-attempt bound and fixed RANDOM sleep. The marker lets a live concurrency
+// proof grep every lane for convergence without any exhaustion.
+func TestStateWriteRetryCeilingAndConvergenceMarker(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	content, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	// Both the git-push (act/gitea) and the Contents-API (real GitHub) branches
+	// carry the raised loop bound.
+	assert.Equal(t, 2, strings.Count(content, "for attempt in 1 2 3 4 5 6 7 8 9 10"),
+		"both state-write branches must retry ten times")
+	// The greppable convergence markers, on both branches.
+	assert.Equal(t, 2, strings.Count(content, `cascade-state-write: attempt=$attempt/10`),
+		"each branch must emit the per-attempt convergence marker")
+	assert.Contains(t, content, `cascade-state-write: ok`,
+		"a successful write must emit the ok convergence marker")
+	assert.Equal(t, 2, strings.Count(content, `cascade-state-write: exhausted attempts=10`),
+		"each branch must emit the exhaustion marker so a live proof asserts its absence")
+
+	// The old five-attempt bound and fixed RANDOM sleep must be gone.
+	assert.NotContains(t, content, "after 5 attempts", "the old five-attempt failure text must be gone")
+	assert.NotContains(t, content, "RANDOM % 5 + 2", "the fixed RANDOM sleep must be replaced by exponential jittered backoff")
+}
+
 // TestStateWriteNoEmDash guards the hard project rule that generated output
 // contains no em dashes.
 func TestStateWriteNoEmDash(t *testing.T) {
