@@ -97,6 +97,77 @@ For pipelines that span more than one repository, one repository is the primary:
 
 See [Coordinate multiple repos](/cascade/guides/multi-repo/) for how to configure `external` and `notify` and for the operational detail this page does not repeat.
 
+## Concurrency and convergence
+
+A busy trunk can fire several lanes at once: every component of a monorepo
+orchestrating off the same commit, a promotion running while a hotfix lands,
+several environments finalizing in parallel. All of that activity ultimately
+writes into one place, the state block inside the manifest file, so cascade's
+concurrency model is really a statement about how that one file converges
+under concurrent writers.
+
+**Isolation by concurrency group.** Every lane derives its own GitHub Actions
+`concurrency.group`, scoped per component where components are declared:
+orchestrate, promote, and rollback each get a distinct group per component,
+and hotfix groups per component and target environment. Two components never
+share a queue and never cancel each other's runs; only repeat runs of the
+*same* lane for the *same* component serialize or cancel, per that lane's
+`cancel_in_progress` setting. See [`concurrency`](/cascade/reference/manifest/#concurrency)
+and [Split a repo into components](/cascade/guides/components/#how-each-component-promotes-independently).
+
+**Convergence by optimistic re-apply, not by file separation.** State lives in
+one manifest-embedded document, node-patched leaf by leaf
+(`state.components.<name>.<env>`, `latest_release.components.<name>`), so a
+concurrent writer's commit never overwrites a sibling leaf it does not own.
+Every write path, the generated workflow's shell step and the Go `orchestrate`,
+`promote`, `hotfix`, and `rollback` finalize paths alike, commits as a
+read-modify-write: on a rejected push it re-reads the current trunk bytes,
+re-applies its own leaf mutation on top of whatever the other writer already
+committed, and retries. The retry ceiling is 10 attempts with exponential,
+jittered backoff, sized to survive a realistic wave (every component of a
+monorepo racing to write into the same file) rather than only a handful of
+parallel environments. Each attempt and its outcome are logged with a stable,
+greppable marker, `cascade-state-write: attempt=N/10`, `cascade-state-write: ok
+attempt=N`, or `cascade-state-write: exhausted attempts=10`, so a live run's
+convergence (or exhaustion) is provable from its logs.
+
+**Merge queues without a side-effecting speculative build.** A merge queue's
+speculative build runs against a commit that may never land, so a lane that
+cuts tags, publishes releases, or writes state must never run there.
+`merge_queue.enabled` emits a read-only lane for the queued candidate;
+attaching the raw `merge_group` event to the side-effecting orchestrate
+workflow through `extra_triggers` is rejected at validate for exactly this
+reason. See [`merge_queue`](/cascade/reference/manifest/#merge_queue).
+
+**Shared-path changes reach every consumer they should.** A component's
+effective path set, its own `path` plus any `extra_paths` and top-level
+`shared_paths`, reaches the emitted push filter, change detection, and the
+version commit range alike, so a breaking change to code two components share
+bumps exactly the components that declare a dependency on it. See [Share code
+across components](/cascade/guides/components/#share-code-across-components).
+
+### What this deliberately does not do
+
+- **No intra-repo component ordering.** Components are independent by design,
+  and validate rejects overriding a per-component concurrency group precisely
+  to keep components from serializing against each other. See [What
+  components deliberately do not
+  do](/cascade/guides/components/#what-components-deliberately-do-not-do) for
+  the detail and the `external`/`notify` alternative for a component that
+  genuinely needs to react to another's deploy.
+- **No per-component state files.** State stays one manifest-embedded
+  document with per-component leaves, not a file per component. The Contents
+  API commits to one branch ref regardless of how many files a commit
+  touches, so separate files would still collide on that ref; leaf-wise
+  optimistic re-apply gives sibling preservation without the extra surface.
+- **No same-component cross-lane serialization.** A promote and a hotfix
+  targeting the same component and environment at the same instant are not
+  ordered against each other. Each converges its own leaf correctly (the
+  state write is what makes that safe), but cascade does not guarantee which
+  one lands first or block one while the other runs. Treat concurrent
+  operations on the same component and environment as a coordination problem
+  for the people running them, not one cascade arbitrates.
+
 ## Security model
 
 Generated workflows run in the adopting repository's own context: secrets are passed with `secrets: inherit` or scoped per callback, environment protection comes from GitHub environments, and cross-repo dispatch requires an explicit token. Cascade's own repository stores no adopter secrets.
