@@ -105,7 +105,15 @@ runs:
         install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
         rm -rf "$TMPDIR"
 
-        INSTALLED=$(cascade version 2>/dev/null | head -n 1 | awk '{print $2}')
+        # `cascade version` prints three lines via separate writes. Piping it
+        # straight into `head -n 1` lets head close the pipe after the first
+        # line while the binary is still writing the rest, which delivers
+        # SIGPIPE (exit 141) to the binary and, under `set -o pipefail`, reds
+        # this step intermittently. Capture the output into a variable first,
+        # then take field two of the first line without a pipe, so no producer
+        # can be signalled. This mirrors the setup-cli action's capture pattern.
+        INSTALLED_RAW=$(cascade version 2>/dev/null || true)
+        read -r _ INSTALLED _ <<<"$INSTALLED_RAW" || true
         # Tolerate a leading v in the self-report so the check tracks the release
         # tag rather than a future ldflags formatting choice.
         echo "fleet-repin: installed cascade version ${INSTALLED} (expected ${RC_BARE})"

@@ -369,6 +369,11 @@ jobs:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           cascade_version: ${{ needs.resolve.outputs.cascade_version }}
           cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
+          # Allow one whole-suite re-dispatch so a transient runner
+          # non-acquisition, a mid-poll API blip, or a SIGPIPE does not red the
+          # lane on a single unlucky attempt. Safe because each scenario-suite
+          # run self-resets on its first step, so a re-dispatch starts clean.
+          retry-attempts: '2'
 
   # Lane 1, stage 2: dependents of primary (mutate primary's shared external
   # state), so they only start after primary is green. Two repos run together,
@@ -396,6 +401,11 @@ jobs:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           cascade_version: ${{ needs.resolve.outputs.cascade_version }}
           cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
+          # Allow one whole-suite re-dispatch so a transient runner
+          # non-acquisition, a mid-poll API blip, or a SIGPIPE does not red the
+          # lane on a single unlucky attempt. Safe because each scenario-suite
+          # run self-resets on its first step, so a re-dispatch starts clean.
+          retry-attempts: '2'
 
   # Lane 2: 4env alone. It is the heaviest and most fragile repo, so it runs in
   # its own dedicated job with nothing beside it. Sequenced AFTER the dependents
@@ -424,8 +434,9 @@ jobs:
           # plus chained multi-env hotfix, conflict, rollback, and merge_queue
           # against one live repo). Allow one whole-suite re-dispatch so a live
           # GitHub eventual-consistency blip does not red the lane. Safe because
-          # each suite run self-resets on its first step. Other lanes keep the
-          # default (no retry) so a retry stays a scoped concession here.
+          # each suite run self-resets on its first step. Every fan-out lane
+          # carries the same single re-dispatch so a transient failure on any of
+          # them re-dispatches once rather than redding the whole fleet.
           retry-attempts: '2'
 
   # Lane 3: the light remainder, capped at two repos in flight. Sequenced AFTER
@@ -454,6 +465,11 @@ jobs:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
           cascade_version: ${{ needs.resolve.outputs.cascade_version }}
           cascade_version_sha: ${{ needs.resolve.outputs.cascade_version_sha }}
+          # Allow one whole-suite re-dispatch so a transient runner
+          # non-acquisition, a mid-poll API blip, or a SIGPIPE does not red the
+          # lane on a single unlucky attempt. Safe because each scenario-suite
+          # run self-resets on its first step, so a re-dispatch starts clean.
+          retry-attempts: '2'
 
   # Fan-in: this job's conclusion is the rc fleet gate. It needs EVERY lane so a
   # green gate means every selected repo passed; auto-promote keys off this
