@@ -52,8 +52,8 @@ inputs:
   retry-attempts:
     description: >-
       Total dispatch attempts for this suite. Default 1 keeps the historical
-      behavior (a single dispatch, no retry). Set to 2 or more on the heaviest,
-      most race-prone lane so a whole-suite failure re-dispatches a fresh run.
+      behavior (a single dispatch, no retry). Set to 2 or more on a fan-out lane
+      so a whole-suite failure re-dispatches a fresh run.
       This is safe because every scenario-suite run begins with its own
       "reset and seed dev" step, so a re-dispatch starts from a clean slate.
       Only a non-success conclusion (or a run that never became visible)
