@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/log"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
@@ -248,21 +250,39 @@ func ListTags() ([]string, error) {
 	return parseLines(output), nil
 }
 
-// pushRetryAttempts is the number of times a rejected push is retried behind a
-// rebase before the operation is declared failed.
-const pushRetryAttempts = 3
+// pushRetryAttempts is the number of times a rejected push is retried before the
+// operation is declared failed. It is sized to survive a realistic concurrent
+// wave (all components of a monorepo racing to write their own leaf into one
+// shared manifest file on trunk) and is aligned with the Contents-API write path
+// ceiling in internal/statewrite.
+const pushRetryAttempts = 10
 
-// defaultPushBackoff is the delay between push retries when no backoff is set via
-// WithBackoff. It gives a concurrent state writer time to settle before the next
-// attempt.
-const defaultPushBackoff = 2 * time.Second
+// defaultPushBackoff is the base delay between push retries when no backoff is
+// set via WithBackoff. The effective wait grows exponentially per attempt and
+// carries a random jitter so concurrent writers de-synchronize rather than
+// colliding again in lockstep. See backoffForAttempt.
+const defaultPushBackoff = 250 * time.Millisecond
+
+// maxPushBackoff caps the exponential growth of the per-attempt backoff so a
+// late retry never sleeps for an unbounded stretch.
+const maxPushBackoff = 8 * time.Second
 
 // pushOptions holds the tunable behaviour of the rebase-retry push helpers. Its
 // zero value reproduces the historical behaviour: git runs in the process working
-// directory and retries wait defaultPushBackoff apart.
+// directory and retries wait defaultPushBackoff apart with no re-apply hook.
 type pushOptions struct {
 	dir     string
 	backoff time.Duration
+	// reapply, when set, is invoked on a rejected push instead of a textual
+	// "git pull --rebase". The loop first re-fetches trunk and hard-resets the
+	// local branch to the upstream tip (dropping the local commit whose bytes
+	// were derived from a now-stale trunk), then calls reapply, which re-derives
+	// and re-writes only the owned state leaf onto the fresh trunk bytes and
+	// re-commits. This converges an owned leaf against a concurrent sibling's
+	// leaf that already landed on trunk, where a textual rebase conflicts on the
+	// adjacent edit. A nil reapply preserves the historical textual-rebase
+	// behaviour for callers (promote, hotfix, rollback) that do not need it.
+	reapply func() error
 }
 
 // Option configures the rebase-retry push helpers. Options are additive: a call
@@ -277,10 +297,62 @@ func WithDir(dir string) Option {
 	return func(o *pushOptions) { o.dir = dir }
 }
 
-// WithBackoff sets the delay between push retries. A zero duration (the default)
-// selects defaultPushBackoff. Tests pass a tiny value to keep the retry loop fast.
+// WithBackoff sets the base delay between push retries. A zero duration (the
+// default) selects defaultPushBackoff. The effective wait grows exponentially
+// from this base per attempt (capped at maxPushBackoff) plus a random jitter, so
+// tests pass a tiny value to keep the retry loop fast.
 func WithBackoff(d time.Duration) Option {
 	return func(o *pushOptions) { o.backoff = d }
+}
+
+// WithReapply supplies a re-apply callback invoked on a rejected push in place of
+// a textual "git pull --rebase". On a non-fast-forward reject the loop re-fetches
+// trunk, hard-resets the local branch to the upstream tip, then calls fn, which
+// must re-derive and re-write only the owned state leaf onto the fresh trunk
+// bytes and re-commit it. This makes an owned leaf converge against a concurrent
+// sibling leaf already on trunk without the textual conflict a rebase hits on the
+// adjacent edit. With no WithReapply the loop keeps the historical textual-rebase
+// behaviour, so callers that do not need re-apply (promote, hotfix, rollback) are
+// unaffected.
+func WithReapply(fn func() error) Option {
+	return func(o *pushOptions) { o.reapply = fn }
+}
+
+// backoffForAttempt returns the delay before the retry following a zero-based
+// attempt index: an exponential growth of base (base * 2^attempt) capped at
+// maxPushBackoff, plus a random jitter of up to base so concurrent writers racing
+// the same trunk de-synchronize instead of colliding again in lockstep.
+func backoffForAttempt(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		base = defaultPushBackoff
+	}
+	d := base
+	for i := 0; i < attempt && d < maxPushBackoff; i++ {
+		d *= 2
+	}
+	if d > maxPushBackoff {
+		d = maxPushBackoff
+	}
+	return d + time.Duration(rand.Int64N(int64(base)+1))
+}
+
+// refetchAndReset re-fetches trunk and hard-resets the working tree to the
+// upstream tracking tip, dropping any local commit whose bytes were derived from
+// a stale trunk. It is the pre-step of a re-apply retry: after it returns the
+// working manifest holds the fresh trunk bytes (including any concurrent sibling
+// leaf) onto which the owned leaf is re-derived.
+func refetchAndReset(dir string) error {
+	fetch := exec.Command("git", "fetch")
+	fetch.Dir = dir
+	if out, err := fetch.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch failed: %s: %w", string(out), err)
+	}
+	reset := exec.Command("git", "reset", "--hard", "@{u}")
+	reset.Dir = dir
+	if out, err := reset.CombinedOutput(); err != nil {
+		return fmt.Errorf("git reset --hard @{u} failed: %s: %w", string(out), err)
+	}
+	return nil
 }
 
 func newPushOptions(opts []Option) pushOptions {
@@ -295,8 +367,9 @@ func newPushOptions(opts []Option) pushOptions {
 }
 
 // CommitAndPushWithRetry stages filePath, commits it with message, and pushes
-// to the current branch's upstream, retrying the push up to three times behind a
-// pull --rebase. A "nothing to commit" state is treated as success (no-op). This
+// to the current branch's upstream, retrying a rejected push up to
+// pushRetryAttempts times behind a pull --rebase. A "nothing to commit" state is
+// treated as success (no-op). This
 // is the manifest state-write path shared by promote and hotfix finalize: an
 // API-created commit on real GitHub goes through a different path, so this is the
 // plain-git fallback used when committing locally.
@@ -325,25 +398,38 @@ func CommitAndPushWithRetry(filePath, message string, opts ...Option) error {
 	return pushWithRebaseRetry(o)
 }
 
-// PushWithRebaseRetry pushes the current branch to its upstream, retrying up to
-// three times behind a "git pull --rebase" when the push is rejected (for example
-// a non-fast-forward caused by a concurrent state writer landing on trunk between
-// checkout and push). It is the push half of CommitAndPushWithRetry, exposed for
-// callers that stage and commit through their own flow and only need the shared
-// rebase-retry behaviour. On a rebase conflict it aborts the rebase and returns
-// the wrapped error rather than leaving the repository mid-rebase.
+// PushWithRebaseRetry pushes the current branch to its upstream, retrying a
+// rejected push up to pushRetryAttempts times (for example a non-fast-forward
+// caused by a concurrent state writer landing on trunk between checkout and
+// push). It is the push half of CommitAndPushWithRetry, exposed for callers that
+// stage and commit through their own flow and only need the shared retry
+// behaviour. By default a rejected push is retried behind a "git pull --rebase",
+// aborting the rebase and returning the wrapped error on a conflict rather than
+// leaving the repository mid-rebase. Passing WithReapply switches the retry to
+// re-derive the owned state leaf against re-fetched trunk instead, so an owned
+// leaf converges against a concurrent sibling's adjacent leaf without conflict.
 func PushWithRebaseRetry(opts ...Option) error {
 	return pushWithRebaseRetry(newPushOptions(opts))
 }
 
 // pushWithRebaseRetry is the single rebase-retry loop shared by
 // CommitAndPushWithRetry and PushWithRebaseRetry. Keeping one implementation
-// means the rebase-abort-on-conflict fix lives in exactly one place.
+// means the re-apply and rebase-abort-on-conflict behaviours live in exactly one
+// place. When o.reapply is set it re-derives the owned leaf against re-fetched
+// trunk on each rejected push; otherwise it falls back to a textual rebase.
+//
+// Every attempt emits a stable "cascade-state-write:" log line carrying the
+// attempt count, so a live run can be grepped to prove a concurrent wave
+// converged (and, on failure, that it exhausted the ceiling rather than erroring
+// for another reason).
 func pushWithRebaseRetry(o pushOptions) error {
 	for i := 0; i < pushRetryAttempts; i++ {
+		log.Info("cascade-state-write: attempt=%d/%d", i+1, pushRetryAttempts)
+
 		cmd := exec.Command("git", "push")
 		cmd.Dir = o.dir
 		if _, err := cmd.CombinedOutput(); err == nil {
+			log.Info("cascade-state-write: ok attempt=%d", i+1)
 			return nil
 		}
 
@@ -351,21 +437,34 @@ func pushWithRebaseRetry(o pushOptions) error {
 			break
 		}
 
-		cmd = exec.Command("git", "pull", "--rebase")
-		cmd.Dir = o.dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			// A failed rebase (typically a conflict) leaves the repository
-			// mid-rebase. Abort it so we neither leave a conflicted state
-			// behind nor loop into a guaranteed-failing push, and surface the
-			// real error instead of the generic "push failed" summary.
-			abort := exec.Command("git", "rebase", "--abort")
-			abort.Dir = o.dir
-			_, _ = abort.CombinedOutput() // best effort; nothing to abort is fine
-			return fmt.Errorf("git pull --rebase failed: %s: %w", string(out), err)
+		if o.reapply != nil {
+			// Re-derive the owned leaf onto re-fetched trunk bytes instead of a
+			// textual rebase, which conflicts when a concurrent sibling wrote an
+			// adjacent leaf into the same shared manifest file.
+			if err := refetchAndReset(o.dir); err != nil {
+				return err
+			}
+			if err := o.reapply(); err != nil {
+				return fmt.Errorf("state re-apply on push retry failed: %w", err)
+			}
+		} else {
+			cmd = exec.Command("git", "pull", "--rebase")
+			cmd.Dir = o.dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				// A failed rebase (typically a conflict) leaves the repository
+				// mid-rebase. Abort it so we neither leave a conflicted state
+				// behind nor loop into a guaranteed-failing push, and surface the
+				// real error instead of the generic "push failed" summary.
+				abort := exec.Command("git", "rebase", "--abort")
+				abort.Dir = o.dir
+				_, _ = abort.CombinedOutput() // best effort; nothing to abort is fine
+				return fmt.Errorf("git pull --rebase failed: %s: %w", string(out), err)
+			}
 		}
-		time.Sleep(o.backoff)
+		time.Sleep(backoffForAttempt(o.backoff, i))
 	}
 
+	log.Info("cascade-state-write: exhausted attempts=%d", pushRetryAttempts)
 	return fmt.Errorf("git push failed after %d retries", pushRetryAttempts)
 }
 
