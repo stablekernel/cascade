@@ -619,11 +619,13 @@ func (o *Orchestrator) serializeState(current []byte, key string) ([]byte, error
 // componentStateWrites builds the component-scoped write the orchestrator owns
 // from its in-memory state: one state directive addressing
 // state.components.<component>.<env> for the orchestrated environment. It is
-// re-appliable: the rebase-retry loop reruns writeConfig against the re-fetched
-// trunk bytes on a rejected push, and each call deterministically re-derives the
-// same owned leaf, so a concurrent sibling component's subtree is never rebuilt
-// or dropped. A missing env state yields no write (a nil State on a StateWrite
-// means delete), so an unexpected miss never becomes an accidental node delete.
+// re-appliable: on a rejected push the retry loop re-fetches trunk, hard-resets
+// to the upstream tip, and reapplyStateLeaf re-runs writeConfig against those
+// fresh trunk bytes, so each attempt deterministically re-derives the same owned
+// leaf onto whatever a concurrent sibling component already landed, and that
+// sibling's subtree is never rebuilt or dropped. A missing env state yields no
+// write (a nil State on a StateWrite means delete), so an unexpected miss never
+// becomes an accidental node delete.
 func (o *Orchestrator) componentStateWrites() []config.StateWrite {
 	st := o.cicdFile.State[o.environment]
 	if st == nil {
@@ -666,18 +668,58 @@ func (o *Orchestrator) commitAndPush(version string) error {
 	return o.pushStateWithRetry()
 }
 
-// pushStateWithRetry pushes the committed state change, rebasing onto the
-// upstream and retrying when the push is rejected (for example a non-fast-forward
-// caused by a concurrent state writer or a "[skip ci]" commit landing on trunk
-// between checkout and push). It delegates to git.PushWithRebaseRetry, the single
-// rebase-retry implementation the promote and hotfix finalizers also use, run
-// against the orchestrator's base directory so both state-write paths share one
-// rebase-abort-on-conflict behaviour.
+// pushStateWithRetry pushes the committed state change, retrying when the push is
+// rejected (for example a non-fast-forward caused by a concurrent state writer or
+// a "[skip ci]" commit landing on trunk between checkout and push). It delegates
+// to git.PushWithRebaseRetry against the orchestrator's base directory.
+//
+// For a component-scoped run it passes WithReapply(reapplyStateLeaf): on a
+// rejected push the shared loop re-fetches trunk and re-derives only this
+// component's owned leaf onto the fresh bytes, so a concurrent sibling component's
+// adjacent leaf survives where a textual rebase would conflict. The
+// single-component path passes no re-apply hook, keeping the historical
+// textual-rebase behaviour byte-for-byte and semantically identical (it writes
+// the whole state node via WriteManifestState, so there is no adjacent-leaf
+// sibling to converge against).
 func (o *Orchestrator) pushStateWithRetry() error {
-	if err := git.PushWithRebaseRetry(git.WithDir(o.baseDir), git.WithBackoff(o.pushBackoff)); err != nil {
+	opts := []git.Option{git.WithDir(o.baseDir), git.WithBackoff(o.pushBackoff)}
+	if o.component != "" {
+		opts = append(opts, git.WithReapply(o.reapplyStateLeaf))
+	}
+	if err := git.PushWithRebaseRetry(opts...); err != nil {
 		return err
 	}
 	log.Info("Committed and pushed state changes")
+	return nil
+}
+
+// reapplyStateLeaf re-derives the orchestrator's owned component state leaf onto
+// the re-fetched trunk bytes and re-commits it. The push-retry loop calls it
+// after hard-resetting the local branch to the upstream tip, so writeConfig reads
+// the fresh trunk manifest (carrying any concurrent sibling leaf), node-patches
+// only state.components.<component>.<env> back in via WriteScopedState, and the
+// re-staged commit is pushed. It mirrors, in the git-checkout world, the
+// re-appliable WriteScopedState closures the promote, hotfix, and rollback
+// finalizers run against the Contents API.
+func (o *Orchestrator) reapplyStateLeaf() error {
+	if err := o.writeConfig(); err != nil {
+		return err
+	}
+	if err := o.gitRun("add", o.configPath); err != nil {
+		return err
+	}
+	message := fmt.Sprintf("chore: update state for %s [skip ci]", o.environment)
+	cmd := exec.Command("git", "commit", "-m", message)
+	cmd.Dir = o.baseDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// The owned leaf is already present on the re-fetched trunk (for example
+		// a same-component racer landed it), so there is nothing to re-commit;
+		// the following push is a clean no-op. Any other commit failure is real.
+		if strings.Contains(string(out), "nothing to commit") {
+			return nil
+		}
+		return fmt.Errorf("git commit failed: %s: %w", string(out), err)
+	}
 	return nil
 }
 
