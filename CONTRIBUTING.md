@@ -52,6 +52,7 @@ Public APIs follow a functional-options style: required inputs are positional an
 cascade holds to a few conventions in its own codebase and in the workflows it generates:
 
 - **Additive manifest changes**: new fields are always optional with sensible defaults, so existing manifest files keep working across minor version bumps.
+- **Path fields reach every path sink**: a manifest field that widens which files a component reacts to must thread through all three places a path is consumed, or it is a silent bug. The emitted `on: push` paths filter fires the workflow, per-callback change detection decides which builds and deploys run, and the version commit range decides the bump. A field that reaches only some of these triggers a run that then no-ops, or bumps a version whose builds skip as unchanged. When you add such a field, add a test that asserts the shared path reaches each sink.
 - **Callback isolation**: generated workflows call your workflows via `workflow_call`, and cascade never reaches into your callback logic.
 - **Metadata courier**: cascade passes artifact identifiers and versions between stages. It never touches your container registry, package registry, or the systems you deploy to directly.
 

@@ -1,0 +1,75 @@
+name: "Per-Component Shared Path Threading"
+description: |
+  Proves a component's extra_paths and the top-level shared_paths sugar both reach
+  the emitted orchestrate push-paths filter, so a commit touching a shared
+  dependency fires the workflows of the components that declare it.
+
+  The manifest declares two components. api adds libs/proto to its own extra_paths;
+  the top-level shared_paths adds libs/common to every component. web declares
+  neither, so it inherits only libs/common (the shared sugar) plus its own path.
+
+  Generation fans the orchestrate lane out to one orchestrate-<name>.yaml per
+  component. The proof is the emitted push-paths filter of each:
+  - orchestrate-api.yaml lists libs/common (shared), libs/proto (its extra_paths),
+    and services/api (its own path).
+  - orchestrate-web.yaml lists libs/common (shared) and services/web (its own
+    path), and NOT libs/proto (a path only api declares), so a non-consumer is not
+    triggered by another component's private dependency.
+
+  The version-commit-range and change-detection sinks of the same effective path
+  set are covered by the orchestrate unit tests (a breaking shared-path commit
+  bumps only the declaring component). This scenario pins the generated-output
+  sink.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  shared_paths:
+    - libs/common/**
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+      extra_paths:
+        - libs/proto/**
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees and assert the shared-path push filters"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate-api.yaml"
+          contains:
+            - "    paths:\n"
+            - "      - 'libs/common/**'\n"
+            - "      - 'libs/proto/**'\n"
+            - "      - 'services/api/**'\n"
+        - path: ".github/workflows/orchestrate-web.yaml"
+          contains:
+            - "    paths:\n"
+            - "      - 'libs/common/**'\n"
+            - "      - 'services/web/**'\n"
+          not_contains:
+            - "libs/proto"

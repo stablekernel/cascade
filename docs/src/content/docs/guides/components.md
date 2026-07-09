@@ -107,6 +107,41 @@ so a repository without a `components:` block reads its tags exactly as before. 
 [Per-component versioning](/cascade/reference/versioning/#per-component-versioning)
 for the tag-namespace rules in full.
 
+## Share code across components
+
+Scoping the commit walk to each component's `path` is the isolation invariant, but
+a monorepo also has code every component shares: a common library, a proto package,
+a root build file. A change there sits outside every component's `path`, so on its
+own it fires nothing and bumps nothing. Two additive fields let a component opt into
+the shared code it depends on:
+
+```yaml
+ci:
+  config:
+    environments: [dev, prod]
+    shared_paths:
+      - libs/common/**   # every component depends on this
+    components:
+      api:
+        path: services/api
+        tag_prefix: api-
+        extra_paths:
+          - libs/proto/**  # only api depends on the proto package
+      web:
+        path: services/web
+        tag_prefix: web-
+```
+
+`extra_paths` widens one component's scope; top-level `shared_paths` widens every
+component's scope and is sugar for adding the same glob to each component's
+`extra_paths`. A component's effective scope is its `path` plus both. That scope
+reaches every place a path matters: the workflow's `push` filter fires on a shared
+change, change detection runs the affected builds and deploys, and the version walk
+counts the shared commit. A breaking (`feat!:`) commit under `libs/common/` bumps
+both `api` and `web`; a breaking commit under `libs/proto/` bumps only `api`. When
+you declare neither field, each component's scope is just its `path`, exactly as
+before.
+
 ## How each component promotes independently
 
 Each component gets its own promote workflow and its own concurrency lane. Cascade

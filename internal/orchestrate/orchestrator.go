@@ -109,11 +109,17 @@ func (o *Orchestrator) Setup(headSHA string) (*output.SetupResult, error) {
 	baseSHAs := o.calculateBaseSHAs(envState)
 	log.Debug("Base SHAs: %v", baseSHAs)
 
+	// Effective extra paths for the scoped component (its extra_paths unioned with
+	// top-level shared_paths), so a change touching only a shared dependency is not
+	// skipped as unchanged by a callback whose own triggers do not list it. Nil on
+	// the single-component path, keeping change detection byte-identical there.
+	extraPaths := o.componentExtraPaths()
+
 	// Detect which builds need to run
 	runBuilds := make(map[string]bool)
 	for _, build := range o.cicdFile.Config.Builds {
 		baseSHA := baseSHAs["build_"+build.Name]
-		needsRun := o.detectChanges(baseSHA, headSHA, build.Triggers)
+		needsRun := o.detectChanges(baseSHA, headSHA, withExtraPaths(build.Triggers, extraPaths))
 		runBuilds[build.Name] = needsRun
 		log.Debug("Build %s: needs_run=%v (base=%s)", build.Name, needsRun, truncateSHA(baseSHA))
 	}
@@ -127,7 +133,7 @@ func (o *Orchestrator) Setup(headSHA string) (*output.SetupResult, error) {
 			log.Debug("Deploy %s: pending (depends on builds)", deploy.Name)
 		} else {
 			baseSHA := baseSHAs["deploy_"+deploy.Name]
-			needsRun := o.detectChanges(baseSHA, headSHA, deploy.Triggers)
+			needsRun := o.detectChanges(baseSHA, headSHA, withExtraPaths(deploy.Triggers, extraPaths))
 			if needsRun {
 				runDeploys[deploy.Name] = "true"
 			} else {
@@ -350,6 +356,39 @@ func (o *Orchestrator) detectChanges(baseSHA, headSHA string, triggers []string)
 	return false
 }
 
+// componentExtraPaths returns the effective extra path set for the scoped
+// component: its extra_paths unioned with the manifest's top-level shared_paths.
+// It returns nil on the single-component path (o.component == ""), so change
+// detection there is byte-identical. A resolution error is logged and treated as
+// no extra paths rather than failing setup.
+func (o *Orchestrator) componentExtraPaths() []string {
+	if o.component == "" {
+		return nil
+	}
+	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
+	if err != nil {
+		log.Warn("Failed to resolve component %s for change detection: %v", o.component, err)
+		return nil
+	}
+	return resolved.ExtraPaths
+}
+
+// withExtraPaths unions a callback's own triggers with the component's effective
+// extra paths so a shared-dependency change is detected by that callback. It only
+// augments a non-empty trigger list: an empty triggers list already means "run on
+// any change", so the shared change is covered and adding paths would wrongly
+// narrow it to those paths. It returns the original slice when there is nothing to
+// add, keeping the single-component and no-extra-path shapes byte-identical.
+func withExtraPaths(triggers, extraPaths []string) []string {
+	if len(triggers) == 0 || len(extraPaths) == 0 {
+		return triggers
+	}
+	out := make([]string, 0, len(triggers))
+	out = append(out, triggers...)
+	out = append(out, extraPaths...)
+	return out
+}
+
 // calculateVersion calculates the next version for the environment.
 func (o *Orchestrator) calculateVersion() (string, error) {
 	// A component-scoped orchestration derives its version from only its own
@@ -508,9 +547,15 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 		baseSHA, _ = git.GetInitialCommit()
 	}
 
+	// Scope the commit range to the component's own path plus its effective extra
+	// paths (its extra_paths unioned with top-level shared_paths), so a commit that
+	// touches only a shared dependency this component declares still registers a
+	// bump. With no extra paths this is just the component path, unchanged.
+	versionPaths := append([]string{resolved.Path}, resolved.ExtraPaths...)
+
 	var commits []changelog.ConventionalCommit
 	if baseSHA != "" {
-		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, "HEAD", []string{resolved.Path})
+		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, "HEAD", versionPaths)
 		if cerr != nil {
 			log.Warn("Failed to get commits for component %s: %v", o.component, cerr)
 		} else {

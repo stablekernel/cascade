@@ -70,6 +70,11 @@
           "items": { "type": "string" },
           "description": "Global path patterns for the orchestrate workflow paths filter. When set, these are used exclusively instead of per-callback triggers."
         },
+        "shared_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Repo-relative globs every component depends on, such as a shared library or a root build file. Each is fanned into every component's effective path set, so a commit touching only a shared path fires each component's orchestrate workflow and counts toward each component's version bump. Sugar for repeating the same glob in every component's extra_paths; applies only when a components block is present."
+        },
         "release_trigger": {
           "type": "string",
           "enum": ["push", "dispatch"],
@@ -548,6 +553,7 @@
         "deployments": { "$ref": "#/definitions/deploymentsConfig" },
         "environment_config": { "type": "object", "additionalProperties": { "$ref": "#/definitions/environmentConfig" }, "description": "Overrides the shared per-environment settings for this component." },
         "triggers": { "type": "array", "items": { "type": "string" }, "description": "Overrides the shared orchestrate path filter for this component." },
+        "extra_paths": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative globs beyond this component's own path that both fire its orchestrate workflow and count toward its version bump, so a change to a shared dependency this component consumes bumps it correctly. Additive to path and to any top-level shared_paths." },
         "release_token": { "type": "string", "description": "Overrides the shared release-operations token expression for this component." },
         "release_token_app": { "$ref": "#/definitions/appTokenSource" }
       }

@@ -16,9 +16,11 @@ import (
 // merge-group candidate ref. The lane is read-only (no state writes, no
 // releases, no deploys) and reports a status the merge queue can require.
 //
-// This generator owns the LANE behavior. The raw merge_group trigger itself is
-// expressible separately under extra_triggers.merge_group; the two are
-// intentionally distinct.
+// This generator owns the LANE behavior and is the only supported way to attach a
+// merge_group trigger. Attaching the raw merge_group event through
+// extra_triggers.merge_group is rejected at validation, because it would fire the
+// side-effecting orchestrate workflow on a speculative merge-queue build with no
+// gh-readonly-queue guard; merge_queue.enabled emits this read-only lane instead.
 type MergeQueueGenerator struct {
 	config  *config.TrunkConfig
 	baseDir string
