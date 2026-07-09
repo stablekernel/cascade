@@ -439,10 +439,17 @@ jobs:
           # them re-dispatches once rather than redding the whole fleet.
           retry-attempts: '2'
 
-  # Lane 3: the light remainder, capped at two repos in flight. Sequenced AFTER
-  # the heavy lane (via needs) so 4env and this capped matrix never overlap;
-  # `always()` lets it proceed when the heavy lane was filtered out. Still gated
-  # on a green repin. max-parallel keeps live API pressure at two repos.
+  # Lane 3: the light remainder, run one repo at a time. Sequenced AFTER
+  # the heavy lane (via needs) so 4env and this matrix never overlap;
+  # `always()` lets it proceed when the heavy lane was filtered out. Still
+  # gated on a green repin. max-parallel is serialized (was 2) to lower the
+  # fleet's peak hosted-runner demand: each suite dispatches several of its
+  # own child runs, so two suites in flight at once was enough concurrent
+  # runner requests that GitHub occasionally could not acquire a hosted
+  # runner in time and cancelled the lane. Running the remainder repos one at
+  # a time trades a longer remainder lane for far fewer runner-starvation
+  # flakes, without touching the already-serial primary/dependents/heavy
+  # sequencing ahead of it.
   remainder:
     name: remainder (${{ matrix.repo }})
     needs: [resolve, plan, repin, heavy]
@@ -453,7 +460,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         repo: ${{ fromJSON(needs.plan.outputs.remainder_repos) }}
     steps:
