@@ -75,7 +75,10 @@ func TestHotfixGenerator_Triggers(t *testing.T) {
 	assert.Contains(t, content, "pull_request:")
 	assert.Contains(t, content, "types: [closed]")
 	assert.Contains(t, content, "branches:")
-	assert.Contains(t, content, "'env/**'")
+	// Single-component env branches are single-segment (env/staging); the
+	// finalize trigger scopes to env/* and must not carry the broader env/**.
+	assert.Contains(t, content, "'env/*'")
+	assert.NotContains(t, content, "'env/**'")
 
 	// Dispatch inputs.
 	assert.Contains(t, content, "commit:")
@@ -89,23 +92,40 @@ func TestHotfixGenerator_Triggers(t *testing.T) {
 	assert.NotContains(t, content, "- dev")
 }
 
-// TestHotfixGenerator_FinalizeTriggerMatchesNestedEnvBranches guards that the
-// finalize pull_request trigger's branch filter matches multi-component env
-// branches. Per-component env branches carry two path segments
-// (env/api/staging), and a GitHub Actions `*` glob stops at a slash, so a
-// single-star `env/*` filter never matches them and the closed-PR finalize
-// never fires. A double-star `env/**` matches any depth, covering both the
-// single-component branch (env/staging) and the per-component branch
-// (env/api/staging).
-func TestHotfixGenerator_FinalizeTriggerMatchesNestedEnvBranches(t *testing.T) {
-	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
-	content, err := gen.Generate()
+// TestHotfixGenerator_FinalizeTriggerScopedToComponent guards that the finalize
+// pull_request trigger's branch filter is scoped to the component the workflow
+// serves, restoring per-component isolation. A single-component workflow's env
+// branches are single-segment (env/staging), so its finalize trigger is env/*.
+// A per-component workflow's env branches are two-segment (env/api/staging), so
+// its finalize trigger is env/<component>/** - matching only its own component's
+// env branches at any depth and never a sibling's. An unscoped env/** would fire
+// every component's finalize on any component's resolution PR, spawning spurious
+// cross-component runs.
+func TestHotfixGenerator_FinalizeTriggerScopedToComponent(t *testing.T) {
+	single, err := NewHotfixGenerator(threeEnvHotfixConfig(), "").Generate()
 	require.NoError(t, err)
+	assert.Contains(t, single, "      - 'env/*'",
+		"single-component finalize trigger must scope to env/*, matching env/staging")
+	assert.NotContains(t, single, "env/**",
+		"single-component finalize trigger must not use the broad env/** filter")
 
-	assert.Contains(t, content, "      - 'env/**'",
-		"finalize trigger must use env/** so it matches per-component env branches like env/api/staging")
-	assert.NotContains(t, content, "      - 'env/*'\n",
-		"finalize trigger must not use a single-star env/* filter, which a GitHub Actions glob will not match across the slash of env/api/staging")
+	api, err := NewHotfixGenerator(threeEnvHotfixConfig(), "", WithHotfixComponentName("api")).Generate()
+	require.NoError(t, err)
+	assert.Contains(t, api, "      - 'env/api/**'",
+		"the api component finalize trigger must scope to env/api/**, matching env/api/staging")
+	assert.NotContains(t, api, "      - 'env/**'",
+		"the api component finalize trigger must not use the unscoped env/** filter that matches sibling components")
+	assert.NotContains(t, api, "env/web/",
+		"the api component finalize trigger must not reference a sibling component's env namespace")
+
+	web, err := NewHotfixGenerator(threeEnvHotfixConfig(), "", WithHotfixComponentName("web")).Generate()
+	require.NoError(t, err)
+	assert.Contains(t, web, "      - 'env/web/**'",
+		"the web component finalize trigger must scope to env/web/**, matching env/web/staging")
+	assert.NotContains(t, web, "      - 'env/**'",
+		"the web component finalize trigger must not use the unscoped env/** filter that matches sibling components")
+	assert.NotContains(t, web, "'env/api/",
+		"the web component finalize trigger must not reference a sibling component's env namespace")
 }
 
 // TestHotfixGenerator_CommitInputAcceptsMultiple guards that the dispatch
