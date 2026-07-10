@@ -238,7 +238,12 @@ func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("  pull_request:\n")
 	sb.WriteString("    types: [closed]\n")
 	sb.WriteString("    branches:\n")
-	sb.WriteString("      - 'env/*'\n")
+	// Double-star matches env branches at any depth. A GitHub Actions branch
+	// glob `*` stops at a slash, so a single-star `env/*` never matches a
+	// per-component branch like env/api/staging and the closed-PR finalize
+	// would never fire for a multi-component pipeline. `env/**` matches both
+	// the single-component branch (env/staging) and the per-component branch.
+	sb.WriteString("      - 'env/**'\n")
 	sb.WriteString("\n")
 }
 

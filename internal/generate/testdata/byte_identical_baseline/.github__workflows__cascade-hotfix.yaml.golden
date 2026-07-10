@@ -40,7 +40,7 @@ on:
   pull_request:
     types: [closed]
     branches:
-      - 'env/*'
+      - 'env/**'
 
 permissions:
   contents: read
