@@ -75,7 +75,7 @@ func TestHotfixGenerator_Triggers(t *testing.T) {
 	assert.Contains(t, content, "pull_request:")
 	assert.Contains(t, content, "types: [closed]")
 	assert.Contains(t, content, "branches:")
-	assert.Contains(t, content, "'env/*'")
+	assert.Contains(t, content, "'env/**'")
 
 	// Dispatch inputs.
 	assert.Contains(t, content, "commit:")
@@ -87,6 +87,25 @@ func TestHotfixGenerator_Triggers(t *testing.T) {
 	assert.Contains(t, content, "- test")
 	assert.Contains(t, content, "- prod")
 	assert.NotContains(t, content, "- dev")
+}
+
+// TestHotfixGenerator_FinalizeTriggerMatchesNestedEnvBranches guards that the
+// finalize pull_request trigger's branch filter matches multi-component env
+// branches. Per-component env branches carry two path segments
+// (env/api/staging), and a GitHub Actions `*` glob stops at a slash, so a
+// single-star `env/*` filter never matches them and the closed-PR finalize
+// never fires. A double-star `env/**` matches any depth, covering both the
+// single-component branch (env/staging) and the per-component branch
+// (env/api/staging).
+func TestHotfixGenerator_FinalizeTriggerMatchesNestedEnvBranches(t *testing.T) {
+	gen := NewHotfixGenerator(threeEnvHotfixConfig(), "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "      - 'env/**'",
+		"finalize trigger must use env/** so it matches per-component env branches like env/api/staging")
+	assert.NotContains(t, content, "      - 'env/*'\n",
+		"finalize trigger must not use a single-star env/* filter, which a GitHub Actions glob will not match across the slash of env/api/staging")
 }
 
 // TestHotfixGenerator_CommitInputAcceptsMultiple guards that the dispatch
