@@ -112,6 +112,25 @@ func (g *HotfixGenerator) envBranchRef() string {
 	return g.envBranchPrefix() + "${env}"
 }
 
+// finalizeTriggerBranch returns the pull_request(closed) branch filter that gates
+// the finalize chain, scoped to the component this workflow serves so a
+// resolution PR into one component's env branch never fires a sibling's finalize.
+//
+// Single-component env branches are single-segment (env/staging), which env/*
+// matches exactly; this is byte-identical to the historical single-component
+// trigger. A named component's env branches are two-segment (env/<component>/<env>,
+// for example env/api/staging), which a GitHub Actions `*` glob will not match
+// across the slash, so the component trigger is env/<component>/** - matching that
+// component's env branches at any depth and no other component's. An unscoped
+// env/** would match every component's env branches and fire spurious
+// cross-component finalize runs, breaking per-component isolation.
+func (g *HotfixGenerator) finalizeTriggerBranch() string {
+	if g.componentName != "" {
+		return "env/" + g.componentName + "/**"
+	}
+	return "env/*"
+}
+
 // hotfixBranchPrefix returns the throwaway cherry-pick branch name prefix the
 // apply lane pushes to: single-component yields "hotfix/" (byte-identical to the
 // historical form), a component yields "hotfix/<component>/" so two components
@@ -238,12 +257,7 @@ func (g *HotfixGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("  pull_request:\n")
 	sb.WriteString("    types: [closed]\n")
 	sb.WriteString("    branches:\n")
-	// Double-star matches env branches at any depth. A GitHub Actions branch
-	// glob `*` stops at a slash, so a single-star `env/*` never matches a
-	// per-component branch like env/api/staging and the closed-PR finalize
-	// would never fire for a multi-component pipeline. `env/**` matches both
-	// the single-component branch (env/staging) and the per-component branch.
-	sb.WriteString("      - 'env/**'\n")
+	fmt.Fprintf(sb, "      - '%s'\n", g.finalizeTriggerBranch())
 	sb.WriteString("\n")
 }
 
