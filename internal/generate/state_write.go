@@ -120,13 +120,21 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("  echo \"cascade-state-write: attempt=$attempt/10\"")
 	w("  git fetch origin \"$BRANCH\"")
 	w("  git reset --hard \"origin/$BRANCH\"")
+	// Capture the base blob sha of the manifest at the freshly fetched tip,
+	// BEFORE applyFn re-renders it. This git blob sha is exactly what the
+	// Contents API `sha` parameter expects, and it binds the compare-and-swap
+	// token to the precise base the rendered content is derived from. A later,
+	// decoupled read of the current remote blob would refresh to a sibling
+	// component's leaf that landed after the render, letting the PUT satisfy the
+	// CAS with a token unrelated to the content and revert the sibling. Binding
+	// to the base blob turns a raced sibling write into a 409 the loop converges.
+	w("  BASE_SHA=$(git rev-parse \"origin/$BRANCH:$MANIFEST_FILE\" 2>/dev/null || true)")
 	w("  %s", params.applyFn)
 	w("  if git diff --quiet \"$MANIFEST_FILE\"; then")
 	w("    echo \"%s\"", params.noChangeLabel)
 	w("    exit 0")
 	w("  fi")
 	w("  CONTENT_B64=$(base64 -w0 \"$MANIFEST_FILE\" 2>/dev/null || base64 \"$MANIFEST_FILE\" | tr -d '\\n')")
-	w("  CURRENT_SHA=$(gh api \"repos/${{ github.repository }}/contents/$MANIFEST_FILE?ref=$BRANCH\" --jq '.sha' 2>/dev/null || true)")
 	// Build the API arguments. -f message handles a multi-line message safely.
 	w("  API_ARGS=(\"repos/${{ github.repository }}/contents/$MANIFEST_FILE\" -X PUT")
 	w("    -f \"message=%s\"", shellSingleLineMessage(params.commitMessage))
@@ -138,8 +146,8 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("    -f \"author[email]=%s\"", authorEmail)
 	w("    -f \"committer[name]=%s\"", authorName)
 	w("    -f \"committer[email]=%s\")", authorEmail)
-	w("  if [[ -n \"$CURRENT_SHA\" ]]; then")
-	w("    API_ARGS+=(-f \"sha=$CURRENT_SHA\")")
+	w("  if [[ -n \"$BASE_SHA\" ]]; then")
+	w("    API_ARGS+=(-f \"sha=$BASE_SHA\")")
 	w("  fi")
 	w("  if gh api \"${API_ARGS[@]}\" >/dev/null; then")
 	w("    echo \"%s via API on attempt $attempt\"", params.successLabel)
