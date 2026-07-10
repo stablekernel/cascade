@@ -297,13 +297,13 @@ jobs:
             echo "cascade-state-write: attempt=$attempt/10"
             git fetch origin "$BRANCH"
             git reset --hard "origin/$BRANCH"
+            BASE_SHA=$(git rev-parse "origin/$BRANCH:$MANIFEST_FILE" 2>/dev/null || true)
             apply_state_edits
             if git diff --quiet "$MANIFEST_FILE"; then
               echo "No state changes"
               exit 0
             fi
             CONTENT_B64=$(base64 -w0 "$MANIFEST_FILE" 2>/dev/null || base64 "$MANIFEST_FILE" | tr -d '\n')
-            CURRENT_SHA=$(gh api "repos/${{ github.repository }}/contents/$MANIFEST_FILE?ref=$BRANCH" --jq '.sha' 2>/dev/null || true)
             API_ARGS=("repos/${{ github.repository }}/contents/$MANIFEST_FILE" -X PUT
               -f "message=chore: update state for $ENVIRONMENT [skip ci]"
               -f "content=$CONTENT_B64"
@@ -312,8 +312,8 @@ jobs:
               -f "author[email]=github-actions[bot]@users.noreply.github.com"
               -f "committer[name]=github-actions[bot]"
               -f "committer[email]=github-actions[bot]@users.noreply.github.com")
-            if [[ -n "$CURRENT_SHA" ]]; then
-              API_ARGS+=(-f "sha=$CURRENT_SHA")
+            if [[ -n "$BASE_SHA" ]]; then
+              API_ARGS+=(-f "sha=$BASE_SHA")
             fi
             if gh api "${API_ARGS[@]}" >/dev/null; then
               echo "Pushed state via API on attempt $attempt"

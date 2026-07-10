@@ -299,6 +299,53 @@ func TestHotfixCherryPickCommitOmitsSkipCIMarker(t *testing.T) {
 	}
 }
 
+// TestStateWriteBindsCASTokenToBaseBlob asserts the Contents-API state write
+// binds its compare-and-swap token to the exact base blob the content was
+// rendered from. The emitter captures BASE_SHA with git rev-parse right after
+// the fetch/reset (before applyFn re-renders), then passes sha=$BASE_SHA to the
+// PUT. It must NOT read a separate, later current-blob sha through the Contents
+// API: a decoupled read refreshes to a sibling component's blob that landed
+// after the render, so the PUT would satisfy the CAS with a token unrelated to
+// the content's base and land stale bytes as a clean child of the sibling
+// commit, silently reverting the sibling leaf. Binding the token to the base
+// blob makes a sibling write turn the PUT into a 409 the retry loop converges.
+func TestStateWriteBindsCASTokenToBaseBlob(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: []string{"dev"},
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}
+
+	orch, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+	rel, err := NewReleaseGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	for name, content := range map[string]string{"orchestrate": orch, "release": rel} {
+		// (a) The base blob sha is captured from the fetched tip, which is exactly
+		// the git blob sha the Contents API `sha` parameter expects.
+		assert.Contains(t, content, `BASE_SHA=$(git rev-parse "origin/$BRANCH:$MANIFEST_FILE" 2>/dev/null || true)`,
+			"%s must capture the base blob sha right after the reset", name)
+		// (b) The PUT's CAS token is the base blob sha, guarded so a brand-new file
+		// (no existing blob) omits sha and creates.
+		assert.Contains(t, content, `if [[ -n "$BASE_SHA" ]]; then`,
+			"%s must guard the sha arg on an existing base blob", name)
+		assert.Contains(t, content, `API_ARGS+=(-f "sha=$BASE_SHA")`,
+			"%s PUT must bind the CAS token to the base blob sha", name)
+		// (c) No decoupled, later current-blob read: that is the clobber.
+		assert.NotContains(t, content, "CURRENT_SHA=$(gh api",
+			"%s must not read a separate current-blob sha decoupled from the rendered content", name)
+		assert.NotContains(t, content, `API_ARGS+=(-f "sha=$CURRENT_SHA")`,
+			"%s PUT must not use the decoupled current-blob sha", name)
+	}
+}
+
 // TestStateWriteNoEmDash guards the hard project rule that generated output
 // contains no em dashes.
 func TestStateWriteNoEmDash(t *testing.T) {
