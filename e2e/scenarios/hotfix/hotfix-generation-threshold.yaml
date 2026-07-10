@@ -39,7 +39,7 @@ steps:
             - "target_env:"
             - "pull_request:"
             - "types: [closed]"
-            - "'env/*'"
+            - "'env/**'"
             - "format('hotfix-finalize-{0}', github.repository)"
             - "format('hotfix-{0}', github.event.inputs.target_env)"
             - "  plan:"
