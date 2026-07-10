@@ -726,8 +726,23 @@ func (m *Manager) update(opts Options) (*Result, error) {
 	}
 
 	if existing == nil {
-		// No existing release, create new one
+		// No existing release, create new one. create() cuts the git tag on this
+		// branch when CreateTag is set, so tag materialization is covered here too.
 		return m.create(opts)
+	}
+
+	// Cut the git tag unconditionally when requested, mirroring create(). A
+	// pre-existing release object (typically a draft) is PATCHed below, but the
+	// git tag must still be materialized on this branch: the orchestrate state
+	// write is an unconditional CAS loop, so leaving tag creation on the
+	// create-only path lets a pre-existing draft advance the state leaf while the
+	// git tag stays permanently absent. createGitTag is idempotent (a 422 "already
+	// exists" is treated as success), so re-cutting a tag that is already present
+	// is a harmless no-op on a convergence rerun.
+	if opts.CreateTag {
+		if err := m.createGitTag(opts.Tag, opts.SHA); err != nil {
+			return nil, fmt.Errorf("creating git tag: %w", err)
+		}
 	}
 
 	releaseName := generateReleaseName(opts.Environment, opts.Tag)
