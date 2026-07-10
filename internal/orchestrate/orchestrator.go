@@ -685,6 +685,26 @@ func (o *Orchestrator) componentStateWrites() []config.StateWrite {
 
 // commitAndPush commits and pushes state changes.
 func (o *Orchestrator) commitAndPush(version string) error {
+	// For a component-scoped run, re-derive the owned leaf onto the CURRENT trunk
+	// manifest before the first commit: re-fetch trunk, hard-reset the working tree
+	// to the upstream tip, and node-patch only state.components.<component>.<env>
+	// back in through WriteScopedState. This makes the very first attempt rest on
+	// fresh trunk bytes rather than the checkout-time base, so a concurrent
+	// sibling's leaf is preserved even when the push then fast-forwards with no
+	// rejection to trigger the retry-loop re-apply. It mirrors the Contents-API
+	// write path, which re-reads fresh trunk on every attempt including the first.
+	// The single-component path (component == "") keeps its historical behavior
+	// byte-identical: it commits the checkout-base bytes and rebases only on a
+	// rejected push.
+	if o.component != "" {
+		if err := git.RefetchAndReset(o.baseDir); err != nil {
+			return err
+		}
+		if err := o.writeConfig(); err != nil {
+			return err
+		}
+	}
+
 	// Check if there are changes to commit
 	status, _ := o.gitOutput("status", "--porcelain", o.configPath)
 	if strings.TrimSpace(status) == "" {

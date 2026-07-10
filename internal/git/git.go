@@ -336,6 +336,15 @@ func backoffForAttempt(base time.Duration, attempt int) time.Duration {
 	return d + time.Duration(rand.Int64N(int64(base)+1))
 }
 
+// RefetchAndReset re-fetches trunk and hard-resets the working tree to the
+// upstream tracking tip, so the working manifest holds the fresh trunk bytes
+// (including any concurrent sibling leaf). It is exported for a state writer that
+// wants to re-derive its owned leaf onto fresh trunk before its first commit, so
+// that write never rests on a stale checkout base rather than relying solely on a
+// push rejection to surface the staleness. It is the same operation the push
+// retry loop performs on a rejected push.
+func RefetchAndReset(dir string) error { return refetchAndReset(dir) }
+
 // refetchAndReset re-fetches trunk and hard-resets the working tree to the
 // upstream tracking tip, dropping any local commit whose bytes were derived from
 // a stale trunk. It is the pre-step of a re-apply retry: after it returns the
