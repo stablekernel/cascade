@@ -348,6 +348,91 @@ func TestManager_Update_TagOnly(t *testing.T) {
 	}
 }
 
+// updateTagRecordingServer answers an action=update flow against a GitHub host,
+// recording every request. When existingDraft is true a matching draft release is
+// returned by the tag-lookup GET so update() takes the PATCH branch; when false
+// the tag lookup 404s and the release list is empty so update() falls through to
+// create(). The POST /git/refs (tag-create) response status is gitRefStatus,
+// letting a caller drive both the fresh-tag (201) and already-present (422) cases.
+func updateTagRecordingServer(t *testing.T, seen *[]string, existingDraft bool, gitRefStatus int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*seen = append(*seen, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
+			w.WriteHeader(gitRefStatus)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/tags/"):
+			if existingDraft {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(GitHubRelease{ID: 456, TagName: "web-0.2.0-rc.0", Draft: true})
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/releases"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]GitHubRelease{})
+		case r.Method == http.MethodPatch:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{ID: 456})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/releases"):
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{ID: 456})
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{})
+		}
+	}))
+}
+
+// TestManager_Update_CutsGitTag is the regression guard for a release-path
+// concurrency defect: action=update with CreateTag set must materialize the git
+// tag on BOTH the pre-existing-release (PATCH) branch and the no-release (create)
+// branch. The orchestrate state write is an unconditional CAS loop, so if tag
+// creation stays on the create-only path a pre-existing draft (which the defect
+// itself accumulates) advances the state leaf while the git tag is permanently
+// absent. The idempotency subcase proves a convergence rerun over an
+// already-present tag (422) does not error.
+func TestManager_Update_CutsGitTag(t *testing.T) {
+	tests := []struct {
+		name          string
+		existingDraft bool
+		gitRefStatus  int
+	}{
+		{name: "existing draft release still cuts the tag", existingDraft: true, gitRefStatus: http.StatusCreated},
+		{name: "no existing release cuts the tag via create", existingDraft: false, gitRefStatus: http.StatusCreated},
+		{name: "idempotent when the tag already exists", existingDraft: true, gitRefStatus: http.StatusUnprocessableEntity},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen []string
+			server := updateTagRecordingServer(t, &seen, tt.existingDraft, tt.gitRefStatus)
+			defer server.Close()
+
+			manager := &Manager{
+				client:  server.Client(),
+				baseURL: server.URL + "/github", // host substring marks it as GitHub
+				token:   "test-token",
+				repo:    "owner/repo",
+				sleepFn: func(time.Duration) {},
+			}
+
+			_, err := manager.Manage(Options{
+				Action:      ActionUpdate,
+				Environment: "prerelease",
+				SHA:         "deadbeef",
+				Tag:         "web-0.2.0-rc.0",
+				Changelog:   "## Changes\n- Test",
+				CreateTag:   true,
+			})
+			require.NoError(t, err)
+
+			assert.True(t, containsPathSuffix(seen, http.MethodPost, "/git/refs"),
+				"update with CreateTag must cut the git tag; saw %v", seen)
+		})
+	}
+}
+
 func TestManager_Update_ExistingRelease(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
