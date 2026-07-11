@@ -323,6 +323,10 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validateSecrets("validate", v.Secrets)...)
 	}
 
+	// Unknown/misspelled top-level keys are hard errors (front-1 strictness),
+	// mirroring the per-component unknown-field rejection one level up.
+	errors = append(errors, validateUnknownTopLevel(cfg)...)
+
 	// Config-level structural validation for v1 reserved fields.
 	errors = append(errors, validateConfigLevel(cfg)...)
 	errors = append(errors, validateComponents(cfg)...)

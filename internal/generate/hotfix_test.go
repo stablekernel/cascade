@@ -263,8 +263,8 @@ func TestHotfixGenerator_Jobs(t *testing.T) {
 	assert.Contains(t, content, "cascade hotfix plan")
 	assert.Contains(t, content, "cascade hotfix finalize")
 
-	// check job runs the parse-config validity gate.
-	assert.Contains(t, content, "cascade parse-config")
+	// check job runs the lint validity gate.
+	assert.Contains(t, content, "cascade lint --json")
 }
 
 func TestHotfixGenerator_ConflictPath(t *testing.T) {

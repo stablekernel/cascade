@@ -121,7 +121,7 @@ func TestPRPreviewGenerator_Enabled(t *testing.T) {
 	assert.NotContains(t, content, "pull-requests: write")
 
 	// The three read-only steps.
-	assert.Contains(t, content, "cascade parse-config")
+	assert.Contains(t, content, "cascade lint --config")
 	assert.Contains(t, content, "cascade detect-changes")
 	assert.Contains(t, content, "cascade --dry-run orchestrate setup")
 
@@ -231,7 +231,6 @@ func TestPRPreviewGenerator_ValidYAML(t *testing.T) {
 func TestRunGenerateWorkflow_PRPreview(t *testing.T) {
 	const previewManifest = `ci:
   config:
-    project: test-project
     trunk_branch: main
     environments: [dev]
     pr_preview:
@@ -267,7 +266,7 @@ func TestRunGenerateWorkflow_PRPreview(t *testing.T) {
 	content := string(raw)
 	assert.Contains(t, content, "name: Cascade PR Preview")
 	assert.Contains(t, content, "on:\n  pull_request:")
-	assert.Contains(t, content, "cascade parse-config")
+	assert.Contains(t, content, "cascade lint --config")
 	assert.Contains(t, content, "pull-requests: write")
 	assert.Contains(t, content, "actions/github-script")
 }

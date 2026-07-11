@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://stablekernel.github.io/cascade/manifest.schema.json",
   "title": "cascade manifest",
-  "description": "Structure, types, and enums for a cascade manifest file. The manifest is nested under a top key (default \"ci\", configurable via config.manifest_key) and carries the authoring surface (config), plus cascade-managed promotion state (state, latest_release). This schema powers editor autocomplete and hover docs; cascade parse-config remains the authority for semantic and cross-field rules.",
+  "description": "Structure, types, and enums for a cascade manifest file. The manifest is nested under a top key (default \"ci\", configurable via config.manifest_key) and carries the authoring surface (config), plus cascade-managed promotion state (state, latest_release). This schema powers editor autocomplete and hover docs; cascade lint remains the authority for semantic and cross-field rules.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

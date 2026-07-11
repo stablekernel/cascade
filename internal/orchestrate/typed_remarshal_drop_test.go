@@ -27,14 +27,18 @@ const remarshalManifest = `ci:
       version: v0.1.0-rc.0
 `
 
-// TestTypedRemarshal_UnmodeledConfig_IsDropped documents the lossy state-write
-// mechanism behind the SHA-pin drift (#372/#390). The original finalize write
-// re-serialized the whole manifest through the typed CICDFile struct. That
-// round-trip omits any key the running binary does not model and discards the
-// top-level manifest-key wrapper, so a pin_mode:sha repo loses its pin on the
-// next state commit and reads as permanent drift. This test pins the failing
-// behavior so the contrast with the WriteManifestState fix is explicit.
-func TestTypedRemarshal_UnmodeledConfig_IsDropped(t *testing.T) {
+// TestTypedRemarshal_IsLossy documents the lossy state-write mechanism behind
+// the SHA-pin drift (#372/#390). The original finalize write re-serialized the
+// whole manifest through the typed CICDFile struct. That round-trip discards the
+// top-level manifest-key wrapper (and reflows comments and formatting), so a
+// state commit written this way reshapes the file. This test pins that lossiness
+// so the contrast with the WriteManifestState fix is explicit.
+//
+// Note: the inline top-level catch-all (TrunkConfig.Extra) now carries unmodeled
+// config keys through the typed round-trip, so future_field survives here where
+// it once dropped. The durable lossiness the fix guards against is the wrapper
+// drop, which persists.
+func TestTypedRemarshal_IsLossy(t *testing.T) {
 	file, err := config.ParseManifestBytes([]byte(remarshalManifest), "ci")
 	if err != nil {
 		t.Fatalf("ParseManifestBytes: %v", err)
@@ -46,9 +50,6 @@ func TestTypedRemarshal_UnmodeledConfig_IsDropped(t *testing.T) {
 	}
 	got := string(out)
 
-	if strings.Contains(got, "future_field") {
-		t.Errorf("typed remarshal was expected to drop the unmodeled future_field, but it survived:\n%s", got)
-	}
 	if strings.Contains(got, "ci:") {
 		t.Errorf("typed remarshal was expected to drop the 'ci:' wrapper, but it survived:\n%s", got)
 	}

@@ -11,7 +11,7 @@ import (
 // MergeQueueGenerator emits the opt-in merge-queue validation lane. When
 // config.merge_queue.enabled is set, cascade generates a merge_group-triggered
 // workflow that validates the prospective trunk commit with cascade's own
-// logic: it runs `cascade parse-config` as a validity gate and a dry-run
+// logic: it runs `cascade lint` as a validity gate and a dry-run
 // `cascade orchestrate setup` to preview the build/deploy decisions against the
 // merge-group candidate ref. The lane is read-only (no state writes, no
 // releases, no deploys) and reports a status the merge queue can require.
@@ -80,7 +80,7 @@ func (g *MergeQueueGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString("#\n")
 	sb.WriteString("# Merge-queue validation lane (opt-in via merge_queue.enabled).\n")
 	sb.WriteString("# Runs on merge_group against the would-be-trunk commit and validates it\n")
-	sb.WriteString("# with cascade's own logic: a parse-config validity gate plus a dry-run\n")
+	sb.WriteString("# with cascade's own logic: a lint validity gate plus a dry-run\n")
 	sb.WriteString("# orchestrate setup that previews the build/deploy decisions. The lane is\n")
 	sb.WriteString("# read-only (no state writes, releases, or deploys) and reports a status\n")
 	sb.WriteString("# the merge queue can require.\n")
@@ -120,12 +120,12 @@ func (g *MergeQueueGenerator) writeJob(sb *strings.Builder) {
 	// gh release download against the public stablekernel/cascade repository.
 	sb.WriteString("          token: ${{ github.token }}\n")
 
-	// Validity gate: parse-config reports validity in its JSON output rather
-	// than via exit code, so gate on the parsed result.
+	// Validity gate: lint --json reports validity in its JSON output, so gate
+	// on the parsed result.
 	sb.WriteString("      - name: Validate Manifest\n")
 	sb.WriteString("        run: |\n")
 	fmt.Fprintf(sb, "          MANIFEST_FILE=\"%s\"\n", g.getManifestFilePath())
-	sb.WriteString("          RESULT=$(cascade parse-config --config \"$MANIFEST_FILE\")\n")
+	sb.WriteString("          RESULT=$(cascade lint --json --config \"$MANIFEST_FILE\")\n")
 	sb.WriteString("          echo \"$RESULT\"\n")
 	sb.WriteString("          VALID=$(echo \"$RESULT\" | jq -r '.valid // false')\n")
 	sb.WriteString("          if [[ \"$VALID\" != \"true\" ]]; then\n")

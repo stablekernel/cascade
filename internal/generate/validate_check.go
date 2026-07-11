@@ -10,7 +10,7 @@ import (
 
 // ValidateCheckGenerator emits the opt-in manifest-validation PR check. When
 // config.validate_check.enabled is set, cascade generates a lightweight
-// pull_request workflow that runs `cascade parse-config` against the manifest
+// pull_request workflow that runs `cascade lint` against the manifest
 // and fails when the manifest is invalid, so a malformed configuration cannot
 // merge to trunk. The check validates cascade's own configuration only: it does
 // not run the consumer's build/test CI, requests contents: read alone, and has
@@ -73,7 +73,7 @@ func (g *ValidateCheckGenerator) writeHeader(sb *strings.Builder) {
 	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n", g.getManifestFilePath())
 	sb.WriteString("#\n")
 	sb.WriteString("# Manifest-validation PR check (opt-in via validate_check.enabled).\n")
-	sb.WriteString("# Runs `cascade parse-config` against the manifest on pull_request and\n")
+	sb.WriteString("# Runs `cascade lint` against the manifest on pull_request and\n")
 	sb.WriteString("# fails when the configuration is invalid, so a malformed manifest cannot\n")
 	sb.WriteString("# merge. Validates cascade's own configuration only; it does not run the\n")
 	sb.WriteString("# repository's build or test suites.\n")
@@ -120,10 +120,9 @@ func (g *ValidateCheckGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("            echo \"::error::$MANIFEST_FILE not found\"\n")
 	sb.WriteString("            exit 1\n")
 	sb.WriteString("          fi\n")
-	sb.WriteString("          # parse-config reports validity in its JSON output (valid: false on\n")
-	sb.WriteString("          # parse or schema errors) rather than via exit code, so gate on the\n")
-	sb.WriteString("          # parsed result.\n")
-	sb.WriteString("          RESULT=$(cascade parse-config --config \"$MANIFEST_FILE\")\n")
+	sb.WriteString("          # lint --json reports validity in its JSON output (valid: false on\n")
+	sb.WriteString("          # parse or schema errors), so gate on the parsed result.\n")
+	sb.WriteString("          RESULT=$(cascade lint --json --config \"$MANIFEST_FILE\")\n")
 	sb.WriteString("          echo \"$RESULT\"\n")
 	sb.WriteString("          VALID=$(echo \"$RESULT\" | jq -r '.valid // false')\n")
 	sb.WriteString("          if [[ \"$VALID\" != \"true\" ]]; then\n")

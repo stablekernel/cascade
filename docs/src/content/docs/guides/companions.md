@@ -49,7 +49,7 @@ Enable it when more than one person edits the manifest, or when you want the man
 
 ## Merge queue: validate the merge-group candidate
 
-When the repository uses GitHub's merge queue, the merge-queue companion adds a `merge_group`-triggered lane that validates the queued candidate: it runs `cascade parse-config` and a dry-run `cascade orchestrate setup` against the merge-group commit before it is allowed to land.
+When the repository uses GitHub's merge queue, the merge-queue companion adds a `merge_group`-triggered lane that validates the queued candidate: it runs `cascade lint` and a dry-run `cascade orchestrate setup` against the merge-group commit before it is allowed to land.
 
 ```yaml
 ci:

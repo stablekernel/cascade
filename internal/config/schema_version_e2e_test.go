@@ -10,7 +10,7 @@ import (
 
 // TestSchemaVersionE2E exercises the full on-disk manifest load path
 // (file -> ParseWithKey -> Validate + ValidateSchemaVersion) the way the
-// parse-config command does, covering the schema-version compatibility gate:
+// lint command does, covering the schema-version compatibility gate:
 //
 //   - a valid schema_version parses and validates cleanly
 //   - an incompatible (too-new) schema_version is rejected, blocking generation
