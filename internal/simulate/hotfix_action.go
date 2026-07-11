@@ -52,7 +52,7 @@ func (a *HotfixAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 		mergeSHA = a.fixSHAs[0]
 	}
 
-	before, err := parseState(ctx.ClonePath)
+	before, err := parseState(ctx.ClonePath, ctx.Component)
 	if err != nil {
 		return nil, fmt.Errorf("parse clone state: %w", err)
 	}
@@ -68,6 +68,7 @@ func (a *HotfixAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 	finalizer, err := hotfix.NewFinalizer(
 		hotfix.FinalizerOptions{ConfigPath: ctx.ClonePath, Actor: ctx.Actor},
 		hotfix.WithFinalizeDryRun(false),
+		hotfix.WithComponent(ctx.Component),
 		hotfix.WithTipReader(fixedTip(mergeSHA)),
 		hotfix.WithTrunkStateReader(cloneTrunkReader{}),
 		hotfix.WithTagLister(noTags{}),

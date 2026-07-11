@@ -11,6 +11,12 @@ type ActionContext struct {
 	// Actor is the identity that performs the hypothetical action.
 	Actor string
 
+	// Component, when non-empty, names the declared component the action is
+	// scoped to. The action passes it to the real orchestration options so state
+	// is read and written under state.components.<Component>.<env>, matching the
+	// component-scoped commands. Empty selects the flat single-component path.
+	Component string
+
 	// Deploys is the deploy-stub model for the manifest's build and deploy
 	// callbacks. The simulator validates orchestration, not the user's real
 	// build and deploy scripts, so an action records each callback as a stubbed

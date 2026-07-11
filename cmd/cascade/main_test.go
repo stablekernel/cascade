@@ -1248,6 +1248,158 @@ func TestSimulateCommand_HotfixMissingEnv(t *testing.T) {
 	}
 }
 
+// simulateMonorepoManifest records state component-scoped under
+// state.components.<comp>.<env>, the layout a multi-component repo uses. Component
+// api and component web each seed dev with a distinct sha and leave staging empty,
+// so a component-scoped promotion advances that component's dev into staging and
+// must never surface the sibling component's rows. This is the end-to-end fixture
+// for the simulator's monorepo support.
+const simulateMonorepoManifest = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - staging
+      - prod
+    components:
+      api:
+        path: services/api
+        tag_prefix: api-v
+      web:
+        path: services/web
+        tag_prefix: web-v
+  state:
+    components:
+      api:
+        dev:
+          sha: apidevsha0001
+          version: api-v1.2.0-rc.1
+          committed_at: "2026-01-01T10:00:00Z"
+          committed_by: seed-user
+        staging: {}
+      web:
+        dev:
+          sha: webdevsha0001
+          version: web-v3.0.0-rc.1
+          committed_at: "2026-01-01T10:00:00Z"
+          committed_by: seed-user
+        staging: {}
+`
+
+// simulateMonorepoRollbackManifest seeds component api's prod with a current state
+// and a single distinct prior snapshot in the deploy-history ring, so a
+// component-scoped rollback resolves the previous-ring target and reverts to it.
+const simulateMonorepoRollbackManifest = `ci:
+  config:
+    trunk_branch: main
+    environments:
+      - dev
+      - staging
+      - prod
+    components:
+      api:
+        path: services/api
+        tag_prefix: api-v
+      web:
+        path: services/web
+        tag_prefix: web-v
+  state:
+    components:
+      api:
+        prod:
+          sha: apiprodnew001
+          version: api-v2.0.0
+          committed_at: "2026-02-01T10:00:00Z"
+          committed_by: seed-user
+          previous:
+            - sha: apiprodold001
+              version: api-v1.0.0
+              committed_at: "2026-01-01T10:00:00Z"
+              committed_by: seed-user
+      web:
+        prod:
+          sha: webprodnew001
+          version: web-v9.0.0
+          committed_at: "2026-02-01T10:00:00Z"
+          committed_by: seed-user
+`
+
+func TestSimulateCommand_MonorepoPromoteScopedToComponent(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateMonorepoManifest)
+	stdout, stderr, err := runCLI("simulate", "promote", "--component", "api", "--config", manifest)
+	if err != nil {
+		t.Fatalf("simulate promote --component api failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{
+		"staging:",
+		"version: (none) -> api-v1.2.0-rc.1",
+		"sha:     (none) -> apidevsha0001",
+		"write state",
+	} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in api-scoped promote output, got:\n%s", want, stdout)
+		}
+	}
+	// The sibling component's rows must never leak into an api-scoped simulation.
+	if contains(stdout, "webdevsha0001") {
+		t.Errorf("api-scoped simulation leaked web's sha:\n%s", stdout)
+	}
+}
+
+func TestSimulateCommand_MonorepoPromoteIsolatesSibling(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateMonorepoManifest)
+	stdout, stderr, err := runCLI("simulate", "promote", "--component", "web", "--config", manifest)
+	if err != nil {
+		t.Fatalf("simulate promote --component web failed: %v\nstderr: %s", err, stderr)
+	}
+	if !contains(stdout, "webdevsha0001") {
+		t.Errorf("web-scoped simulation should carry web's sha, got:\n%s", stdout)
+	}
+	if contains(stdout, "apidevsha0001") {
+		t.Errorf("web-scoped simulation leaked api's sha:\n%s", stdout)
+	}
+}
+
+func TestSimulateCommand_MonorepoRequiresComponent(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateMonorepoManifest)
+	_, stderr, err := runCLI("simulate", "promote", "--config", manifest)
+	if err == nil {
+		t.Error("expected non-zero exit when --component is omitted on a monorepo manifest")
+	}
+	if !contains(stderr, "--component") {
+		t.Errorf("expected error directing the user to pass --component, got: %s", stderr)
+	}
+}
+
+func TestSimulateCommand_MonorepoUnknownComponent(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateMonorepoManifest)
+	_, stderr, err := runCLI("simulate", "promote", "--component", "billing", "--config", manifest)
+	if err == nil {
+		t.Error("expected non-zero exit for an undeclared component")
+	}
+	if !contains(stderr, "unknown component") {
+		t.Errorf("expected an unknown-component error, got: %s", stderr)
+	}
+}
+
+func TestSimulateCommand_MonorepoRollbackScopedToComponent(t *testing.T) {
+	manifest := writeSimulateManifest(t, simulateMonorepoRollbackManifest)
+	stdout, stderr, err := runCLI("simulate", "rollback", "--component", "api", "--env", "prod", "--config", manifest)
+	if err != nil {
+		t.Fatalf("simulate rollback --component api failed: %v\nstderr: %s", err, stderr)
+	}
+	for _, want := range []string{
+		"prod:",
+		"sha:     apiprodnew001 -> apiprodold001",
+		"version: api-v2.0.0 -> api-v1.0.0",
+		"revert",
+	} {
+		if !contains(stdout, want) {
+			t.Errorf("expected %q in api-scoped rollback output, got:\n%s", want, stdout)
+		}
+	}
+}
+
 // keysOf returns the top-level keys of a decoded JSON object, for diagnostics.
 func keysOf(m map[string]interface{}) []string {
 	ks := make([]string, 0, len(m))

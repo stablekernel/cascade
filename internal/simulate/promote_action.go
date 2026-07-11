@@ -41,6 +41,7 @@ func (a *PromoteAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 		ConfigPath: ctx.ClonePath,
 		DryRun:     false,
 		Actor:      ctx.Actor,
+		Component:  ctx.Component,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build promoter: %w", err)

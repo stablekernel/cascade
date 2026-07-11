@@ -47,6 +47,7 @@ func (a *RollbackAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 	rb, err := rollback.New(rollback.Options{
 		ConfigPath:    ctx.ClonePath,
 		Actor:         ctx.Actor,
+		Component:     ctx.Component,
 		HistoryReader: emptyHistory{},
 	})
 	if err != nil {

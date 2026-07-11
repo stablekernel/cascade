@@ -384,6 +384,20 @@ subcommands are `promote`, `release`, `rollback`, and `hotfix`. See
 [Simulate and verify](/cascade/guides/simulate-and-verify/) for the full walkthrough,
 example output, and the deploy-stub model.
 
+On a multi-component (monorepo) manifest, pass `--component <name>` to scope the
+simulation to one declared component. The engine then reads and replays that
+component's recorded state under `state.components.<name>.<env>`, the same path the
+component-scoped `promote`, `rollback`, and `hotfix` commands use:
+
+```bash
+cascade simulate promote --component api
+cascade simulate rollback --component web --env prod
+```
+
+`--component` is required when the manifest declares components: a manifest with no
+flat `state.<env>` rows would otherwise replay against empty state. The flag is left
+empty on a single-component manifest, which keeps the flat behavior unchanged.
+
 #### Flags
 
 The following flags are shared by every subcommand.
@@ -392,6 +406,7 @@ The following flags are shared by every subcommand.
 |------|------|---------|-------------|
 | `--config` | string | auto-detect | Path to manifest file |
 | `--actor` | string | (none) | Actor performing the hypothetical action |
+| `--component` | string | (single-component) | Declared component to scope the simulation to (required for multi-component manifests) |
 | `--deploy-result` | string | (none) | Simulated outcome for a build or deploy callback, `name=success\|failure\|skipped` (repeatable) |
 | `--json` | bool | `false` | Output result as JSON |
 
