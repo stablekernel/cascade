@@ -15,6 +15,10 @@ import (
 // Output is deterministic: it ranges the model's ordered slices and never
 // iterates a map, so the same model always yields byte-identical source.
 //
+// The env granularity (a DiagramState model) defaults to a horizontal,
+// left-to-right layout, matching how a promotion pipeline is read. Every other
+// granularity keeps D2's default top-down layout.
+//
 // The palette is the branded crucible style rather than the passed Theme's
 // colors: the Mermaid emitter is the theme-driven, GitHub-native path, while D2
 // is the high-fidelity branded renderer whose look is fixed. The theme's Name is
@@ -167,6 +171,13 @@ classes: {
 style.fill: "#151b20"
 `
 
+// d2EnvDirection sets the env projection's layout to left-to-right. A promotion
+// ladder (dev -> staging -> prod) reads as a horizontal pipeline; D2's own
+// default (top-down) stacks a multi-environment ladder into a tall, narrow
+// column that reads far worse. Only the env granularity (a DiagramState model)
+// opts in; jobs, stages, and cross-repo keep D2's default direction.
+const d2EnvDirection = "direction: right\n"
+
 // Emit renders vm as D2 source. A start/end-bracketed state model (the env
 // projection) and a directed-graph model (jobs, stages, cross-repo) share one
 // emit path because D2 expresses both as nodes and connections; the node and
@@ -188,6 +199,9 @@ func (D2Emitter) Emit(vm ViewModel, theme Theme, opts ...Option) (string, error)
 	}
 
 	b.WriteString(d2Header)
+	if vm.Kind == DiagramState {
+		b.WriteString(d2EnvDirection)
+	}
 	b.WriteString("\n")
 
 	// container maps each grouped node id to the group id that holds it, so an
