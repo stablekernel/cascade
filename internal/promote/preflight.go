@@ -248,7 +248,9 @@ func (p *Preflighter) Run() (*PreflightResult, error) {
 		promoResult.Promotions, prereleaseEnv, prodEnv, hasReleaseMarker,
 	)
 
-	result.CanProceed = !result.HasBreaking
+	// REDPROOF-FAULT (throwaway): the gate always reports can_proceed=true,
+	// so a breaking promote never gets blocked regardless of HasBreaking.
+	result.CanProceed = true
 
 	// 7. Promotion INTO a diverged env: the incoming SHA must contain every
 	// recorded patch, otherwise the promotion would silently regress a fix that

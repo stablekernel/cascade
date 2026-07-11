@@ -98,7 +98,9 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("    fi")
 	w("    git add \"$MANIFEST_FILE\"")
 	writeShellCommit(sb, indent+"    ", params.commitMessage)
-	w("    if git push origin \"HEAD:$BRANCH\"; then")
+	// REDPROOF-FAULT (throwaway): the push guard never fires, so the loop
+	// never reaches its success echo and the state write never lands.
+	w("    if false; then")
 	w("      echo \"%s on attempt $attempt\"", params.successLabel)
 	w("      echo \"cascade-state-write: ok attempt=$attempt\"")
 	w("      exit 0")

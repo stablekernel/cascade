@@ -293,7 +293,9 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 
 	// Fail if cannot proceed
 	sb.WriteString("      - name: Fail if Cannot Proceed\n")
-	sb.WriteString("        if: steps.check.outputs.can_proceed == 'false'\n")
+	// REDPROOF-FAULT (throwaway): inverted guard means the block step fires
+	// only when can_proceed is true, so a breaking publish never gets blocked.
+	sb.WriteString("        if: steps.check.outputs.can_proceed == 'true'\n")
 	sb.WriteString("        run: exit 1\n\n")
 }
 

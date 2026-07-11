@@ -688,7 +688,9 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 	// on workflow_dispatch. A maintainer-owned gate then decides when a release
 	// candidate is cut, instead of every trunk merge producing one. Default
 	// (push) keeps the trunk-push trigger and its paths filter.
-	if !g.config.OrchestrateDispatchOnly() {
+	// REDPROOF-FAULT (throwaway): guard is always true, so the push trigger
+	// is emitted even when dispatch-only was configured.
+	if true {
 		sb.WriteString("  push:\n")
 		fmt.Fprintf(sb, "    branches: [%s]\n", g.config.TrunkBranch)
 
