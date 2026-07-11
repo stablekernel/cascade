@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -186,8 +187,13 @@ func Validate(cfg *TrunkConfig) []string {
 	buildNames := make(map[string]bool)
 	deployNames := make(map[string]bool)
 
+	// Known-field sets for callback strictness, derived once from the struct tags.
+	buildFields := knownYAMLFields(reflect.TypeOf(BuildConfig{}))
+	deployFields := knownYAMLFields(reflect.TypeOf(DeployConfig{}))
+
 	// Validate builds
 	for i, b := range cfg.Builds {
+		errors = append(errors, validateUnknownCallbackFields(fmt.Sprintf("builds[%d]", i), b.Extra, buildFields)...)
 		if b.Name == "" {
 			errors = append(errors, fmt.Sprintf("builds[%d].name is required", i))
 		} else if buildNames[b.Name] {
@@ -248,6 +254,7 @@ func Validate(cfg *TrunkConfig) []string {
 
 	// Validate deploys
 	for i, d := range cfg.Deploys {
+		errors = append(errors, validateUnknownCallbackFields(fmt.Sprintf("deploys[%d]", i), d.Extra, deployFields)...)
 		if d.Name == "" {
 			errors = append(errors, fmt.Sprintf("deploys[%d].name is required", i))
 		} else if deployNames[d.Name] {

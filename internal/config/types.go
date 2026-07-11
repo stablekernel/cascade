@@ -622,7 +622,15 @@ type BuildConfig struct {
 	Matrix              *MatrixConfig        `yaml:"matrix,omitempty" json:"matrix,omitempty"` // Build fan-out (builds only)
 	OptionalDependsOn   []string             `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
 	AutoCommits         bool                 `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
-	PassthroughArtifact *PassthroughArtifact `yaml:"artifact,omitempty" json:"artifact,omitempty"` // GHA artifact passing within an orchestrate run (#16)
+	PassthroughArtifact *PassthroughArtifact `yaml:"artifact_upload,omitempty" json:"artifact_upload,omitempty"` // GHA artifact passing within an orchestrate run (#16)
+
+	// Extra captures any build callback key that is not a modeled BuildConfig
+	// field, mirroring the top-level and per-component catch-alls. A populated
+	// Extra map is rejected by validateUnknownCallbackFields with a did-you-mean
+	// suggestion, so a misspelled or renamed key (for example the former
+	// artifact:, now artifact_upload:) is a hard error instead of being silently
+	// dropped by the lenient yaml decoder. It is never serialized.
+	Extra map[string]any `yaml:",inline" json:"-"`
 }
 
 // ArtifactConfig defines a release artifact produced by a build
@@ -641,11 +649,11 @@ type ArtifactConfig struct {
 //
 //	builds:
 //	  - name: compile
-//	    artifact:
+//	    artifact_upload:
 //	      upload: dist/
 //	  - name: sign
 //	    depends_on: [compile]
-//	    artifact:
+//	    artifact_upload:
 //	      downloads: [compile]   # downloads "build-compile" before running
 //	      upload: dist-signed/
 type PassthroughArtifact struct {
@@ -686,7 +694,15 @@ type DeployConfig struct {
 	DeployTarget        *DeployTarget        `yaml:"deploy_target,omitempty" json:"deploy_target,omitempty"`
 	OptionalDependsOn   []string             `yaml:"optional_depends_on,omitempty" json:"optional_depends_on,omitempty"`
 	AutoCommits         bool                 `yaml:"auto_commits,omitempty" json:"auto_commits,omitempty"`
-	PassthroughArtifact *PassthroughArtifact `yaml:"artifact,omitempty" json:"artifact,omitempty"` // GHA artifact passing within an orchestrate run (#16)
+	PassthroughArtifact *PassthroughArtifact `yaml:"artifact_upload,omitempty" json:"artifact_upload,omitempty"` // GHA artifact passing within an orchestrate run (#16)
+
+	// Extra captures any deploy callback key that is not a modeled DeployConfig
+	// field, mirroring the top-level and per-component catch-alls. A populated
+	// Extra map is rejected by validateUnknownCallbackFields with a did-you-mean
+	// suggestion, so a misspelled or renamed key (for example the former
+	// artifact:, now artifact_upload:) is a hard error instead of being silently
+	// dropped by the lenient yaml decoder. It is never serialized.
+	Extra map[string]any `yaml:",inline" json:"-"`
 }
 
 // PublishConfig defines a publish callback invoked after a release is published.

@@ -345,7 +345,7 @@
         "matrix": { "$ref": "#/definitions/matrixConfig" },
         "optional_depends_on": { "type": "array", "items": { "type": "string" } },
         "auto_commits": { "type": "boolean" },
-        "artifact": { "$ref": "#/definitions/passthroughArtifact" }
+        "artifact_upload": { "$ref": "#/definitions/passthroughArtifact" }
       }
     },
     "deployConfig": {
@@ -378,7 +378,7 @@
         "deploy_target": { "$ref": "#/definitions/deployTarget" },
         "optional_depends_on": { "type": "array", "items": { "type": "string" } },
         "auto_commits": { "type": "boolean" },
-        "artifact": { "$ref": "#/definitions/passthroughArtifact" }
+        "artifact_upload": { "$ref": "#/definitions/passthroughArtifact" }
       }
     },
     "artifactConfig": {
