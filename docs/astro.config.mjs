@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
 
 // GitHub project page: https://stablekernel.github.io/cascade
@@ -53,6 +54,8 @@ export default defineConfig({
       },
     }),
     starlight({
+      // Emits llms.txt and a consolidated plain-markdown export of the docs.
+      plugins: [starlightLlmsTxt()],
       title: 'Cascade',
       tagline: 'Declarative trunk-based CI/CD for GitHub Actions.',
       description:
