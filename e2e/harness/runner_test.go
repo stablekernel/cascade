@@ -163,6 +163,47 @@ func TestRunner_ValidateScenario_PromoteValidation(t *testing.T) {
 	}
 }
 
+func TestRunner_ValidateScenario_RunWorkflowValidation(t *testing.T) {
+	runner := &Runner{t: t}
+
+	// A valid run_workflow step must pass validation (guards against the action
+	// being defined but omitted from ValidateScenario's switch, which reds only
+	// at act runtime with "unknown action").
+	valid := &MultiStepScenario{
+		Name: "Test",
+		Steps: []Step{{
+			Name:        "run merge-queue lane",
+			Action:      "run_workflow",
+			RunWorkflow: &RunWorkflowStep{WorkflowPath: ".github/workflows/cascade-merge-queue.yaml", Event: "merge_group"},
+		}},
+	}
+	assert.NoError(t, runner.ValidateScenario(valid))
+
+	tests := []struct {
+		name      string
+		step      Step
+		wantError string
+	}{
+		{
+			name:      "run_workflow without config",
+			step:      Step{Name: "bad", Action: "run_workflow", RunWorkflow: nil},
+			wantError: "run_workflow action requires run_workflow config",
+		},
+		{
+			name:      "run_workflow without workflow_path",
+			step:      Step{Name: "bad", Action: "run_workflow", RunWorkflow: &RunWorkflowStep{}},
+			wantError: "run_workflow requires workflow_path",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runner.ValidateScenario(&MultiStepScenario{Name: "Test", Steps: []Step{tt.step}})
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantError)
+		})
+	}
+}
+
 func TestRunner_ExecuteCommit(t *testing.T) {
 	runner := &Runner{
 		ctx: NewExecutionContext(),

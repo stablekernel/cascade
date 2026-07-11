@@ -2,9 +2,16 @@ name: "Merge Queue Workflow"
 description: |
   Verifies that enabling merge_queue emits the cascade-merge-queue.yaml
   workflow that validates the manifest and sets up orchestration on
-  merge_group events (#91).
+  merge_group events (#91), and that the emitted lane actually gates: it
+  RUNS under merge_group, passing a valid candidate and blocking a breaking
+  one.
 
-  Generator-output verification only.
+  Generator-output verification plus a runtime proof of the gate. The
+  positive step runs the lane on merge_group against a valid manifest and
+  asserts the merge-queue-validate job succeeds (parse-config .valid, then a
+  dry-run orchestrate setup). The negative step overwrites the manifest with a
+  breaking one and asserts the same lane reds, proving a bad config cannot
+  merge.
 
 config:
   trunk_branch: main
@@ -36,3 +43,28 @@ steps:
             - "cascade parse-config"
             - "cascade --dry-run orchestrate setup"
             - "token: ${{ github.token }}"
+
+  - name: "POSITIVE: valid candidate passes the merge_group lane"
+    action: run_workflow
+    run_workflow:
+      workflow_path: ".github/workflows/cascade-merge-queue.yaml"
+      event: merge_group
+    expect:
+      jobs:
+        merge-queue-validate: success
+
+  - name: "Overwrite the manifest with a breaking config"
+    action: commit
+    commit:
+      message: "test: stage a breaking manifest for the queue"
+      files:
+        .github/manifest.yaml: |
+          trunk_branch: main
+          builds: []
+
+  - name: "NEGATIVE: breaking candidate is blocked by the merge_group lane"
+    action: run_workflow
+    expect_failure: true
+    run_workflow:
+      workflow_path: ".github/workflows/cascade-merge-queue.yaml"
+      event: merge_group
