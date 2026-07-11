@@ -1,51 +1,151 @@
 name: "Promote breaking-change gate and release-build dispatch"
 description: |
-  Verifies that the multi-environment promote workflow emits its
-  CLI-driven breaking-change gate and the follow-on release-build dispatch
-  when release.workflow is configured (#322).
+  Verifies at runtime that the multi-environment promote workflow's CLI-driven
+  breaking-change gate blocks a breaking promotion into the release stage and
+  lets it through once allow_breaking_changes is set (#322).
 
-  Covers:
-  - allow_breaking_changes workflow_dispatch input
-  - the cascade promote preflight run with the --allow-breaking flag
-  - the dry_run input and the promote-job skip guard
-  - the Trigger Release Build step dispatching the configured release-build
-    workflow after a final-env publication
+  Runtime assertion. From a published v0.1.0 baseline, a feat! commit is
+  orchestrated to a v1.0.0-rc.0 prerelease and cascaded through the prerelease
+  environments (no gate). Promoting uat into the release stage without the flag
+  fails and leaves both the source and target state unchanged; the same promote
+  with allow_breaking succeeds and publishes v1.0.0. The blocked/allowed pair is
+  observed through the run conclusion and the state leaf, both of which flip when
+  the gate is inverted, rather than by grepping the emitted preflight script.
 
-  Generator-output verification only.
+  The follow-on release-build dispatch (Trigger Release Build) fires only on a
+  real final-env publish against real GitHub, which act cannot exercise, so its
+  presence is asserted generation-only. The scenario never promotes into prod,
+  so that step never runs here.
 
 config:
   trunk_branch: main
-  environments: [dev, test, prod]
-  deploys:
+  environments: [dev, qa, uat, prod]
+  builds:
     - name: app
-      workflow: .github/workflows/deploy.yaml
+      workflow: build.yaml
       triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
   release:
     workflow: .github/workflows/release-build.yaml
 
+# Published v0.1.0 baseline: prerelease envs hold the last RC, release and prod
+# hold the published version. The RC tag was reaped at publish time.
+setup:
+  state:
+    dev:
+      version: "v0.1.0-rc.0"
+    qa:
+      version: "v0.1.0-rc.0"
+    uat:
+      version: "v0.1.0-rc.0"
+    release:
+      version: "v0.1.0"
+    prod:
+      version: "v0.1.0"
+  tags:
+    - "v0.1.0"
+  releases:
+    - tag: "v0.1.0"
+      prerelease: false
+
 steps:
-  - name: "Initial commit generates promote.yaml; assert gate and release-build dispatch"
+  - name: "Breaking change commit"
     action: commit
     commit:
-      message: "feat: add app source"
+      message: "feat!: major app refactor"
       files:
-        src/app.go: |
-          package main
-          func main() {}
+        src/app.ts: |
+          export function mainV2() {
+            console.log("App v1.0.0 - Breaking!");
+          }
+
+  - name: "Orchestrate dev; assert the emitted CLI gate and release-build shape"
+    action: orchestrate
     expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: true
+      # Generation-only: these assert the emitted shape of behaviors act cannot
+      # execute (the CLI gate wiring and the real-GitHub-only release-build
+      # dispatch). The gate's RUNTIME behavior is proven by the blocked/allowed
+      # promote pair below, not by these strings.
       workflow_files:
         - path: ".github/workflows/promote.yaml"
           contains:
-            # Breaking-change gate input and CLI-driven preflight.
             - "      allow_breaking_changes:\n"
             - "          cascade promote preflight \\\n"
             - "            --allow-breaking=\"${ALLOW_BREAKING:-false}\" \\\n"
-            # dry_run input and the promote-job skip guard.
-            - "      dry_run:\n"
-            - "    if: ${{ github.event.inputs.dry_run != 'true' }}\n"
-            # Follow-on release-build dispatch against the published tag.
             - "      - name: Trigger Release Build\n"
             - "          gh workflow run release-build.yaml \\\n"
           not_contains:
-            # The promote path uses the CLI gate, not the release bash step.
+            # The multi-env promote path uses the CLI gate, not the single-env
+            # release workflow's bash "Check Breaking Changes" step.
             - "      - name: Check Breaking Changes\n"
+
+  - name: "Cascade promote dev to qa (prerelease, no gate)"
+    action: promote
+    promote:
+      mode: cascade
+      target: qa
+    expect:
+      state:
+        qa:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+        dev:
+          unchanged: true
+
+  - name: "Cascade promote qa to uat (prerelease, no gate)"
+    action: promote
+    promote:
+      mode: cascade
+      target: uat
+    expect:
+      state:
+        uat:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+        qa:
+          unchanged: true
+
+  - name: "Promote uat to release without the flag is blocked"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      state:
+        uat:
+          unchanged: true
+        release:
+          unchanged: true
+
+  - name: "Promote uat to release with allow_breaking proceeds"
+    action: promote
+    promote:
+      mode: default
+      allow_breaking: true
+    expect:
+      state:
+        release:
+          sha: commit1
+          version: "v1.0.0"
+        uat:
+          unchanged: true
+      releases:
+        - tag: "v1.0.0"
+          prerelease: false
+          latest: true
+      tags:
+        exist: ["v1.0.0"]
+        deleted: ["v1.0.0-rc.0"]

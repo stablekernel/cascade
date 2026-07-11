@@ -1,17 +1,19 @@
 name: "Release trigger dispatch-only"
 description: |
-  Verifies that release_trigger: dispatch makes the generated orchestrate
-  workflow omit its push: trigger so it runs only on workflow_dispatch. A
-  maintainer-owned gate (for example a nightly schedule) then decides when a
-  release candidate is cut, instead of every trunk merge cutting one.
+  Verifies at runtime that release_trigger: dispatch makes the generated
+  orchestrate workflow run only on workflow_dispatch. A maintainer-owned gate
+  (for example a nightly schedule) then decides when a release candidate is cut,
+  instead of every trunk merge cutting one.
 
-  Covers:
-  - the push: trigger and its branches:/paths: filter are gone
-  - workflow_dispatch and its dry_run input survive
-  - the default (push) behavior is unaffected, asserted by 13-dispatch-inputs
-    and every other generator scenario that does not set release_trigger
-
-  Generator-output verification only.
+  Runtime assertion. The same orchestrate workflow is run twice: under a push
+  event it schedules no job (the push: trigger is gone), and under a
+  workflow_dispatch event it runs and advances dev state to the first release
+  candidate. Running the dispatch path proves the workflow_dispatch trigger is
+  genuinely wired, which a grep for the "workflow_dispatch:" string cannot
+  establish, and the no-run push assertion proves the trigger was suppressed
+  rather than merely spelled differently in the on: block. The default (push)
+  behavior for repositories that do not set release_trigger is covered by every
+  other generator scenario.
 
 config:
   trunk_branch: main
@@ -24,7 +26,7 @@ config:
   deploys: []
 
 steps:
-  - name: "Initial commit; assert orchestrate omits push trigger"
+  - name: "Initial commit"
     action: commit
     commit:
       message: "feat: add app"
@@ -32,13 +34,21 @@ steps:
         src/app.go: |
           package main
           func main() {}
+
+  - name: "A push event triggers no orchestrate run"
+    action: orchestrate
+    orchestrate:
+      event: push
+      expect_no_run: true
+
+  - name: "A workflow_dispatch event runs orchestrate and advances state"
+    action: orchestrate
+    orchestrate:
+      event: workflow_dispatch
     expect:
-      workflow_files:
-        - path: ".github/workflows/orchestrate.yaml"
-          contains:
-            - "  workflow_dispatch:"
-            - "      dry_run:"
-          not_contains:
-            - "  push:"
-            - "    branches: [main]"
-            - "    paths:"
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success

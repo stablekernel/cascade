@@ -224,6 +224,18 @@ type CommitStep struct {
 // repo-wide orchestrate.yaml, byte-identical to an orchestrate step with no config.
 type OrchestrateStep struct {
 	Component string `yaml:"component,omitempty"`
+	// Event overrides the GitHub event the orchestrate workflow runs under
+	// (default "push"). release_trigger: dispatch drops the push: trigger, so a
+	// scenario runs the same workflow under "push" (paired with ExpectNoRun to
+	// prove no job fires) and under "workflow_dispatch" (proving the dispatch path
+	// still advances state).
+	Event string `yaml:"event,omitempty"`
+	// ExpectNoRun asserts the orchestrate workflow produced no job run at all: act
+	// scheduled zero jobs because the event does not match any of the workflow's
+	// triggers. It is the runtime signal that a trigger was correctly suppressed.
+	// A bare source grep for the absent "push:" string cannot distinguish a
+	// suppressed trigger from a malformed on: block that would still fire.
+	ExpectNoRun bool `yaml:"expect_no_run,omitempty"`
 }
 
 // PromoteStep defines a promote action
@@ -384,6 +396,15 @@ type StepExpect struct {
 	// assert a config field survives a routine state write rather than being
 	// dropped on finalize.
 	Manifest *ManifestExpect `yaml:"manifest,omitempty"`
+	// ExpectLog asserts the last workflow run's logs contain this substring, so a
+	// scenario can prove a load-bearing runtime marker the running job actually
+	// emitted (for example the state-write loop's "cascade-state-write: ok
+	// attempt=1") instead of grepping the emitted script source, which stays green
+	// even when the loop is deleted because the marker text is still literally
+	// present in the file. Mirrors RollbackStep.ExpectLog and is evaluated against
+	// the same run result the Jobs assertion reads, so it applies to any step that
+	// ran a workflow (orchestrate, promote).
+	ExpectLog string `yaml:"expect_log,omitempty"`
 }
 
 // ManifestExpect asserts substrings against the live manifest read from Gitea.

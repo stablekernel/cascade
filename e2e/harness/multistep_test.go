@@ -67,6 +67,53 @@ steps:
 	assert.Equal(t, "skipped", scenario.Steps[1].Expect.Jobs["build-worker"])
 }
 
+// TestParseMultiStepScenario_RuntimeAssertionFields round-trips the runtime
+// de-vacuum surfaces (expect_log on a step expectation; event and expect_no_run
+// on an orchestrate step) so a scenario that asserts a runtime log marker or a
+// suppressed trigger parses into the fields the runner consumes.
+func TestParseMultiStepScenario_RuntimeAssertionFields(t *testing.T) {
+	yaml := `
+name: "Runtime assertion fields"
+config:
+  environments: [dev]
+steps:
+  - name: "Orchestrate on push; assert state-write marker"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          version: "v0.1.0-rc.0"
+      expect_log: "cascade-state-write: ok attempt=1"
+  - name: "Push does not trigger a dispatch-only orchestrate"
+    action: orchestrate
+    orchestrate:
+      event: push
+      expect_no_run: true
+  - name: "Dispatch triggers the orchestrate"
+    action: orchestrate
+    orchestrate:
+      event: workflow_dispatch
+    expect:
+      state:
+        dev:
+          version: "v0.1.0-rc.0"
+`
+
+	scenario, err := ParseMultiStepScenario([]byte(yaml))
+	require.NoError(t, err)
+	require.Len(t, scenario.Steps, 3)
+
+	assert.Equal(t, "cascade-state-write: ok attempt=1", scenario.Steps[0].Expect.ExpectLog)
+
+	require.NotNil(t, scenario.Steps[1].Orchestrate)
+	assert.Equal(t, "push", scenario.Steps[1].Orchestrate.Event)
+	assert.True(t, scenario.Steps[1].Orchestrate.ExpectNoRun)
+
+	require.NotNil(t, scenario.Steps[2].Orchestrate)
+	assert.Equal(t, "workflow_dispatch", scenario.Steps[2].Orchestrate.Event)
+	assert.False(t, scenario.Steps[2].Orchestrate.ExpectNoRun)
+}
+
 func TestDiscoverMultiStepScenarios(t *testing.T) {
 	// Create temp directory with test scenarios
 	dir := t.TempDir()

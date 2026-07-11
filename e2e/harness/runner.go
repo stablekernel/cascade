@@ -1020,10 +1020,19 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 		branch = "main"
 	}
 
+	// The event defaults to push (a trunk merge). A dispatch-only orchestrate
+	// (release_trigger: dispatch) is run under "push" with ExpectNoRun to prove
+	// no job fires, and under "workflow_dispatch" to prove the dispatch path
+	// still advances state.
+	event := "push"
+	if orch != nil && orch.Event != "" {
+		event = orch.Event
+	}
+
 	// Run the actual orchestrate workflow via ActRunner
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
 		WorkflowPath: workflowPath,
-		Event:        "push",
+		Event:        event,
 		Env: map[string]string{
 			"GITHUB_SHA":        sha,
 			"GITHUB_REF":        fmt.Sprintf("refs/heads/%s", branch),
@@ -1036,6 +1045,18 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 
 	// Store workflow result for assertions
 	r.lastWorkflowResult = result
+
+	// Handle the suppressed-trigger case: the workflow scheduled no jobs because
+	// the event matches none of its triggers. act marks a zero-job targeted run
+	// as a "failure" (missing/unloadable workflow); ExpectNoRun reinterprets that
+	// specific outcome as the success path, proving the trigger was dropped.
+	if orch != nil && orch.ExpectNoRun {
+		if len(result.Jobs) == 0 {
+			r.t.Logf("  Orchestrate: no job ran under event %q, as expected", event)
+			return nil
+		}
+		return fmt.Errorf("expected no orchestrate run under event %q but %d job(s) ran", event, len(result.Jobs))
+	}
 
 	// Handle expected failures (mirrors executePromote's ExpectFailure path).
 	if expectFailure {
@@ -1538,6 +1559,16 @@ func (r *Runner) assertStep(ctx context.Context, step *Step, preState *Execution
 	if expect.Manifest != nil {
 		errs := r.assertManifest(ctx, expect.Manifest)
 		allErrs = append(allErrs, errs...)
+	}
+
+	// Assert a runtime log marker the last workflow run actually emitted. This
+	// reads r.lastWorkflowResult (the same result the Jobs assertion consumes),
+	// so it proves a behavior ran rather than that its marker text was rendered
+	// into the workflow file. Skipped in unit-test mode where no workflow ran.
+	if expect.ExpectLog != "" && r.lastWorkflowResult != nil {
+		if !strings.Contains(r.lastWorkflowResult.Logs, expect.ExpectLog) {
+			allErrs = append(allErrs, fmt.Errorf("expected workflow logs to contain %q but did not", expect.ExpectLog))
+		}
 	}
 
 	return allErrs
