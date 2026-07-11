@@ -6,10 +6,9 @@ description: |
   change back into the manifest. This scenario also forces the reconcile block
   through the schema: TestSchema_ValidatesE2EScenarioConfigs validates every
   scenario config against the manifest schema, so the reconcile property can
-  never silently drop from the schema again. Coverage here stops at generation:
-  the emitted workflows are asserted directly, and no separate verify step is
-  run (verify's planned-file set does not yet include the reconcile companion,
-  so it would always flag both files as orphaned; that is tracked separately).
+  never silently drop from the schema again. After regenerating, verify against
+  pristine output is clean (exit 0), proving the generated files round-trip
+  through verify with no drift or orphan.
 
 config:
   trunk_branch: main
@@ -53,3 +52,9 @@ steps:
         - path: ".github/workflows/cascade-reconcile-companion.yaml"
           contains:
             - "workflows: [\"Cascade Reconcile Check\"]"
+
+  - name: "Verify clean against pristine generated output"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
