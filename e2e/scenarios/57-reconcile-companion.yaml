@@ -1,0 +1,60 @@
+name: "Generate Reconcile Companion"
+description: |
+  Exercises the opt-in reconcile lane (#443) end to end. A manifest that enables
+  reconcile generates two cascade-owned workflows: the read-only pull_request
+  detector and the workflow_run companion that adopts an external governed-pin
+  change back into the manifest. This scenario also forces the reconcile block
+  through the schema: TestSchema_ValidatesE2EScenarioConfigs validates every
+  scenario config against the manifest schema, so the reconcile property can
+  never silently drop from the schema again. After regenerating, verify against
+  pristine output is clean (exit 0), proving the generated files round-trip
+  through verify with no drift or orphan.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
+  reconcile:
+    enabled: true
+    source: dependabot
+    commit: followup
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        # The pull_request detector runs on fork-controlled input, so its
+        # top-level token stays read-only: it captures relevance as an artifact
+        # and never pushes or comments.
+        - path: ".github/workflows/cascade-reconcile-check.yaml"
+          contains:
+            - "name: Cascade Reconcile Check"
+            - "permissions:\n  contents: read\n"
+          not_contains:
+            - "\npermissions:\n  contents: write"
+        # The workflow_run companion subscribes to the detector and adopts the
+        # bump. followup routing opens a separate cascade-owned branch.
+        - path: ".github/workflows/cascade-reconcile-companion.yaml"
+          contains:
+            - "workflows: [\"Cascade Reconcile Check\"]"
+
+  - name: "Verify clean against pristine generated output"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

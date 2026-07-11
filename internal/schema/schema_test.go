@@ -393,3 +393,55 @@ func TestSchema_AcceptsAllowBreakingChanges(t *testing.T) {
 		t.Fatalf("a non-boolean allow_breaking_changes must be rejected")
 	}
 }
+
+// TestSchema_AcceptsReconcile proves the config-level reconcile block is
+// declared, so a manifest that opts in to the emitted pin-reconcile companion
+// validates under the config object's additionalProperties: false. Source and
+// commit are constrained to their known adapter and routing values.
+func TestSchema_AcceptsReconcile(t *testing.T) {
+	sch := compileSchema(t)
+
+	good := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch": "main",
+			"reconcile": map[string]any{
+				"enabled": true,
+				"source":  "dependabot",
+				"commit":  "followup",
+			},
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, good)); err != nil {
+		t.Fatalf("reconcile block must validate: %v", err)
+	}
+
+	minimal := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch": "main",
+			"reconcile":    map[string]any{"enabled": true},
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, minimal)); err != nil {
+		t.Fatalf("minimal reconcile block must validate: %v", err)
+	}
+
+	badSource := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch": "main",
+			"reconcile":    map[string]any{"source": "renovate"},
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, badSource)); err == nil {
+		t.Fatalf("an unknown reconcile source must be rejected")
+	}
+
+	badKey := map[string]any{
+		"ci": map[string]any{"config": map[string]any{
+			"trunk_branch": "main",
+			"reconcile":    map[string]any{"nope": true},
+		}},
+	}
+	if err := sch.Validate(toJSONValue(t, badKey)); err == nil {
+		t.Fatalf("an unknown reconcile property must be rejected")
+	}
+}
