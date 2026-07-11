@@ -813,6 +813,26 @@ where an override is meaningful. An unset field takes the shared top-level value
 `extra_triggers`, `pr_preview`, `validate_check`, `rollback`, `deployments`,
 `environment_config`, `triggers`, `release_token`, and `release_token_app`.
 
+Inheritance is a **deep merge**. When a component overrides a block, it merges
+field-by-field into the inherited default rather than replacing it wholesale, so
+a partial override never drops the shared siblings it did not mention:
+
+- A **nested block** merges recursively. A component that sets only
+  `tag_grammar.prefix` keeps the inherited `prerelease_token`, `prerelease_separator`,
+  and `dryrun_token`. A component that sets only `deployments.keep_prior_active`
+  keeps the inherited `deployments.enabled`.
+- A **keyed map** such as `environment_config` merges by key, and the entry under
+  each key merges field-by-field. A component that configures only its `prod`
+  environment keeps the shared `dev` and `staging` entries, and a `prod` entry that
+  sets only `wait_timer` keeps the inherited `gha_environment` for `prod`.
+- A **scalar or a list** replaces. A component `environments` list overrides the
+  shared list outright, and a scalar such as `release_trigger` overrides the shared
+  value.
+
+The one exception to replace-a-list is the additive path set: a component's
+`extra_paths` unions with the top-level `shared_paths` rather than replacing it.
+See [Shared paths](#shared-paths).
+
 `concurrency.cancel_in_progress` is inheritable, but `concurrency.group` is not:
 the orchestrate, promote, and rollback groups are derived per component so runs
 never serialize across components. Setting a component `concurrency.group` is a
