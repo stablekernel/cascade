@@ -1164,7 +1164,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 
 	// Build changelog command with optional --contributors flag
 	changelogCmd := "cascade generate-changelog --base-sha \"$TARGET_SHA\" --head-sha \"$SOURCE_SHA\" --repo \"${{ github.repository }}\""
-	if g.config.Changelog != nil && g.config.Changelog.Contributors {
+	if g.config.Changelog.IncludesContributors() {
 		changelogCmd += " --contributors"
 	}
 	fmt.Fprintf(sb, "          RESULT=$(%s)\n", changelogCmd)

@@ -556,12 +556,16 @@ type ValidateConfig struct {
 	Run            string                            `yaml:"run,omitempty" json:"run,omitempty"`           // rejected: inline run is no longer supported; use workflow:
 	Shell          string                            `yaml:"shell,omitempty" json:"shell,omitempty"`       // rejected: inline shell is no longer supported; use workflow:
 	Triggers       []string                          `yaml:"triggers,omitempty" json:"triggers,omitempty"` // File patterns that should trigger validation
-	SupportsDryRun bool                              `yaml:"supports_dry_run,omitempty" json:"supports_dry_run,omitempty"`
+	// SupportsDryRun and Retries are pointers so an explicit per-component
+	// opt-out survives the inheritance deep merge (see PRPreviewConfig): a bare
+	// bool/int set to its zero value against an inherited non-zero would marshal
+	// to nothing and silently inherit.
+	SupportsDryRun *bool                             `yaml:"supports_dry_run,omitempty" json:"supports_dry_run,omitempty"`
 	Inputs         map[string]interface{}            `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	EnvInputs      map[string]map[string]interface{} `yaml:"env_inputs,omitempty" json:"env_inputs,omitempty"`
 	RunPolicy      string                            `yaml:"run_policy,omitempty" json:"run_policy,omitempty"`
 	OnFailure      string                            `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
-	Retries        int                               `yaml:"retries,omitempty" json:"retries,omitempty"`
+	Retries        *int                              `yaml:"retries,omitempty" json:"retries,omitempty"`
 	TimeoutMinutes int                               `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // Job-level timeout-minutes (omits when 0)
 
 	// Per-callback fields. secrets and permissions are wired into generation:
@@ -574,6 +578,20 @@ type ValidateConfig struct {
 	Permissions map[string]string  `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	RunsOn      *RunsOn            `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`
 	Concurrency *ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+}
+
+// DryRunSupported reports whether the validate callback supports a dry run.
+// Nil-safe; defaults to false when unset.
+func (v *ValidateConfig) DryRunSupported() bool {
+	return v != nil && v.SupportsDryRun != nil && *v.SupportsDryRun
+}
+
+// RetryCount returns the configured validate retry count, or 0 when unset.
+func (v *ValidateConfig) RetryCount() int {
+	if v == nil || v.Retries == nil {
+		return 0
+	}
+	return *v.Retries
 }
 
 // BuildConfig defines a build target
@@ -689,7 +707,10 @@ type PublishConfig struct {
 
 // ReleaseConfig defines release management settings
 type ReleaseConfig struct {
-	Disabled bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"` // true = disabled
+	// Disabled is a pointer so an explicit per-component opt-in (disabled: false
+	// against an inherited disabled: true) survives the inheritance deep merge
+	// rather than marshalling to nothing and silently inheriting the true.
+	Disabled *bool  `yaml:"disabled,omitempty" json:"disabled,omitempty"` // true = disabled
 	Tag      string `yaml:"tag,omitempty" json:"tag,omitempty"`           // callback.output reference for external releases
 
 	// Workflow is the optional reusable-workflow path dispatched after a final
@@ -799,16 +820,36 @@ func (n *NotifyConfig) GetToken() string {
 	return normalizeTokenExpression(n.Token)
 }
 
-// ChangelogConfig defines changelog generation settings
+// ChangelogConfig defines changelog generation settings. Disabled and
+// Contributors are pointers so an explicit per-component override of either to
+// false survives the inheritance deep merge (see PRPreviewConfig).
 type ChangelogConfig struct {
-	Disabled     bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`         // true = disabled
+	Disabled     *bool  `yaml:"disabled,omitempty" json:"disabled,omitempty"`         // true = disabled
 	Workflow     string `yaml:"workflow,omitempty" json:"workflow,omitempty"`         // custom changelog workflow
-	Contributors bool   `yaml:"contributors,omitempty" json:"contributors,omitempty"` // true = include contributors section
+	Contributors *bool  `yaml:"contributors,omitempty" json:"contributors,omitempty"` // true = include contributors section
+}
+
+// IsDisabled reports whether changelog generation is turned off. Nil-safe;
+// defaults to false (enabled) when unset.
+func (c *ChangelogConfig) IsDisabled() bool {
+	return c != nil && c.Disabled != nil && *c.Disabled
+}
+
+// IncludesContributors reports whether the contributors section is emitted.
+// Nil-safe; defaults to false when unset.
+func (c *ChangelogConfig) IncludesContributors() bool {
+	return c != nil && c.Contributors != nil && *c.Contributors
+}
+
+// IsDisabled reports whether release management is turned off. Nil-safe;
+// defaults to false (enabled) when unset.
+func (r *ReleaseConfig) IsDisabled() bool {
+	return r != nil && r.Disabled != nil && *r.Disabled
 }
 
 // ReleaseEnabled returns true if release management is enabled (default: true)
 func (c *TrunkConfig) ReleaseEnabled() bool {
-	return c.Release == nil || !c.Release.Disabled
+	return c.Release == nil || !c.Release.IsDisabled()
 }
 
 // HasExternalRelease returns true if an external tool creates releases
@@ -823,7 +864,7 @@ func (c *TrunkConfig) HasCustomChangelog() bool {
 
 // ChangelogEnabled returns true if changelog generation is enabled (default: true)
 func (c *TrunkConfig) ChangelogEnabled() bool {
-	return c.Changelog == nil || !c.Changelog.Disabled
+	return c.Changelog == nil || !c.Changelog.IsDisabled()
 }
 
 // HasReleaseArtifacts returns true if any build has artifacts configured

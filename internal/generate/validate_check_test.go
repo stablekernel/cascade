@@ -14,21 +14,21 @@ import (
 func TestValidateCheckGenerator_Enabled(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:   "main",
-		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(true)},
 	}
 	gen := NewValidateCheckGenerator(cfg, "")
 	assert.True(t, gen.Enabled(), "validate_check.enabled should report enabled")
 
 	// Absent block and explicitly-disabled block both report disabled.
 	assert.False(t, NewValidateCheckGenerator(&config.TrunkConfig{TrunkBranch: "main"}, "").Enabled())
-	disabled := &config.TrunkConfig{ValidateCheck: &config.ValidateCheckConfig{Enabled: false}}
+	disabled := &config.TrunkConfig{ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(false)}}
 	assert.False(t, NewValidateCheckGenerator(disabled, "").Enabled())
 }
 
 func TestValidateCheckGenerator_TriggersAndPermissions(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:   "main",
-		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(true)},
 	}
 	gen := NewValidateCheckGenerator(cfg, "")
 	content, err := gen.Generate()
@@ -49,7 +49,7 @@ func TestValidateCheckGenerator_TriggersAndPermissions(t *testing.T) {
 func TestValidateCheckGenerator_Steps(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:   "main",
-		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(true)},
 	}
 	gen := NewValidateCheckGenerator(cfg, "")
 	content, err := gen.Generate()
@@ -78,7 +78,7 @@ func TestValidateCheckGenerator_Steps(t *testing.T) {
 func TestValidateCheckGenerator_SetupCLIPassesToken(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:   "main",
-		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(true)},
 	}
 	gen := NewValidateCheckGenerator(cfg, "")
 	content, err := gen.Generate()
@@ -94,7 +94,7 @@ func TestValidateCheckGenerator_PinModeSHA(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:   "main",
 		PinMode:       config.PinModeSHA,
-		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(true)},
 	}
 	gen := NewValidateCheckGenerator(cfg, "")
 	content, err := gen.Generate()
@@ -107,7 +107,7 @@ func TestValidateCheckGenerator_PinModeSHA(t *testing.T) {
 func TestValidateCheckGenerator_ValidYAML(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:   "main",
-		ValidateCheck: &config.ValidateCheckConfig{Enabled: true},
+		ValidateCheck: &config.ValidateCheckConfig{Enabled: boolPtr(true)},
 	}
 	gen := NewValidateCheckGenerator(cfg, "")
 	content, err := gen.Generate()

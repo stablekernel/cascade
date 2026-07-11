@@ -30,7 +30,7 @@ func NewValidateCheckGenerator(cfg *config.TrunkConfig, baseDir string) *Validat
 
 // Enabled reports whether the manifest opts in to the validation check.
 func (g *ValidateCheckGenerator) Enabled() bool {
-	return g.config != nil && g.config.ValidateCheck != nil && g.config.ValidateCheck.Enabled
+	return g.config != nil && g.config.ValidateCheck.IsEnabled()
 }
 
 // getCLIRef mirrors the ref-resolution used by the other generators so the

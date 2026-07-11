@@ -359,7 +359,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 
 	// Generate the opt-in read-only PR plan-preview workflow (#40). Absent or
 	// disabled pr_preview emits nothing, so existing manifests are unaffected.
-	if cfg.PRPreview != nil && cfg.PRPreview.Enabled {
+	if cfg.PRPreview.IsEnabled() {
 		previewGen := NewPRPreviewGenerator(cfg, baseDir)
 		content, err := previewGen.Generate()
 		if err != nil {

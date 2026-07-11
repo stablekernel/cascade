@@ -44,12 +44,12 @@ func (g *PRPreviewGenerator) getCLIRef() string {
 
 // commentEnabled reports whether the preview should also post a PR comment.
 func (g *PRPreviewGenerator) commentEnabled() bool {
-	return g.config.PRPreview != nil && g.config.PRPreview.Comment
+	return g.config.PRPreview.HasComment()
 }
 
 // Generate creates the PR plan-preview workflow content.
 func (g *PRPreviewGenerator) Generate() (string, error) {
-	if g.config.PRPreview == nil || !g.config.PRPreview.Enabled {
+	if !g.config.PRPreview.IsEnabled() {
 		return "", fmt.Errorf("cannot generate pr-preview workflow: pr_preview is not enabled")
 	}
 

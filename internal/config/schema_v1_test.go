@@ -223,7 +223,7 @@ environment_config:
 	if et == nil || et.Schedule[0].Cron != "0 6 * * 1" || et.RepositoryDispatch == nil || et.WorkflowRun == nil || et.MergeGroup == nil {
 		t.Fatalf("extra_triggers: %#v", et)
 	}
-	if !cfg.PRPreview.Enabled || !cfg.ValidateCheck.Enabled || !cfg.MergeQueue.Enabled {
+	if !cfg.PRPreview.IsEnabled() || !cfg.ValidateCheck.IsEnabled() || !cfg.MergeQueue.Enabled {
 		t.Fatalf("pr lanes: %#v %#v %#v", cfg.PRPreview, cfg.ValidateCheck, cfg.MergeQueue)
 	}
 	if cfg.Telemetry.Adapter != "none" || cfg.EnvironmentConfig["prod"].GHAEnvironment != "production" {

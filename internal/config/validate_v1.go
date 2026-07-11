@@ -673,7 +673,7 @@ func validateEnvironmentConfig(cfg *TrunkConfig) []string {
 		ec := cfg.EnvironmentConfig[name]
 		prefix := "environment_config." + name
 
-		if ec.WaitTimer < 0 || ec.WaitTimer > MaxWaitTimerMinutes {
+		if ec.WaitTimer != nil && (*ec.WaitTimer < 0 || *ec.WaitTimer > MaxWaitTimerMinutes) {
 			errs = append(errs, fmt.Sprintf("%s.wait_timer must be between 0 and %d minutes", prefix, MaxWaitTimerMinutes))
 		}
 

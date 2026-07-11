@@ -11,7 +11,7 @@ import (
 // nativeDeploymentsEnabled reports whether the manifest opted in to GitHub
 // Deployments API reporting in the finalize job.
 func nativeDeploymentsEnabled(cfg *config.TrunkConfig) bool {
-	return cfg.Deployments != nil && cfg.Deployments.Enabled
+	return cfg.Deployments.IsEnabled()
 }
 
 // deploymentAutoInactive returns the auto_inactive value sent to the Deployments
@@ -19,10 +19,7 @@ func nativeDeploymentsEnabled(cfg *config.TrunkConfig) bool {
 // deployments for the same environment Active; the default relies on GitHub's
 // native auto-inactivation (auto_inactive:true).
 func deploymentAutoInactive(cfg *config.TrunkConfig) bool {
-	if cfg.Deployments != nil && cfg.Deployments.KeepPriorActive {
-		return false
-	}
-	return true
+	return !cfg.Deployments.KeepsPriorActive()
 }
 
 // writeNativeDeploymentSteps emits the GitHub Deployments API lifecycle for the

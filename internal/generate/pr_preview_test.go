@@ -17,8 +17,8 @@ func prPreviewConfig(comment bool) *config.TrunkConfig {
 		TrunkBranch:  "main",
 		Environments: []string{"dev"},
 		PRPreview: &config.PRPreviewConfig{
-			Enabled: true,
-			Comment: comment,
+			Enabled: boolPtr(true),
+			Comment: boolPtr(comment),
 		},
 	}
 }
@@ -98,7 +98,7 @@ func TestPRPreviewGenerator_Disabled(t *testing.T) {
 	// enabled: false
 	gen = NewPRPreviewGenerator(&config.TrunkConfig{
 		TrunkBranch: "main",
-		PRPreview:   &config.PRPreviewConfig{Enabled: false},
+		PRPreview:   &config.PRPreviewConfig{Enabled: boolPtr(false)},
 	}, "")
 	_, err = gen.Generate()
 	require.Error(t, err)

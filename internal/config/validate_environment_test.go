@@ -31,7 +31,7 @@ func TestValidateEnvironmentConfigFields(t *testing.T) {
 				"prod": {
 					GHAEnvironment:    "production",
 					RequiredReviewers: []string{"octocat", "team/ops"},
-					WaitTimer:         10,
+					WaitTimer:         intPtr(10),
 					BranchPolicy:      EnvBranchPolicyCustom,
 					BranchPatterns:    []string{"main", "release/*"},
 					TagPatterns:       []string{"v*"},
@@ -44,21 +44,21 @@ func TestValidateEnvironmentConfigFields(t *testing.T) {
 		{
 			name: "wait_timer zero is valid",
 			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: 0},
+				"prod": {WaitTimer: intPtr(0)},
 			},
 			wantErr: false,
 		},
 		{
 			name: "wait_timer at maximum is valid",
 			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: MaxWaitTimerMinutes},
+				"prod": {WaitTimer: intPtr(MaxWaitTimerMinutes)},
 			},
 			wantErr: false,
 		},
 		{
 			name: "wait_timer above maximum is rejected",
 			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: MaxWaitTimerMinutes + 1},
+				"prod": {WaitTimer: intPtr(MaxWaitTimerMinutes + 1)},
 			},
 			wantErr:     true,
 			errContains: "wait_timer must be between 0 and 43200 minutes",
@@ -66,7 +66,7 @@ func TestValidateEnvironmentConfigFields(t *testing.T) {
 		{
 			name: "negative wait_timer is rejected",
 			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: -1},
+				"prod": {WaitTimer: intPtr(-1)},
 			},
 			wantErr:     true,
 			errContains: "wait_timer must be between 0 and 43200 minutes",
@@ -217,8 +217,8 @@ environment_config:
 	if got, want := len(ec.RequiredReviewers), 2; got != want {
 		t.Fatalf("required_reviewers len = %d, want %d", got, want)
 	}
-	if ec.WaitTimer != 10 {
-		t.Fatalf("wait_timer = %d, want 10", ec.WaitTimer)
+	if ec.WaitTimerMinutes() != 10 {
+		t.Fatalf("wait_timer = %d, want 10", ec.WaitTimerMinutes())
 	}
 	if ec.BranchPolicy != EnvBranchPolicyCustom {
 		t.Fatalf("branch_policy = %q", ec.BranchPolicy)

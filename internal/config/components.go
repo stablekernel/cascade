@@ -128,82 +128,21 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	eff.Components = nil  // an effective per-component config has no nested components
 	eff.SharedPaths = nil // top-level sugar, expanded into per-component extra paths below
 
-	// Required per-component tag namespace.
-	eff.TagPrefix = comp.TagPrefix
+	// Inheritable overrides: uniform deep-merge. Every inheritable block merges
+	// field-by-field into the shared defaults rather than replacing it wholesale.
+	// An override the component leaves unset keeps the inherited value; a scalar
+	// or slice the component sets replaces the inherited one; a nested block (or a
+	// keyed map such as environment_config) merges key-by-key so a partial
+	// override never drops the inherited siblings. The one axis that stays a union
+	// rather than a merge is extra_paths/shared_paths, resolved separately below.
+	if err := deepMergeComponentOverrides(eff, comp); err != nil {
+		return nil, err
+	}
 
-	// Inheritable overrides: apply only where the component set a value.
-	if comp.TagGrammar != nil {
-		eff.TagGrammar = comp.TagGrammar
-	}
-	if comp.Environments != nil {
-		eff.Environments = comp.Environments
-	}
-	if comp.ReleaseTrigger != "" {
-		eff.ReleaseTrigger = comp.ReleaseTrigger
-	}
-	if comp.AllowBreakingChanges != nil {
-		eff.AllowBreakingChanges = *comp.AllowBreakingChanges
-	}
-	if comp.Validate != nil {
-		eff.Validate = comp.Validate
-	}
-	if comp.Builds != nil {
-		eff.Builds = comp.Builds
-	}
-	if comp.Deploys != nil {
-		eff.Deploys = comp.Deploys
-	}
-	if comp.Publish != nil {
-		eff.Publish = comp.Publish
-	}
-	if comp.External != nil {
-		eff.External = comp.External
-	}
-	if comp.Notify != nil {
-		eff.Notify = comp.Notify
-	}
-	if comp.Release != nil {
-		eff.Release = comp.Release
-	}
-	if comp.Changelog != nil {
-		eff.Changelog = comp.Changelog
-	}
-	if comp.RunsOn != nil {
-		eff.RunsOn = comp.RunsOn
-	}
-	if comp.JobTimeoutMinutes != nil {
-		eff.JobTimeoutMinutes = *comp.JobTimeoutMinutes
-	}
-	if comp.DispatchInputs != nil {
-		eff.DispatchInputs = comp.DispatchInputs
-	}
-	if comp.ExtraTriggers != nil {
-		eff.ExtraTriggers = comp.ExtraTriggers
-	}
-	if comp.PRPreview != nil {
-		eff.PRPreview = comp.PRPreview
-	}
-	if comp.ValidateCheck != nil {
-		eff.ValidateCheck = comp.ValidateCheck
-	}
-	if comp.Rollback != nil {
-		eff.Rollback = comp.Rollback
-	}
-	if comp.Deployments != nil {
-		eff.Deployments = comp.Deployments
-	}
-	if comp.EnvironmentConfig != nil {
-		eff.EnvironmentConfig = comp.EnvironmentConfig
-	}
-	if comp.Triggers != nil {
-		eff.Triggers = comp.Triggers
-	}
-	if comp.ReleaseToken != "" {
-		eff.ReleaseToken = comp.ReleaseToken
-	}
-	if comp.ReleaseTokenApp != nil {
-		eff.ReleaseTokenApp = comp.ReleaseTokenApp
-	}
+	// Required per-component tag namespace. deepMergeComponentOverrides already
+	// carries comp.TagPrefix through; set it explicitly so the required namespace
+	// is unmistakable and independent of the merge path.
+	eff.TagPrefix = comp.TagPrefix
 
 	// Concurrency: cancel_in_progress is inheritable, the group is derived per
 	// component. Start from the shared cancel policy, let the component override
@@ -269,6 +208,107 @@ func mergePaths(lists ...[]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// deepMergeComponentOverrides folds a component's inheritable overrides into the
+// shared defaults in place, field-by-field. It marshals both the base config and
+// the component override to a generic JSON tree and recursively merges the
+// override onto the base: an object present on both sides merges key-by-key (so a
+// nested block or a keyed map such as environment_config keeps its inherited
+// siblings), while a scalar or array on the override side replaces the inherited
+// value. A field the component leaves unset is absent from its JSON (every
+// override field carries omitempty), so it never clobbers the inherited value.
+//
+// The JSON round trip is the same fidelity contract clone() already depends on:
+// every TrunkConfig field is JSON-tagged and none is json:"-" except the inline
+// Extra catch-all, which is empty here (validation rejects unknown keys before
+// resolution). Component-only keys such as path and extra_paths have no
+// TrunkConfig field and are ignored on decode; concurrency is overwritten by the
+// per-component derivation that follows, so leaving it in the merge is harmless.
+func deepMergeComponentOverrides(base *TrunkConfig, override ComponentConfig) error {
+	baseJSON, err := json.Marshal(base)
+	if err != nil {
+		return fmt.Errorf("merging component overrides: %w", err)
+	}
+	overrideJSON, err := json.Marshal(override)
+	if err != nil {
+		return fmt.Errorf("merging component overrides: %w", err)
+	}
+	var baseTree, overrideTree map[string]any
+	if err := json.Unmarshal(baseJSON, &baseTree); err != nil {
+		return fmt.Errorf("merging component overrides: %w", err)
+	}
+	if err := json.Unmarshal(overrideJSON, &overrideTree); err != nil {
+		return fmt.Errorf("merging component overrides: %w", err)
+	}
+	mergeJSONTrees(baseTree, overrideTree)
+	mergedJSON, err := json.Marshal(baseTree)
+	if err != nil {
+		return fmt.Errorf("merging component overrides: %w", err)
+	}
+	// Reset before decoding so no stale slice or map tail from the pre-merge base
+	// lingers; the merged tree is a superset of the base keys, so this is a full
+	// rewrite of the effective config.
+	*base = TrunkConfig{}
+	if err := json.Unmarshal(mergedJSON, base); err != nil {
+		return fmt.Errorf("merging component overrides: %w", err)
+	}
+	return nil
+}
+
+// mergeReplaceLeafKeys names the manifest blocks that must WHOLE-REPLACE on
+// override rather than field-merge, even though they marshal to a JSON object.
+// These are exclusive or atomic blocks whose fields are not independently
+// composable, so recursively merging one component's fields onto the inherited
+// block's fields corrupts it:
+//
+//   - secrets (SecretsConfig): XOR-exclusive - either "inherit" (all caller
+//     secrets) OR an explicit {name: source} allow-list, never both. A
+//     field-merge of an inherited "inherit" with a component allow-list yields
+//     both set, and generation gives "inherit" precedence, silently BROADENING
+//     the component's least-privilege allow-list. It has a custom UnmarshalYAML.
+//   - runs_on (RunsOn): polymorphic - a scalar label, a list of labels, or a
+//     {group, labels} object, exactly one form. Field-merging two forms leaves a
+//     stale field from the inherited form set. It has a custom UnmarshalYAML.
+//   - release_token_app / state_token_app (AppTokenSource): an atomic credential
+//     identity (app_id + private_key). Field-merging would splice an app_id from
+//     one source with a private_key from another; whole-replace makes an
+//     incomplete override a clean validation error instead of a bad credential.
+//
+// A new exclusive, polymorphic, atomic, or custom-decoded block MUST be added
+// here, or the tree-merge will silently corrupt it. The keys are matched by name
+// at any depth because each of these names maps to exactly one such type in the
+// schema (for example secrets under validate and under each build/deploy).
+var mergeReplaceLeafKeys = map[string]struct{}{
+	"secrets":           {},
+	"runs_on":           {},
+	"release_token_app": {},
+	"state_token_app":   {},
+}
+
+// mergeJSONTrees recursively merges the override tree onto the base tree in
+// place, implementing the deep-merge inheritance rule at the generic-JSON level:
+// when a key holds an object on both sides the objects merge recursively; a null
+// override is treated as unset and leaves the base untouched; anything else
+// (scalar or array) replaces the base value. A key in mergeReplaceLeafKeys is a
+// replace-leaf: it whole-replaces rather than recursing, so an exclusive or
+// atomic block is never corrupted by a field-merge. It is the merge core behind
+// deepMergeComponentOverrides.
+func mergeJSONTrees(base, override map[string]any) {
+	for key, ov := range override {
+		if ov == nil {
+			continue // an explicit null is treated as unset: inherit the base
+		}
+		if _, replaceLeaf := mergeReplaceLeafKeys[key]; !replaceLeaf {
+			if ovMap, ok := ov.(map[string]any); ok {
+				if baseMap, ok := base[key].(map[string]any); ok {
+					mergeJSONTrees(baseMap, ovMap)
+					continue
+				}
+			}
+		}
+		base[key] = ov
+	}
 }
 
 // TagGrammarSpec returns the tag grammar a component reads and emits its versions
