@@ -396,6 +396,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeConsistency(ctx, step.Consistency)
 	case "reconcile":
 		return r.executeReconcile(ctx, step.Reconcile)
+	case "run_workflow":
+		return r.executeRunWorkflow(ctx, config, step.ExpectFailure, step.RunWorkflow)
 	default:
 		return fmt.Errorf("unknown action: %s", step.Action)
 	}
@@ -967,6 +969,89 @@ func (r *Runner) executeStageDivergence(ctx context.Context, step *StageDivergen
 	r.ctx.RecordStateDivergence(step.Env, step.Ref, baseSHA, patches, step.PreviousVersion)
 	r.t.Logf("  StageDivergence: env=%s ref=%s base=%s patches=%d",
 		step.Env, step.Ref, truncateSHA(baseSHA), len(patches))
+	return nil
+}
+
+// executeRunWorkflow runs an arbitrary generated workflow file under a chosen
+// GitHub event via ActRunner and stores the result for job/log assertions. It is
+// the read-only counterpart to executeOrchestrate: it performs no post-run state
+// sync, so it drives validation lanes whose only observable outcome is the job
+// conclusion and logs (for example the merge-queue lane, which runs on
+// merge_group and writes no state). When expectFailure is set a failure
+// conclusion is the success path and a success conclusion is the error, so a
+// scenario can prove a gate reds on an invalid or breaking candidate.
+func (r *Runner) executeRunWorkflow(ctx context.Context, config Config, expectFailure bool, step *RunWorkflowStep) error {
+	if step == nil || step.WorkflowPath == "" {
+		return fmt.Errorf("run_workflow: workflow_path is required")
+	}
+
+	if r.harness == nil || r.harness.act == nil {
+		r.t.Logf("  Would run workflow %s under %q (no harness)", step.WorkflowPath, step.Event)
+		return nil
+	}
+
+	event := step.Event
+	if event == "" {
+		event = "push"
+	}
+
+	// Get the current HEAD SHA for later reference.
+	sha, err := r.harness.gitea.getHeadSHA(ctx, r.harness.repo)
+	if err != nil {
+		return fmt.Errorf("run_workflow: failed to get HEAD SHA: %w", err)
+	}
+
+	// Sync the repo to the act container so the run sees the committed workflows
+	// and manifest (including any manifest a preceding commit step overwrote).
+	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
+		return fmt.Errorf("run_workflow: failed to sync repo: %w", err)
+	}
+
+	branch := config.TrunkBranch
+	if branch == "" {
+		branch = "main"
+	}
+
+	r.t.Logf("  RunWorkflow: %s under event %q for SHA %s", step.WorkflowPath, event, truncateSHA(sha))
+
+	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
+		WorkflowPath: step.WorkflowPath,
+		Event:        event,
+		Env: map[string]string{
+			"GITHUB_SHA":        sha,
+			"GITHUB_REF":        fmt.Sprintf("refs/heads/%s", branch),
+			"GITHUB_REPOSITORY": fmt.Sprintf("%s/%s", AdminUsername, r.harness.repo.Name),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("run_workflow: failed to run %s: %w", step.WorkflowPath, err)
+	}
+
+	// Store workflow result for assertions (expect.jobs, expect.expect_log).
+	r.lastWorkflowResult = result
+
+	// Handle expected failures (mirrors executeOrchestrate's ExpectFailure path).
+	// A failing conclusion is the success path: it proves the lane blocks an
+	// invalid or breaking candidate from merging.
+	if expectFailure {
+		if result.Conclusion == "failure" {
+			r.t.Logf("  RunWorkflow: %s failed as expected", step.WorkflowPath)
+			return nil
+		}
+		return fmt.Errorf("run_workflow: expected %s to fail but it succeeded", step.WorkflowPath)
+	}
+
+	if result.Conclusion != "success" {
+		r.t.Logf("  RunWorkflow %s failed with conclusion: %s", step.WorkflowPath, result.Conclusion)
+		r.t.Logf("  Workflow logs:\n%s", result.Logs)
+		return workflowFailureError("run_workflow", result)
+	}
+
+	r.t.Logf("  RunWorkflow: %s parsed %d jobs", step.WorkflowPath, len(result.Jobs))
+	for jobName, job := range result.Jobs {
+		r.t.Logf("    - Job '%s': conclusion=%s", jobName, job.Conclusion)
+	}
+
 	return nil
 }
 

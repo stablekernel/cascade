@@ -119,6 +119,14 @@ type Step struct {
 	// landing in cascade-owned output. It asserts the adopted pin lands in the
 	// regenerated file and that a subsequent `cascade verify` stays clean.
 	Reconcile *ReconcileStep `yaml:"reconcile,omitempty"`
+	// RunWorkflow configures a "run_workflow" action: a generic act run of a
+	// chosen generated workflow file under a chosen GitHub event, storing the
+	// result for expect.jobs / expect.expect_log assertions. It is the read-only
+	// counterpart to "orchestrate": it performs no post-run state sync, so it
+	// drives validation lanes whose only observable outcome is the job conclusion
+	// and logs (for example the merge-queue lane, which runs on merge_group and
+	// writes no state).
+	RunWorkflow *RunWorkflowStep `yaml:"run_workflow,omitempty"`
 	// ExpectFailure marks a step whose workflow is expected to conclude in
 	// failure (for example an orchestrate run whose build exits non-zero). When
 	// set, a failure conclusion is the success path and a success conclusion is
@@ -236,6 +244,21 @@ type OrchestrateStep struct {
 	// A bare source grep for the absent "push:" string cannot distinguish a
 	// suppressed trigger from a malformed on: block that would still fire.
 	ExpectNoRun bool `yaml:"expect_no_run,omitempty"`
+}
+
+// RunWorkflowStep defines a "run_workflow" action: a generic act run of a chosen
+// generated workflow file under a chosen GitHub event. Unlike "orchestrate" it
+// performs no post-run state sync, so it drives read-only validation lanes whose
+// only observable outcome is the job conclusion and logs. WorkflowPath is the
+// repo-relative path of the workflow to run (for example
+// ".github/workflows/cascade-merge-queue.yaml"). Event is the GitHub event act
+// runs it under (for example "merge_group"); when empty it defaults to "push".
+// Paired with the step's expect_failure knob and expect.jobs, a scenario proves
+// both that a valid candidate passes the lane and that an invalid or breaking one
+// reds it, so the gate is shown to actually gate.
+type RunWorkflowStep struct {
+	WorkflowPath string `yaml:"workflow_path"`
+	Event        string `yaml:"event,omitempty"`
 }
 
 // PromoteStep defines a promote action
