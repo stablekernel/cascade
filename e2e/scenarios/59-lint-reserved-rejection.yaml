@@ -1,0 +1,75 @@
+name: "Lint Reserved Rejection"
+description: |
+  Verifies that cascade lint rejects a manifest that populates a reserved
+  field (one that parses but is not wired to generation), and that the
+  merge_queue lane (which runs cascade lint --json as its validity gate) reds
+  when a candidate carries such a field.
+
+  The positive step runs the merge_group lane against a valid manifest and
+  asserts the merge-queue-validate job succeeds. The negative step overwrites
+  the manifest with one declaring the reserved telemetry block and asserts the
+  same lane reds, proving reserved-field usage blocks a merge that a lenient
+  parse would have silently accepted as an inert manifest.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  merge_queue:
+    enabled: true
+
+steps:
+  - name: "Initial commit; assert the merge-queue lane runs cascade lint --json"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-merge-queue.yaml"
+          contains:
+            - "merge-queue-validate:"
+            - "cascade lint --json"
+
+  - name: "POSITIVE: valid candidate passes the merge_group lane"
+    action: run_workflow
+    run_workflow:
+      workflow_path: ".github/workflows/cascade-merge-queue.yaml"
+      event: merge_group
+    expect:
+      jobs:
+        merge-queue-validate: success
+
+  - name: "Overwrite the manifest with a reserved telemetry block"
+    action: commit
+    commit:
+      message: "test: stage a manifest that uses a reserved field"
+      files:
+        .github/manifest.yaml: |
+          ci:
+            config:
+              trunk_branch: main
+              environments: [dev]
+              builds:
+                - name: app
+                  workflow: build.yaml
+                  triggers: ["src/**"]
+              merge_queue:
+                enabled: true
+              telemetry:
+                enabled: true
+                adapter: none
+
+  - name: "NEGATIVE: reserved-field candidate is blocked by the merge_group lane"
+    action: run_workflow
+    expect_failure: true
+    run_workflow:
+      workflow_path: ".github/workflows/cascade-merge-queue.yaml"
+      event: merge_group

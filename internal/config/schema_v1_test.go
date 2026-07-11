@@ -474,10 +474,10 @@ validate:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			errs := Validate(parseInline(t, tt.manifest))
-			if !hasErrContaining(errs, "timeout_minutes is not valid on a reusable-workflow callback") {
+			if !hasErrContaining(errs, "timeout belongs in the called workflow, not the caller") {
 				t.Fatalf("expected timeout_minutes rejection, got %v", errs)
 			}
-			if !hasErrContaining(errs, "set timeout-minutes inside your callback workflow") {
+			if !hasErrContaining(errs, "GitHub forbids timeout-minutes on a job that calls a reusable workflow") {
 				t.Fatalf("expected actionable timeout-minutes guidance, got %v", errs)
 			}
 		})

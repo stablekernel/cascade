@@ -11,7 +11,7 @@ Each field carries an emission status:
 |--------|---------|
 | **emitted** | Changes generated workflow output. |
 | **validated-only** | Parsed and schema-checked, but never appears in generated YAML. |
-| **reserved** | Parsed, but has no generator consumption today. |
+| **reserved** | Parses, but has no generator consumption today, so `cascade lint` rejects any manifest that sets it. |
 
 ## File shape and schema support
 
@@ -944,16 +944,16 @@ These fields parse and pass schema validation but **never appear in generated YA
 |-------|-------|-----------------------|
 | `runs_on` | top-level and per-callback | GitHub Actions forbids `runs-on` on a reusable-workflow `uses:` caller job, so cascade-owned jobs are hardcoded `ubuntu-latest`. Per-environment runner overrides are blocked by the same structural limit. |
 | `concurrency` (per-callback) | `builds[]`, `deploys[]`, `publish` | GitHub Actions forbids a `concurrency:` block on a reusable-workflow caller job. Top-level `concurrency` is emitted; the per-callback form is not. |
-| `timeout_minutes` (per-callback) | `builds[]`, `deploys[]`, `publish` | The timeout belongs inside the called workflow, not the caller job. Use top-level `job_timeout_minutes` to bound the cascade-owned jobs. |
+| `timeout_minutes` (per-callback) | `builds[]`, `deploys[]`, `publish` | The timeout belongs inside the called workflow, not the caller job; it is never emitted, so `cascade lint` rejects it. Use top-level `job_timeout_minutes` to bound the cascade-owned jobs. |
 
 ## Reserved fields
 
-Reserved fields parse but have zero generator consumption today. They reserve a stable shape so a future capability can land without a schema break.
+Reserved fields parse but have zero generator consumption today. They reserve a stable shape so a future capability can land without a schema break. Because a manifest that sets one is silently inert, `cascade lint` treats reserved-field use as an error: remove the field (or, in the demo, keep it commented) until the capability is wired.
 
 | Field | Where | Note |
 |-------|-------|------|
 | `telemetry` | top-level | `enabled`, `adapter`, plus reserved `webhook` and `job_summary`. No generator consumption. |
-| `rollout.type` / `rollout.canary` / `rollout.blue_green` | `deploys[]` | Reserved rollout sub-blocks (`rollout.fail_fast` and `rollout.max_parallel` are emitted; the rest are inert). |
+| `rollout.type` / `rollout.canary` / `rollout.blue_green` | `deploys[]` | Reserved rollout sub-blocks (`rollout.fail_fast` and `rollout.max_parallel` are emitted and stay valid; the rest are inert and rejected). |
 | `release.version_overrides` | `release` | Reserved pointer to version-intent override files. |
 | `deploy_target` | `deploys[]` | Reserved shape for the GitOps mirror pattern. |
 

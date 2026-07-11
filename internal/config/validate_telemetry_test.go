@@ -148,8 +148,10 @@ telemetry:
 	if cfg.Telemetry.JobSummary == nil || !*cfg.Telemetry.JobSummary {
 		t.Fatalf("telemetry.job_summary: %#v", cfg.Telemetry.JobSummary)
 	}
-	if errs := Validate(cfg); len(errs) != 0 {
-		t.Fatalf("expected no errors, got %v", errs)
+	// telemetry parses and structurally validates, but using it is a hard lint
+	// error: the block is reserved and not wired to generation.
+	if errs := Validate(cfg); !hasErrContaining(errs, "telemetry is reserved and not implemented in this cascade version") {
+		t.Fatalf("expected reserved telemetry rejection, got %v", errs)
 	}
 	if got := cfg.GetSchemaVersion(); got != CurrentSchemaVersion {
 		t.Fatalf("schema_version = %d, want %d (reserved shape must not bump)", got, CurrentSchemaVersion)
