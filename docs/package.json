@@ -12,14 +12,12 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.39.3",
-    "astro": "^6.4.8",
-    "astro-mermaid": "2.0.2",
-    "mermaid": "11.15.0",
+    "@astrojs/starlight": "^0.41.3",
+    "astro": "^7.0.7",
+    "astro-mermaid": "^2.1.0",
+    "mermaid": "^11.16.0",
     "@mermaid-js/layout-elk": "0.2.1",
-    "sharp": "0.34.5"
-  },
-  "overrides": {
-    "esbuild": ">=0.28.1"
+    "sharp": "0.34.5",
+    "starlight-llms-txt": "^0.11.0"
   }
 }
