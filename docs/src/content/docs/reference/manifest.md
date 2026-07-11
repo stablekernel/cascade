@@ -831,6 +831,13 @@ a partial override never drops the shared siblings it did not mention:
   back to `false` (for example `deployments.enabled: false` under a shared
   `deployments.enabled: true`), or an inherited number to `0`, overrides the shared
   value rather than inheriting it.
+- A few **exclusive blocks whole-replace** instead of field-merging, because their
+  fields are not independently composable: `secrets` (either `inherit` or an
+  explicit allow-list, never both), `runs_on` (a label, a list, or a `{group,
+  labels}` object, one form only), and the `release_token_app` / `state_token_app`
+  credential blocks. A component that sets one of these replaces the inherited
+  block outright. This keeps a component narrowing `secrets: inherit` to an
+  explicit allow-list from being silently broadened back to inherit-all.
 
 The one exception to replace-a-list is the additive path set: a component's
 `extra_paths` unions with the top-level `shared_paths` rather than replacing it.

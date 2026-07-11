@@ -256,21 +256,55 @@ func deepMergeComponentOverrides(base *TrunkConfig, override ComponentConfig) er
 	return nil
 }
 
+// mergeReplaceLeafKeys names the manifest blocks that must WHOLE-REPLACE on
+// override rather than field-merge, even though they marshal to a JSON object.
+// These are exclusive or atomic blocks whose fields are not independently
+// composable, so recursively merging one component's fields onto the inherited
+// block's fields corrupts it:
+//
+//   - secrets (SecretsConfig): XOR-exclusive - either "inherit" (all caller
+//     secrets) OR an explicit {name: source} allow-list, never both. A
+//     field-merge of an inherited "inherit" with a component allow-list yields
+//     both set, and generation gives "inherit" precedence, silently BROADENING
+//     the component's least-privilege allow-list. It has a custom UnmarshalYAML.
+//   - runs_on (RunsOn): polymorphic - a scalar label, a list of labels, or a
+//     {group, labels} object, exactly one form. Field-merging two forms leaves a
+//     stale field from the inherited form set. It has a custom UnmarshalYAML.
+//   - release_token_app / state_token_app (AppTokenSource): an atomic credential
+//     identity (app_id + private_key). Field-merging would splice an app_id from
+//     one source with a private_key from another; whole-replace makes an
+//     incomplete override a clean validation error instead of a bad credential.
+//
+// A new exclusive, polymorphic, atomic, or custom-decoded block MUST be added
+// here, or the tree-merge will silently corrupt it. The keys are matched by name
+// at any depth because each of these names maps to exactly one such type in the
+// schema (for example secrets under validate and under each build/deploy).
+var mergeReplaceLeafKeys = map[string]struct{}{
+	"secrets":           {},
+	"runs_on":           {},
+	"release_token_app": {},
+	"state_token_app":   {},
+}
+
 // mergeJSONTrees recursively merges the override tree onto the base tree in
 // place, implementing the deep-merge inheritance rule at the generic-JSON level:
 // when a key holds an object on both sides the objects merge recursively; a null
 // override is treated as unset and leaves the base untouched; anything else
-// (scalar or array) replaces the base value. It is the merge core behind
+// (scalar or array) replaces the base value. A key in mergeReplaceLeafKeys is a
+// replace-leaf: it whole-replaces rather than recursing, so an exclusive or
+// atomic block is never corrupted by a field-merge. It is the merge core behind
 // deepMergeComponentOverrides.
 func mergeJSONTrees(base, override map[string]any) {
 	for key, ov := range override {
 		if ov == nil {
 			continue // an explicit null is treated as unset: inherit the base
 		}
-		if ovMap, ok := ov.(map[string]any); ok {
-			if baseMap, ok := base[key].(map[string]any); ok {
-				mergeJSONTrees(baseMap, ovMap)
-				continue
+		if _, replaceLeaf := mergeReplaceLeafKeys[key]; !replaceLeaf {
+			if ovMap, ok := ov.(map[string]any); ok {
+				if baseMap, ok := base[key].(map[string]any); ok {
+					mergeJSONTrees(baseMap, ovMap)
+					continue
+				}
 			}
 		}
 		base[key] = ov
