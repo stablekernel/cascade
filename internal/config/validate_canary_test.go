@@ -10,7 +10,7 @@ import (
 func TestValidateCanaryFields(t *testing.T) {
 	t.Parallel()
 
-	t.Run("new canary fields validate at CurrentSchemaVersion", func(t *testing.T) {
+	t.Run("canary and rollout.type are reserved and rejected by lint", func(t *testing.T) {
 		t.Parallel()
 		cfg := parseInline(t, `
 environments: [dev, prod]
@@ -25,8 +25,12 @@ deploys:
         promote_callback: .github/workflows/promote.yaml
         rollback_callback: .github/workflows/rollback.yaml
 `)
-		if errs := Validate(cfg); len(errs) != 0 {
-			t.Fatalf("expected no errors, got %v", errs)
+		errs := Validate(cfg)
+		if !hasErrContaining(errs, "deploys[0].rollout.type is reserved and not implemented in this cascade version") {
+			t.Fatalf("expected reserved rollout.type rejection, got %v", errs)
+		}
+		if !hasErrContaining(errs, "deploys[0].rollout.canary is reserved and not implemented in this cascade version") {
+			t.Fatalf("expected reserved rollout.canary rejection, got %v", errs)
 		}
 	})
 

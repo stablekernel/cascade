@@ -111,8 +111,10 @@ deploys:
       branch: release/prod
       track_sha: true
 `)
-	if errs := Validate(cfg); len(errs) != 0 {
-		t.Fatalf("expected no errors, got %v", errs)
+	// deploy_target parses and structurally validates, but using it is a hard
+	// lint error: the block is reserved and not wired to generation.
+	if errs := Validate(cfg); !hasErrContaining(errs, "deploys[0].deploy_target is reserved and not implemented in this cascade version") {
+		t.Fatalf("expected reserved deploy_target rejection, got %v", errs)
 	}
 	if got := cfg.GetSchemaVersion(); got != CurrentSchemaVersion {
 		t.Fatalf("schema_version = %d, want %d (reserved shape must not bump)", got, CurrentSchemaVersion)

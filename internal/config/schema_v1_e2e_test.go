@@ -7,8 +7,8 @@ import (
 )
 
 // fullSurfaceManifest exercises the full v1 schema surface (every reserved-shape
-// field) through the on-disk load path the lint command uses, asserting
-// it parses cleanly and validates with no errors.
+// field) through the on-disk load path the lint command uses, asserting the
+// reserved fields round-trip from disk and that lint rejects their use.
 const fullSurfaceManifest = `ci:
   config:
     schema_version: 1
@@ -153,8 +153,21 @@ func TestFullSurfaceManifestE2E(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	if errs := Validate(cfg); len(errs) != 0 {
-		t.Fatalf("expected a clean full-surface manifest, got errors: %v", errs)
+	// The full-surface manifest deliberately populates reserved fields so the
+	// parse round-trip below is exercised end to end. Because those fields are
+	// reserved (not wired to generation), lint rejects the manifest: assert each
+	// reserved-usage error is reported rather than silently accepted.
+	errs := Validate(cfg)
+	for _, want := range []string{
+		"telemetry is reserved and not implemented in this cascade version",
+		"deploys[0].rollout.type is reserved and not implemented in this cascade version",
+		"deploys[0].rollout.canary is reserved and not implemented in this cascade version",
+		"deploys[0].rollout.blue_green is reserved and not implemented in this cascade version",
+		"deploys[0].deploy_target is reserved and not implemented in this cascade version",
+	} {
+		if !hasErrContaining(errs, want) {
+			t.Fatalf("expected reserved-field rejection %q, got %v", want, errs)
+		}
 	}
 
 	// Spot-check that the reserved fields actually round-tripped from disk.

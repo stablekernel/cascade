@@ -181,20 +181,6 @@ func validateJobControlFields(prefix string, isReusableWorkflow bool, runsOn *Ru
 	return errs
 }
 
-// validateCallbackTimeout rejects a per-callback timeout_minutes on a
-// reusable-workflow callback. GitHub forbids timeout-minutes on a job that calls
-// a reusable workflow (a jobs.<id>.uses job may only set uses, with, secrets,
-// needs, if, permissions, strategy, name, and concurrency). Every cascade callback
-// is a reusable-workflow uses: job, so the timeout must be declared inside the
-// called workflow instead.
-func validateCallbackTimeout(prefix string, isReusableWorkflow bool, timeoutMinutes int) []string {
-	if !isReusableWorkflow || timeoutMinutes <= 0 {
-		return nil
-	}
-	return []string{fmt.Sprintf(
-		"%s: timeout_minutes is not valid on a reusable-workflow callback; GitHub forbids timeout-minutes on a job that calls a reusable workflow - set timeout-minutes inside your callback workflow instead", prefix)}
-}
-
 // localCallbackPathRe bounds a bare-filename or .github/workflows/... local
 // callback value to characters safe to splice raw into a generated
 // workflow's uses: line. It rejects newlines, other control characters,

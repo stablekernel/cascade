@@ -55,7 +55,7 @@ A CLI supports the current schema version and the immediately preceding one (N-1
 
 ## Reserved shapes
 
-These fields parse and pass structural validation today but carry no generator, state, or runtime behavior. A manifest declaring them produces byte-identical generated workflows, so adopting the shape now is safe. Attaching behavior to any of them later is additive and does not bump `schema_version`.
+These fields parse and pass structural validation today but carry no generator, state, or runtime behavior. Because a manifest that declares one is silently inert, `cascade lint` rejects reserved-field use as an error rather than accepting a no-op manifest: the shape is frozen so a future capability can land without a schema break, not so it can be set today. Attaching behavior to any of them later is additive and does not bump `schema_version`.
 
 ### Progressive rollout: canary and blue/green
 
@@ -106,7 +106,7 @@ Only the addressing pointer is frozen in v1. The override-file format and the fo
 
 Two fields on `rollout:` are live today, not reserved. `rollout.fail_fast` and `rollout.max_parallel` (deploys and publish only) are emitted directly into the deploy job's `strategy:` block: `fail_fast` sets `strategy.fail-fast` (defaulting to `false` when unset), and `max_parallel`, when greater than zero, sets `strategy.max-parallel`. A manifest that sets either field changes the generated workflow.
 
-Only the `type`, `canary`, and `blue_green` sub-blocks remain reserved and inert, as described above. Setting `type: canary` or populating a `canary:`/`blue_green:` sub-block parses and validates but has no effect on generated output today.
+Only the `type`, `canary`, and `blue_green` sub-blocks remain reserved and inert, as described above. Setting `type: canary` or populating a `canary:`/`blue_green:` sub-block parses and structurally validates, but because it has no effect on generated output today, `cascade lint` rejects it; keep `rollout:` to `fail_fast` and `max_parallel` until the type-specific behavior is wired.
 
 ## Per-component versioning
 
