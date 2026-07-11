@@ -2,9 +2,9 @@
  * Cascade brand theme.
  *
  * Real CSS-variable overrides of Starlight's design tokens, not a theme fork.
- * Dark mode is the default (see :root below); a light variant is provided for
- * readers who toggle it. Palette: cyan-teal accent over a deep slate base with
- * cool blue-grays. Technical and crisp.
+ * The docs are dark-only, so the tokens below define a single dark palette:
+ * a cyan-teal accent over a deep slate base with cool blue-grays. Technical
+ * and crisp.
  */
 
 /* ---- Accent: cyan-teal --------------------------------------------------- */
@@ -40,25 +40,6 @@
   /* Cool the text-accent so inline links read as aqua, not neon. */
   --sl-color-text-accent: var(--cascade-teal-glow);
   --sl-color-hairline-shade: #283036;
-}
-
-/* ---- Light mode (toggle): cool grays, teal accent retained --------------- */
-:root[data-theme='light'] {
-  --sl-color-accent-low: #c2f0eb;
-  --sl-color-accent: #0f8d83; /* deepened for contrast on light bg */
-  --sl-color-accent-high: #075d56;
-
-  --sl-color-white: #151b20;
-  --sl-color-gray-1: #222a30;
-  --sl-color-gray-2: #333b42;
-  --sl-color-gray-3: #555d66;
-  --sl-color-gray-4: #8a929c;
-  --sl-color-gray-5: #bfc8cf;
-  --sl-color-gray-6: #e2e8ec;
-  --sl-color-gray-7: #f1f4f5;
-  --sl-color-black: #ffffff;
-
-  --sl-color-text-accent: var(--sl-color-accent);
 }
 
 /* ---- Splash hero: balance the tagline ------------------------------------ */

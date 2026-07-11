@@ -1,0 +1,22 @@
+---
+/*
+ * Override of Starlight's ThemeProvider that locks the site to dark.
+ *
+ * The stock component derives the theme from a stored preference or the
+ * reader's system setting, which is what powers the light/dark/auto switcher.
+ * Cascade ships dark-only, so this replacement hardcodes `data-theme="dark"`
+ * on the document element. The script stays inlined so the value is set
+ * before first paint, avoiding any flash of a light background.
+ *
+ * `StarlightThemeProvider.updatePickers` is retained as a no-op so any stray
+ * caller stays safe now that the picker (ThemeSelect) renders nothing.
+ */
+---
+
+{/* Intentionally inlined to set the theme before first paint. */}
+<script is:inline>
+	window.StarlightThemeProvider = {
+		updatePickers() {},
+	};
+	document.documentElement.dataset.theme = 'dark';
+</script>

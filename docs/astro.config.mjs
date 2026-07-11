@@ -12,16 +12,14 @@ export default defineConfig({
   integrations: [
     // astro-mermaid renders ```mermaid fenced code blocks client-side at runtime.
     // It needs no headless browser at build time, keeping `npm run build` fast and
-    // dependency-light. `theme: 'dark'` matches the dark-default Cascade brand and
-    // mermaid auto-syncs when the reader toggles the theme.
+    // dependency-light. `theme: 'dark'` matches the dark-only Cascade brand.
     mermaid({
       theme: 'dark',
-      // Mermaid follows the Starlight light/dark toggle. We keep autoTheme so
-      // node fills and text stay legible in both modes, and brand only the
-      // accent surfaces (edges, borders, cluster outlines, active accent) with
-      // cascade teal and copper, colors that read on both the dark slate and
-      // the light gray Starlight backgrounds.
-      autoTheme: true,
+      // The docs render dark-only, so pin mermaid to its dark theme rather than
+      // tracking a data-theme attribute that never changes. Node fills, text,
+      // and the branded accent surfaces (edges, borders, cluster outlines,
+      // active accent) all key off the dark slate background below.
+      autoTheme: false,
       mermaidConfig: {
         themeVariables: {
           fontFamily: 'ui-sans-serif, system-ui, sans-serif',
@@ -74,6 +72,13 @@ export default defineConfig({
         },
       ],
       customCss: ['./src/styles/cascade.css'],
+      // Dark-only site: replace the theme script with one that locks
+      // `data-theme="dark"`, and render the switcher as nothing so there is no
+      // light/auto control.
+      components: {
+        ThemeProvider: './src/components/ThemeProvider.astro',
+        ThemeSelect: './src/components/ThemeSelect.astro',
+      },
       head: [
         // Social card / og:image (brand art).
         {
