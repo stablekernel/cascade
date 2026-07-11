@@ -34,6 +34,7 @@ A breaking-change gate sits at the prerelease-to-release boundary regardless of 
 | `dry_run` | boolean | `false` | Resolve and print the plan; skip deploys and state writes. |
 | `deploys` | string | `all` | See [Selective deploys](#selective-deploys). |
 | `rollback_on_failure` | boolean | `true` | See below. |
+| `allow_downgrade` | boolean | `false` | Required to promote a build whose version is lower than the target's current version; the release stage always requires it. |
 
 ## Atomic promotion and rollback-on-failure
 
@@ -56,7 +57,7 @@ Promote also skips a deploy on its own when there is nothing to do: it compares 
 
 When the manifest has a `publish:` callback, crossing the prerelease-to-release boundary adds a publish step once per configured build. See [Publish](/cascade/reference/generated-workflows/#publish) for the exact dispatch payload.
 
-For the release stage, version is the latest semver tag auto-incremented from conventional commits since that tag (major for a breaking change, minor for a feature, patch for a fix), or an explicit `version_override` input when you need to force a specific bump. The prerelease suffix (`-rc.N` by default; configurable via [`tag_grammar`](/cascade/reference/manifest/#tag_grammar)) is dropped at this boundary.
+For the release stage, version is the latest semver tag auto-incremented from conventional commits since that tag: major for a breaking change, minor for a feature, patch for a fix. There is no manual override input; the commit history determines the bump. The prerelease suffix (`-rc.N` by default; configurable via [`tag_grammar`](/cascade/reference/manifest/#tag_grammar)) is dropped at this boundary.
 
 ## What to watch
 

@@ -20,10 +20,10 @@ Auto-promote publishes the final version, but only when the entire fleet is gree
 The fleet ([`.github/workflows/fleet-e2e.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/fleet-e2e.yaml))
 revalidates the downstream `cascade-example-*` fleet on live GitHub. Every example
 repository dispatches its own `scenario-suite.yaml` under one shared fleet token. A
-green run means this cascade version validated across all eleven example repositories,
+green run means this cascade version validated across all twelve example repositories,
 each running its own scenario suite in its own repository context.
 
-Dispatching all eleven repositories at once tripped transient GitHub API failures
+Dispatching all twelve repositories at once tripped transient GitHub API failures
 (401, 403, and 500 responses) on a rotating repository each run, because they all
 draw on the same token. The fan-out is therefore split into sequenced lanes that
 hold peak live concurrency near two repositories at a time. A `gh()` transient-retry

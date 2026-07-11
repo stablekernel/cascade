@@ -478,6 +478,7 @@ cascade orchestrate setup \
 | `--environment` | string | Yes | Target environment (empty for no-env setup) |
 | `--sha` | string | No | Head SHA (default: current HEAD) |
 | `--gha-output` | bool | No | Write outputs to `$GITHUB_OUTPUT` |
+| `--component` | string | No | Declared component to scope this orchestration to (multi-component manifests) |
 
 Output:
 
@@ -515,6 +516,7 @@ cascade orchestrate finalize \
 | `--version` | string | Yes | Calculated version |
 | `--build-results` | string | No | Comma-separated `name:status` pairs |
 | `--deploy-results` | string | No | Comma-separated `name:status` pairs |
+| `--component` | string | No | Declared component to scope this orchestration to (multi-component manifests). Persistent across `orchestrate` subcommands. |
 
 ### promote
 
@@ -530,6 +532,7 @@ Promotion command with subcommands. For the operator recipe see
 | `--json` | bool | false | Output result as JSON |
 | `--gha-output` | bool | false | Write to `$GITHUB_OUTPUT` |
 | `--actor` | string | `$GITHUB_ACTOR` | Actor performing the action |
+| `--component` | string | (single-component) | Declared component to scope promotion state to (multi-component manifests) |
 
 #### promote preflight
 
@@ -653,6 +656,7 @@ cascade hotfix plan \
 | `--dry-run` | bool | No | Compute the plan without mutating anything |
 | `--json` | bool | No | Output the plan as JSON |
 | `--gha-output` | bool | No | Write outputs to `$GITHUB_OUTPUT` for workflow consumption |
+| `--component` | string | No | Declared component to scope the hotfix to (default: single-component manifest) |
 
 With `--json`:
 
@@ -709,6 +713,7 @@ cascade hotfix finalize \
 | `--dry-run` | bool | No | Validate and compute without writing state, tags, or releases |
 | `--build-result` | string | No | Build result as `name=result` (repeatable) |
 | `--deploy-result` | string | No | Deploy result as `name=result` (repeatable) |
+| `--component` | string | No | Declared component to scope the hotfix to (default: single-component manifest) |
 
 Only successful build and deploy results update the per-build and per-deploy substates. For
 a prerelease-environment target the hotfix release is promoted to a GitHub prerelease,
@@ -771,6 +776,7 @@ through the normal path.
 | `--actor` | string | `$GITHUB_ACTOR` | Actor recorded on the rollback |
 | `--dry-run` | bool | false | Resolve and print the plan without modifying the manifest |
 | `--json` | bool | false | Output the resolved plan as JSON |
+| `--component` | string | - | Scope the rollback to a declared component (reads and records `state.components.<component>.<env>`) |
 
 #### rollback preflight
 
@@ -793,6 +799,7 @@ cascade rollback preflight --env prod --gha-output
 | `--deployable` | string | - | Scope the rollback to a single deployable |
 | `--gha-output` | bool | false | Write the resolved target to `$GITHUB_OUTPUT` |
 | `--json` | bool | false | Print the resolved plan as JSON |
+| `--component` | string | - | Scope the rollback to a declared component |
 
 #### rollback finalize
 
@@ -817,6 +824,7 @@ cascade rollback finalize --env prod --commit-push
 | `--deployable` | string | - | Scope the rollback to a single deployable |
 | `--actor` | string | `$GITHUB_ACTOR` | Actor recorded on the rollback |
 | `--commit-push` | bool | false | Commit and push the updated manifest to the trunk branch |
+| `--component` | string | - | Scope the rollback to a declared component |
 
 ### next-version
 
@@ -836,6 +844,7 @@ cascade next-version \
 | `--base-sha` | string | No | Base SHA (defaults to next env's SHA) |
 | `--head-sha` | string | No | Head SHA (defaults to HEAD) |
 | `--json` | bool | No | Output as JSON |
+| `--component` | string | No | Declared component to scope the version to (multi-component manifests) |
 
 Bump rules:
 
@@ -935,6 +944,7 @@ cascade manage-release \
 | `--new-tag` | string | No | New semver tag (for `prerelease` action) |
 | `--delete-tag` | string | No | Tag to delete after publish (cleanup) |
 | `--create-tag` | bool | No | Create git tag on `create` |
+| `--component` | string | No | Declared component to scope RC-tag reaping to (multi-component manifests) |
 
 Actions:
 
@@ -1283,7 +1293,7 @@ matches the exit-code table in the [`verify`](#verify) section above.
 
 ## JSON output
 
-Pass `--json` (or use `--gha-output` inside Actions) to get machine-readable output:
+Many commands accept `--json` (or `--gha-output` inside Actions) for machine-readable output; `detect-changes` always writes its JSON result to stdout, so a step can capture it directly:
 
 ```yaml
 - name: Detect changes
@@ -1292,8 +1302,7 @@ Pass `--json` (or use `--gha-output` inside Actions) to get machine-readable out
     cascade detect-changes \
       --config .github/manifest.yaml \
       --base-sha "${{ github.event.before }}" \
-      --head-sha "${{ github.sha }}" \
-      --gha-output
+      --head-sha "${{ github.sha }}"
 ```
 
 ## Debugging
