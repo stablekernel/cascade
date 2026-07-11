@@ -139,9 +139,22 @@ func (g *MergeQueueGenerator) writeJob(sb *strings.Builder) {
 	// what would build/deploy for the merge-group candidate without writing any
 	// state. This exercises cascade's change-detection and version logic against
 	// the prospective trunk commit.
+	//
+	// When the manifest declares environments the step targets the first (lowest)
+	// environment with --environment, mirroring how the orchestrate workflow
+	// defaults its setup environment. orchestrate setup resolves the version
+	// against that environment, so an empty value would fail with `environment ""
+	// not found`. A manifest with no environments omits the flag and runs the
+	// no-environment version calculation. The preview is read-only regardless of
+	// which environment it reports on.
 	sb.WriteString("      - name: Preview Orchestration (dry-run)\n")
 	sb.WriteString("        run: |\n")
 	fmt.Fprintf(sb, "          MANIFEST_FILE=\"%s\"\n", g.getManifestFilePath())
 	sb.WriteString("          cascade --dry-run orchestrate setup \\\n")
-	sb.WriteString("            --config \"$MANIFEST_FILE\"\n")
+	if len(g.config.Environments) > 0 {
+		sb.WriteString("            --config \"$MANIFEST_FILE\" \\\n")
+		fmt.Fprintf(sb, "            --environment %s\n", g.config.Environments[0])
+	} else {
+		sb.WriteString("            --config \"$MANIFEST_FILE\"\n")
+	}
 }

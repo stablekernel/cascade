@@ -71,6 +71,49 @@ func TestMergeQueueGenerator_Steps(t *testing.T) {
 	assert.NotContains(t, content, "action: publish")
 }
 
+// TestMergeQueueGenerator_DryRunResolvesEnvironment asserts that the preview
+// dry-run step targets a concrete environment so version calculation succeeds.
+//
+// orchestrate setup looks the --environment value up in the manifest's
+// environments list; an empty value resolves to no match and fails with
+// `environment "" not found`. For a manifest that declares environments the
+// preview must pass --environment with the first (lowest) environment, mirroring
+// how the orchestrate workflow defaults its setup environment. For a manifest
+// with no environments the flag must be omitted entirely.
+func TestMergeQueueGenerator_DryRunResolvesEnvironment(t *testing.T) {
+	t.Run("multi-env passes first environment", func(t *testing.T) {
+		cfg := &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: []string{"staging", "prod"},
+			MergeQueue:   &config.MergeQueueConfig{Enabled: true},
+		}
+		gen := NewMergeQueueGenerator(cfg, "")
+		content, err := gen.Generate()
+		require.NoError(t, err)
+
+		previewBody := stepRunBody(t, content, "Preview Orchestration (dry-run)")
+		assert.Contains(t, previewBody, "--environment staging",
+			"preview dry-run must target the first environment so version calc succeeds")
+		assert.NotContains(t, previewBody, "--environment \"\"",
+			"preview dry-run must never pass an empty environment")
+	})
+
+	t.Run("no-env omits the environment flag", func(t *testing.T) {
+		cfg := &config.TrunkConfig{
+			TrunkBranch: "main",
+			MergeQueue:  &config.MergeQueueConfig{Enabled: true},
+		}
+		gen := NewMergeQueueGenerator(cfg, "")
+		content, err := gen.Generate()
+		require.NoError(t, err)
+
+		previewBody := stepRunBody(t, content, "Preview Orchestration (dry-run)")
+		assert.NotContains(t, previewBody, "--environment",
+			"no-env manifest must not pass --environment")
+		assert.Contains(t, previewBody, "cascade --dry-run orchestrate setup")
+	})
+}
+
 // TestMergeQueueGenerator_SetupCLIPassesToken asserts that the setup-cli step
 // passes github.token so that gh release download can authenticate on a cold
 // tool-cache. Without the token: input the composite action's GH_TOKEN is
