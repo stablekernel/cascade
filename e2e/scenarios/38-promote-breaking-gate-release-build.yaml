@@ -4,18 +4,23 @@ description: |
   breaking-change gate blocks a breaking promotion into the release stage and
   lets it through once allow_breaking_changes is set (#322).
 
-  Runtime assertion. From a published v0.1.0 baseline, a feat! commit is
-  orchestrated to a v1.0.0-rc.0 prerelease and cascaded through the prerelease
-  environments (no gate). Promoting uat into the release stage without the flag
-  fails and leaves both the source and target state unchanged; the same promote
-  with allow_breaking succeeds and publishes v1.0.0. The blocked/allowed pair is
-  observed through the run conclusion and the state leaf, both of which flip when
-  the gate is inverted, rather than by grepping the emitted preflight script.
+  Runtime assertion for the gate; generation-only for the release-build dispatch.
+  From a published v0.1.0 baseline, a feat! commit is orchestrated to a
+  v1.0.0-rc.0 prerelease and cascaded through the prerelease environments (no
+  gate). Promoting uat into the release stage without the flag fails at the
+  breaking-change gate and leaves both the source state and the published release
+  unchanged. The same promote with allow_breaking clears the gate and publishes
+  v1.0.0: Publish Release cuts the v1.0.0 tag and reaps the RC, then the run
+  stops at the Trigger Release Build step, which shells out to gh to dispatch the
+  configured release-build workflow and cannot run under act. The published
+  v1.0.0 tag and release are the gate-bypass signal, and they flip against the
+  blocked promote purely on the gate. The state leaf does not advance under act
+  because Finalize runs after the release-build dispatch; its advance is proven
+  on the fleet, where gh is present.
 
-  The follow-on release-build dispatch (Trigger Release Build) fires only on a
-  real final-env publish against real GitHub, which act cannot exercise, so its
-  presence is asserted generation-only. The scenario never promotes into prod,
-  so that step never runs here.
+  The release-build dispatch (Trigger Release Build) fires only on a real publish
+  against real GitHub, which act cannot exercise, so its emitted shape is
+  asserted generation-only and its execution is proven on the fleet.
 
 config:
   trunk_branch: main
@@ -78,7 +83,8 @@ steps:
       # Generation-only: these assert the emitted shape of behaviors act cannot
       # execute (the CLI gate wiring and the real-GitHub-only release-build
       # dispatch). The gate's RUNTIME behavior is proven by the blocked/allowed
-      # promote pair below, not by these strings.
+      # promote pair below; the release-build dispatch's execution is proven on
+      # the fleet, since act has no gh to run it.
       workflow_files:
         - path: ".github/workflows/promote.yaml"
           contains:
@@ -118,33 +124,46 @@ steps:
         qa:
           unchanged: true
 
-  - name: "Promote uat to release without the flag is blocked"
+  - name: "Promote uat to release without the flag is blocked at the gate"
     action: promote
     promote:
       mode: default
       expect_failure: true
     expect:
+      # The gate blocks before Publish Release, so no v1.0.0 is cut and both the
+      # source state and the published release stay put. This is the load-bearing
+      # runtime blocked outcome; it flips against the allow_breaking promote below.
       state:
         uat:
           unchanged: true
         release:
           unchanged: true
+      releases:
+        - tag: "v1.0.0"
+          deleted: true
 
-  - name: "Promote uat to release with allow_breaking proceeds"
+  - name: "Promote uat to release with allow_breaking clears the gate and publishes"
     action: promote
     promote:
       mode: default
       allow_breaking: true
+      # The run stops at the act-only gh release-build dispatch, which runs after
+      # Publish Release. The gate-bypass proof is the v1.0.0 release Publish
+      # Release cut before that step, not the run conclusion.
+      expect_failure: true
     expect:
+      # allow_breaking clears the gate; Publish Release cuts v1.0.0 and reaps the
+      # RC before the run stops at the gh dispatch act cannot run. The published
+      # release is the runtime gate-bypass signal and is absent on the blocked
+      # promote above. The release state leaf stays put under act because Finalize
+      # runs after the dispatch; its advance is proven on the fleet.
       state:
         release:
-          sha: commit1
-          version: "v1.0.0"
-        uat:
           unchanged: true
       releases:
         - tag: "v1.0.0"
           prerelease: false
+          draft: false
           latest: true
       tags:
         exist: ["v1.0.0"]
