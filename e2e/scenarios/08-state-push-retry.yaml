@@ -1,14 +1,20 @@
 name: "State Push Retry Loop"
 description: |
-  Verifies the generated orchestrate.yaml's Update Manifest step uses a
-  fetch+reset+reapply+push retry loop (#101) instead of a single git push.
+  Verifies the generated orchestrate.yaml's Update Manifest step runs its
+  fetch+reset+reapply+push retry loop (#101) at runtime instead of a single git
+  push.
 
-  Generator-output verification. Reproducing the actual concurrent-push race
-  needs real GHA and is out of scope for the act+gitea harness.
+  Runtime assertion. An orchestrate run advances dev state and the executed
+  finalize job logs the loop's success marker "cascade-state-write: ok
+  attempt=1". That marker is emitted only by the running loop, so it disappears
+  if the loop is replaced by a bare push, whereas a grep of the emitted script
+  source would stay green because the marker text is still literally present in
+  the file. Reproducing the actual concurrent-push 409 race needs real GHA and
+  stays a fleet concern.
 
 config:
   trunk_branch: main
-  environments: []
+  environments: [dev]
   builds:
     - name: app
       workflow: build.yaml
@@ -16,7 +22,7 @@ config:
   deploys: []
 
 steps:
-  - name: "Initial commit; assert retry loop in Update Manifest step"
+  - name: "Initial commit"
     action: commit
     commit:
       message: "feat: add app"
@@ -24,15 +30,19 @@ steps:
         src/app.go: |
           package main
           func main() {}
+
+  - name: "Orchestrate; assert the retry loop ran and wrote state"
+    action: orchestrate
     expect:
-      workflow_files:
-        - path: ".github/workflows/orchestrate.yaml"
-          contains:
-            - "Update Manifest"
-            - "for attempt in 1 2 3 4 5 6 7 8 9 10"
-            - "cascade-state-write: attempt=$attempt/10"
-            - "cascade-state-write: ok attempt=$attempt"
-            - "cascade-state-write: exhausted attempts=10"
-            - "git fetch origin"
-            - "git reset --hard"
-            - "apply_state_edits"
+      # State advanced: the Update Manifest loop reached its push and committed
+      # the new leaf. A regressed loop that never pushes leaves this unchanged.
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      # The running loop's success marker. attempt=1 is the shell-expanded value
+      # the executed job logs on the first successful push, not the unexpanded
+      # "$attempt" that appears in the emitted script source.
+      expect_log: "cascade-state-write: ok attempt=1"

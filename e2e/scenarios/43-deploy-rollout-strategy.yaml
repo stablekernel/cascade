@@ -7,7 +7,13 @@ description: |
   rollout, so a deploy that sets fail_fast: true and max_parallel: 2 proves the
   configured values flow through rather than the historical defaults.
 
-  Generator-output assertion only; no workflow run.
+  Generation-only. The whole effect of these knobs is the generated strategy
+  block, and the runtime behavior they configure (fail-fast cancelling a sibling
+  matrix leg, max-parallel throttling) is not observable in act: act does not
+  reliably implement matrix fail-fast cancellation, and max-parallel is a timing
+  property. The executing proof of a rollout that cancels on failure lives on the
+  fleet, not in an e2e grep. This cell is a ceiling, labeled as such, not runtime
+  coverage.
 
 config:
   trunk_branch: main

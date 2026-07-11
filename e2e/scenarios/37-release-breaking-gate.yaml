@@ -1,53 +1,105 @@
 name: "Release workflow breaking-change gate, dry-run, concurrency"
 description: |
-  Verifies that the single-environment release workflow emits its
-  breaking-change gate, the dry_run skip wiring, and the serialized
-  non-cancelling concurrency block (#322).
+  Verifies at runtime that the single-environment Release workflow's
+  breaking-change gate blocks publishing a breaking (major) release and lets it
+  through once allow_breaking_changes is set (#322).
 
-  A single-environment manifest generates a Release workflow into
-  promote.yaml (see 09-single-env-repo.yaml). This asserts the generated
-  shape of that workflow.
+  A single-environment manifest generates a Release workflow into promote.yaml
+  (see 09-single-env-repo.yaml). From a published v0.1.0 baseline, a feat!
+  commit is orchestrated to a v1.0.0-rc.0 draft. Publishing it without the flag
+  fails and leaves the published pointer at v0.1.0; the same publish with
+  allow_breaking succeeds and cuts v1.0.0. The blocked/allowed pair is observed
+  through the run conclusion and the published release, both of which flip when
+  the gate is inverted, rather than by grepping the emitted can_proceed script.
 
-  Covers:
-  - allow_breaking_changes workflow_dispatch input
-  - the Check Breaking Changes preflight step and its can_proceed outputs
-  - the dry_run workflow_dispatch input and the release-job skip guard
-  - the top-level concurrency block with cancel-in-progress: false
-
-  Generator-output verification only.
+  The dry_run skip wiring and the serialized non-cancelling concurrency block
+  are pure generated shape, asserted generation-only.
 
 config:
   trunk_branch: main
   environments: [prod]
-  deploys:
+  builds:
     - name: app
-      workflow: .github/workflows/deploy.yaml
+      workflow: build.yaml
       triggers: ["src/**"]
+  deploys: []
+
+# Published v0.1.0 baseline so a subsequent major bump is gated.
+setup:
+  state:
+    prod:
+      version: "v0.1.0"
+  tags:
+    - "v0.1.0"
+  releases:
+    - tag: "v0.1.0"
+      prerelease: false
 
 steps:
-  - name: "Initial commit generates release-flavored promote.yaml; assert the breaking gate"
+  - name: "Breaking change commit"
     action: commit
     commit:
-      message: "feat: add app source"
+      message: "feat!: major app refactor"
       files:
         src/app.go: |
           package main
-          func main() {}
+          func mainV2() {}
+
+  - name: "Orchestrate; assert draft RC and the emitted gate/concurrency shape"
+    action: orchestrate
     expect:
+      state:
+        prod:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: true
+      # Generation-only: the dry_run skip guard and the serialized concurrency
+      # block are pure generated shape act does not execute here. The gate's
+      # RUNTIME behavior is proven by the blocked/allowed publish pair below.
       workflow_files:
         - path: ".github/workflows/promote.yaml"
           contains:
-            # Breaking-change gate input and detection step.
             - "      allow_breaking_changes:\n"
             - "      - name: Check Breaking Changes\n"
-            - "          ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n"
-            - "          echo \"has_breaking=$HAS_BREAKING\" >> \"$GITHUB_OUTPUT\"\n"
-            # The gate proceeds only when allowed, and blocks otherwise.
-            - "              echo \"can_proceed=true\" >> \"$GITHUB_OUTPUT\"\n"
-            - "              echo \"can_proceed=false\" >> \"$GITHUB_OUTPUT\"\n"
-            # dry_run input and the release-job skip guard.
             - "      dry_run:\n"
             - "    if: ${{ github.event.inputs.dry_run != 'true' }}\n"
-            # Serialized, non-cancelling concurrency block.
             - "concurrency:\n"
             - "  cancel-in-progress: false\n"
+
+  - name: "Publish without the flag is blocked"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      # The published pointer never advanced to v1.0.0; the draft RC is intact.
+      state:
+        release:
+          unchanged: true
+      releases:
+        - tag: "v1.0.0"
+          deleted: true
+
+  - name: "Publish with allow_breaking proceeds"
+    action: promote
+    promote:
+      mode: default
+      allow_breaking: true
+    expect:
+      state:
+        release:
+          sha: commit1
+          version: "v1.0.0"
+      releases:
+        - tag: "v1.0.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v1.0.0"]
+        deleted: ["v1.0.0-rc.0"]

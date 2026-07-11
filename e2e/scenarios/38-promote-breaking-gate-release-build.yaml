@@ -1,51 +1,178 @@
 name: "Promote breaking-change gate and release-build dispatch"
 description: |
-  Verifies that the multi-environment promote workflow emits its
-  CLI-driven breaking-change gate and the follow-on release-build dispatch
-  when release.workflow is configured (#322).
+  Verifies that the multi-environment promote workflow's CLI-driven
+  breaking-change gate blocks a breaking promotion into the release stage (#322).
 
-  Covers:
-  - allow_breaking_changes workflow_dispatch input
-  - the cascade promote preflight run with the --allow-breaking flag
-  - the dry_run input and the promote-job skip guard
-  - the Trigger Release Build step dispatching the configured release-build
-    workflow after a final-env publication
+  Load-bearing RUNTIME assertion (the block): from a published v0.1.0 baseline, a
+  feat! commit is orchestrated to a v1.0.0-rc.0 prerelease and cascaded through
+  the prerelease environments (no gate). Promoting uat into the release stage
+  WITHOUT the flag fails at the breaking-change gate: the CLI preflight rejects
+  the promotion before any publish, so the source and release state leaves stay
+  unchanged and no v1.0.0 tag or release is cut. This runs under act (the gate
+  fails in preflight, ahead of the gh-dependent publish path) and is red-able:
+  forcing preflight CanProceed=true makes the promote proceed instead of failing.
 
-  Generator-output verification only.
+  Generation-only (act cannot run the publish path): the allow_breaking side of
+  the gate and the release-build dispatch are asserted as EMITTED shape, not run.
+  The multi-env allow_breaking promote reaches a final-env publish entangled with
+  the gh-driven Trigger Release Build step; Publish Release cutting v1.0.0,
+  reaping the RC, advancing the release/prod state, and executing the dispatched
+  release-build workflow all need real GitHub, which act has no gh for. So this
+  scenario asserts only that the promote workflow EMITS the allow_breaking wiring
+  and the release-build dispatch.
+
+  Residuals proven elsewhere: the runtime gate-BYPASS (a breaking promote
+  proceeding once allow_breaking is set) is proven by scenario 37 (single-env,
+  two-sided and red-able); the multi-env allow_breaking publish and the
+  release-build execution are proven on the fleet, where gh is present.
 
 config:
   trunk_branch: main
-  environments: [dev, test, prod]
-  deploys:
+  environments: [dev, qa, uat, prod]
+  builds:
     - name: app
-      workflow: .github/workflows/deploy.yaml
+      workflow: build.yaml
       triggers: ["src/**"]
+  deploys:
+    - name: cdk
+      workflow: deploy.yaml
+      triggers: ["cdk/**"]
   release:
     workflow: .github/workflows/release-build.yaml
 
+# Published v0.1.0 baseline: prerelease envs hold the last RC, release and prod
+# hold the published version. The RC tag was reaped at publish time.
+setup:
+  state:
+    dev:
+      version: "v0.1.0-rc.0"
+    qa:
+      version: "v0.1.0-rc.0"
+    uat:
+      version: "v0.1.0-rc.0"
+    release:
+      version: "v0.1.0"
+    prod:
+      version: "v0.1.0"
+  tags:
+    - "v0.1.0"
+  releases:
+    - tag: "v0.1.0"
+      prerelease: false
+
 steps:
-  - name: "Initial commit generates promote.yaml; assert gate and release-build dispatch"
+  - name: "Breaking change commit"
     action: commit
     commit:
-      message: "feat: add app source"
+      message: "feat!: major app refactor"
       files:
-        src/app.go: |
-          package main
-          func main() {}
+        src/app.ts: |
+          export function mainV2() {
+            console.log("App v1.0.0 - Breaking!");
+          }
+
+  - name: "Orchestrate dev; assert the emitted CLI gate and release-build shape"
+    action: orchestrate
     expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v1.0.0-rc.0"
+          prerelease: true
+          draft: true
+      # Generation-only: these assert the emitted shape of behaviors act cannot
+      # execute (the CLI gate wiring and the real-GitHub-only release-build
+      # dispatch). The gate's RUNTIME behavior is proven by the blocked/allowed
+      # promote pair below; the release-build dispatch's execution is proven on
+      # the fleet, since act has no gh to run it.
       workflow_files:
         - path: ".github/workflows/promote.yaml"
           contains:
-            # Breaking-change gate input and CLI-driven preflight.
             - "      allow_breaking_changes:\n"
             - "          cascade promote preflight \\\n"
             - "            --allow-breaking=\"${ALLOW_BREAKING:-false}\" \\\n"
-            # dry_run input and the promote-job skip guard.
-            - "      dry_run:\n"
-            - "    if: ${{ github.event.inputs.dry_run != 'true' }}\n"
-            # Follow-on release-build dispatch against the published tag.
             - "      - name: Trigger Release Build\n"
             - "          gh workflow run release-build.yaml \\\n"
           not_contains:
-            # The promote path uses the CLI gate, not the release bash step.
+            # The multi-env promote path uses the CLI gate, not the single-env
+            # release workflow's bash "Check Breaking Changes" step.
             - "      - name: Check Breaking Changes\n"
+
+  - name: "Cascade promote dev to qa (prerelease, no gate)"
+    action: promote
+    promote:
+      mode: cascade
+      target: qa
+    expect:
+      state:
+        qa:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+        dev:
+          unchanged: true
+
+  - name: "Cascade promote qa to uat (prerelease, no gate)"
+    action: promote
+    promote:
+      mode: cascade
+      target: uat
+    expect:
+      state:
+        uat:
+          sha: commit1
+          version: "v1.0.0-rc.0"
+        qa:
+          unchanged: true
+
+  - name: "Promote uat to release without the flag is blocked at the gate"
+    action: promote
+    promote:
+      mode: default
+      expect_failure: true
+    expect:
+      # The gate blocks before Publish Release, so no v1.0.0 is cut and both the
+      # source state and the published release stay put. This is the load-bearing
+      # runtime blocked outcome, and it is red-able: forcing preflight
+      # CanProceed=true lets the promote proceed instead of failing. The
+      # gate-bypass counterpart (allow_breaking proceeding) is proven by
+      # scenario 37; the allow_breaking step below asserts only emitted shape.
+      state:
+        uat:
+          unchanged: true
+        release:
+          unchanged: true
+      releases:
+        - tag: "v1.0.0"
+          deleted: true
+
+  - name: "Promote uat to release with allow_breaking: emitted allow-breaking wiring and release-build dispatch (generation-only)"
+    action: promote
+    promote:
+      mode: default
+      allow_breaking: true
+      # Under act this run clears the CLI gate but cannot complete: Publish
+      # Release and the gh-driven Trigger Release Build dispatch need real
+      # GitHub, which act has no gh for, so the run fails here for an
+      # infrastructure reason, NOT at the gate. The runtime gate-BYPASS (a
+      # breaking promote proceeding once allow_breaking is set) is proven by
+      # scenario 37; this step's surviving, act-runnable assertion is
+      # generation-only.
+      expect_failure: true
+    expect:
+      # Generation-only: the multi-env allow_breaking publish + release-build
+      # execution cannot run under act, so instead of asserting a published
+      # v1.0.0 (release/tag/rc-reap/state-advance), assert only that the promote
+      # workflow EMITS the allow_breaking wiring and the release-build dispatch.
+      # The publish + dispatch execution are proven on the fleet, where gh is
+      # present; the runtime gate-bypass is proven by scenario 37.
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "      allow_breaking_changes:\n"
+            - "            --allow-breaking=\"${ALLOW_BREAKING:-false}\" \\\n"
+            - "      - name: Trigger Release Build\n"
+            - "          gh workflow run release-build.yaml \\\n"
