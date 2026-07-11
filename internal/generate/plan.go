@@ -225,7 +225,26 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 		}
 	}
 
-	// 10. composite action -> baseDir/.github/actions/<folder>/action.yaml.
+	// 10. reconcile -> cascade-reconcile-check.yaml plus its workflow_run
+	//     cascade-reconcile-companion.yaml when reconcile.enabled. This mirrors the
+	//     generate command's default reconcile path (no own-repo gating), so verify
+	//     sees the same two files generate writes and reports no drift on a clean
+	//     tree.
+	if gen := NewReconcileGenerator(cfg, baseDir); gen.Enabled() {
+		content, err = gen.Generate()
+		if err != nil {
+			return nil, fmt.Errorf("generating reconcile-check workflow: %w", err)
+		}
+		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-reconcile-check.yaml", Content: content})
+
+		companionContent, cerr := gen.GenerateCompanion()
+		if cerr != nil {
+			return nil, fmt.Errorf("generating reconcile-companion workflow: %w", cerr)
+		}
+		planned = append(planned, PlannedFile{Path: ".github/workflows/cascade-reconcile-companion.yaml", Content: companionContent})
+	}
+
+	// 11. composite action -> baseDir/.github/actions/<folder>/action.yaml.
 	action, err := RenderLocalActions(baseDir, cfg, opts.OwnRepo)
 	if err != nil {
 		return nil, fmt.Errorf("rendering local actions: %w", err)

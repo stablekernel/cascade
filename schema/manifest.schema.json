@@ -171,6 +171,7 @@
         "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
         "merge_queue": { "$ref": "#/definitions/mergeQueueConfig" },
         "drift_check": { "$ref": "#/definitions/driftCheckConfig" },
+        "reconcile": { "$ref": "#/definitions/reconcileConfig" },
         "rollback": { "$ref": "#/definitions/rollbackConfig" },
         "deployments": { "$ref": "#/definitions/deploymentsConfig" },
         "pin_mode": {
@@ -731,6 +732,24 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "comment": { "type": "boolean" }
+      }
+    },
+    "reconcileConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opt-in emitted pin-reconcile companion. When enabled, cascade emits a read-only pull_request detector plus a workflow_run companion that adopts an external governed-pin change back into the manifest.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "source": {
+          "type": "string",
+          "enum": ["dependabot"],
+          "description": "Change source the companion recognizes (default: dependabot)."
+        },
+        "commit": {
+          "type": "string",
+          "enum": ["append", "followup"],
+          "description": "How the same-repo adoption commit is routed: append (default) onto the triggering PR, or followup as a separate PR."
+        }
       }
     },
     "tagGrammarConfig": {

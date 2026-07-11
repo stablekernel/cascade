@@ -153,6 +153,85 @@ func TestPlan_MatchesGeneratedBytes(t *testing.T) {
 	}
 }
 
+// planPaths returns the set of paths Plan emitted, each normalized to its base
+// name so a caller can assert on the workflow file names without depending on
+// the absolute composite-action location.
+func planPaths(t *testing.T, planned []PlannedFile) map[string]string {
+	t.Helper()
+	out := make(map[string]string, len(planned))
+	for _, p := range planned {
+		out[filepath.Base(p.Path)] = p.Content
+	}
+	return out
+}
+
+// TestPlan_IncludesReconcileFilesWhenEnabled proves Plan (the set verify
+// enumerates) emits the two reconcile workflow files exactly when
+// reconcile.enabled is set, mirroring the generate command's default reconcile
+// path. Without this, verify would report the reconcile files generate wrote as
+// orphaned drift on a clean tree.
+func TestPlan_IncludesReconcileFilesWhenEnabled(t *testing.T) {
+	writeReconcilePlanManifest := func(t *testing.T, enabled bool) string {
+		t.Helper()
+		dir := writeDeterminismWorkflows(t)
+
+		cfg := determinismConfig()
+		if enabled {
+			cfg.Reconcile = &config.ReconcileConfig{Enabled: true}
+		}
+		manifest := map[string]any{
+			config.DefaultManifestKey: config.CICDFile{Config: cfg},
+		}
+		body, err := yaml.Marshal(manifest)
+		require.NoError(t, err)
+
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "manifest.yaml"), body, 0o644))
+		return dir
+	}
+
+	const (
+		checkFile     = "cascade-reconcile-check.yaml"
+		companionFile = "cascade-reconcile-companion.yaml"
+	)
+
+	planOpts := func() PlanOptions {
+		return PlanOptions{
+			ConfigPath:        ".github/manifest.yaml",
+			ManifestKey:       config.DefaultManifestKey,
+			ActionFolder:      "manage-release",
+			OutputPath:        ".github/workflows/orchestrate.yaml",
+			PromoteOutputPath: ".github/workflows/promote.yaml",
+		}
+	}
+
+	t.Run("enabled emits both reconcile files", func(t *testing.T) {
+		dir := writeReconcilePlanManifest(t, true)
+		chdir(t, dir)
+
+		planned, err := Plan(planOpts())
+		require.NoError(t, err)
+
+		byName := planPaths(t, planned)
+		require.Contains(t, byName, checkFile, "Plan must include the reconcile detector when reconcile.enabled")
+		require.Contains(t, byName, companionFile, "Plan must include the reconcile companion when reconcile.enabled")
+		require.NotEmpty(t, byName[checkFile])
+		require.NotEmpty(t, byName[companionFile])
+	})
+
+	t.Run("disabled omits both reconcile files", func(t *testing.T) {
+		dir := writeReconcilePlanManifest(t, false)
+		chdir(t, dir)
+
+		planned, err := Plan(planOpts())
+		require.NoError(t, err)
+
+		byName := planPaths(t, planned)
+		require.NotContains(t, byName, checkFile, "Plan must omit the reconcile detector when reconcile is disabled")
+		require.NotContains(t, byName, companionFile, "Plan must omit the reconcile companion when reconcile is disabled")
+	})
+}
+
 // TestPlan_Deterministic asserts Plan returns an identical set across repeated
 // calls in one process, guarding the #174 determinism contract through the
 // plan-set boundary that verify consumes.
