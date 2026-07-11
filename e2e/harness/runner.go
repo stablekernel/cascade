@@ -154,6 +154,13 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.Reconcile.MutateFind == "" {
 				return fmt.Errorf("step %d (%s): reconcile requires mutate_find", i, step.Name)
 			}
+		case "run_workflow":
+			if step.RunWorkflow == nil {
+				return fmt.Errorf("step %d (%s): run_workflow action requires run_workflow config", i, step.Name)
+			}
+			if step.RunWorkflow.WorkflowPath == "" {
+				return fmt.Errorf("step %d (%s): run_workflow requires workflow_path", i, step.Name)
+			}
 		default:
 			return fmt.Errorf("step %d (%s): unknown action %q", i, step.Name, step.Action)
 		}
