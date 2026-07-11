@@ -1,0 +1,140 @@
+# theme: cascade
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
+classes: {
+  state: {
+    shape: rectangle
+    style: {
+      fill: "#222a30"
+      stroke: "#36d0c4"
+      font-color: "#f4f7f8"
+      stroke-width: 2
+      3d: true
+    }
+  }
+  invoke: {
+    shape: hexagon
+    style: {
+      fill: "#06343a"
+      stroke: "#36d0c4"
+      font-color: "#8af0e8"
+      stroke-width: 2
+    }
+  }
+  region: {
+    shape: rectangle
+    style: {
+      fill: "#1a2228"
+      stroke: "#1f9b92"
+      font-color: "#8af0e8"
+      stroke-width: 2
+      stroke-dash: 3
+      border-radius: 8
+    }
+  }
+  lane: {
+    style: {
+      fill: "#1a2228"
+      stroke: "#1f9b92"
+      font-color: "#8af0e8"
+      stroke-dash: 3
+      border-radius: 8
+    }
+  }
+  repo: {
+    shape: rectangle
+    style: {
+      fill: "#333b42"
+      stroke: "#57606a"
+      font-color: "#e2e8ec"
+      border-radius: 8
+    }
+  }
+  hotfix: {
+    shape: rectangle
+    style: {
+      fill: "#82071e"
+      stroke: "#cf222e"
+      font-color: "#f4f7f8"
+      stroke-width: 2
+      3d: true
+    }
+  }
+  init: {
+    shape: circle
+    width: 26
+    style: {
+      fill: "#36d0c4"
+      stroke: "#8af0e8"
+      font-color: "#151b20"
+    }
+  }
+  final: {
+    shape: circle
+    style: {
+      fill: "#151b20"
+      stroke: "#36d0c4"
+      font-color: "#8af0e8"
+      stroke-width: 3
+      multiple: true
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#36d0c4"
+      font-color: "#e2e8ec"
+      stroke-width: 2
+    }
+  }
+  promote: {
+    style: {
+      stroke: "#36d0c4"
+      font-color: "#8af0e8"
+      stroke-width: 3
+      bold: true
+    }
+  }
+  optional: {
+    style: {
+      stroke: "#57606a"
+      font-color: "#8a929c"
+      stroke-dash: 4
+    }
+  }
+  external: {
+    style: {
+      stroke: "#36d0c4"
+      font-color: "#8af0e8"
+      stroke-width: 3
+      bold: true
+    }
+  }
+  notify: {
+    style: {
+      stroke: "#57606a"
+      font-color: "#8a929c"
+      stroke-dash: 4
+    }
+  }
+  hotfix_edge: {
+    style: {
+      stroke: "#cf222e"
+      font-color: "#cf222e"
+      stroke-dash: 4
+    }
+  }
+}
+
+style.fill: "#151b20"
+
+trunk: "Trunk" {class: state}
+build: "Build" {class: state}
+deploy: "Deploy" {class: state}
+release: "Release" {class: state}
+trunk -> build: {class: flow}
+build -> deploy: {class: flow}
+deploy -> release: {class: flow}

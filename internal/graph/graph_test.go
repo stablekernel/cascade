@@ -107,7 +107,62 @@ func TestRun_UnknownFormat_Errors(t *testing.T) {
 	err := Run(o, &out)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mermaid")
+	require.Contains(t, err.Error(), "d2")
 	require.Empty(t, out.String())
+}
+
+func TestRun_D2Format_EmitsCrucibleSource(t *testing.T) {
+	path := writeManifest(t)
+	o := baseOptions(path)
+	o.Format = formatD2
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	// The D2 emitter selects ELK, defines the crucible class catalog, and paints
+	// the dark canvas, none of which the Mermaid emitter produces.
+	require.Contains(t, got, "layout-engine: elk")
+	require.Contains(t, got, `style.fill: "#151b20"`)
+	require.NotContains(t, got, "flowchart TD")
+	// The job nodes and a hard dependency edge carry their crucible classes.
+	require.Contains(t, got, "deploy_app: ")
+	require.Contains(t, got, "deploy_app -> build_app: {class: flow}")
+}
+
+func TestRun_D2Format_CrossRepoLanes(t *testing.T) {
+	path := writeCrossRepoManifest(t)
+	o := baseOptions(path)
+	o.Format = formatD2
+	o.Granularity = string(GranularityCrossRepo)
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	got := out.String()
+	// Each repo lane renders as a D2 container and the primary coordinates the
+	// external satellite across lanes.
+	require.Contains(t, got, `primary: "primary" {`)
+	require.Contains(t, got, `repo_org_cdk_infra: "org/cdk-infra" {`)
+	require.Contains(t, got, `{class: external}`)
+}
+
+func TestRun_D2Format_JSONReportsFormat(t *testing.T) {
+	path := writeManifest(t)
+	o := baseOptions(path)
+	o.Format = formatD2
+	o.JSON = true
+
+	var out bytes.Buffer
+	require.NoError(t, Run(o, &out))
+
+	var payload struct {
+		Format  string `json:"format"`
+		Diagram string `json:"diagram"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
+	require.Equal(t, formatD2, payload.Format)
+	require.Contains(t, payload.Diagram, "layout-engine: elk")
 }
 
 func TestRun_StagesGranularity_EmitsFlowchart(t *testing.T) {

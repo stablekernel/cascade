@@ -30,10 +30,14 @@ const (
 	GranularityCrossRepo Granularity = "cross-repo"
 )
 
-// formatMermaid is the only diagram format cascade graph emits today. The flag
-// validates against it so a future format is additive rather than a silent
-// behavior change.
-const formatMermaid = "mermaid"
+// Diagram formats cascade graph emits. mermaid is the GitHub-native default that
+// renders in Markdown; d2 emits cascade's branded crucible-style D2 source a
+// sidecar renderer turns into SVG or PNG. The flag validates against this set so
+// a future format is additive rather than a silent behavior change.
+const (
+	formatMermaid = "mermaid"
+	formatD2      = "d2"
+)
 
 // defaultThemeName is the theme applied when no theme flag is set. It mirrors
 // the visualize package default (the branded cascade palette) so a manifest
@@ -72,8 +76,11 @@ func Run(o Options, stdout io.Writer) error {
 	if format == "" {
 		format = formatMermaid
 	}
-	if format != formatMermaid {
-		return fmt.Errorf("unsupported format %q: only %q is supported", format, formatMermaid)
+	switch format {
+	case formatMermaid, formatD2:
+		// Each format maps to a supported emitter.
+	default:
+		return fmt.Errorf("unsupported format %q: supported values are %q and %q", format, formatMermaid, formatD2)
 	}
 
 	granularity := o.Granularity
@@ -107,7 +114,7 @@ func Run(o Options, stdout io.Writer) error {
 		return err
 	}
 
-	diagram, err := visualize.NewMermaidEmitter().Emit(vm, theme)
+	diagram, err := selectEmitter(format).Emit(vm, theme)
 	if err != nil {
 		return fmt.Errorf("rendering %s: %w", format, err)
 	}
@@ -122,6 +129,16 @@ func Run(o Options, stdout io.Writer) error {
 		return fmt.Errorf("writing diagram: %w", err)
 	}
 	return nil
+}
+
+// selectEmitter returns the Emitter for a validated format. Run guards the
+// format before calling, so the mermaid emitter is a safe default for any value
+// that is not the D2 format.
+func selectEmitter(format string) visualize.Emitter {
+	if format == formatD2 {
+		return visualize.NewD2Emitter()
+	}
+	return visualize.NewMermaidEmitter()
 }
 
 // resolveTheme turns the --theme value into a concrete theme. An empty value or

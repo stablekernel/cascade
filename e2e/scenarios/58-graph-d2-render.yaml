@@ -1,0 +1,64 @@
+name: "Graph D2 Render"
+description: |
+  Exercises the read-only `cascade graph --format d2` command end to end. After a
+  feature commit against a two-environment manifest, graph renders the branded
+  crucible-style D2 source on stdout: it selects the ELK layout engine, paints the
+  dark canvas, and emits the job nodes and their dependency edge with the crucible
+  node and edge classes. The default Mermaid format still renders on the same
+  manifest, and graph never writes a file or mutates the repo, so both runs are
+  purely informational.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+      depends_on: ["app"]
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.go: |
+          package main
+
+          func main() {}
+
+  - name: "Render the job graph as crucible-style D2"
+    action: graph
+    graph:
+      format: d2
+      granularity: jobs
+      expect_exit: 0
+      expect_contains:
+        - "layout-engine: elk"
+        - 'style.fill: "#151b20"'
+        - "deploy_app -> build_app: {class: flow}"
+      expect_not_contains:
+        - "flowchart TD"
+
+  - name: "Render the coarse stages as D2"
+    action: graph
+    graph:
+      format: d2
+      granularity: stages
+      expect_exit: 0
+      expect_contains:
+        - "layout-engine: elk"
+        - "{class: state}"
+
+  - name: "Default Mermaid format still renders"
+    action: graph
+    graph:
+      granularity: jobs
+      expect_exit: 0
+      expect_contains:
+        - "flowchart TD"

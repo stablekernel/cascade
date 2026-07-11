@@ -108,6 +108,10 @@ type Step struct {
 	// a per-file unified diff of committed-vs-planned workflows and always exits 0
 	// on success, exercising plan's informational (non-gate) contract.
 	Plan *PlanStep `yaml:"plan,omitempty"`
+	// Graph configures a "graph" action: a read-only `cascade graph` run that
+	// renders the manifest's pipeline as diagram source (Mermaid or D2) on stdout,
+	// exercising the renderer's deterministic, read-only text contract.
+	Graph *GraphStep `yaml:"graph,omitempty"`
 	// Consistency configures a "consistency" action: a `cascade status
 	// consistency` run (optionally --fix) that flags, and with --fix deletes,
 	// orphan env/* branches on the Gitea remote, then asserts the JSON report and
@@ -357,6 +361,21 @@ type PlanStep struct {
 	Regenerate        bool     `yaml:"regenerate,omitempty"`
 	MutatePath        string   `yaml:"mutate_path,omitempty"`
 	MutateAppend      string   `yaml:"mutate_append,omitempty"`
+	ExpectExit        int      `yaml:"expect_exit"`
+	ExpectContains    []string `yaml:"expect_contains,omitempty"`
+	ExpectNotContains []string `yaml:"expect_not_contains,omitempty"`
+}
+
+// GraphStep defines a "graph" action: a read-only `cascade graph` run that emits
+// diagram source on stdout without touching the repo. Format selects the syntax
+// (mermaid by default, or d2 for the branded crucible source); Granularity
+// selects the projection (jobs, stages, env, cross-repo). ExpectExit is the exit
+// code the command must return (0 on success). ExpectContains and
+// ExpectNotContains are substrings the emitted diagram must and must not carry,
+// so a scenario asserts the deterministic source shape end to end.
+type GraphStep struct {
+	Format            string   `yaml:"format,omitempty"`
+	Granularity       string   `yaml:"granularity,omitempty"`
 	ExpectExit        int      `yaml:"expect_exit"`
 	ExpectContains    []string `yaml:"expect_contains,omitempty"`
 	ExpectNotContains []string `yaml:"expect_not_contains,omitempty"`

@@ -140,6 +140,10 @@ func (r *Runner) ValidateScenario(scenario *MultiStepScenario) error {
 			if step.Plan.MutatePath != "" && step.Plan.MutateAppend == "" {
 				return fmt.Errorf("step %d (%s): plan mutate_path requires mutate_append", i, step.Name)
 			}
+		case "graph":
+			if step.Graph == nil {
+				return fmt.Errorf("step %d (%s): graph action requires graph config", i, step.Name)
+			}
 		case "consistency":
 			if step.Consistency == nil {
 				return fmt.Errorf("step %d (%s): consistency action requires consistency config", i, step.Name)
@@ -399,6 +403,8 @@ func (r *Runner) executeStep(ctx context.Context, step *Step, config Config) err
 		return r.executeVerify(ctx, step.Verify)
 	case "plan":
 		return r.executePlan(ctx, step.Plan)
+	case "graph":
+		return r.executeGraph(ctx, step.Graph)
 	case "consistency":
 		return r.executeConsistency(ctx, step.Consistency)
 	case "reconcile":
@@ -575,6 +581,56 @@ func (r *Runner) executePlan(ctx context.Context, step *PlanStep) error {
 	for _, unwant := range step.ExpectNotContains {
 		if strings.Contains(output, unwant) {
 			return fmt.Errorf("plan: stdout contains unexpected substring %q: %s", unwant, output)
+		}
+	}
+	return nil
+}
+
+// executeGraph runs `cascade graph` in the synced repo and asserts the emitted
+// diagram source. It is fully read-only: graph never writes a file, runs git, or
+// mutates the repo, so the step syncs the repo, runs the command with the step's
+// format and granularity, checks the exit code, and asserts the deterministic
+// stdout carries every ExpectContains substring and none of ExpectNotContains.
+func (r *Runner) executeGraph(ctx context.Context, step *GraphStep) error {
+	if r.harness == nil || r.harness.act == nil {
+		r.t.Logf("  Would run cascade graph (expect exit %d, no harness)", step.ExpectExit)
+		return nil
+	}
+
+	if err := r.harness.SyncRepoToActContainer(ctx); err != nil {
+		return fmt.Errorf("graph: failed to sync repo: %w", err)
+	}
+
+	cmd := "cd /tmp/repo && /usr/local/bin/cascade graph"
+	if step.Format != "" {
+		cmd += " --format " + shellQuote(step.Format)
+	}
+	if step.Granularity != "" {
+		cmd += " --granularity " + shellQuote(step.Granularity)
+	}
+	graphCmd := []string{"bash", "-c", cmd}
+	exitCode, reader, err := r.harness.act.Container().Exec(ctx, graphCmd)
+	if err != nil {
+		return fmt.Errorf("graph: exec failed: %w", err)
+	}
+	var out bytes.Buffer
+	if reader != nil {
+		_, _ = io.Copy(&out, reader)
+	}
+	output := out.String()
+	r.t.Logf("  Graph: exit=%d (expected %d)", exitCode, step.ExpectExit)
+
+	if exitCode != step.ExpectExit {
+		return fmt.Errorf("graph: expected exit %d, got %d: %s", step.ExpectExit, exitCode, output)
+	}
+	for _, want := range step.ExpectContains {
+		if !strings.Contains(output, want) {
+			return fmt.Errorf("graph: stdout missing expected substring %q: %s", want, output)
+		}
+	}
+	for _, unwant := range step.ExpectNotContains {
+		if strings.Contains(output, unwant) {
+			return fmt.Errorf("graph: stdout contains unexpected substring %q: %s", unwant, output)
 		}
 	}
 	return nil
