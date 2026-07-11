@@ -20,7 +20,7 @@ func fullConfig() *config.TrunkConfig {
 			"prod": {
 				GHAEnvironment:    "production",
 				RequiredReviewers: []string{"octocat", "team/ops"},
-				WaitTimer:         10,
+				WaitTimer:         intPtr(10),
 				BranchPolicy:      config.EnvBranchPolicyProtected,
 				Secrets:           []string{"MY_SECRET", "DB_PASSWORD"},
 				Variables:         []string{"REGION"},

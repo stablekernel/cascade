@@ -1,0 +1,77 @@
+name: "Per-Component Boolean Opt-Out"
+description: |
+  Proves the opt-out direction of uniform deep-merge inheritance end to end. The
+  manifest enables the GitHub Deployments integration once at the top level
+  (deployments.enabled: true). One component (api) sets deployments.enabled: false
+  to opt out, while the other (web) carries no override and inherits the shared
+  enabled: true.
+
+  The inheritable boolean is pointer-typed so an explicit false is distinct from
+  unset: a component that opts out marshals its false into the merge and overrides
+  the inherited true rather than dropping to nothing and silently staying enabled.
+  So api's orchestrate workflow emits no deployment reporting at all, while web's
+  still reports the deployment. The scenario generates the per-component set,
+  proves the roundtrip is drift-free, and asserts the opt-out component carries no
+  deployment step while its sibling does.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  deployments:
+    enabled: true
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_prefix: api-
+      deployments:
+        enabled: false
+    web:
+      path: services/web
+      tag_prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "The opt-out component drops deployment reporting; the sibling keeps it"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+    # api set deployments.enabled: false, overriding the inherited true, so its
+    # orchestrate workflow creates no deployment. web inherited the shared true, so
+    # its workflow still creates one. This is the opt-out direction the pointer-
+    # typed inheritable fields make correct.
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate-api.yaml"
+          not_contains:
+            - "Create deployment"
+        - path: ".github/workflows/orchestrate-web.yaml"
+          contains:
+            - "Create deployment"

@@ -745,7 +745,7 @@ func TestGenerator_FinalizeJob_ReleaseDisabled(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: []string{"dev"},
-		Release:      &config.ReleaseConfig{Disabled: true},
+		Release:      &config.ReleaseConfig{Disabled: boolPtr(true)},
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -2246,7 +2246,7 @@ func TestGenerator_DispatchInputs_StringType(t *testing.T) {
 			"deploy_tag": {
 				Type:        config.DispatchInputTypeString,
 				Description: "Override image tag",
-				Required:    false,
+				Required:    boolPtr(false),
 			},
 		},
 	}
@@ -2342,7 +2342,7 @@ func TestGenerator_DispatchInputs_RequiredFlag(t *testing.T) {
 		DispatchInputs: map[string]config.DispatchInput{
 			"release_notes": {
 				Type:     config.DispatchInputTypeString,
-				Required: true,
+				Required: boolPtr(true),
 			},
 		},
 	}

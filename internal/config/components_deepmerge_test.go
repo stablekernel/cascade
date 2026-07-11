@@ -47,8 +47,8 @@ components:
 	}
 	// Within the overridden prod entry: wait_timer overrides, gha_environment
 	// inherits the shared entry (within-key deep merge).
-	if ec["prod"].WaitTimer != 15 {
-		t.Errorf("prod wait_timer = %d, want override 15", ec["prod"].WaitTimer)
+	if ec["prod"].WaitTimerMinutes() != 15 {
+		t.Errorf("prod wait_timer = %d, want override 15", ec["prod"].WaitTimerMinutes())
 	}
 	if ec["prod"].GHAEnvironment != "production" {
 		t.Errorf("prod gha_environment = %q, want inherited production", ec["prod"].GHAEnvironment)
@@ -116,6 +116,57 @@ components:
 	}
 	if !got["libs/**"] || !got["protos/**"] {
 		t.Errorf("ExtraPaths = %v, want union of libs/** and protos/**", rc.ExtraPaths)
+	}
+}
+
+// TestResolveComponent_DeepMergeOptOutOverridesInheritedTrue proves the opt-out
+// direction: a component that sets an inherited boolean back to false overrides
+// the inherited true rather than silently inheriting it. This is the regression
+// the pointer-typed override fields guard against: with a bare bool the
+// component's explicit false marshalled to nothing under the deep merge and the
+// component silently stayed enabled.
+func TestResolveComponent_DeepMergeOptOutOverridesInheritedTrue(t *testing.T) {
+	cfg := parseInline(t, `
+trunk_branch: main
+environments: [dev, prod]
+deployments:
+  enabled: true
+changelog:
+  disabled: true
+components:
+  api:
+    path: services/api
+    tag_prefix: api-
+    deployments:
+      enabled: false
+    changelog:
+      disabled: false
+  web:
+    path: services/web
+    tag_prefix: web-
+`)
+
+	api, err := cfg.ResolveComponent("api")
+	if err != nil {
+		t.Fatalf("ResolveComponent(api): %v", err)
+	}
+	if api.Config.Deployments.IsEnabled() {
+		t.Error("api set deployments.enabled: false but stayed enabled (inherited the shared true)")
+	}
+	if api.Config.Changelog.IsDisabled() {
+		t.Error("api set changelog.disabled: false but stayed disabled (inherited the shared true)")
+	}
+
+	// The sibling with no override still inherits the shared true values.
+	web, err := cfg.ResolveComponent("web")
+	if err != nil {
+		t.Fatalf("ResolveComponent(web): %v", err)
+	}
+	if !web.Config.Deployments.IsEnabled() {
+		t.Error("web should inherit the shared deployments.enabled: true")
+	}
+	if !web.Config.Changelog.IsDisabled() {
+		t.Error("web should inherit the shared changelog.disabled: true")
 	}
 }
 

@@ -66,7 +66,7 @@ func TestParse(t *testing.T) {
 	if cfg.Validate.Workflow != ".github/workflows/validate.yaml" {
 		t.Errorf("Validate.Workflow = %q, want %q", cfg.Validate.Workflow, ".github/workflows/validate.yaml")
 	}
-	if !cfg.Validate.SupportsDryRun {
+	if !cfg.Validate.DryRunSupported() {
 		t.Error("Validate.SupportsDryRun = false, want true")
 	}
 
@@ -505,7 +505,7 @@ func TestParse_ReleaseAndChangelogConfig(t *testing.T) {
 		t.Fatal("Release is nil")
 		return
 	}
-	if cfg.Release.Disabled {
+	if cfg.Release.IsDisabled() {
 		t.Error("Release.Disabled should be false (enabled by default)")
 	}
 	if cfg.Release.Tag != "goreleaser.tag" {
@@ -552,7 +552,7 @@ func TestParse_ReleaseDisabled(t *testing.T) {
 		t.Fatal("Release is nil")
 		return
 	}
-	if !cfg.Release.Disabled {
+	if !cfg.Release.IsDisabled() {
 		t.Error("Release.Disabled should be true")
 	}
 }
@@ -721,8 +721,8 @@ func TestChangelogEnabled(t *testing.T) {
 		expected  bool
 	}{
 		{"nil changelog - enabled by default", nil, true},
-		{"disabled false - enabled", &ChangelogConfig{Disabled: false}, true},
-		{"disabled true - explicitly disabled", &ChangelogConfig{Disabled: true}, false},
+		{"disabled false - enabled", &ChangelogConfig{Disabled: boolPtr(false)}, true},
+		{"disabled true - explicitly disabled", &ChangelogConfig{Disabled: boolPtr(true)}, false},
 		{"with workflow - custom enabled", &ChangelogConfig{Workflow: ".github/workflows/changelog.yaml"}, true},
 	}
 
@@ -743,8 +743,8 @@ func TestReleaseEnabled(t *testing.T) {
 		expected bool
 	}{
 		{"nil release - enabled by default", nil, true},
-		{"disabled false - enabled", &ReleaseConfig{Disabled: false}, true},
-		{"disabled true - explicitly disabled", &ReleaseConfig{Disabled: true}, false},
+		{"disabled false - enabled", &ReleaseConfig{Disabled: boolPtr(false)}, true},
+		{"disabled true - explicitly disabled", &ReleaseConfig{Disabled: boolPtr(true)}, false},
 		{"with tag - external release enabled", &ReleaseConfig{Tag: "goreleaser.tag"}, true},
 	}
 

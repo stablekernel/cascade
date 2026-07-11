@@ -359,7 +359,7 @@ func TestGeneratedWorkflow_ChangelogCommandValid(t *testing.T) {
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
 		Changelog: &config.ChangelogConfig{
-			Contributors: true,
+			Contributors: boolPtr(true),
 		},
 	}
 

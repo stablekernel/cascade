@@ -200,8 +200,16 @@ type DispatchInput struct {
 	Default interface{} `yaml:"default,omitempty" json:"default,omitempty"`
 	// Description is the operator-facing help text.
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	// Required marks the input as required.
-	Required bool `yaml:"required,omitempty" json:"required,omitempty"`
+	// Required marks the input as required. A pointer so an explicit per-component
+	// opt-out (required: false against an inherited required: true) survives the
+	// dispatch_inputs deep merge, which merges by input key.
+	Required *bool `yaml:"required,omitempty" json:"required,omitempty"`
+}
+
+// IsRequired reports whether the dispatch input is required. Nil-safe; defaults
+// to false when unset.
+func (d DispatchInput) IsRequired() bool {
+	return d.Required != nil && *d.Required
 }
 
 // Dispatch input type constants (GHA dispatch input types).
@@ -247,14 +255,39 @@ type WorkflowRunTrigger struct {
 type MergeGroupTrigger struct{}
 
 // PRPreviewConfig is the opt-in read-only PR plan-preview lane (#40).
+//
+// Enabled and Comment are pointers so an unset field (nil) is distinct from an
+// explicit false. Component inheritance is a deep merge over the marshalled
+// override, so a bare bool would make a component that sets `enabled: false`
+// against an inherited `enabled: true` marshal to nothing and silently inherit
+// the true; a pointer keeps the explicit opt-out. Same reasoning as
+// AllowBreakingChanges and TelemetryConfig.JobSummary.
 type PRPreviewConfig struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Comment bool `yaml:"comment,omitempty" json:"comment,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Comment *bool `yaml:"comment,omitempty" json:"comment,omitempty"`
+}
+
+// IsEnabled reports whether the PR-preview lane is on. Nil-safe: an unset block
+// or an unset enabled is off.
+func (p *PRPreviewConfig) IsEnabled() bool {
+	return p != nil && p.Enabled != nil && *p.Enabled
+}
+
+// HasComment reports whether the lane posts a sticky comment. Nil-safe.
+func (p *PRPreviewConfig) HasComment() bool {
+	return p != nil && p.Comment != nil && *p.Comment
 }
 
 // ValidateCheckConfig is the opt-in manifest-validation-as-a-PR-check lane (#41).
+// Enabled is a pointer so an explicit per-component opt-out survives the
+// inheritance deep merge (see PRPreviewConfig).
 type ValidateCheckConfig struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// IsEnabled reports whether the validate-check lane is on. Nil-safe.
+func (v *ValidateCheckConfig) IsEnabled() bool {
+	return v != nil && v.Enabled != nil && *v.Enabled
 }
 
 // MergeQueueConfig is the opt-in merge-queue validation lane (#42). The raw
@@ -308,12 +341,27 @@ const (
 // When enabled, the finalize job creates a Deployment per target environment
 // and reports in_progress then success/failure status after each deploy.
 type DeploymentsConfig struct {
-	// Enabled activates GitHub Deployments API reporting in the finalize job.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Enabled activates GitHub Deployments API reporting in the finalize job. A
+	// pointer so an explicit per-component opt-out (enabled: false against an
+	// inherited enabled: true) survives the inheritance deep merge rather than
+	// marshalling to nothing and silently inheriting the true.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	// KeepPriorActive prevents GitHub from auto-inactivating prior deployments
 	// for the same environment. Maps to auto_inactive:false in the Deployments API.
-	// Default false relies on GitHub native auto-inactivation.
-	KeepPriorActive bool `yaml:"keep_prior_active,omitempty" json:"keep_prior_active,omitempty"`
+	// Default (nil) relies on GitHub native auto-inactivation. A pointer for the
+	// same opt-out reason as Enabled.
+	KeepPriorActive *bool `yaml:"keep_prior_active,omitempty" json:"keep_prior_active,omitempty"`
+}
+
+// IsEnabled reports whether GitHub Deployments reporting is on. Nil-safe.
+func (d *DeploymentsConfig) IsEnabled() bool {
+	return d != nil && d.Enabled != nil && *d.Enabled
+}
+
+// KeepsPriorActive reports whether prior deployments stay active
+// (auto_inactive:false). Nil-safe; defaults to false when unset.
+func (d *DeploymentsConfig) KeepsPriorActive() bool {
+	return d != nil && d.KeepPriorActive != nil && *d.KeepPriorActive
 }
 
 // RollbackConfig is the opt-in configuration block for the generated rollback
@@ -409,7 +457,10 @@ type EnvironmentConfig struct {
 	RequiredReviewers []string `yaml:"required_reviewers,omitempty" json:"required_reviewers,omitempty"`
 	// WaitTimer is the delay, in minutes, before a job targeting this
 	// environment runs. GitHub allows an integer between 0 and 43200 (30 days).
-	WaitTimer int `yaml:"wait_timer,omitempty" json:"wait_timer,omitempty"`
+	// A pointer so an explicit per-component opt-out (wait_timer: 0 against an
+	// inherited non-zero value) survives the inheritance deep merge rather than
+	// marshalling to nothing and silently inheriting the shared value.
+	WaitTimer *int `yaml:"wait_timer,omitempty" json:"wait_timer,omitempty"`
 	// BranchPolicy selects which branches may deploy to this environment. It
 	// maps to GitHub's deployment_branch_policy model: "protected" (only
 	// protected branches), "custom" (only branches matching BranchPatterns or
@@ -434,6 +485,15 @@ type EnvironmentConfig struct {
 	Variables []string `yaml:"variables,omitempty" json:"variables,omitempty"`
 	// EnvironmentURL is the URL of the deployed environment, reported to GitHub Deployments API status updates.
 	EnvironmentURL string `yaml:"environment_url,omitempty" json:"environment_url,omitempty"`
+}
+
+// WaitTimerMinutes returns the configured wait timer in minutes, or 0 when
+// unset. Centralizes the nil default for the now-pointer WaitTimer field.
+func (e EnvironmentConfig) WaitTimerMinutes() int {
+	if e.WaitTimer == nil {
+		return 0
+	}
+	return *e.WaitTimer
 }
 
 // Environment branch-policy mode constants. They map onto GitHub's

@@ -108,7 +108,7 @@ func TestBuildDependencyGraph_WithValidate(t *testing.T) {
 			Workflow:  ".github/workflows/validate.yaml",
 			RunPolicy: config.RunPolicyAlways,
 			OnFailure: config.OnFailureAbort,
-			Retries:   1,
+			Retries:   intPtr(1),
 		},
 		Builds: []config.BuildConfig{
 			{Name: "app", DependsOn: []string{}},

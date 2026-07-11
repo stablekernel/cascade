@@ -127,7 +127,7 @@ func Build(cfg *config.TrunkConfig) Payload {
 			Name:           name,
 			GHAEnvironment: ghaEnv,
 			Environment: EnvironmentBody{
-				WaitTimer:              ec.WaitTimer,
+				WaitTimer:              ec.WaitTimerMinutes(),
 				DeploymentBranchPolicy: branchPolicy(ec.BranchPolicy),
 			},
 			OperatorTodo: OperatorTodo{

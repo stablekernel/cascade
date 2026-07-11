@@ -199,7 +199,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	}
 
 	// 8. pr-preview -> .github/workflows/cascade-pr-preview.yaml when enabled.
-	if cfg.PRPreview != nil && cfg.PRPreview.Enabled {
+	if cfg.PRPreview.IsEnabled() {
 		content, err = NewPRPreviewGenerator(cfg, baseDir).Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating pr-preview workflow: %w", err)

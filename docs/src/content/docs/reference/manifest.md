@@ -827,7 +827,10 @@ a partial override never drops the shared siblings it did not mention:
   sets only `wait_timer` keeps the inherited `gha_environment` for `prod`.
 - A **scalar or a list** replaces. A component `environments` list overrides the
   shared list outright, and a scalar such as `release_trigger` overrides the shared
-  value.
+  value. An explicit opt-out is honored: a component that sets an inherited boolean
+  back to `false` (for example `deployments.enabled: false` under a shared
+  `deployments.enabled: true`), or an inherited number to `0`, overrides the shared
+  value rather than inheriting it.
 
 The one exception to replace-a-list is the additive path set: a component's
 `extra_paths` unions with the top-level `shared_paths` rather than replacing it.

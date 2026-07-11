@@ -15,7 +15,7 @@ environment_config:
   production:
     environment_url: "https://app.example.com"
 `)
-	if cfg.Deployments == nil || !cfg.Deployments.Enabled || !cfg.Deployments.KeepPriorActive {
+	if !cfg.Deployments.IsEnabled() || !cfg.Deployments.KeepsPriorActive() {
 		t.Fatalf("deployments: %#v", cfg.Deployments)
 	}
 	ec, ok := cfg.EnvironmentConfig["production"]
@@ -35,7 +35,7 @@ func TestDeploymentsValidatesAtCurrentSchemaVersion(t *testing.T) {
 		SchemaVersion: CurrentSchemaVersion,
 		TrunkBranch:   "main",
 		Environments:  []string{"production"},
-		Deployments:   &DeploymentsConfig{Enabled: true, KeepPriorActive: true},
+		Deployments:   &DeploymentsConfig{Enabled: boolPtr(true), KeepPriorActive: boolPtr(true)},
 		EnvironmentConfig: map[string]EnvironmentConfig{
 			"production": {EnvironmentURL: "https://app.example.com"},
 		},

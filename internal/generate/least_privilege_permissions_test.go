@@ -126,7 +126,7 @@ func TestPromote_NativeDeployments_JobLevelDeploymentsWrite(t *testing.T) {
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
-		Deployments: &config.DeploymentsConfig{Enabled: true},
+		Deployments: &config.DeploymentsConfig{Enabled: boolPtr(true)},
 		EnvironmentConfig: map[string]config.EnvironmentConfig{
 			"production": {EnvironmentURL: "https://app.example.com"},
 		},

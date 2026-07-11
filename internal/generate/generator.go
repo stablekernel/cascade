@@ -750,7 +750,7 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 			if di.Default != nil {
 				fmt.Fprintf(sb, "        default: '%v'\n", di.Default)
 			}
-			if di.Required {
+			if di.IsRequired() {
 				sb.WriteString("        required: true\n")
 			}
 		}
@@ -1966,7 +1966,7 @@ func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 		sb.WriteString("            --base-sha \"${{ needs.setup.outputs.changelog_base_sha }}\" \\\n")
 		sb.WriteString("            --head-sha \"${{ needs.setup.outputs.head_sha }}\" \\\n")
 		// Add contributors flag if enabled in config
-		if g.config.Changelog != nil && g.config.Changelog.Contributors {
+		if g.config.Changelog.IncludesContributors() {
 			sb.WriteString("            --contributors \\\n")
 		}
 		sb.WriteString("            --repo \"${{ github.repository }}\")\n")

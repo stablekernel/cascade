@@ -89,12 +89,12 @@ func BuildDependencyGraph(cfg *config.TrunkConfig) *DependencyGraph {
 			Workflow:       cfg.Validate.Workflow,
 			RunPolicy:      defaultString(cfg.Validate.RunPolicy, config.RunPolicyDefault),
 			OnFailure:      defaultString(cfg.Validate.OnFailure, config.OnFailureAbort),
-			Retries:        cfg.Validate.Retries,
+			Retries:        cfg.Validate.RetryCount(),
 			TimeoutMinutes: cfg.Validate.TimeoutMinutes,
 			RunsOn:         cfg.Validate.RunsOn,
 			Permissions:    cfg.Validate.Permissions,
 			Concurrency:    cfg.Validate.Concurrency,
-			SupportsDryRun: cfg.Validate.SupportsDryRun,
+			SupportsDryRun: cfg.Validate.DryRunSupported(),
 			Secrets:        cfg.Validate.Secrets,
 		}
 		g.Edges[jobID] = nil
