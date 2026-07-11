@@ -3,6 +3,7 @@ package simulate
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,13 +19,14 @@ type commonFlags struct {
 	config        string
 	json          bool
 	actor         string
+	component     string
 	deployResults []string
 }
 
 // engineOptions builds the engine options shared by every subcommand from the
 // common flags, parsing the repeatable --deploy-result pairs.
 func (cf *commonFlags) engineOptions() ([]Option, error) {
-	opts := []Option{WithActor(cf.actor)}
+	opts := []Option{WithActor(cf.actor), WithComponent(cf.component)}
 	outcomes, err := ParseDeployResults(cf.deployResults)
 	if err != nil {
 		return nil, err
@@ -33,6 +35,50 @@ func (cf *commonFlags) engineOptions() ([]Option, error) {
 		opts = append(opts, WithDeployResults(outcomes))
 	}
 	return opts, nil
+}
+
+// validateComponentSelection reconciles the --component flag with the manifest's
+// component declaration before a simulation runs. A monorepo manifest records no
+// flat state.<env> rows, so a simulation without --component would silently
+// replay against empty state and report only guard messages. Rather than mirror
+// that footgun (the generated component workflows always pass --component; a human
+// at the simulate command has no such guarantee), require the selector when the
+// manifest declares components, and reject a --component that names nothing the
+// manifest declares. A single-component manifest with an empty --component keeps
+// the flat path unchanged.
+func validateComponentSelection(configPath, component string) error {
+	cicd, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	if err != nil {
+		return err
+	}
+	has := cicd.Config != nil && cicd.Config.HasComponents()
+
+	if component == "" {
+		if has {
+			return fmt.Errorf("manifest declares components %s; pass --component to select one",
+				declaredComponents(cicd.Config))
+		}
+		return nil
+	}
+
+	if !has {
+		return fmt.Errorf("--component %q was given but the manifest declares no components", component)
+	}
+	if _, ok := cicd.Config.Components[component]; !ok {
+		return fmt.Errorf("unknown component %q; manifest declares %s", component, declaredComponents(cicd.Config))
+	}
+	return nil
+}
+
+// declaredComponents renders the manifest's declared component names in sorted
+// order for a stable, actionable error message.
+func declaredComponents(cfg *config.TrunkConfig) string {
+	names := make([]string, 0, len(cfg.Components))
+	for name := range cfg.Components {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 const simulateLong = `Run a hypothetical action against a clone of your manifest and print what
@@ -74,6 +120,7 @@ func NewCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&cf.config, "config", "", "Path to manifest file (default: .github/manifest.yaml)")
 	cmd.PersistentFlags().BoolVar(&cf.json, "json", false, "Output result as JSON")
 	cmd.PersistentFlags().StringVar(&cf.actor, "actor", "", "Actor performing the hypothetical action")
+	cmd.PersistentFlags().StringVar(&cf.component, "component", "", "Declared component to scope the simulation to (required for multi-component manifests)")
 	cmd.PersistentFlags().StringArrayVar(&cf.deployResults, "deploy-result", nil, "Simulated outcome for a build or deploy callback, name=success|failure|skipped (repeatable)")
 
 	cmd.AddCommand(newPromoteCommand(cf))
@@ -87,6 +134,9 @@ func NewCommand() *cobra.Command {
 // runSimulation builds the engine and renders the action result, shared by every
 // subcommand so output formatting stays identical across actions.
 func runSimulation(cf *commonFlags, a Action) error {
+	if err := validateComponentSelection(cf.config, cf.component); err != nil {
+		return err
+	}
 	opts, err := cf.engineOptions()
 	if err != nil {
 		return err

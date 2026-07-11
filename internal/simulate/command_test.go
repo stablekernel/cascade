@@ -101,13 +101,59 @@ func TestCommonFlags_EngineOptions_InvalidDeployResult(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown outcome")
 }
 
-func TestCommonFlags_EngineOptions_DefaultIsActorOnly(t *testing.T) {
+func TestCommonFlags_EngineOptions_DefaultIsActorAndComponent(t *testing.T) {
 	t.Parallel()
 
 	cf := &commonFlags{actor: "tester"}
 	opts, err := cf.engineOptions()
 	require.NoError(t, err)
-	assert.Len(t, opts, 1, "no deploy-result pairs adds no extra option")
+	assert.Len(t, opts, 2, "actor and component options with no deploy-result pairs")
+}
+
+func TestValidateComponentSelection(t *testing.T) {
+	t.Parallel()
+
+	mono := writeRaw(t, simMonorepoManifest)
+	single := seedManifest(t)
+
+	t.Run("monorepo without component is rejected", func(t *testing.T) {
+		t.Parallel()
+		err := validateComponentSelection(mono, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "pass --component")
+		assert.Contains(t, err.Error(), "api, web")
+	})
+
+	t.Run("monorepo with unknown component is rejected", func(t *testing.T) {
+		t.Parallel()
+		err := validateComponentSelection(mono, "billing")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown component")
+	})
+
+	t.Run("monorepo with declared component is accepted", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, validateComponentSelection(mono, "api"))
+	})
+
+	t.Run("single-component without component is accepted", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, validateComponentSelection(single, ""))
+	})
+
+	t.Run("single-component with a component is rejected", func(t *testing.T) {
+		t.Parallel()
+		err := validateComponentSelection(single, "api")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "declares no components")
+	})
+}
+
+func TestSimulateHelp_MentionsComponentFlag(t *testing.T) {
+	t.Parallel()
+
+	out := helpText(t, "--help")
+	assert.Contains(t, out, "--component")
 }
 
 func TestParseCommaList(t *testing.T) {

@@ -59,6 +59,17 @@ Effects (in order):
 
 A `skipped` outcome is never a failure, but it does not count as a success either. When every configured deploy is skipped, nothing was deployed, so the finalize still gates.
 
+## Multi-component (monorepo) manifests
+
+When a manifest declares `components:`, each component owns an independent state ladder recorded under `state.components.<name>.<env>`, and there are no flat `state.<env>` rows. Scope a simulation to one component with `--component`; the engine reads and replays that component's recorded state through the same path the component-scoped `promote`, `rollback`, and `hotfix` commands use, so the what-if matches the run cascade would actually perform for that component:
+
+```bash
+cascade simulate promote --component api
+cascade simulate rollback --component web --env prod
+```
+
+`--component` is required on a multi-component manifest: without it the simulation would replay against empty state and report only guard messages. The command rejects an omitted or unknown component with a clear error listing the declared names. A sibling component's rows never appear in another component's simulation. On a single-component manifest the flag is left empty and behavior is unchanged.
+
 ## `--mode default | cascade`
 
 `promote` is the one action with a mode switch. `default` advances one environment; `cascade` carries state through every intermediate hop to a `--target`:

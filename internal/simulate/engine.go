@@ -39,6 +39,7 @@ type Result struct {
 type Engine struct {
 	manifestPath   string
 	actor          string
+	component      string
 	deployOutcomes map[string]DeployOutcome
 }
 
@@ -50,6 +51,18 @@ func WithActor(actor string) Option {
 	return func(e *Engine) {
 		if actor != "" {
 			e.actor = actor
+		}
+	}
+}
+
+// WithComponent scopes the simulation to a declared component, reading and
+// writing state under state.components.<name>.<env> exactly as the real
+// component-scoped commands do. An empty name (the default) keeps the flat
+// single-component path byte-identical.
+func WithComponent(name string) Option {
+	return func(e *Engine) {
+		if name != "" {
+			e.component = name
 		}
 	}
 }
@@ -93,7 +106,7 @@ func NewEngine(manifestPath string, opts ...Option) (*Engine, error) {
 // the before and after diff plus the ordered effects. The clone is created in a
 // temp directory and removed when Simulate returns.
 func (e *Engine) Simulate(a Action) (*Result, error) {
-	beforeState, err := parseState(e.manifestPath)
+	beforeState, err := parseState(e.manifestPath, e.component)
 	if err != nil {
 		return nil, fmt.Errorf("parse before-state: %w", err)
 	}
@@ -113,7 +126,7 @@ func (e *Engine) Simulate(a Action) (*Result, error) {
 	}
 	stub := newDeployStub(builds, deploys, e.deployOutcomes)
 
-	outcome, err := a.Apply(ActionContext{ClonePath: clonePath, Actor: e.actor, Deploys: stub})
+	outcome, err := a.Apply(ActionContext{ClonePath: clonePath, Actor: e.actor, Component: e.component, Deploys: stub})
 	if err != nil {
 		return nil, fmt.Errorf("apply action: %w", err)
 	}
@@ -122,7 +135,7 @@ func (e *Engine) Simulate(a Action) (*Result, error) {
 	if afterPath == "" {
 		afterPath = clonePath
 	}
-	afterState, err := parseState(afterPath)
+	afterState, err := parseState(afterPath, e.component)
 	if err != nil {
 		return nil, fmt.Errorf("parse after-state: %w", err)
 	}
@@ -158,8 +171,29 @@ func (e *Engine) cloneManifest() (string, func(), error) {
 	return clonePath, cleanup, nil
 }
 
-// parseState reads a manifest file and returns its environment state map.
-func parseState(path string) (map[string]*config.EnvState, error) {
+// parseState reads a manifest file and returns its environment state map. When
+// component is non-empty the state is read component-scoped from
+// state.components.<component>.<env> via config.ReadComponentState, the same
+// helper the real component-scoped commands (promote, rollback, hotfix) use, so
+// the simulator replays those commands' state rather than the empty flat map a
+// monorepo manifest carries at the top level. An empty component keeps the flat
+// state.<env> path unchanged.
+func parseState(path, component string) (map[string]*config.EnvState, error) {
+	if component != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read manifest for component state: %w", err)
+		}
+		compState, err := config.ReadComponentState(raw, config.DefaultManifestKey, component)
+		if err != nil {
+			return nil, err
+		}
+		if compState == nil {
+			return map[string]*config.EnvState{}, nil
+		}
+		return compState, nil
+	}
+
 	cicd, err := config.ParseManifestFile(path, config.DefaultManifestKey)
 	if err != nil {
 		return nil, err
