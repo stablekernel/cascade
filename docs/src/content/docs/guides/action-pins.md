@@ -54,8 +54,7 @@ cascade reconcile \
 Two flags shape the run:
 
 - `--changed-file` names a changed source file to scan for a governed pin bump. Repeat it for each file the bump touched.
-- `--check` runs the read-only detector instead: it reports whether the change is relevant and writes a data-only JSON artifact (path set by `--check-output`), writing nothing else. Use it to gate the adopting step in CI.
-- `--dry-run` previews the adoption without writing.
+- `--check` runs the read-only detector instead: it reports whether the change is relevant and writes a data-only JSON artifact (path set by `--check-output`), writing nothing else. Use it to gate the adopting step in CI. This is the only read-only mode; a plain `reconcile` run adopts and regenerates in place.
 
 ## Automate it as a companion
 

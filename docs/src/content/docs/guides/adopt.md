@@ -33,25 +33,31 @@ cascade owns orchestration: promotion, state, versioning, and the release bounda
 Every callback is a reusable workflow with an `on: workflow_call` trigger; see the [Callback contract](/cascade/reference/callbacks/) for the full input/output shape of each callback type. A minimal manifest expressing the mapping above:
 
 ```yaml
-project: my-service
-schema_version: 1
-trunk_branch: main
-cli_version: v0.9.1
+ci:
+  config:
+    schema_version: 1
+    trunk_branch: main
+    cli_version: v0.9.1
 
-environments: [dev, staging, prod]
+    environments: [dev, staging, prod]
 
-validate:
-  workflow: .github/workflows/validate.yaml
+    validate:
+      workflow: .github/workflows/validate.yaml
 
-builds:
-  - name: app
-    workflow: .github/workflows/build-app.yaml
-    triggers: ["src/**", "Dockerfile", "go.mod"]
+    builds:
+      - name: app
+        workflow: .github/workflows/build-app.yaml
+        triggers: ["src/**", "Dockerfile", "go.mod"]
 
-deploys:
-  - name: app
-    workflow: .github/workflows/deploy-app.yaml
-    depends_on: [app]
+    deploys:
+      - name: app
+        workflow: .github/workflows/deploy-app.yaml
+        depends_on: [app]
+
+  state:
+    dev: {}
+    staging: {}
+    prod: {}
 ```
 
 ## Keep release-please or git-cliff
