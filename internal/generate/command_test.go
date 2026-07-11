@@ -67,7 +67,6 @@ func defaultOpts(configPath, outputPath string) generateOptions {
 // validManifestContent returns a valid manifest with ci: key at top level
 const validManifestContent = `ci:
   config:
-    project: test-project
     trunk_branch: main
     environments: [dev]
     builds:

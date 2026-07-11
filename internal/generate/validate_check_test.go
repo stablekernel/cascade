@@ -55,12 +55,12 @@ func TestValidateCheckGenerator_Steps(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	// Checkout + setup-cli + the parse-config validity gate.
+	// Checkout + setup-cli + the lint validity gate.
 	assert.Contains(t, content, "uses: actions/checkout@")
 	assert.Contains(t, content, "uses: stablekernel/cascade/.github/actions/setup-cli@")
-	assert.Contains(t, content, "cascade parse-config --config")
+	assert.Contains(t, content, "cascade lint --json --config")
 
-	// parse-config reports validity in JSON (valid: false), not via exit code,
+	// lint --json reports validity in JSON (valid: false), not via exit code,
 	// so the workflow must gate on the parsed result.
 	assert.Contains(t, content, "jq -r '.valid // false'")
 	assert.Contains(t, content, "exit 1")
@@ -143,7 +143,7 @@ func TestValidateCheckGeneratorE2E(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 	assert.Contains(t, content, "on:\n  pull_request:")
-	assert.Contains(t, content, "cascade parse-config")
+	assert.Contains(t, content, "cascade lint --json")
 
 	// Omitting the block is non-breaking: the generator reports disabled.
 	bare := `ci:

@@ -48,7 +48,7 @@ Every field below lives under `ci.config` unless stated otherwise. The `ci.state
 
 ### Editor support
 
-cascade ships a hand-authored JSON Schema. Registering it gives autocomplete, type checking, enum hints, and hover docs while you author the manifest. The schema covers structure, types, and enums; `cascade parse-config` remains the authority for semantic and cross-field rules.
+cascade ships a hand-authored JSON Schema. Registering it gives autocomplete, type checking, enum hints, and hover docs while you author the manifest. The schema covers structure, types, and enums; `cascade lint` remains the authority for semantic and cross-field rules.
 
 The schema is published at:
 
@@ -139,7 +139,7 @@ ci:
 
 **Relationship to `tag_prefix`.** `tag_prefix` still sets the prefix on its own when
 `tag_grammar` is absent. When both `tag_prefix` and `tag_grammar.prefix` are set,
-`tag_grammar.prefix` wins, and `cascade parse-config` emits a non-fatal warning naming both
+`tag_grammar.prefix` wins, and `cascade lint` emits a non-fatal warning naming both
 keys so the redundancy is visible. Resolution is well defined either way; the warning is
 advisory only.
 
@@ -677,7 +677,7 @@ ci:
 | `workflow_run` | emitted | Wires the `workflow_run` trigger. |
 | `merge_group` | rejected | Not allowed. `extra_triggers` attaches to the side-effecting orchestrate workflow, which cuts release tags, publishes releases, and runs deploys while writing state, so a speculative merge-queue build could publish a real release from a candidate commit. cascade rejects `extra_triggers.merge_group` at validate. To gate pull requests inside a merge queue, set [`merge_queue.enabled`](#merge_queue), which emits a read-only validation lane. |
 
-Migrating from a manifest that set `extra_triggers.merge_group`: remove that entry and set `merge_queue.enabled: true` instead. The read-only merge-queue lane runs `cascade parse-config` and a dry-run `cascade orchestrate setup` against the queued candidate without cutting tags, publishing releases, or writing state.
+Migrating from a manifest that set `extra_triggers.merge_group`: remove that entry and set `merge_queue.enabled: true` instead. The read-only merge-queue lane runs `cascade lint` and a dry-run `cascade orchestrate setup` against the queued candidate without cutting tags, publishing releases, or writing state.
 
 ### rollback
 
@@ -752,7 +752,7 @@ Every Deployments API step carries an `if: ${{ github.server_url == 'https://git
 
 | Field | Status | Type | Default | Description |
 |-------|--------|------|---------|-------------|
-| `enabled` | emitted | bool | false | Emit `.github/workflows/cascade-validate.yaml`, a `pull_request` check that runs `cascade parse-config` and fails on an invalid manifest. |
+| `enabled` | emitted | bool | false | Emit `.github/workflows/cascade-validate.yaml`, a `pull_request` check that runs `cascade lint` and fails on an invalid manifest. |
 
 The check validates cascade's own configuration only, requests `contents: read` alone, and has no dry-run or comment side effects.
 
@@ -760,7 +760,7 @@ The check validates cascade's own configuration only, requests `contents: read` 
 
 | Field | Status | Type | Default | Description |
 |-------|--------|------|---------|-------------|
-| `enabled` | emitted | bool | false | Emit `.github/workflows/cascade-merge-queue.yaml`, a `merge_group`-triggered lane that runs `cascade parse-config` and a dry-run `cascade orchestrate setup` against the merge-group candidate. |
+| `enabled` | emitted | bool | false | Emit `.github/workflows/cascade-merge-queue.yaml`, a `merge_group`-triggered lane that runs `cascade lint` and a dry-run `cascade orchestrate setup` against the merge-group candidate. |
 
 The lane is read-only, which is exactly what a merge queue needs: it validates the queued candidate without cutting tags, publishing releases, or writing state. This is the supported way to participate in a merge queue. Attaching the raw `merge_group` event to the side-effecting orchestrate workflow through `extra_triggers.merge_group` is rejected at validate, because a speculative merge-queue build could otherwise publish a real release from a candidate commit.
 
@@ -870,7 +870,7 @@ just each component's `path`, byte-identical to before the fields existed.
 
 ### Validation rules
 
-`cascade parse-config` rejects a `components:` block that breaks isolation:
+`cascade lint` rejects a `components:` block that breaks isolation:
 
 - Each component must set `path` (relative, no `..`) and `tag_prefix`.
 - Component names must be identifier-safe.
@@ -1000,7 +1000,7 @@ The implicit `release` slot tracks the most recently published (non-draft) GitHu
 
 ## Validation rules
 
-`cascade parse-config` enforces the semantic rules the schema alone cannot:
+`cascade lint` enforces the semantic rules the schema alone cannot:
 
 - `schema_version` should be `1`. Omitting it emits a warning.
 - Environment, build, and deploy names must be identifier-safe (letters, digits, underscores). The generator-owned names `environment` and `dry_run` are reserved and cannot be used as `dispatch_inputs`.

@@ -58,7 +58,7 @@ func TestMergeQueueGenerator_Steps(t *testing.T) {
 	// Validate gate plus the dry-run orchestrate preview against the candidate.
 	assert.Contains(t, content, "uses: actions/checkout@")
 	assert.Contains(t, content, "uses: stablekernel/cascade/.github/actions/setup-cli@")
-	assert.Contains(t, content, "cascade parse-config --config")
+	assert.Contains(t, content, "cascade lint --json --config")
 	assert.Contains(t, content, "cascade --dry-run orchestrate setup")
 
 	// Validity gated on the parsed result.

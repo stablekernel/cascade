@@ -1,0 +1,73 @@
+name: "Lint Strict Rejection"
+description: |
+  Verifies that the renamed cascade lint command rejects an unknown or
+  misspelled top-level manifest key at runtime, and that the merge_queue lane
+  (which runs cascade lint --json as its validity gate) reds when a candidate
+  carries such a key.
+
+  The positive step runs the merge_group lane against a valid manifest and
+  asserts the merge-queue-validate job succeeds. The negative step overwrites
+  the manifest with one carrying a misspelled top-level key (enviroments) and
+  asserts the same lane reds, proving strict unknown-key rejection blocks a
+  merge that a lenient parse would have silently accepted.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  merge_queue:
+    enabled: true
+
+steps:
+  - name: "Initial commit; assert the merge-queue lane runs cascade lint --json"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/cascade-merge-queue.yaml"
+          contains:
+            - "merge-queue-validate:"
+            - "cascade lint --json"
+
+  - name: "POSITIVE: valid candidate passes the merge_group lane"
+    action: run_workflow
+    run_workflow:
+      workflow_path: ".github/workflows/cascade-merge-queue.yaml"
+      event: merge_group
+    expect:
+      jobs:
+        merge-queue-validate: success
+
+  - name: "Overwrite the manifest with a misspelled top-level key"
+    action: commit
+    commit:
+      message: "test: stage a manifest with an unknown top-level key"
+      files:
+        .github/manifest.yaml: |
+          ci:
+            config:
+              trunk_branch: main
+              environments: [dev]
+              enviroments: [staging]
+              builds:
+                - name: app
+                  workflow: build.yaml
+                  triggers: ["src/**"]
+              merge_queue:
+                enabled: true
+
+  - name: "NEGATIVE: unknown-key candidate is blocked by the merge_group lane"
+    action: run_workflow
+    expect_failure: true
+    run_workflow:
+      workflow_path: ".github/workflows/cascade-merge-queue.yaml"
+      event: merge_group

@@ -33,7 +33,7 @@ These flags are available on every command.
 
 Most commands (`generate-workflow`, `verify`, `plan`, `graph`, `status`, and the
 promotion lifecycle commands) auto-detect the manifest at `.github/manifest.yaml` when
-`--config` is not given. Two commands are the exception: `parse-config` and
+`--config` is not given. Two commands are the exception: `lint` and
 `detect-changes` default `--config` to the literal path `cicd-config.yaml` and do NOT
 auto-detect. Pass `--config` explicitly to point either one at a different file.
 
@@ -42,7 +42,7 @@ auto-detect. Pass `--config` explicitly to point either one at a different file.
 Commands are grouped by how often you reach for them:
 
 - **Everyday**: `version`, `init`, `generate-workflow`, `verify`, `plan`, `status`, `graph`
-- **Preview and inspect**: `simulate`, `parse-config`, `detect-changes`
+- **Preview and inspect**: `simulate`, `lint`, `detect-changes`
 - **Promotion lifecycle**: `orchestrate`, `promote`, `hotfix`, `rollback`
 - **Releases and versioning**: `next-version`, `generate-changelog`, `manage-release`
 - **Multi-repo**: `external`
@@ -414,14 +414,20 @@ Subcommand-specific flags: `promote` takes `--mode` (`default` or `cascade`) and
 `--target`; `rollback` takes `--env` (required), `--to`, and `--deployable`; `hotfix` takes
 `--env` (required), `--fix`, and `--merge-sha`; `release` takes only the shared flags.
 
-### parse-config
+### lint
 
-Parse and validate the manifest and print it as JSON. This command defaults `--config` to
-the literal `cicd-config.yaml` path and does NOT auto-detect `.github/manifest.yaml`; pass
+Parse a manifest, validate it, and report any errors or warnings. Unknown or misspelled
+keys are rejected with a "did you mean" suggestion, so a typo or a field pasted at the wrong
+level is a hard error rather than a silently ignored line. By default the report is
+human-readable and the command exits non-zero when the manifest is invalid; pass `--json` to
+emit the parsed config and validation result (`valid`/`errors`/`warnings`) as JSON, the
+surface the generated validation lanes consume. This command defaults `--config` to the
+literal `cicd-config.yaml` path and does NOT auto-detect `.github/manifest.yaml`; pass
 `--config` to point it at another file.
 
 ```bash
-cascade parse-config --config .github/manifest.yaml
+cascade lint --config .github/manifest.yaml
+cascade lint --json --config .github/manifest.yaml
 ```
 
 #### Flags
@@ -429,12 +435,12 @@ cascade parse-config --config .github/manifest.yaml
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--config`, `-c` | string | `cicd-config.yaml` | Path to the manifest file (no auto-detection) |
-| `--output`, `-o` | string | `json` | Output format (`json`) |
+| `--json` | bool | `false` | Emit the parsed config and validation result as JSON |
 
 ### detect-changes
 
 Determine which builds and deploys are triggered by file changes between two commits. Like
-`parse-config`, this command defaults `--config` to the literal `cicd-config.yaml` path and
+`lint`, this command defaults `--config` to the literal `cicd-config.yaml` path and
 does NOT auto-detect `.github/manifest.yaml`.
 
 ```bash
@@ -1032,7 +1038,7 @@ cascade schema --output manifest.schema.json
 | `--output`, `-o` | string | stdout | Write the schema to a file instead of stdout |
 
 The same schema is published at
-`https://stablekernel.github.io/cascade/manifest.schema.json`. `parse-config` remains the
+`https://stablekernel.github.io/cascade/manifest.schema.json`. `lint` remains the
 authority for semantic and cross-field rules; the schema covers structure, types, enums,
 and hover docs.
 
@@ -1325,7 +1331,7 @@ Many commands accept `--json` (or `--gha-output` inside Actions) for machine-rea
 Raise log verbosity with the global `--trace` flag:
 
 ```bash
-cascade --trace parse-config --config .github/manifest.yaml
+cascade --trace lint --config .github/manifest.yaml
 ```
 
 Trace logs include:

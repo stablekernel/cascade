@@ -76,7 +76,6 @@ func writeManifest(t *testing.T, repoDir, stateSHA string) string {
 	manifestPath := filepath.Join(repoDir, ".github", "manifest.yaml")
 	manifest := `ci:
   config:
-    project: nochange-test
     trunk_branch: main
     environments: []
     builds:

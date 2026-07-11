@@ -35,5 +35,5 @@ steps:
             - "paths:"
             - ".github/manifest.yaml"
             - "validate-manifest:"
-            - "cascade parse-config"
+            - "cascade lint --json"
             - "token: ${{ github.token }}"

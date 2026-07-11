@@ -38,7 +38,7 @@ jobs:
         run: |
           ./cascade version
           ./cascade --help
-          ./cascade parse-config --help
+          ./cascade lint --help
           ./cascade detect-changes --help
           ./cascade generate-changelog --help
           ./cascade generate-workflow --help

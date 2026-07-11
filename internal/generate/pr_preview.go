@@ -127,12 +127,12 @@ func (g *PRPreviewGenerator) writeJob(sb *strings.Builder) {
 	}
 }
 
-// writeValidateStep runs cascade parse-config as a required check. A malformed
+// writeValidateStep runs cascade lint as a required check. A malformed
 // manifest exits non-zero here and fails the PR before merge.
 func (g *PRPreviewGenerator) writeValidateStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Validate manifest\n")
 	sb.WriteString("        run: |\n")
-	fmt.Fprintf(sb, "          cascade parse-config --config %s\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "          cascade lint --config %s\n", g.config.GetManifestFile())
 	sb.WriteString("\n")
 }
 

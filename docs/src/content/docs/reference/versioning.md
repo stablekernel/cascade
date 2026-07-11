@@ -39,7 +39,7 @@ On load, the CLI applies these rules:
 | above `CurrentSchemaVersion` | Rejected. The manifest needs a newer CLI; upgrade the `cli_version` pin. |
 | negative | Rejected as invalid. |
 
-A rejected manifest is fatal: the CLI reports the error and produces no workflows. A warning is non-fatal and surfaces on stderr and in the `warnings` field of `parse-config` JSON output.
+A rejected manifest is fatal: the CLI reports the error and produces no workflows. A warning is non-fatal and surfaces on stderr and in the `warnings` field of `lint --json` output.
 
 ### Schema-version to CLI-version matrix
 

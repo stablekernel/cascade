@@ -253,7 +253,6 @@ func TestNewOrchestrator(t *testing.T) {
 	// Write a manifest with ci: key at top level
 	config := `ci:
   config:
-    project: test-project
     trunk_branch: main
     environments:
       - dev

@@ -7,7 +7,7 @@ import (
 )
 
 // fullSurfaceManifest exercises the full v1 schema surface (every reserved-shape
-// field) through the on-disk load path the parse-config command uses, asserting
+// field) through the on-disk load path the lint command uses, asserting
 // it parses cleanly and validates with no errors.
 const fullSurfaceManifest = `ci:
   config:

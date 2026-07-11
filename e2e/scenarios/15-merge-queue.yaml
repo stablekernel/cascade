@@ -8,7 +8,7 @@ description: |
 
   Generator-output verification plus a runtime proof of the gate. The
   positive step runs the lane on merge_group against a valid manifest and
-  asserts the merge-queue-validate job succeeds (parse-config .valid, then a
+  asserts the merge-queue-validate job succeeds (lint .valid, then a
   dry-run orchestrate setup). The negative step overwrites the manifest with a
   breaking one and asserts the same lane reds, proving a bad config cannot
   merge.
@@ -40,7 +40,7 @@ steps:
             - "merge_group"
             - "contents: read"
             - "merge-queue-validate:"
-            - "cascade parse-config"
+            - "cascade lint --json"
             - "cascade --dry-run orchestrate setup"
             - "token: ${{ github.token }}"
 

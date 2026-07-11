@@ -197,6 +197,13 @@ type TrunkConfig struct {
 	// every component's extra_paths, and applies only when a components block is
 	// present. Empty by default, so a manifest without it is unchanged.
 	SharedPaths []string `yaml:"shared_paths,omitempty" json:"shared_paths,omitempty"`
+
+	// Extra captures any top-level config key that is not a modeled TrunkConfig
+	// field, mirroring the per-component catch-all on ComponentConfig. A populated
+	// Extra map is rejected by validateUnknownTopLevel with a did-you-mean
+	// suggestion, so a misspelled or misplaced key is a hard error instead of
+	// being silently dropped by the lenient yaml decoder. It is never serialized.
+	Extra map[string]any `yaml:",inline" json:"-"`
 }
 
 // ConcurrencyConfig overrides the default concurrency: block emitted on the
@@ -850,7 +857,7 @@ func (c *TrunkConfig) GetAllReleaseArtifacts() []struct {
 	return artifacts
 }
 
-// ParseResult is the output of parse-config command
+// ParseResult is the JSON output of the lint command (lint --json).
 type ParseResult struct {
 	Config      TrunkConfig `json:"config"`
 	BuildNames  []string    `json:"build_names"`

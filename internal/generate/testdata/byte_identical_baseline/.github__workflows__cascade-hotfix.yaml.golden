@@ -260,7 +260,7 @@ jobs:
       - name: Validate manifest
         run: |
           MANIFEST_FILE=".github/manifest.yaml"
-          RESULT=$(cascade parse-config --config "$MANIFEST_FILE")
+          RESULT=$(cascade lint --json --config "$MANIFEST_FILE")
           echo "$RESULT"
           VALID=$(echo "$RESULT" | jq -r '.valid // false')
           if [[ "$VALID" != "true" ]]; then

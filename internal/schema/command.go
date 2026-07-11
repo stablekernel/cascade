@@ -20,7 +20,7 @@ func NewCommand() *cobra.Command {
 
 The schema describes the structure, types, and allowed values of a manifest
 file. Point your editor at it for autocomplete, type checking, and hover docs
-while authoring .github/manifest.yaml. cascade parse-config remains the
+while authoring .github/manifest.yaml. cascade lint remains the
 authority for semantic and cross-field rules.
 
 Examples:

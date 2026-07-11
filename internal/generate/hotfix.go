@@ -591,7 +591,7 @@ func (g *HotfixGenerator) writeApplyJob(sb *strings.Builder) {
 	sb.WriteString("          done\n")
 }
 
-// writeCheckJob emits the parse-config validity gate that runs while a hotfix PR
+// writeCheckJob emits the lint validity gate that runs while a hotfix PR
 // against an env/* branch is open or closing. Full required-status-check
 // designation against the open PR is the operator's branch-protection
 // responsibility, surfaced by the apply job's protection-warning step.
@@ -610,7 +610,7 @@ func (g *HotfixGenerator) writeCheckJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Validate manifest\n")
 	sb.WriteString("        run: |\n")
 	fmt.Fprintf(sb, "          MANIFEST_FILE=\"%s\"\n", g.getManifestFilePath())
-	sb.WriteString("          RESULT=$(cascade parse-config --config \"$MANIFEST_FILE\")\n")
+	sb.WriteString("          RESULT=$(cascade lint --json --config \"$MANIFEST_FILE\")\n")
 	sb.WriteString("          echo \"$RESULT\"\n")
 	sb.WriteString("          VALID=$(echo \"$RESULT\" | jq -r '.valid // false')\n")
 	sb.WriteString("          if [[ \"$VALID\" != \"true\" ]]; then\n")

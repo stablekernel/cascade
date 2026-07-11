@@ -78,7 +78,7 @@ func TestHelpCommand(t *testing.T) {
 	}
 }
 
-func TestParseConfigCommand(t *testing.T) {
+func TestLintCommand(t *testing.T) {
 	// Create a temporary config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "trunk-config.yaml")
@@ -104,9 +104,9 @@ func TestParseConfigCommand(t *testing.T) {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	stdout, stderr, err := runCLI("parse-config", "--config", configPath)
+	stdout, stderr, err := runCLI("lint", "--json", "--config", configPath)
 	if err != nil {
-		t.Fatalf("parse-config command failed: %v\nstderr: %s", err, stderr)
+		t.Fatalf("lint --json command failed: %v\nstderr: %s", err, stderr)
 	}
 
 	// Verify JSON output
@@ -135,7 +135,7 @@ func TestParseConfigCommand(t *testing.T) {
 	}
 }
 
-func TestParseConfigCommand_InvalidConfig(t *testing.T) {
+func TestLintCommand_InvalidConfig(t *testing.T) {
 	// Create an invalid config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "invalid-config.yaml")
@@ -149,7 +149,7 @@ builds: []
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	stdout, _, err := runCLI("parse-config", "--config", configPath)
+	stdout, _, err := runCLI("lint", "--json", "--config", configPath)
 	// The command should succeed but report validation errors
 	if err != nil {
 		t.Logf("Command returned error (expected for invalid config): %v", err)
@@ -170,8 +170,8 @@ builds: []
 	}
 }
 
-func TestParseConfigCommand_FileNotFound(t *testing.T) {
-	stdout, _, err := runCLI("parse-config", "--config", "/nonexistent/path/config.yaml")
+func TestLintCommand_FileNotFound(t *testing.T) {
+	stdout, _, err := runCLI("lint", "--json", "--config", "/nonexistent/path/config.yaml")
 
 	// CLI returns JSON with valid=false for file errors
 	if err != nil {
