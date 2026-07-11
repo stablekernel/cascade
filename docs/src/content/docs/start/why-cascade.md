@@ -24,7 +24,9 @@ Cascade earns its keep when you promote a built artifact through a chain of envi
 
 ## When not to use it
 
-Cascade is likely overkill for a single environment with a plain build-and-release on push, or for a repository with no deployments at all. (The no-environment mode still gives you Conventional-Commit versioning and releases if you want just that.)
+Cascade is likely more than you need for a single environment with a plain build-and-release on push, where its promotion machinery would sit unused.
+
+A repository with no deployments at all, such as a library or CLI, is a different case. Its no-environment mode still gives you Conventional-Commit versioning, changelogs, and releases out of the box. If you would otherwise wire that together yourself across several moving parts, having those aspects managed for you can make Cascade a good fit even with nothing to deploy.
 
 A few deliberate non-goals are worth stating plainly, because they shape what Cascade will and will not do for you:
 
