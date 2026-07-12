@@ -26,7 +26,7 @@ func TestCalculateVersion_CustomTagGrammar(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, os.Chdir(orig)) })
 
 	cfg := &config.TrunkConfig{
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		TagGrammar: &config.TagGrammarConfig{
 			Prefix:          tgPtr("ver"),
 			PreReleaseToken: tgPtr("beta"),

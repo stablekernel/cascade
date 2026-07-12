@@ -52,7 +52,7 @@ func TestGenerator_OwnedJobsGetDefaultTimeout(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -74,7 +74,7 @@ func TestGenerator_OwnedJobTimeoutConfigurable(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:       "main",
-		Environments:      []string{"dev"},
+		Environments:      config.EnvNames("dev"),
 		JobTimeoutMinutes: 12,
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
@@ -97,7 +97,7 @@ func TestGenerator_TimeoutNotOnReusableCallback(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			// Reusable-workflow callback (uses:): no timeout-minutes.
 			{Name: "reusable", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
@@ -124,7 +124,7 @@ func TestGenerator_OptionalDependsOnAddsNeedsWithoutGating(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "migrations", Workflow: ".github/workflows/build.yaml", Triggers: []string{"db/**"}},
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
@@ -171,7 +171,7 @@ func TestGenerator_OptionalDependsOnHonorsImplicitRunOnSkip(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "build", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -207,7 +207,7 @@ func TestGenerator_BothFieldsUnsetNonBreaking(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -234,7 +234,7 @@ func TestGenerator_ExplicitTimeoutNotOnReusableCallback(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			// Reusable-workflow callback with an explicit timeout: must NOT emit it.
 			{Name: "reusable", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}, TimeoutMinutes: 15},

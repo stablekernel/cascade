@@ -332,7 +332,7 @@ func TestWriteConfig(t *testing.T) {
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "prod"},
+			Environments: config.EnvNames("dev", "prod"),
 		},
 	}
 

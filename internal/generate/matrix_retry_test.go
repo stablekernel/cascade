@@ -61,7 +61,7 @@ func TestMatrixRetry_RetryJobCarriesStrategy(t *testing.T) {
 	ptrFalse := false
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",
@@ -120,7 +120,7 @@ func TestMatrixRetry_MatrixWithoutRetries(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",
@@ -157,7 +157,7 @@ func TestMatrixRetry_RetriesWithoutMatrix(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",

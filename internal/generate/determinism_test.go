@@ -68,7 +68,7 @@ on:
 func determinismConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod", "canary"},
+		Environments: config.EnvNames("dev", "staging", "prod", "canary"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "image",

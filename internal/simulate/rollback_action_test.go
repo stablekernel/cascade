@@ -34,7 +34,7 @@ func seedRollbackManifest(t *testing.T) string {
 	return writeManifest(t, &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "uat", "prod"},
+			Environments: config.EnvNames("dev", "uat", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"prod": {
@@ -94,7 +94,7 @@ func TestRollbackAction_NoOpWhenAlreadyAtTarget(t *testing.T) {
 	// No distinct prior: the only snapshot equals the current SHA, so the
 	// resolved target is the current state and the rollback is a no-op.
 	path := writeManifest(t, &config.CICDFile{
-		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}},
+		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "prod")},
 		State: map[string]*config.EnvState{
 			"prod": {
 				SHA:     "samesha000000",

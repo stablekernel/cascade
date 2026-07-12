@@ -180,9 +180,9 @@ See [Security](/cascade/security/) for the full trust model, action-pinning poli
 - **Custom release**: override with `release.tag` to hand releases to an external tool.
 - **Custom inputs**: pass arbitrary values into a callback via `inputs` and `env_inputs`.
 - **Output chaining**: a callback's outputs are auto-discovered and passed to whatever depends on it.
-- **GitHub Environments**: `environment_config` lets a manifest express required reviewers, wait timers, and branch policy per environment; `cascade environments` emits that as a file for an operator to apply. Cascade never calls the Environments REST API itself, so applying the config stays a deliberate operator step. See [the manifest reference](/cascade/reference/manifest/) for the field shape.
+- **GitHub Environments**: the inline settings on an `environments` entry let a manifest express required reviewers, wait timers, and branch policy per environment; `cascade environments` emits that as a file for an operator to apply. Cascade never calls the Environments REST API itself, so applying the config stays a deliberate operator step. See [the manifest reference](/cascade/reference/manifest/) for the field shape.
 
-New fields under `environment_config` and similar blocks are additive by design: a manifest that omits them is valid and behaves exactly as it does today, so this extension point can grow without a schema version bump.
+New inline fields on the `environments` entries and similar blocks are additive by design: a manifest that omits them is valid and behaves exactly as it does today, so this extension point can grow without a schema version bump.
 
 ## Wayfinding
 

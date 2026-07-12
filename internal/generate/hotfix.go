@@ -169,7 +169,7 @@ func (g *HotfixGenerator) Enabled() bool {
 // environment except the first, which is the build target. Callers must gate on
 // Enabled() so the slice is non-empty.
 func (g *HotfixGenerator) targetEnvs() []string {
-	return g.config.Environments[1:]
+	return g.config.EnvironmentNames()[1:]
 }
 
 // getCLIRef mirrors the ref-resolution used by the other generators so the

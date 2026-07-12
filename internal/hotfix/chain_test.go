@@ -122,7 +122,7 @@ func TestExpandTargetEnvs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.TrunkConfig{Environments: envs}
+			cfg := &config.TrunkConfig{Environments: config.EnvNames(envs...)}
 			got, err := expandTargetEnvs(cfg, tt.targetEnv)
 			if tt.wantErr {
 				if err == nil {

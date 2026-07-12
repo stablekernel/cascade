@@ -11,26 +11,32 @@ import (
 )
 
 // fullConfig returns a manifest config exercising every additive
-// environment_config field, with environments declared out of alphabetical
-// order so the manifest-order guarantee is observable.
+// per-environment field, with environments declared out of alphabetical order
+// so the manifest-order guarantee is observable.
 func fullConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
-		Environments: []string{"prod", "dev", "test"},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {
-				GHAEnvironment:    "production",
-				RequiredReviewers: []string{"octocat", "team/ops"},
-				WaitTimer:         intPtr(10),
-				BranchPolicy:      config.EnvBranchPolicyProtected,
-				Secrets:           []string{"MY_SECRET", "DB_PASSWORD"},
-				Variables:         []string{"REGION"},
+		Environments: []config.EnvironmentEntry{
+			{
+				Name: "prod",
+				EnvironmentConfig: config.EnvironmentConfig{
+					GHAEnvironment:    "production",
+					RequiredReviewers: []string{"octocat", "team/ops"},
+					WaitTimer:         intPtr(10),
+					BranchPolicy:      config.EnvBranchPolicyProtected,
+					Secrets:           []string{"MY_SECRET", "DB_PASSWORD"},
+					Variables:         []string{"REGION"},
+				},
 			},
-			"dev": {
-				BranchPolicy:   config.EnvBranchPolicyCustom,
-				BranchPatterns: []string{"main", "release/*"},
-				TagPatterns:    []string{"v*"},
+			{
+				Name: "dev",
+				EnvironmentConfig: config.EnvironmentConfig{
+					BranchPolicy:   config.EnvBranchPolicyCustom,
+					BranchPatterns: []string{"main", "release/*"},
+					TagPatterns:    []string{"v*"},
+				},
 			},
-			// "test" intentionally has no environment_config entry.
+			// "test" intentionally carries no inline settings.
+			{Name: "test"},
 		},
 	}
 }
@@ -83,7 +89,7 @@ func TestBuild_OrdersByManifestAndDefaults(t *testing.T) {
 func TestBuild_NoEnvironmentConfigBlock(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.TrunkConfig{Environments: []string{"staging", "prod"}}
+	cfg := &config.TrunkConfig{Environments: config.EnvNames("staging", "prod")}
 	p := Build(cfg)
 
 	require.Len(t, p.Environments, 2)
@@ -99,9 +105,8 @@ func TestBuild_AllBranchPolicyIsNull(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.TrunkConfig{
-		Environments: []string{"prod"},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {BranchPolicy: config.EnvBranchPolicyAll},
+		Environments: []config.EnvironmentEntry{
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{BranchPolicy: config.EnvBranchPolicyAll}},
 		},
 	}
 	p := Build(cfg)

@@ -101,7 +101,7 @@ func RunReconcileCompanionAppendScenario(ctx context.Context, t *testing.T) (*Re
 
 	cfg := Config{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Reconcile:    &config.ReconcileConfig{Enabled: true},
 		Builds: []config.BuildConfig{
 			{Name: "build", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},

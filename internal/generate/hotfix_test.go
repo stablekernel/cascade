@@ -22,7 +22,7 @@ import (
 func threeEnvHotfixConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml"},
 		},
@@ -36,7 +36,7 @@ func TestHotfixGenerator_Enabled(t *testing.T) {
 	// Two or more environments enables the hotfix workflow.
 	assert.True(t, NewHotfixGenerator(&config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 	}, "").Enabled(), "2 envs should enable the hotfix workflow")
 
 	assert.True(t, NewHotfixGenerator(threeEnvHotfixConfig(), "").Enabled(), "3 envs should enable")
@@ -44,7 +44,7 @@ func TestHotfixGenerator_Enabled(t *testing.T) {
 	// Below two environments emits nothing.
 	assert.False(t, NewHotfixGenerator(&config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 	}, "").Enabled(), "1 env should not enable")
 
 	assert.False(t, NewHotfixGenerator(&config.TrunkConfig{
@@ -58,7 +58,7 @@ func TestHotfixGenerator_Enabled(t *testing.T) {
 // TestHotfixGenerator_Threshold_EmitsNothingBelowTwoEnvs confirms the Q1
 // generation threshold: with a single env the generator gate is closed.
 func TestHotfixGenerator_Threshold_EmitsNothingBelowTwoEnvs(t *testing.T) {
-	oneEnv := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev"}}
+	oneEnv := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev")}
 	assert.False(t, NewHotfixGenerator(oneEnv, "").Enabled())
 
 	zeroEnv := &config.TrunkConfig{TrunkBranch: "main"}

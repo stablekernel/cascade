@@ -200,7 +200,8 @@ func (p *Preflighter) Run() (*PreflightResult, error) {
 	}
 
 	// 4. Determine prerelease/final env and release marker positions
-	envs := p.cicdFile.Config.Environments
+	cfg := p.cicdFile.Config
+	envs := cfg.EnvironmentNames()
 	var prereleaseEnv, prodEnv string
 	hasReleaseMarker := false
 
@@ -219,8 +220,11 @@ func (p *Preflighter) Run() (*PreflightResult, error) {
 				prodEnv = envs[len(envs)-1]
 			}
 		} else if len(envs) >= 2 {
-			prereleaseEnv = envs[len(envs)-2]
-			prodEnv = envs[len(envs)-1]
+			// Role-aware, positional by default: an explicit role: on an entry moves
+			// the prerelease/release markers, otherwise the last/second-from-last
+			// entries stand in unchanged.
+			prereleaseEnv = cfg.PrereleaseEnvironment()
+			prodEnv = cfg.ReleaseEnvironment()
 		}
 	}
 
@@ -404,12 +408,13 @@ func (p *Preflighter) detectDeployChanges(sourceSHA, targetEnv string) ([]string
 
 	// Get source environment name for external deploy comparison
 	var sourceEnv string
-	if len(p.cicdFile.Config.Environments) > 0 {
-		sourceEnv = p.cicdFile.Config.Environments[0] // Default to first env
+	envNames := p.cicdFile.Config.EnvironmentNames()
+	if len(envNames) > 0 {
+		sourceEnv = envNames[0] // Default to first env
 		// Find the env before targetEnv for source
-		for i, env := range p.cicdFile.Config.Environments {
+		for i, env := range envNames {
 			if env == targetEnv && i > 0 {
-				sourceEnv = p.cicdFile.Config.Environments[i-1]
+				sourceEnv = envNames[i-1]
 				break
 			}
 		}

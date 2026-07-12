@@ -82,7 +82,7 @@ func TestPreflight_DefaultPromotion(t *testing.T) {
 	// Setup test config with dev having state
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "infra", Triggers: []string{"infra/**"}},
 				{Name: "app", Triggers: []string{"src/**"}},
@@ -112,7 +112,7 @@ func TestPreflight_CascadePromotion(t *testing.T) {
 	// Setup test config with dev and test having different state
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "infra", Triggers: []string{"infra/**"}},
 				{Name: "app", Triggers: []string{"src/**"}},
@@ -144,7 +144,7 @@ func TestPreflight_AllEnvironmentsInSync(t *testing.T) {
 	// Setup test config where ALL environments including prod are in sync
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "infra", Triggers: []string{"infra/**"}},
 			},
@@ -174,7 +174,7 @@ func TestPreflight_ExtractsPromotionFields(t *testing.T) {
 	// Setup test config for testing field extraction
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "infra", Triggers: []string{"infra/**"}},
 				{Name: "app", Triggers: []string{"src/**"}},
@@ -208,7 +208,7 @@ func TestPreflight_ExtractsPromotionFields(t *testing.T) {
 func TestPreflight_SourceImageDigest_FirstSortedNonEmpty(t *testing.T) {
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "app", Triggers: []string{"src/**"}},
 			},
@@ -247,7 +247,7 @@ func TestPreflight_SourceImageDigest_FirstSortedNonEmpty(t *testing.T) {
 func TestPreflight_SourceImageDigest_EmptyWhenNoArtifact(t *testing.T) {
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "app", Triggers: []string{"src/**"}},
 			},
@@ -279,7 +279,7 @@ func TestPreflight_PrereleaseFinalEnv(t *testing.T) {
 	// Test prerelease and final env detection
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys:      []config.DeployConfig{{Name: "app"}},
 		},
 		State: map[string]*config.EnvState{
@@ -319,7 +319,7 @@ func TestPreflight_DeployChecks(t *testing.T) {
 	// Test that deploy checks filter deploys to run
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat"},
+			Environments: config.EnvNames("dev", "test", "uat"),
 			Deploys: []config.DeployConfig{
 				{Name: "infra", Triggers: []string{"infra/**"}},
 				{Name: "app", Triggers: []string{"src/**"}},
@@ -352,7 +352,7 @@ func TestPreflight_ForceFlag(t *testing.T) {
 	// Test that force flag is passed through
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys:      []config.DeployConfig{{Name: "app"}},
 		},
 		State: map[string]*config.EnvState{
@@ -377,7 +377,7 @@ func TestPreflight_RollbackSHA(t *testing.T) {
 	// Test that rollback SHA is populated from target env's current state
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys:      []config.DeployConfig{{Name: "app"}},
 		},
 		State: map[string]*config.EnvState{
@@ -404,7 +404,7 @@ func TestPreflight_RollbackSHAEmpty_WhenNoTargetState(t *testing.T) {
 	// Test that rollback SHA is empty when target env has no state (first deployment)
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys:      []config.DeployConfig{{Name: "app"}},
 		},
 		State: map[string]*config.EnvState{
@@ -432,7 +432,7 @@ func TestPreflight_DeploysFilter(t *testing.T) {
 	// Test that deploys filter restricts which deploys are included
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat"},
+			Environments: config.EnvNames("dev", "test", "uat"),
 			Deploys: []config.DeployConfig{
 				{Name: "infra", Triggers: []string{}}, // No triggers = always deploy
 				{Name: "app", Triggers: []string{}},

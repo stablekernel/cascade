@@ -130,7 +130,7 @@ func TestNormalizeWorkflowPath_ActionlintClean(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging", "production"},
+		Environments: config.EnvNames("staging", "production"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: "build.yaml", Triggers: []string{"src/**"}},
 		},

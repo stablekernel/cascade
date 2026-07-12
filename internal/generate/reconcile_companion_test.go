@@ -16,7 +16,7 @@ import (
 func reconcileConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Reconcile:    &config.ReconcileConfig{Enabled: true},
 	}
 }

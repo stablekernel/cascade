@@ -84,7 +84,7 @@ func TestMergeQueueGenerator_DryRunResolvesEnvironment(t *testing.T) {
 	t.Run("multi-env passes first environment", func(t *testing.T) {
 		cfg := &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"staging", "prod"},
+			Environments: config.EnvNames("staging", "prod"),
 			MergeQueue:   &config.MergeQueueConfig{Enabled: true},
 		}
 		gen := NewMergeQueueGenerator(cfg, "")

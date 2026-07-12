@@ -15,7 +15,7 @@ import (
 func stagesConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "api", Workflow: ".github/workflows/build-api.yaml"},
 			{Name: "web", Workflow: ".github/workflows/build-web.yaml"},

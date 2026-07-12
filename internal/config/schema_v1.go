@@ -496,6 +496,136 @@ func (e EnvironmentConfig) WaitTimerMinutes() int {
 	return *e.WaitTimer
 }
 
+// isZero reports whether every per-environment setting is at its zero value, so
+// an environment carries no inline configuration. It backs the environments
+// entry MarshalYAML, which collapses a config-free entry back to the bare-string
+// sugar for a faithful round trip.
+func (e EnvironmentConfig) isZero() bool {
+	return e.GHAEnvironment == "" &&
+		len(e.RequiredReviewers) == 0 &&
+		e.WaitTimer == nil &&
+		e.BranchPolicy == "" &&
+		len(e.BranchPatterns) == 0 &&
+		len(e.TagPatterns) == 0 &&
+		len(e.Secrets) == 0 &&
+		len(e.Variables) == 0 &&
+		e.EnvironmentURL == ""
+}
+
+// Environment role constants. A role explicitly declares which promotion stage
+// an environment plays, overriding the positional default (last entry =
+// release, second-from-last = prerelease). Only these two roles carry behavior;
+// an unset role keeps the index-based default so a manifest that declares no
+// role behaves exactly as before.
+const (
+	// EnvRolePrerelease marks the environment whose promotion cuts the
+	// prerelease, overriding the second-from-last positional default.
+	EnvRolePrerelease = "prerelease"
+	// EnvRoleRelease marks the environment whose promotion publishes the
+	// release, overriding the last-entry positional default.
+	EnvRoleRelease = "release"
+)
+
+// EnvironmentEntry is one entry in the ordered environments: list. The list is
+// the single source of truth for both the promotion ladder (its order) and each
+// environment's settings (its inline config), folding what used to be the
+// separate environments list and environment_config map into one shape.
+//
+// An entry accepts two YAML forms, reconciled by UnmarshalYAML:
+//
+//   - a bare string ("- dev") - sugar for an environment with no extra config;
+//   - a mapping ("- {name: dev, wait_timer: 5, ...}") carrying the name, an
+//     optional role, and the inline per-environment settings.
+//
+// The embedded EnvironmentConfig carries the protection and native-Environment
+// settings (gha_environment, required_reviewers, wait_timer, branch_policy,
+// branch_patterns, tag_patterns, secrets, variables, environment_url). Because
+// the entry has a custom UnmarshalYAML it is a replace-leaf under component deep
+// merge: a component that sets environments: whole-replaces the inherited list
+// (settings and all), preserving the pre-fold whole-replace of the environments
+// slice.
+type EnvironmentEntry struct {
+	// Name is the environment name. It keys job IDs and ${{ }} expression
+	// references and defines this entry's rung on the promotion ladder.
+	Name string `yaml:"name" json:"name"`
+	// Role optionally declares this environment's promotion stage
+	// (EnvRolePrerelease or EnvRoleRelease), overriding the positional default.
+	// Empty keeps the index-based default.
+	Role string `yaml:"role,omitempty" json:"role,omitempty"`
+	// EnvironmentConfig is the inline per-environment settings block. Its fields
+	// are promoted onto the entry's YAML mapping and JSON object (no nesting).
+	EnvironmentConfig `yaml:",inline" json:",inline"`
+	// Extra captures any key on an environment mapping that is not a modeled
+	// field, mirroring the top-level and per-callback catch-alls. A populated
+	// Extra is rejected by validation with a did-you-mean suggestion. Never
+	// serialized.
+	Extra map[string]any `yaml:",inline" json:"-"`
+}
+
+// EnvNames builds an ordered environments list from bare names, the programmatic
+// equivalent of the "- dev" string sugar: each name becomes a config-free entry.
+// It is the constructor for the common case of an environment ladder that needs
+// no per-environment settings.
+func EnvNames(names ...string) []EnvironmentEntry {
+	if len(names) == 0 {
+		return nil
+	}
+	entries := make([]EnvironmentEntry, len(names))
+	for i, n := range names {
+		entries[i] = EnvironmentEntry{Name: n}
+	}
+	return entries
+}
+
+// MarshalYAML emits the faithful inverse of UnmarshalYAML: a config-free entry
+// (no role, no inline settings) marshals back to the bare-string sugar, and a
+// configured entry marshals to a mapping with name, role, and the inline
+// settings. This keeps a parse-then-marshal round trip byte-stable for the
+// common bare-name ladder rather than rewriting every "- dev" as "- name: dev".
+func (e EnvironmentEntry) MarshalYAML() (interface{}, error) {
+	if e.Role == "" && e.isZero() {
+		return e.Name, nil
+	}
+	type entryFields struct {
+		Name              string `yaml:"name"`
+		Role              string `yaml:"role,omitempty"`
+		EnvironmentConfig `yaml:",inline"`
+	}
+	return entryFields{Name: e.Name, Role: e.Role, EnvironmentConfig: e.EnvironmentConfig}, nil
+}
+
+// UnmarshalYAML reconciles the bare-string sugar and the object form into one
+// EnvironmentEntry. A scalar node is the environment name; a mapping node
+// decodes name, role, the inline settings, and any unknown keys (captured in
+// Extra for the strictness walk).
+func (e *EnvironmentEntry) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var name string
+		if err := value.Decode(&name); err != nil {
+			return err
+		}
+		e.Name = name
+		return nil
+	}
+	// A distinct type strips this method so Decode does not recurse; its fields
+	// mirror EnvironmentEntry so the inline settings and catch-all decode intact.
+	type entryFields struct {
+		Name              string `yaml:"name"`
+		Role              string `yaml:"role,omitempty"`
+		EnvironmentConfig `yaml:",inline"`
+		Extra             map[string]any `yaml:",inline"`
+	}
+	var ef entryFields
+	if err := value.Decode(&ef); err != nil {
+		return err
+	}
+	e.Name = ef.Name
+	e.Role = ef.Role
+	e.EnvironmentConfig = ef.EnvironmentConfig
+	e.Extra = ef.Extra
+	return nil
+}
+
 // Environment branch-policy mode constants. They map onto GitHub's
 // deployment_branch_policy model: protected_branches, custom_branch_policies,
 // or null (all branches).

@@ -102,7 +102,7 @@ Cascade does not configure the receiving side: the OIDC trust policy in AWS, GCP
 
 ## GitHub Environments as a gate
 
-GitHub Environments are the shipped answer for gating a deploy with required reviewers, wait timers, and branch or tag restrictions. `environment_config.<env>.gha_environment` on the manifest wires a cascade-managed environment (native GitHub deployments, `environment_url`) onto that environment's deploy jobs, and the `environments` command emits the matching per-environment settings (`required_reviewers`, `wait_timer`, `branch_policy`) for an operator to apply through the GitHub API or UI.
+GitHub Environments are the shipped answer for gating a deploy with required reviewers, wait timers, and branch or tag restrictions. The `gha_environment` field on an environment's `environments` entry wires a cascade-managed environment (native GitHub deployments, `environment_url`) onto that environment's deploy jobs, and the `environments` command emits the matching per-environment settings (`required_reviewers`, `wait_timer`, `branch_policy`) for an operator to apply through the GitHub API or UI.
 
 The one structural caveat: GitHub does not allow a job-level `environment:` on a job that calls a reusable workflow. A reusable deploy's gate has to live inside the called workflow, and cascade warns at generation time when a manifest wires a reusable deploy without one. See [Add or change environments](/cascade/guides/environments/) for the full setup walkthrough.
 
@@ -114,7 +114,7 @@ Work through this when standing up or reviewing a cascade pipeline. The order mo
 2. **Protect trunk and tags, and add CODEOWNERS.** Require review on `main` and on `.github/workflows/**`, and protect release and version tags from being moved or deleted. Run `branch-protection --apply` with a repo-admin token, or apply the emitted JSON manually.
 3. **Turn on `pin_mode: sha`.** SHA pinning is shipped; it just is not the default. Set it explicitly if your threat model includes a retargeted third-party action tag.
 4. **Scope every callback's `permissions:` and `secrets:`.** Do not lean on reusable-workflow secret inheritance. List exactly the secrets and permission scopes each callback needs, and add `id-token: write` only to callbacks that actually deploy or publish.
-5. **Gate every production deploy with a GitHub Environment.** Set `environment_config.<env>.gha_environment`, run the `environments` command, and apply the emitted settings. For reusable deploys, place the `environment:` gate inside the called workflow.
+5. **Gate every production deploy with a GitHub Environment.** Set `gha_environment` on that environment's `environments` entry, run the `environments` command, and apply the emitted settings. For reusable deploys, place the `environment:` gate inside the called workflow.
 6. **Scope your cloud's OIDC trust policy narrowly.** Restrict it to the specific repository, environment, and ref that should be allowed to exchange a token, and issue short-lived sessions instead of long-lived static credentials.
 7. **Restrict your repository's Actions settings.** Allow-list the specific actions and reusable workflows your pipeline needs, require approval for fork-PR runs, and set the default workflow token to read-only.
 8. **Protect artifact integrity in the registry.** Use immutable tags and registry RBAC so a published artifact cannot be replaced, and deploy by the recorded digest where your deploy target supports it.

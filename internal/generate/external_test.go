@@ -79,7 +79,7 @@ func createMockWorkflow(t *testing.T, baseDir, workflowPath string) {
 func TestExternalUpdateWorkflow_Generation(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -139,7 +139,7 @@ func TestExternalUpdateWorkflow_Generation(t *testing.T) {
 func TestSatelliteNotifyPrimary_Generation(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Notify: &config.NotifyConfig{
 			Repo:     "example/primary-backend",
 			Workflow: ".github/workflows/external-update.yaml",
@@ -168,7 +168,7 @@ func TestSatelliteNotifyPrimary_Generation(t *testing.T) {
 func TestPromoteExternalDeploys_Generation(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 		},
@@ -221,7 +221,7 @@ func TestExternalDeployStateTracking(t *testing.T) {
 	// This test covers the integration between config and preflight
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "app"},
 			},
@@ -291,7 +291,7 @@ func TestMixedLocalAndExternalDeploys(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "api", Workflow: ".github/workflows/deploy-api.yaml"},
 			{Name: "infra", Workflow: ".github/workflows/deploy-infra.yaml", Triggers: []string{"terraform/**"}},
@@ -352,7 +352,7 @@ func TestSatelliteConfigNoExternal(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml", Triggers: []string{"cdk/**"}},
 		},
@@ -392,7 +392,7 @@ func TestPrimaryWithoutExternal(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -452,7 +452,7 @@ func TestExternalWorkflowResolution(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.TrunkConfig{
 				TrunkBranch:  "master",
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 				},
@@ -481,7 +481,7 @@ func TestExternalWorkflowResolution(t *testing.T) {
 func TestRollbackJobConditions(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 		},
@@ -549,7 +549,7 @@ func TestRollbackJobConditions(t *testing.T) {
 func TestExternalUpdateGenerator_NotPrimary(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -575,7 +575,7 @@ func TestExternalUpdateGenerator_NotPrimary(t *testing.T) {
 func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -614,7 +614,7 @@ func TestExternalUpdateGenerator_HasConcurrencyBlock(t *testing.T) {
 func TestExternalUpdateGenerator_DistinctComponentsGetDistinctGroups(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -651,7 +651,7 @@ func TestExternalUpdateGenerator_DistinctComponentsGetDistinctGroups(t *testing.
 func TestExternalUpdateGenerator_InputsAreNotInterpolatedIntoRun(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -707,7 +707,7 @@ func TestExternalUpdateGenerator_InputsAreNotInterpolatedIntoRun(t *testing.T) {
 func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -750,7 +750,7 @@ func TestExternalUpdateGenerator_CheckoutUsesStateToken(t *testing.T) {
 	t.Run("state_token configured", func(t *testing.T) {
 		cfg := &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "prod"},
+			Environments: config.EnvNames("dev", "prod"),
 			External:     externalRepos,
 			StateToken:   "CASCADE_STATE_TOKEN",
 		}
@@ -773,7 +773,7 @@ func TestExternalUpdateGenerator_CheckoutUsesStateToken(t *testing.T) {
 	t.Run("state_token unset uses GITHUB_TOKEN back-compat", func(t *testing.T) {
 		cfg := &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "prod"},
+			Environments: config.EnvNames("dev", "prod"),
 			External:     externalRepos,
 		}
 		gen := NewExternalUpdateGenerator(cfg, "/tmp")
@@ -798,7 +798,7 @@ func TestExternalUpdateGenerator_CheckoutUsesStateToken(t *testing.T) {
 func TestExternalUpdateGenerator_DefaultConcurrencyIsPerComponent(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -836,7 +836,7 @@ func TestNotifyPrimaryStep_BuildOnlySatellite_EmitsDeployName(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "shared", Workflow: ".github/workflows/build-shared.yaml", Triggers: []string{"src/**"}},
 		},
@@ -874,7 +874,7 @@ func TestNotifyPrimaryStep_OverridesEmitParentNames(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "shared", Workflow: ".github/workflows/build-shared.yaml", Triggers: []string{"src/**"}},
 		},
@@ -908,7 +908,7 @@ func TestNotifyPrimaryStep_OverridesOffStateByteIdentical(t *testing.T) {
 	newCfg := func() *config.TrunkConfig {
 		return &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev"},
+			Environments: config.EnvNames("dev"),
 			Builds: []config.BuildConfig{
 				{Name: "shared", Workflow: ".github/workflows/build-shared.yaml", Triggers: []string{"src/**"}},
 			},
@@ -943,7 +943,7 @@ func TestNotifyPrimaryStep_NoStrayDotInJobsAccessor(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml", Triggers: []string{"cdk/**"}},
 		},
@@ -967,7 +967,7 @@ func TestNotifyPrimaryStep_NoStrayDotInJobsAccessor(t *testing.T) {
 func onUpdatePrimaryConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -1034,7 +1034,7 @@ func TestExternalUpdateGenerator_NoOnUpdate_RecordOnlyByteIdentical(t *testing.T
 	// stripped. The generated bytes must match a hand-built record-only baseline.
 	recordOnly := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -1086,7 +1086,7 @@ func TestExternalUpdateGenerator_OnUpdateDeploy_Deterministic(t *testing.T) {
 func TestExternalUpdateGenerator_OnUpdateDeploy_LocalWorkflowPath(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",
@@ -1118,7 +1118,7 @@ func TestExternalUpdateGenerator_OnUpdateDeploy_LocalWorkflowPath(t *testing.T) 
 func TestExternalUpdateGenerator_EmitsRunName(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "master",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		External: []config.ExternalRepoConfig{
 			{
 				Repo: "example/cdk-infra",

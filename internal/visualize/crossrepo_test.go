@@ -15,7 +15,7 @@ import (
 func primaryWithDependents() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "api", Workflow: ".github/workflows/build-api.yaml"},
 		},
@@ -126,7 +126,7 @@ func TestBuildCrossRepoViewModel_SatelliteOnly_NotifiesNamedPrimary(t *testing.T
 	// must still render its notify edge to the named primary repo.
 	vm, err := BuildCrossRepoViewModel(&config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys:      []config.DeployConfig{{Name: "app", Workflow: ".github/workflows/deploy.yaml"}},
 		Notify:       &config.NotifyConfig{Repo: "org/my-backend"},
 	})

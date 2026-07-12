@@ -17,7 +17,7 @@ import (
 func TestReleaseGenerator_NoRollbackJob(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -33,7 +33,7 @@ func TestReleaseGenerator_NoRollbackJob(t *testing.T) {
 func TestReleaseGenerator_Generate(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -65,7 +65,7 @@ func TestReleaseGenerator_Generate(t *testing.T) {
 func TestReleaseGenerator_ReleaseActions(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -89,7 +89,7 @@ func TestReleaseGenerator_ReleaseActions(t *testing.T) {
 func TestReleaseGenerator_ValidYAML(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -116,7 +116,7 @@ func TestReleaseGenerator_ValidYAML(t *testing.T) {
 func TestReleaseGenerator_LatestReleaseStateUpdate(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -144,7 +144,7 @@ func TestReleaseGenerator_LatestReleaseStateUpdate(t *testing.T) {
 func TestReleaseGenerator_LatestReleaseStateUpdate_PushRetriesOnConflict(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -173,7 +173,7 @@ func TestReleaseGenerator_LatestReleaseStateUpdate_PushRetriesOnConflict(t *test
 func TestReleaseGenerator_DryRunSupport(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -191,7 +191,7 @@ func TestReleaseGenerator_DryRunSupport(t *testing.T) {
 func TestReleaseGenerator_SemverTagCalculation(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -213,7 +213,7 @@ func TestReleaseGenerator_SemverTagCalculation_CustomToken(t *testing.T) {
 	emptySep := ""
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		TagGrammar: &config.TagGrammarConfig{
 			PreReleaseToken:     &betaToken,
 			PreReleaseSeparator: &emptySep,
@@ -231,7 +231,7 @@ func TestReleaseGenerator_SemverTagCalculation_CustomToken(t *testing.T) {
 func TestReleaseGenerator_ChangelogGeneration(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -247,7 +247,7 @@ func TestReleaseGenerator_ChangelogGeneration(t *testing.T) {
 func TestReleaseGenerator_Summary(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -263,7 +263,7 @@ func TestReleaseGenerator_Summary(t *testing.T) {
 func TestReleaseGenerator_UsesCorrectActions(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -280,7 +280,7 @@ func TestReleaseGenerator_UsesCorrectActions(t *testing.T) {
 func TestReleaseGenerator_WithCLIVersion(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		CLIVersion:   "v1.0.0",
 	}
 
@@ -303,7 +303,7 @@ func TestReleaseGenerator_WithCLIVersion(t *testing.T) {
 func TestReleaseGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -322,7 +322,7 @@ func TestReleaseGenerator_HasConcurrencyBlock(t *testing.T) {
 func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		Concurrency: &config.ConcurrencyConfig{
 			Group:            "my-custom-release",
 			CancelInProgress: true,
@@ -339,7 +339,7 @@ func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
 
 func TestReleaseGenerator_AllowBreakingChanges_BakesGateOff(t *testing.T) {
 	// Default: the breaking-change gate reads the per-run workflow input.
-	def := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}}
+	def := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("prod")}
 	defContent, err := NewReleaseGenerator(def, "").Generate()
 	require.NoError(t, err)
 	assert.Contains(t, defContent, "ALLOW_BREAKING: ${{ github.event.inputs.allow_breaking_changes }}\n")
@@ -347,7 +347,7 @@ func TestReleaseGenerator_AllowBreakingChanges_BakesGateOff(t *testing.T) {
 
 	// allow_breaking_changes: true bakes the gate off so a breaking release
 	// proceeds even when the per-run input is unchecked.
-	on := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}, AllowBreakingChanges: true}
+	on := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("prod"), AllowBreakingChanges: true}
 	onContent, err := NewReleaseGenerator(on, "").Generate()
 	require.NoError(t, err)
 	assert.Contains(t, onContent, "ALLOW_BREAKING: \"true\"\n")

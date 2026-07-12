@@ -173,7 +173,10 @@ deploys:
 
 func TestParseConfigLevelFields(t *testing.T) {
 	cfg := parseInline(t, `
-environments: [dev, prod]
+environments:
+  - dev
+  - name: prod
+    gha_environment: production
 runs_on: ubuntu-latest
 job_timeout_minutes: 30
 pin_mode: sha
@@ -206,9 +209,6 @@ merge_queue:
 telemetry:
   enabled: false
   adapter: none
-environment_config:
-  prod:
-    gha_environment: production
 `)
 	if cfg.GetPinMode() != "sha" || cfg.ActionPins["actions/checkout"] != "v4.2.2" {
 		t.Fatalf("pin fields: %s %v", cfg.PinMode, cfg.ActionPins)
@@ -226,8 +226,14 @@ environment_config:
 	if !cfg.PRPreview.IsEnabled() || !cfg.ValidateCheck.IsEnabled() || !cfg.MergeQueue.Enabled {
 		t.Fatalf("pr lanes: %#v %#v %#v", cfg.PRPreview, cfg.ValidateCheck, cfg.MergeQueue)
 	}
-	if cfg.Telemetry.Adapter != "none" || cfg.EnvironmentConfig["prod"].GHAEnvironment != "production" {
-		t.Fatalf("telemetry/env_config: %#v %#v", cfg.Telemetry, cfg.EnvironmentConfig)
+	var prodGHAEnvironment string
+	for _, e := range cfg.Environments {
+		if e.Name == "prod" {
+			prodGHAEnvironment = e.GHAEnvironment
+		}
+	}
+	if cfg.Telemetry.Adapter != "none" || prodGHAEnvironment != "production" {
+		t.Fatalf("telemetry/env_config: %#v %#v", cfg.Telemetry, cfg.Environments)
 	}
 }
 
@@ -737,15 +743,18 @@ dispatch_inputs:
 			t.Fatalf("expected dotted/hyphenated options to pass, got %v", errs)
 		}
 	})
-	t.Run("environment_config unknown env rejected", func(t *testing.T) {
+	t.Run("removed environment_config block rejected with a did-you-mean", func(t *testing.T) {
+		// environment_config was folded into the environments: list; the
+		// standalone block is now an unknown top-level field with a
+		// did-you-mean pointing at environments.
 		cfg := parseInline(t, `
 environments: [dev]
 environment_config:
   prod:
     gha_environment: production
 `)
-		if errs := Validate(cfg); !hasErrContaining(errs, "not in environments") {
-			t.Fatalf("expected env_config rejection, got %v", errs)
+		if errs := Validate(cfg); !hasErrContaining(errs, `unknown field "environment_config"; did you mean "environments"`) {
+			t.Fatalf("expected environment_config did-you-mean rejection, got %v", errs)
 		}
 	})
 }

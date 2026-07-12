@@ -38,7 +38,7 @@ func TestReconcileAdoptsBumpAndSurvivesRegen(t *testing.T) {
 
 	cfg := harness.Config{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		PinMode:      config.PinModeSHA,
 		Builds: []config.BuildConfig{
 			{

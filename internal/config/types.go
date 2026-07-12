@@ -123,7 +123,13 @@ type TrunkConfig struct {
 	// workflow_dispatch, letting a maintainer-owned gate decide when a release
 	// candidate is cut. Opt-in; repos that do not set it keep push triggers.
 	ReleaseTrigger string `yaml:"release_trigger,omitempty" json:"release_trigger,omitempty"`
-	Environments  []string `yaml:"environments,omitempty" json:"environments,omitempty"`   // Empty = no-environment setup (library/CLI projects)
+	// Environments is the ordered promotion ladder, folded into one list of
+	// objects: each entry is a bare string ("- dev", sugar for a config-free
+	// environment) or a mapping ("- {name: dev, role: ..., wait_timer: ...}")
+	// carrying that environment's inline settings. Order defines the ladder;
+	// per-environment settings live on the entry (the former environment_config
+	// map). Empty = no-environment setup (library/CLI projects).
+	Environments []EnvironmentEntry `yaml:"environments,omitempty" json:"environments,omitempty"`
 	CLIVersion    string   `yaml:"cli_version,omitempty" json:"cli_version,omitempty"`     // cascade CLI version (e.g., v1.0.0)
 	// CLIVersionSHA is the 40-hex commit SHA that cli_version resolves to. When
 	// set and pin_mode is sha, generated setup-cli self-action refs are pinned to
@@ -183,7 +189,6 @@ type TrunkConfig struct {
 	PinMode           string                       `yaml:"pin_mode,omitempty" json:"pin_mode,omitempty"` // tag | sha (default tag)
 	ActionPins        map[string]string            `yaml:"action_pins,omitempty" json:"action_pins,omitempty"`
 	Telemetry         *TelemetryConfig             `yaml:"telemetry,omitempty" json:"telemetry,omitempty"`
-	EnvironmentConfig map[string]EnvironmentConfig `yaml:"environment_config,omitempty" json:"environment_config,omitempty"`
 	// Components reserves the shape for independently versioned components sharing
 	// one manifest (#176). v1 contract: parse + structural validation only; no
 	// generator, state, or runtime behavior is attached. Absent by default.
@@ -964,23 +969,82 @@ func (c *TrunkConfig) GetPromotionModes() []PromotionMode {
 	return []PromotionMode{ModeDefault, ModeCascade}
 }
 
+// EnvironmentNames returns the ordered environment names, the promotion ladder
+// as a plain string slice. It is the accessor every positional consumer uses now
+// that the environments list holds objects rather than bare strings.
+func (c *TrunkConfig) EnvironmentNames() []string {
+	if len(c.Environments) == 0 {
+		return nil
+	}
+	names := make([]string, len(c.Environments))
+	for i, e := range c.Environments {
+		names[i] = e.Name
+	}
+	return names
+}
+
+// EnvConfig returns the inline per-environment settings for the named
+// environment and whether that environment is declared. It replaces the former
+// environment_config map lookup now that settings live on each environments
+// entry.
+func (c *TrunkConfig) EnvConfig(name string) (EnvironmentConfig, bool) {
+	for _, e := range c.Environments {
+		if e.Name == name {
+			return e.EnvironmentConfig, true
+		}
+	}
+	return EnvironmentConfig{}, false
+}
+
+// ReleaseEnvironment returns the environment whose promotion publishes the
+// release: the entry that declares role: release, or the last entry when no
+// role is set (the index-based default). Empty when no environments exist.
+func (c *TrunkConfig) ReleaseEnvironment() string {
+	for _, e := range c.Environments {
+		if e.Role == EnvRoleRelease {
+			return e.Name
+		}
+	}
+	if len(c.Environments) == 0 {
+		return ""
+	}
+	return c.Environments[len(c.Environments)-1].Name
+}
+
+// PrereleaseEnvironment returns the environment whose promotion cuts the
+// prerelease: the entry that declares role: prerelease, or the second-from-last
+// entry when no role is set (the index-based default). Empty when fewer than two
+// environments exist.
+func (c *TrunkConfig) PrereleaseEnvironment() string {
+	for _, e := range c.Environments {
+		if e.Role == EnvRolePrerelease {
+			return e.Name
+		}
+	}
+	if len(c.Environments) < 2 {
+		return ""
+	}
+	return c.Environments[len(c.Environments)-2].Name
+}
+
 // GetAllDirectPromotionOptions returns all direct promotion options.
-// Release states are determined by position, not by fake "release" environment:
-//   - Promotion to second-from-top env (e.g., uat) = prerelease state
-//   - Promotion to top env (e.g., prod) = released state
+// Release and prerelease stages default to position (last env = release,
+// second-from-last = prerelease) but an explicit role: on an environments entry
+// overrides that default. Promotion to the release environment triggers the
+// released state; promotion to the prerelease environment triggers prerelease.
 //
 // For 4 envs [dev, test, uat, prod], generates:
 //   - dev-to-test, dev-to-uat, test-to-uat (env-to-env, uat promotions trigger prerelease)
 //   - dev-to-prod, test-to-prod, uat-to-prod (includes prod deployment, triggers released)
 func (c *TrunkConfig) GetAllDirectPromotionOptions() []PromotionOption {
-	envs := c.Environments
+	envs := c.EnvironmentNames()
 	if len(envs) < 2 {
 		return nil
 	}
 
 	var options []PromotionOption
-	prodEnv := envs[len(envs)-1]
-	prereleaseEnv := envs[len(envs)-2] // Second from top = prerelease environment
+	prodEnv := c.ReleaseEnvironment()      // role: release, else last entry
+	prereleaseEnv := c.PrereleaseEnvironment() // role: prerelease, else second from top
 
 	// Generate from each environment (except prod)
 	for i := 0; i < len(envs)-1; i++ {
@@ -1032,21 +1096,25 @@ func (c *TrunkConfig) IsFirstEnvironment(env string) bool {
 	if len(c.Environments) == 0 {
 		return false
 	}
-	return c.Environments[0] == env
+	return c.Environments[0].Name == env
 }
 
-// IsLastEnvironment returns true if env is the last (production)
+// IsLastEnvironment returns true if env is the last entry by position. This is a
+// positional query, NOT the release-role query: with an explicit role: release on
+// a non-last entry the release environment differs from the last one, so callers
+// deciding the release stage must use ReleaseEnvironment, not this. It has no
+// production consumer today; the ladder-position semantics are kept for tests.
 func (c *TrunkConfig) IsLastEnvironment(env string) bool {
 	if len(c.Environments) == 0 {
 		return false
 	}
-	return c.Environments[len(c.Environments)-1] == env
+	return c.Environments[len(c.Environments)-1].Name == env
 }
 
 // GetEnvironmentIndex returns the index of the environment, -1 if not found
 func (c *TrunkConfig) GetEnvironmentIndex(env string) int {
 	for i, e := range c.Environments {
-		if e == env {
+		if e.Name == env {
 			return i
 		}
 	}
@@ -1059,7 +1127,7 @@ func (c *TrunkConfig) GetNextEnvironment(env string) string {
 	if idx == -1 || idx == len(c.Environments)-1 {
 		return ""
 	}
-	return c.Environments[idx+1]
+	return c.Environments[idx+1].Name
 }
 
 // GetEnvironmentsInRange returns all environments from start to end (inclusive)
@@ -1074,7 +1142,7 @@ func (c *TrunkConfig) GetEnvironmentsInRange(start, end string) []string {
 
 	result := make([]string, 0, endIdx-startIdx+1)
 	for i := startIdx; i <= endIdx; i++ {
-		result = append(result, c.Environments[i])
+		result = append(result, c.Environments[i].Name)
 	}
 	return result
 }
@@ -1281,7 +1349,7 @@ type ComponentConfig struct {
 	// (prerelease_token, separator, dryrun_token) deep-merge onto the shared
 	// top-level tag_grammar, so a component setting only prefix inherits the rest.
 	TagGrammar           *TagGrammarConfig            `yaml:"tag_grammar,omitempty" json:"tag_grammar,omitempty"`
-	Environments         []string                     `yaml:"environments,omitempty" json:"environments,omitempty"`
+	Environments         []EnvironmentEntry           `yaml:"environments,omitempty" json:"environments,omitempty"`
 	ReleaseTrigger       string                       `yaml:"release_trigger,omitempty" json:"release_trigger,omitempty"`
 	AllowBreakingChanges *bool                        `yaml:"allow_breaking_changes,omitempty" json:"allow_breaking_changes,omitempty"`
 	Validate             *ValidateConfig              `yaml:"validate,omitempty" json:"validate,omitempty"`
@@ -1301,7 +1369,6 @@ type ComponentConfig struct {
 	ValidateCheck        *ValidateCheckConfig         `yaml:"validate_check,omitempty" json:"validate_check,omitempty"`
 	Rollback             *RollbackConfig              `yaml:"rollback,omitempty" json:"rollback,omitempty"`
 	Deployments          *DeploymentsConfig           `yaml:"deployments,omitempty" json:"deployments,omitempty"`
-	EnvironmentConfig    map[string]EnvironmentConfig `yaml:"environment_config,omitempty" json:"environment_config,omitempty"`
 	Triggers             []string                     `yaml:"triggers,omitempty" json:"triggers,omitempty"`
 	// ExtraPaths lists repo-relative globs beyond this component's own path that both
 	// fire its orchestrate workflow and count toward its version bump, so a change to

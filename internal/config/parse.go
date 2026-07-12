@@ -75,7 +75,7 @@ func ParseManifestBytes(data []byte, key string) (*CICDFile, error) {
 	// Ensure all environments have state entries
 	if file.Config != nil {
 		file.Config.ManifestKey = key
-		for _, env := range file.Config.Environments {
+		for _, env := range file.Config.EnvironmentNames() {
 			if file.State[env] == nil {
 				file.State[env] = &EnvState{}
 			}
@@ -176,12 +176,16 @@ func Validate(cfg *TrunkConfig) []string {
 	// Empty environments is valid - means pre-release -> release only (no deployments)
 
 	envSet := make(map[string]bool)
-	for i, env := range cfg.Environments {
+	envNames := cfg.EnvironmentNames()
+	for i, env := range envNames {
 		envSet[env] = true
 		// Environment names key job IDs and ${{ }} expression references, so they
 		// must be job-ID-safe.
 		errors = append(errors, validateJobIDSafeName(fmt.Sprintf("environments[%d]", i), env)...)
 	}
+	// Fold-specific structural rules for the environments list of objects: names
+	// must be non-empty and unique, and any declared role must be a known value.
+	errors = append(errors, validateEnvironments(cfg)...)
 
 	// Build name sets for each section (builds and deploys can share names)
 	buildNames := make(map[string]bool)
@@ -247,7 +251,7 @@ func Validate(cfg *TrunkConfig) []string {
 		// Validate env_inputs keys match top-level environments
 		for envKey := range b.EnvInputs {
 			if !envSet[envKey] {
-				errors = append(errors, fmt.Sprintf("builds[%d].env_inputs has key '%s' which is not in environments %v", i, envKey, cfg.Environments))
+				errors = append(errors, fmt.Sprintf("builds[%d].env_inputs has key '%s' which is not in environments %v", i, envKey, envNames))
 			}
 		}
 	}
@@ -275,7 +279,7 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validateJobControlFields(fmt.Sprintf("deploys[%d]", i), isReusable, d.RunsOn, d.Concurrency)...)
 		errors = append(errors, validatePermissions(fmt.Sprintf("deploys[%d]", i), d.Permissions)...)
 		errors = append(errors, validateSecrets(fmt.Sprintf("deploys[%d]", i), d.Secrets)...)
-		errors = append(errors, validateRollout(fmt.Sprintf("deploys[%d]", i), d.Rollout, cfg.Environments)...)
+		errors = append(errors, validateRollout(fmt.Sprintf("deploys[%d]", i), d.Rollout, envNames)...)
 		errors = append(errors, validateDeployTarget(fmt.Sprintf("deploys[%d]", i), d.DeployTarget)...)
 
 		// Validate run_policy
@@ -311,7 +315,7 @@ func Validate(cfg *TrunkConfig) []string {
 		// Validate env_inputs keys match top-level environments
 		for envKey := range d.EnvInputs {
 			if !envSet[envKey] {
-				errors = append(errors, fmt.Sprintf("deploys[%d].env_inputs has key '%s' which is not in environments %v", i, envKey, cfg.Environments))
+				errors = append(errors, fmt.Sprintf("deploys[%d].env_inputs has key '%s' which is not in environments %v", i, envKey, envNames))
 			}
 		}
 	}
@@ -406,7 +410,7 @@ func Validate(cfg *TrunkConfig) []string {
 			errors = append(errors, validateJobControlFields(prefix, true, d.RunsOn, d.Concurrency)...)
 			errors = append(errors, validatePermissions(prefix, d.Permissions)...)
 			errors = append(errors, validateSecrets(prefix, d.Secrets)...)
-			errors = append(errors, validateRollout(prefix, d.Rollout, cfg.Environments)...)
+			errors = append(errors, validateRollout(prefix, d.Rollout, envNames)...)
 			errors = append(errors, validateDeployTarget(prefix, d.DeployTarget)...)
 			for _, dep := range d.OptionalDependsOn {
 				if _, err := cfg.ResolveDependency(dep, CallbackTypeExternal); err != nil {

@@ -1,0 +1,49 @@
+name: "Environment Role Override"
+description: |
+  Exercises the explicit environment role: an environments entry declares
+  role: release on an environment that is NOT the last in the list, overriding
+  the positional default (last entry = release, second-from-last = prerelease).
+  The scenario proves a manifest carrying an explicit role parses, validates, and
+  generates its full workflow set, and that regeneration is byte-identical with
+  no drift. The promotion graph honors the declared release marker rather than
+  the list position; the unit suite asserts the precise marker placement, while
+  this scenario proves the role is wired through real generation end to end.
+
+config:
+  trunk_branch: main
+  environments:
+    - name: dev
+    - name: staging
+      role: release
+    - name: prod
+      role: prerelease
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Seed a minimal source tree and generate"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "promote:"
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

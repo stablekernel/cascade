@@ -198,7 +198,7 @@ func (g *RollbackGenerator) writeTriggers(sb *strings.Builder) {
 	sb.WriteString("        required: true\n")
 	sb.WriteString("        type: choice\n")
 	sb.WriteString("        options:\n")
-	promoted := g.config.Environments
+	promoted := g.config.EnvironmentNames()
 	if len(promoted) > 0 {
 		promoted = promoted[1:]
 	}

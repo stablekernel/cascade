@@ -49,7 +49,7 @@ func TestAnyAutoCommits_None(t *testing.T) {
 // callback has auto_commits: true.
 func TestManifestUpdateStep_AutoCommitsReResolvesHEAD(t *testing.T) {
 	cfg := &config.TrunkConfig{
-		Environments: []string{"dev", "test"},
+		Environments: config.EnvNames("dev", "test"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", AutoCommits: true},
 		},
@@ -71,7 +71,7 @@ func TestManifestUpdateStep_AutoCommitsReResolvesHEAD(t *testing.T) {
 // declares auto_commits: true, preserving existing behavior.
 func TestManifestUpdateStep_NoAutoCommits_NoReResolve(t *testing.T) {
 	cfg := &config.TrunkConfig{
-		Environments: []string{"dev", "test"},
+		Environments: config.EnvNames("dev", "test"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},

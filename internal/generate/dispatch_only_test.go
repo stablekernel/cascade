@@ -20,7 +20,7 @@ func dispatchOnlyTestConfig(t *testing.T, dispatchOnly bool) (*config.TrunkConfi
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},

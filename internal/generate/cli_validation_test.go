@@ -17,7 +17,7 @@ import (
 func TestGeneratedWorkflow_PreflightCommandValid(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test"},
+		Environments: config.EnvNames("dev", "test"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -48,7 +48,7 @@ func TestGeneratedWorkflow_PreflightCommandValid(t *testing.T) {
 func TestGeneratedWorkflow_FinalizeCommandValid(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test"},
+		Environments: config.EnvNames("dev", "test"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -78,7 +78,7 @@ func TestGeneratedWorkflow_FinalizeCommandValid(t *testing.T) {
 func TestGeneratedWorkflow_PromoteJobNoDirectCLICall(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -113,7 +113,7 @@ func TestGeneratedWorkflow_PromoteJobNoDirectCLICall(t *testing.T) {
 func TestGeneratedWorkflow_ValidCLISubcommands(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -171,7 +171,7 @@ func TestGeneratedWorkflow_ValidCLISubcommands(t *testing.T) {
 func TestPromoteJobStepName(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test"},
+		Environments: config.EnvNames("dev", "test"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -194,7 +194,7 @@ func TestPromoteJobStepName(t *testing.T) {
 func TestGeneratedWorkflow_NoOrphanedFlags(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -230,7 +230,7 @@ func TestGeneratedWorkflow_NoOrphanedFlags(t *testing.T) {
 func TestGeneratedWorkflow_PromotePreflightStructure(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -270,7 +270,7 @@ func TestGeneratedWorkflow_PromotePreflightStructure(t *testing.T) {
 func TestGeneratedWorkflow_PromoteFinalizeStructure(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -313,7 +313,7 @@ func TestGeneratedWorkflow_PromoteFinalizeStructure(t *testing.T) {
 func TestGeneratedWorkflow_PreflightNoInvalidFlags(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -354,7 +354,7 @@ func TestGeneratedWorkflow_PreflightNoInvalidFlags(t *testing.T) {
 func TestGeneratedWorkflow_ChangelogCommandValid(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},

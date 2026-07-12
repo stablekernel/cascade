@@ -14,7 +14,7 @@ func strPtr(s string) *string { return &s }
 func betaConfig(state map[string]*config.EnvState) *config.CICDFile {
 	return &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys:      []config.DeployConfig{{Name: "app"}},
 			TagGrammar: &config.TagGrammarConfig{
 				PreReleaseToken: strPtr("beta"),

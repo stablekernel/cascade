@@ -41,9 +41,10 @@ and overridden per component only where it differs.
 When a `components:` block is present, the top-level config becomes the set of
 **shared defaults** every component inherits. Each entry under `components:`
 overrides those defaults where it sets a value and inherits them everywhere else.
-Overrides are a deep merge: a component that sets only part of a block, such as a
-single `environment_config` entry or one `tag_grammar` field, keeps the inherited
-siblings rather than dropping them. See the [override
+Overrides are a deep merge: a component that sets only part of a block, such as
+one `tag_grammar` field, keeps the inherited siblings rather than dropping them.
+The `environments` list is the exception, whole-replacing the shared ladder
+(inline per-environment settings and all) when a component narrows it. See the [override
 matrix](/cascade/reference/manifest/#inheritable-overrides) for the precise
 per-field rules.
 

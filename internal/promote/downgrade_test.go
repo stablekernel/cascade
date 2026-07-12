@@ -13,7 +13,7 @@ func newDowngradePreflighter(t *testing.T, state map[string]*config.EnvState, al
 	t.Helper()
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 			Deploys:      []config.DeployConfig{{Name: "app"}},
 		},
 		State: state,

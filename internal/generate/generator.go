@@ -83,7 +83,7 @@ func workflowDispatchTarget(path string) string {
 // GHAEnvironment field is non-empty, that value is returned; otherwise the
 // cascade env name itself is used as the GitHub Environment name.
 func envGHAName(cfg *config.TrunkConfig, cascadeEnvName string) string {
-	if ec, ok := cfg.EnvironmentConfig[cascadeEnvName]; ok && ec.GHAEnvironment != "" {
+	if ec, ok := cfg.EnvConfig(cascadeEnvName); ok && ec.GHAEnvironment != "" {
 		return ec.GHAEnvironment
 	}
 	return cascadeEnvName
@@ -92,8 +92,8 @@ func envGHAName(cfg *config.TrunkConfig, cascadeEnvName string) string {
 // anyEnvHasGHAConfig reports whether any environment in the config has an
 // EnvironmentConfig entry with a non-empty GHAEnvironment field.
 func anyEnvHasGHAConfig(cfg *config.TrunkConfig) bool {
-	for _, ec := range cfg.EnvironmentConfig {
-		if ec.GHAEnvironment != "" {
+	for _, entry := range cfg.Environments {
+		if entry.GHAEnvironment != "" {
 			return true
 		}
 	}
@@ -713,10 +713,10 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 		sb.WriteString("        description: 'Target environment'\n")
 		sb.WriteString("        type: choice\n")
 		sb.WriteString("        options:\n")
-		for _, env := range g.config.Environments {
+		for _, env := range g.config.EnvironmentNames() {
 			fmt.Fprintf(sb, "          - %s\n", env)
 		}
-		fmt.Fprintf(sb, "        default: '%s'\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "        default: '%s'\n", g.config.Environments[0].Name)
 	}
 	sb.WriteString("      dry_run:\n")
 	sb.WriteString("        description: 'Dry run mode'\n")
@@ -929,7 +929,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	// For no-environment setup, don't pass environment at all
 	if len(g.config.Environments) > 0 {
 		sb.WriteString("        env:\n")
-		fmt.Fprintf(sb, "          ENVIRONMENT: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "          ENVIRONMENT: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0].Name)
 		sb.WriteString("        run: |\n")
 		sb.WriteString("          cascade orchestrate setup \\\n")
 		sb.WriteString("            --environment \"$ENVIRONMENT\" \\\n")
@@ -1202,7 +1202,7 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 
 	// Only pass environment if there are environments configured
 	if len(g.config.Environments) > 0 {
-		inputs = append(inputs, fmt.Sprintf("      environment: ${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0]))
+		inputs = append(inputs, fmt.Sprintf("      environment: ${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0].Name))
 	}
 
 	// Optional standard inputs - only passed if callback declares them
@@ -1526,7 +1526,7 @@ func (g *Generator) writeNativeDeploymentSteps(sb *strings.Builder, sorted []str
 
 	envExpr := "${{ github.event.inputs.environment }}"
 	if len(g.config.Environments) > 0 {
-		envExpr = fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0])
+		envExpr = fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0].Name)
 	}
 
 	// Collect deploy job IDs so the terminal status reflects the real deploy
@@ -1625,7 +1625,7 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 
 	// Only include environment if there are environments configured
 	if len(g.config.Environments) > 0 {
-		fmt.Fprintf(sb, "          ENVIRONMENT: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "          ENVIRONMENT: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0].Name)
 	}
 
 	// Add env vars for each deploy result
@@ -1775,7 +1775,7 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Notify Primary Repo\n")
 	// Only notify if we're deploying to the first environment (dev)
 	if len(g.config.Environments) > 0 {
-		fmt.Fprintf(sb, "        if: github.event.inputs.environment == '%s' || github.event.inputs.environment == ''\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "        if: github.event.inputs.environment == '%s' || github.event.inputs.environment == ''\n", g.config.Environments[0].Name)
 	}
 	writeActionUses(sb, g.config, "        ", actionGithubScript)
 	sb.WriteString("        with:\n")
@@ -1829,7 +1829,7 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 	case g.config.Notify.Environment != "":
 		fmt.Fprintf(sb, "                environment: '%s',\n", g.config.Notify.Environment)
 	case len(g.config.Environments) > 0:
-		fmt.Fprintf(sb, "                environment: context.payload.inputs?.environment || '%s',\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "                environment: context.payload.inputs?.environment || '%s',\n", g.config.Environments[0].Name)
 	default:
 		sb.WriteString("                environment: 'dev',\n")
 	}
@@ -2044,7 +2044,7 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 
 	// Only include environment if there are environments configured
 	if len(g.config.Environments) > 0 {
-		fmt.Fprintf(sb, "          environment: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "          environment: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0].Name)
 	} else {
 		// For no-environment repos, use a placeholder for release tracking
 		sb.WriteString("          environment: prerelease\n")

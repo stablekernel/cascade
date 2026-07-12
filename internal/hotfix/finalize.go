@@ -824,11 +824,8 @@ func releaseToken() string {
 // isPrereleaseEnv reports whether env is the prerelease env (second from top),
 // mirroring promote's prerelease-env detection.
 func (f *Finalizer) isPrereleaseEnv(cfg *config.TrunkConfig, env string) bool {
-	envs := cfg.Environments
-	if len(envs) < 2 {
-		return false
-	}
-	return env == envs[len(envs)-2]
+	prerelease := cfg.PrereleaseEnvironment()
+	return prerelease != "" && env == prerelease
 }
 
 // writeConfig writes the updated manifest back to disk, rewriting only the

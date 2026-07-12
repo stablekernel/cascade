@@ -24,6 +24,17 @@ func knownComponentFields() []string {
 	return knownYAMLFields(reflect.TypeOf(ComponentConfig{}))
 }
 
+// knownEnvironmentEntryFields returns the modeled yaml keys accepted on an
+// environments entry: the entry's own name and role plus every inline
+// per-environment setting promoted from EnvironmentConfig (the folded former
+// environment_config block). It backs the entry-level did-you-mean suggestion.
+func knownEnvironmentEntryFields() []string {
+	fields := []string{"name", "role"}
+	fields = append(fields, knownYAMLFields(reflect.TypeOf(EnvironmentConfig{}))...)
+	sort.Strings(fields)
+	return fields
+}
+
 // knownYAMLFields returns the modeled yaml key names for a struct type, derived
 // from its yaml struct tags. The inline catch-all (yaml:",inline") and any
 // yaml:"-" field are excluded. Reflecting the tags keeps every known-field set
@@ -85,6 +96,11 @@ var legacyCallbackFieldRenames = map[string]string{
 // the nested destination, since it is not a single top-level field name.
 var legacyFieldRenames = map[string]string{
 	"tag_prefix": "tag_grammar.prefix",
+	// The separate environment_config map was folded into the environments list:
+	// per-environment settings now ride on each environments entry as inline keys
+	// ({name: dev, wait_timer: 5, ...}). Point a stale environment_config: at the
+	// list rather than at the nearest field by edit distance.
+	"environment_config": "environments",
 }
 
 // fieldSuggestion returns the best did-you-mean replacement for an unknown key:

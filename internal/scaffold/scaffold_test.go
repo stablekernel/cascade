@@ -99,7 +99,7 @@ func TestScaffold_ManifestParsesValidatesAndGenerates(t *testing.T) {
 			// Positional env ordering preserved. A release-only manifest omits
 			// the environments key, so the parsed slice is nil there.
 			if len(tc.envs) > 0 {
-				require.Equal(t, tc.envs, parsed.Config.Environments)
+				require.Equal(t, tc.envs, parsed.Config.EnvironmentNames())
 			} else {
 				require.Empty(t, parsed.Config.Environments)
 			}

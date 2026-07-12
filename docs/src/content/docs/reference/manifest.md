@@ -85,19 +85,34 @@ The two fields that define the pipeline shape.
 | Field | Status | Type | Required | Default | Description |
 |-------|--------|------|----------|---------|-------------|
 | `trunk_branch` | emitted | string | Yes | `main` | The trunk branch releases flow from. |
-| `environments` | emitted | list | No | - | The promotion chain. Omit for a no-environment library or CLI project. |
+| `environments` | emitted | list of strings or objects | No | - | The promotion ladder. Each entry is a bare name or an object carrying that environment's name, optional role, and inline settings. Omit for a no-environment library or CLI project. |
 
 ```yaml
 ci:
   config:
     schema_version: 1
     trunk_branch: main
-    environments: [dev, test, prod]
+    environments:
+      - dev                      # bare string: an environment with no extra settings
+      - name: staging
+        wait_timer: 5
+      - name: prod
+        gha_environment: production
+        environment_url: "https://app.example.com"
     cli_version: v0.9.1
 ```
 
-:::note[Environment names are yours; roles are positional]
-The `environments` list is fully configurable. cascade attaches no meaning to specific labels: `dev`, `test`, `staging`, and `prod` are illustrative, not reserved. Roles are decided by position, not by name. The last environment is the release stage, the second-to-last is the prerelease environment, and the publish boundary is the final crossing into the last environment. The count is structural too: zero environments is release-only, one environment generates a single-environment Release workflow, and two or more enable the full promote cascade.
+Each entry is one of two forms:
+
+- a **bare string** (`- dev`), sugar for an environment with no inline settings;
+- an **object** (`- {name: dev, ...}`) carrying `name`, an optional `role`, and the
+  inline per-environment settings ([below](#per-environment-settings)).
+
+The list order defines the promotion ladder, so a plain string list behaves exactly as
+before.
+
+:::note[Environment names are yours; roles default to position]
+The `environments` list is fully configurable. cascade attaches no meaning to specific labels: `dev`, `test`, `staging`, and `prod` are illustrative, not reserved. By default roles are decided by position, not by name: the last environment is the release stage, the second-to-last is the prerelease environment, and the publish boundary is the final crossing into the last environment. Set `role: release` or `role: prerelease` on an entry to declare that stage explicitly and override the positional default (see [`role`](#per-environment-settings)). The count is structural too: zero environments is release-only, one environment generates a single-environment Release workflow, and two or more enable the full promote cascade.
 
 **Naming.** Environment, build, and deploy names become GitHub Actions job IDs and output keys, so keep them identifier-safe: letters, digits, and underscores (hyphens read as subtraction in GitHub Actions expressions). The generator-owned names `environment` and `dry_run` cannot be used as `dispatch_inputs`.
 :::
@@ -598,16 +613,18 @@ ci:
 Leave it unset (the default) to keep the gate on. A manifest that omits the field generates
 byte-identical workflows to before.
 
-## environment_config
+## Per-environment settings
 
-Per-environment settings keyed by environment name. Consumed for native GitHub Environment support and deployment URLs.
+Per-environment settings live inline on each [`environments`](#environments) entry in its
+object form, keyed by that entry rather than in a separate map. They are consumed for
+native GitHub Environment support and deployment URLs.
 
 ```yaml
 ci:
   config:
-    environments: [production]
-    environment_config:
-      production:
+    environments:
+      - name: production
+        role: release
         gha_environment: production
         environment_url: "https://app.example.com"
         required_reviewers: [octocat]
@@ -617,11 +634,14 @@ ci:
 
 | Sub-field | Status | Description |
 |-----------|--------|-------------|
+| `name` | emitted | The environment name (required on an object entry). Defines this entry's rung on the ladder. |
+| `role` | emitted | Optional explicit promotion stage (`prerelease` or `release`), overriding the positional default. |
 | `gha_environment` | emitted | Maps the cascade environment to a real GitHub Environment (native deployments, `environment_url`). |
 | `environment_url` | emitted | URL reported on the Deployment status for that environment. |
 | `required_reviewers` | emitted (via `environments` command) | Reviewers the `environments` command applies to the GitHub Environment. |
 | `wait_timer` | emitted (via `environments` command) | Wait timer the `environments` command applies. |
-| `branch_policy` | emitted (via `environments` command) | Branch policy the `environments` command applies. |
+| `branch_policy` | emitted (via `environments` command) | Branch policy the `environments` command applies (with `branch_patterns` and `tag_patterns` when `custom`). |
+| `secrets` / `variables` | emitted (via `environments` command) | Expected env-scoped secret and variable NAMES (names only, never values). |
 
 GitHub Environment support is shipped: `gha_environment` is consumed for native deployments, and the `cascade environments` command emits `required_reviewers`, `wait_timer`, and `branch_policy` for an operator to apply. See [Add or change environments](/cascade/guides/environments/).
 
@@ -748,7 +768,7 @@ Reports deployment status through the GitHub Deployments API from the finalize j
 | `enabled` | emitted | bool | false | Create a Deployment and report status. Adds `deployments: write` to top-level permissions only when enabled. |
 | `keep_prior_active` | emitted | bool | false | Set `auto_inactive: false` so GitHub leaves prior deployments Active. |
 
-Every Deployments API step carries an `if: ${{ github.server_url == 'https://github.com' }}` guard, so on act or gitea the steps are skipped. Pair with `environment_config.<env>.environment_url` so the status links to the running environment.
+Every Deployments API step carries an `if: ${{ github.server_url == 'https://github.com' }}` guard, so on act or gitea the steps are skipped. Pair with the `environment_url` field on that environment's [`environments`](#environments) entry so the status links to the running environment.
 
 ### validate_check
 
@@ -815,7 +835,7 @@ where an override is meaningful. An unset field takes the shared top-level value
 `validate`, `builds`, `deploys`, `publish`, `external`, `notify`, `release`,
 `changelog`, `runs_on`, `job_timeout_minutes`, `dispatch_inputs`,
 `extra_triggers`, `pr_preview`, `validate_check`, `rollback`, `deployments`,
-`environment_config`, `triggers`, `release_token`, and `release_token_app`.
+`triggers`, `release_token`, and `release_token_app`.
 
 Inheritance is a **deep merge**. When a component overrides a block, it merges
 field-by-field into the inherited default rather than replacing it wholesale, so
@@ -825,13 +845,14 @@ a partial override never drops the shared siblings it did not mention:
   `tag_grammar.prefix` keeps the inherited `prerelease_token`, `prerelease_separator`,
   and `dryrun_token`. A component that sets only `deployments.keep_prior_active`
   keeps the inherited `deployments.enabled`.
-- A **keyed map** such as `environment_config` merges by key, and the entry under
-  each key merges field-by-field. A component that configures only its `prod`
-  environment keeps the shared `dev` and `staging` entries, and a `prod` entry that
-  sets only `wait_timer` keeps the inherited `gha_environment` for `prod`.
-- A **scalar or a list** replaces. A component `environments` list overrides the
-  shared list outright, and a scalar such as `release_trigger` overrides the shared
-  value. An explicit opt-out is honored: a component that sets an inherited boolean
+- A **keyed map** such as `dispatch_inputs` merges by key, and the entry under
+  each key merges field-by-field. A component that configures only one input key
+  keeps the shared entries under the other keys.
+- A **scalar or a list** replaces. The `environments` list whole-replaces the
+  shared ladder outright, inline per-environment settings and all: a component that
+  narrows to `environments: [prod]` declares its own settings on that entry rather
+  than inheriting the shared `prod` block. A scalar such as `release_trigger`
+  overrides the shared value. An explicit opt-out is honored: a component that sets an inherited boolean
   back to `false` (for example `deployments.enabled: false` under a shared
   `deployments.enabled: true`), or an inherited number to `0`, overrides the shared
   value rather than inheriting it.

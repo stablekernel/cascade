@@ -88,7 +88,7 @@ func expandTargetEnvs(cfg *config.TrunkConfig, targetEnv string) ([]string, erro
 	}
 	// Environments[1..idx] inclusive: skip the first env, stop at the target.
 	seq := make([]string, 0, idx)
-	seq = append(seq, cfg.Environments[1:idx+1]...)
+	seq = append(seq, cfg.EnvironmentNames()[1:idx+1]...)
 	return seq, nil
 }
 

@@ -19,7 +19,7 @@ const minimalWorkflowYAML = "on:\n  workflow_call:\n"
 func orchestrateCfgWithDeploySecrets(secrets *config.SecretsConfig) (*config.TrunkConfig, string) {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -36,7 +36,7 @@ func orchestrateCfgWithDeploySecrets(secrets *config.SecretsConfig) (*config.Tru
 func orchestrateCfgWithBuildSecrets(secrets *config.SecretsConfig) (*config.TrunkConfig, string) {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",
@@ -205,7 +205,7 @@ func TestOrchestrateDeployCallbackJob_ExplicitSecretsMap(t *testing.T) {
 func TestPromoteDeployJob_ExplicitSecretsMap(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -236,7 +236,7 @@ func TestPromoteDeployJob_ExplicitSecretsMap(t *testing.T) {
 func TestPromoteDeployJob_NoSecretsByDefault(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -258,7 +258,7 @@ func TestPromoteDeployJob_NoSecretsByDefault(t *testing.T) {
 func TestPromoteDeployJob_InheritSecrets(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -282,7 +282,7 @@ func TestPromoteDeployJob_InheritSecrets(t *testing.T) {
 func hotfixCfgWithBuildSecrets(secrets *config.SecretsConfig) *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",

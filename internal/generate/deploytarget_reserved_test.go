@@ -37,7 +37,7 @@ func TestDeployTargetReservedFieldsAreByteIdentical(t *testing.T) {
 
 	cfgA := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:         "app",
@@ -49,7 +49,7 @@ func TestDeployTargetReservedFieldsAreByteIdentical(t *testing.T) {
 
 	cfgB := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:         "app",

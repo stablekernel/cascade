@@ -12,7 +12,7 @@ import (
 func rollbackBaseConfig() *TrunkConfig {
 	return &TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: EnvNames("dev", "prod"),
 	}
 }
 

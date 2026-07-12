@@ -153,7 +153,7 @@ func (g *MergeQueueGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("          cascade --dry-run orchestrate setup \\\n")
 	if len(g.config.Environments) > 0 {
 		sb.WriteString("            --config \"$MANIFEST_FILE\" \\\n")
-		fmt.Fprintf(sb, "            --environment %s\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "            --environment %s\n", g.config.Environments[0].Name)
 	} else {
 		sb.WriteString("            --config \"$MANIFEST_FILE\"\n")
 	}

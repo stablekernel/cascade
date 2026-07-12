@@ -24,7 +24,7 @@ func TestReleaseAction_SurfacesPrereleaseMarker(t *testing.T) {
 	// dev populated, uat (the prerelease env) empty: the default crossing into
 	// uat sets ReleaseAction=prerelease.
 	path := writeManifest(t, &config.CICDFile{
-		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "uat", "prod"}},
+		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "uat", "prod")},
 		State: map[string]*config.EnvState{
 			"dev": {SHA: "a1b2c3d4e5f6", Version: "v1.0.0-rc.0"},
 			"uat": {},
@@ -51,7 +51,7 @@ func TestReleaseAction_ErrorsWhenNoCrossing(t *testing.T) {
 	// A normal early hop that does not reach the prerelease env: dev advances to
 	// staging, but staging is not the release boundary, so no marker is emitted.
 	path := writeManifest(t, &config.CICDFile{
-		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "staging", "uat", "prod"}},
+		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "staging", "uat", "prod")},
 		State: map[string]*config.EnvState{
 			"dev":     {SHA: "a1b2c3d4e5f6", Version: "v1.0.0-rc.0"},
 			"staging": {},

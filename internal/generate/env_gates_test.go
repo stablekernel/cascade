@@ -24,12 +24,12 @@ func TestEnvGates_Orchestrate_DeployJob_WithGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -67,7 +67,7 @@ func TestEnvGates_Orchestrate_DeployJob_WithoutGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -104,12 +104,11 @@ func TestEnvGates_Orchestrate_BuildJob_NoEnvironmentKey(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "staging", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "staging-gate"}},
+		},
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"staging": {GHAEnvironment: "staging-gate"},
 		},
 	}
 
@@ -143,12 +142,12 @@ func TestEnvGates_Promote_SingleDeployJob_WithGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -169,7 +168,7 @@ func TestEnvGates_Promote_SingleDeployJob_WithGHAEnvironment(t *testing.T) {
 func TestEnvGates_Promote_SingleDeployJob_WithoutGHAEnvironment(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -202,12 +201,12 @@ func TestEnvGates_Promote_ProdDeployJob_WithGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -236,7 +235,7 @@ func TestEnvGates_Promote_ProdDeployJob_WithGHAEnvironment(t *testing.T) {
 func TestEnvGates_Promote_ProdDeployJob_WithoutGHAEnvironment(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -268,13 +267,14 @@ func TestEnvGates_Promote_ProdDeployJob_OnlyFinalEnvGated(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			// Only the intermediate env has gha_environment; prod does not.
+			{Name: "staging", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "staging-gate"}},
+			{Name: "prod"},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			// Only the intermediate env has gha_environment; prod does not.
-			"staging": {GHAEnvironment: "staging-gate"},
 		},
 	}
 
@@ -303,8 +303,8 @@ func TestEnvGates_Promote_ProdDeployJob_OnlyFinalEnvGated(t *testing.T) {
 // gha_environment value when configured and falls back to the cascade env name.
 func TestEnvGates_Helper_envGHAName(t *testing.T) {
 	cfg := &config.TrunkConfig{
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
 		},
 	}
 
@@ -317,8 +317,8 @@ func TestEnvGates_Helper_envGHAName(t *testing.T) {
 // correctly for configs with and without gha_environment.
 func TestEnvGates_Helper_anyEnvHasGHAConfig(t *testing.T) {
 	withConfig := &config.TrunkConfig{
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
 		},
 	}
 	assert.True(t, anyEnvHasGHAConfig(withConfig), "should return true when at least one env has gha_environment")
@@ -327,8 +327,8 @@ func TestEnvGates_Helper_anyEnvHasGHAConfig(t *testing.T) {
 	assert.False(t, anyEnvHasGHAConfig(withoutConfig), "should return false when no env has gha_environment")
 
 	emptyValue := &config.TrunkConfig{
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: ""},
+		Environments: []config.EnvironmentEntry{
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: ""}},
 		},
 	}
 	assert.False(t, anyEnvHasGHAConfig(emptyValue), "should return false when gha_environment is empty string")

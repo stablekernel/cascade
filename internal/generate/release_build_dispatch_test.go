@@ -62,7 +62,7 @@ func TestPromoteGenerator_ReleaseBuildDispatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Release:      tt.release,
 			}
 

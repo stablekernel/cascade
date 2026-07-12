@@ -19,7 +19,7 @@ func seedHotfixManifest(t *testing.T) string {
 	return writeManifest(t, &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "uat", "prod"},
+			Environments: config.EnvNames("dev", "uat", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"uat": {

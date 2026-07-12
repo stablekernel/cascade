@@ -180,7 +180,7 @@ func (g *PRPreviewGenerator) writeDeployDryRunStep(sb *strings.Builder) {
 	if len(g.config.Environments) > 0 {
 		// Target the first environment so version calculation resolves; the
 		// preview is read-only regardless of which environment it reports on.
-		fmt.Fprintf(sb, "            --environment %s \\\n", g.config.Environments[0])
+		fmt.Fprintf(sb, "            --environment %s \\\n", g.config.Environments[0].Name)
 	}
 	sb.WriteString("            --sha \"$HEAD_SHA\" \\\n")
 	sb.WriteString("            > cascade-plan.json\n")

@@ -177,7 +177,7 @@ func TestCalculateVersion_EnvironmentNotFound(t *testing.T) {
 	o := &Orchestrator{
 		environment: "ghost",
 		cicdFile: &config.CICDFile{
-			Config: &config.TrunkConfig{Environments: []string{"dev", "prod"}},
+			Config: &config.TrunkConfig{Environments: config.EnvNames("dev", "prod")},
 		},
 	}
 
@@ -198,7 +198,7 @@ func TestCalculateVersion_MultiEnv(t *testing.T) {
 		environment: "dev",
 		baseDir:     repoDir,
 		cicdFile: &config.CICDFile{
-			Config: &config.TrunkConfig{Environments: []string{"dev", "prod"}},
+			Config: &config.TrunkConfig{Environments: config.EnvNames("dev", "prod")},
 			State: map[string]*config.EnvState{
 				"dev":  {Version: "v1.0.0-rc.0"},
 				"prod": {Version: "v0.9.0", SHA: head},

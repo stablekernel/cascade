@@ -18,7 +18,7 @@ func TestVersionOverridesReservedFieldIsByteIdentical(t *testing.T) {
 	// Case A: reserved version_overrides pointer populated.
 	cfgA := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -35,7 +35,7 @@ func TestVersionOverridesReservedFieldIsByteIdentical(t *testing.T) {
 	// Case B: same base fields, reserved version_overrides block absent.
 	cfgB := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",

@@ -9,7 +9,7 @@ import "testing"
 func baseComponentConfig() *TrunkConfig {
 	return &TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: EnvNames("dev", "prod"),
 		ActionPins:   map[string]string{"actions/checkout": "v4"},
 		Git:          &GitConfig{UserName: "shared-bot", UserEmail: "bot@example.com"},
 		Components: map[string]ComponentConfig{
@@ -37,12 +37,12 @@ func TestResolveComponent_NoSiblingBleed(t *testing.T) {
 	}
 
 	// Slice: overwrite api's inherited environments in place.
-	api.Config.Environments[0] = "MUTATED"
-	if web.Config.Environments[0] != "dev" {
-		t.Errorf("slice bleed: web env[0] = %q, want dev", web.Config.Environments[0])
+	api.Config.Environments[0].Name = "MUTATED"
+	if web.Config.Environments[0].Name != "dev" {
+		t.Errorf("slice bleed: web env[0] = %q, want dev", web.Config.Environments[0].Name)
 	}
-	if c.Environments[0] != "dev" {
-		t.Errorf("slice bleed into source: c env[0] = %q, want dev", c.Environments[0])
+	if c.Environments[0].Name != "dev" {
+		t.Errorf("slice bleed into source: c env[0] = %q, want dev", c.Environments[0].Name)
 	}
 
 	// Map: mutate api's inherited action pins.

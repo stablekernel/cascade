@@ -33,14 +33,13 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"production"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "production", EnvironmentConfig: config.EnvironmentConfig{EnvironmentURL: "https://app.example.com"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
 		Deployments: &config.DeploymentsConfig{Enabled: boolPtr(true)},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"production": {EnvironmentURL: "https://app.example.com"},
-		},
 	}
 	return cfg, tmpDir
 }

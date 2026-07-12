@@ -136,7 +136,7 @@ func TestCustomChangelog_Actionlint(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Changelog:    &config.ChangelogConfig{Workflow: ".github/workflows/custom-changelog.yaml", Contributors: boolPtr(true)},
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},

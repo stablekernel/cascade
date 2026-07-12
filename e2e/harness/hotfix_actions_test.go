@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/stablekernel/cascade/internal/config"
 )
 
 // TestParseHotfixScenario verifies the new step actions, divergence expectation
@@ -389,7 +391,7 @@ func TestRunnerHotfixActionsNoHarness(t *testing.T) {
 		t.Run(step.Action, func(t *testing.T) {
 			r := NewRunner(t, nil)
 			step := step
-			err := r.executeStep(ctx, &step, Config{Environments: []string{"dev", "prod"}})
+			err := r.executeStep(ctx, &step, Config{Environments: config.EnvNames("dev", "prod")})
 			assert.NoError(t, err)
 		})
 	}

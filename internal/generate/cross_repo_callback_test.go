@@ -25,7 +25,7 @@ func TestCrossRepoBuildCallback_GeneratesWithoutLocalRead(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging", "prod"},
+		Environments: config.EnvNames("staging", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build-app.yaml"},
 			{Name: "sharedlib", Workflow: crossRepoWorkflow},
@@ -67,7 +67,7 @@ func TestCrossRepoCallback_OperatorInputsPassThrough(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging"},
+		Environments: config.EnvNames("staging"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "sharedlib",

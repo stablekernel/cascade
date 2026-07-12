@@ -49,7 +49,7 @@ func TestFinalizeRunsOnCancelledPredecessor(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",
@@ -77,7 +77,7 @@ func TestFailureCheckMatchesCancelled(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:      "app",
@@ -107,7 +107,7 @@ func TestOnFailureContinueEmitsContinueOnError(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:      "app",
@@ -147,7 +147,7 @@ func TestDefaultCallbackOmitsContinueOnError(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",

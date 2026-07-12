@@ -9,7 +9,7 @@ import (
 )
 
 func TestGetPromotionModes(t *testing.T) {
-	cfg := &TrunkConfig{Environments: []string{"dev", "test", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "test", "prod")}
 	modes := cfg.GetPromotionModes()
 
 	assert.Len(t, modes, 2)
@@ -22,7 +22,7 @@ func TestGetCascadeTargets(t *testing.T) {
 	// For [dev, test, uat, prod] (4 envs):
 	// - Direct env-to-env: dev-to-test, dev-to-uat, dev-to-prod, test-to-uat, test-to-prod, uat-to-prod = 6
 
-	cfg := &TrunkConfig{Environments: []string{"dev", "test", "uat", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "test", "uat", "prod")}
 	options := cfg.GetCascadeTargets()
 
 	// 6 direct promotions
@@ -46,7 +46,7 @@ func TestGetAllDirectPromotionOptions(t *testing.T) {
 	// - uat (second-from-top) = prerelease env
 	// - prod (top) = release env
 
-	cfg := &TrunkConfig{Environments: []string{"dev", "test", "uat", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "test", "uat", "prod")}
 	options := cfg.GetAllDirectPromotionOptions()
 
 	assert.Len(t, options, 6)
@@ -90,7 +90,7 @@ func TestGetAllDirectPromotionOptions_TwoEnvs(t *testing.T) {
 	//
 	// With 2 envs, prod is both prerelease AND release env (position-based)
 
-	cfg := &TrunkConfig{Environments: []string{"dev", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "prod")}
 	options := cfg.GetAllDirectPromotionOptions()
 
 	assert.Len(t, options, 1)
@@ -103,28 +103,28 @@ func TestGetAllDirectPromotionOptions_TwoEnvs(t *testing.T) {
 
 func TestGetAllDirectPromotionOptions_SingleEnv(t *testing.T) {
 	// For 1 env, returns nil (no promotions possible)
-	cfg := &TrunkConfig{Environments: []string{"prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("prod")}
 	options := cfg.GetAllDirectPromotionOptions()
 
 	assert.Nil(t, options)
 }
 
 func TestIsSingleEnvironment(t *testing.T) {
-	single := &TrunkConfig{Environments: []string{"prod"}}
+	single := &TrunkConfig{Environments: EnvNames("prod")}
 	assert.True(t, single.IsSingleEnvironment())
 
-	two := &TrunkConfig{Environments: []string{"dev", "prod"}}
+	two := &TrunkConfig{Environments: EnvNames("dev", "prod")}
 	assert.False(t, two.IsSingleEnvironment())
 
-	four := &TrunkConfig{Environments: []string{"dev", "test", "uat", "prod"}}
+	four := &TrunkConfig{Environments: EnvNames("dev", "test", "uat", "prod")}
 	assert.False(t, four.IsSingleEnvironment())
 
-	empty := &TrunkConfig{Environments: []string{}}
+	empty := &TrunkConfig{Environments: EnvNames()}
 	assert.False(t, empty.IsSingleEnvironment())
 }
 
 func TestIsFirstEnvironment(t *testing.T) {
-	cfg := &TrunkConfig{Environments: []string{"dev", "staging", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "staging", "prod")}
 
 	assert.True(t, cfg.IsFirstEnvironment("dev"))
 	assert.False(t, cfg.IsFirstEnvironment("staging"))
@@ -137,7 +137,7 @@ func TestIsFirstEnvironment(t *testing.T) {
 }
 
 func TestIsLastEnvironment(t *testing.T) {
-	cfg := &TrunkConfig{Environments: []string{"dev", "staging", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "staging", "prod")}
 
 	assert.False(t, cfg.IsLastEnvironment("dev"))
 	assert.False(t, cfg.IsLastEnvironment("staging"))
@@ -150,7 +150,7 @@ func TestIsLastEnvironment(t *testing.T) {
 }
 
 func TestGetEnvironmentIndex(t *testing.T) {
-	cfg := &TrunkConfig{Environments: []string{"dev", "staging", "uat", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "staging", "uat", "prod")}
 
 	assert.Equal(t, 0, cfg.GetEnvironmentIndex("dev"))
 	assert.Equal(t, 1, cfg.GetEnvironmentIndex("staging"))
@@ -160,7 +160,7 @@ func TestGetEnvironmentIndex(t *testing.T) {
 }
 
 func TestGetNextEnvironment(t *testing.T) {
-	cfg := &TrunkConfig{Environments: []string{"dev", "staging", "uat", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "staging", "uat", "prod")}
 
 	assert.Equal(t, "staging", cfg.GetNextEnvironment("dev"))
 	assert.Equal(t, "uat", cfg.GetNextEnvironment("staging"))
@@ -170,7 +170,7 @@ func TestGetNextEnvironment(t *testing.T) {
 }
 
 func TestGetEnvironmentsInRange(t *testing.T) {
-	cfg := &TrunkConfig{Environments: []string{"dev", "staging", "uat", "perf", "prod"}}
+	cfg := &TrunkConfig{Environments: EnvNames("dev", "staging", "uat", "perf", "prod")}
 
 	tests := []struct {
 		name     string
@@ -1062,7 +1062,7 @@ func TestComponentsRoundTrip(t *testing.T) {
 		Config: &TrunkConfig{
 			SchemaVersion: 1,
 			TrunkBranch:   "main",
-			Environments:  []string{"dev", "prod"},
+			Environments:  EnvNames("dev", "prod"),
 			Components: map[string]ComponentConfig{
 				"api": {Path: "services/api", TagGrammar: &TagGrammarConfig{Prefix: strptr("api-v")}},
 			},

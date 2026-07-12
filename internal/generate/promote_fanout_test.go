@@ -15,7 +15,7 @@ func strptr(s string) *string { return &s }
 func promoteMultiComponentConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Components: map[string]config.ComponentConfig{
 			"api": {Path: "services/api", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("api-")}},
 			"web": {Path: "services/web", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("web-")}},
@@ -28,7 +28,7 @@ func promoteMultiComponentConfig() *config.TrunkConfig {
 // at the output path whose content is byte-identical to a directly built promote
 // generator, with no component-namespaced name and no --component flag.
 func TestPromoteTargets_SingleComponent_ByteIdentical(t *testing.T) {
-	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}}
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "prod")}
 
 	targets, err := promoteTargets(cfg, "", ".github/workflows/promote.yaml", nil)
 	if err != nil {

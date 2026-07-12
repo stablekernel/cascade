@@ -12,7 +12,7 @@ import (
 func extraTriggersBaseConfig() *TrunkConfig {
 	return &TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: EnvNames("dev", "prod"),
 	}
 }
 

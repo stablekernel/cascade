@@ -25,7 +25,7 @@ func seedManifest(t *testing.T) string {
 	cicd := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "uat", "prod"},
+			Environments: config.EnvNames("dev", "uat", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"dev": {
@@ -103,7 +103,7 @@ func TestEngine_Simulate_PromoteCascade(t *testing.T) {
 	// dev populated, uat and prod empty: a cascade to prod carries dev's state
 	// through every intermediate hop atomically.
 	path := writeManifest(t, &config.CICDFile{
-		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "uat", "prod"}},
+		Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "uat", "prod")},
 		State: map[string]*config.EnvState{
 			"dev":  {SHA: "a1b2c3d4e5f6", Version: "v1.2.0-rc.1"},
 			"uat":  {},

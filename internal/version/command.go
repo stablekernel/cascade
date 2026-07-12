@@ -123,7 +123,8 @@ Examples:
 // out unchanged.
 func singleComponentVersionInputs(cfg *config.TrunkConfig, configPath, environment, baseSHA, headSHA string) (currentDevVersion, nextEnvVersion string, commits []changelog.ConventionalCommit, calc *Calculator, err error) {
 	envIndex := -1
-	for i, env := range cfg.Environments {
+	envNames := cfg.EnvironmentNames()
+	for i, env := range envNames {
 		if env == environment {
 			envIndex = i
 			break
@@ -139,8 +140,8 @@ func singleComponentVersionInputs(cfg *config.TrunkConfig, configPath, environme
 		if state, ok := cicdFile.State[environment]; ok {
 			currentDevVersion = state.Version
 		}
-		if envIndex+1 < len(cfg.Environments) {
-			nextEnv := cfg.Environments[envIndex+1]
+		if envIndex+1 < len(envNames) {
+			nextEnv := envNames[envIndex+1]
 			if state, ok := cicdFile.State[nextEnv]; ok {
 				nextEnvVersion = state.Version
 				nextEnvSHA = state.SHA

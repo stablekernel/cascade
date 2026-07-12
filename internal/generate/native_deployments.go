@@ -92,9 +92,9 @@ func writeNativeDeploymentSteps(sb *strings.Builder, cfg *config.TrunkConfig, en
 // empty default. Entries are emitted in sorted order for byte-stable output.
 func writeEnvironmentURLCase(sb *strings.Builder, cfg *config.TrunkConfig, body string) {
 	urls := make(map[string]string)
-	for name, ec := range cfg.EnvironmentConfig {
-		if ec.EnvironmentURL != "" {
-			urls[name] = ec.EnvironmentURL
+	for _, entry := range cfg.Environments {
+		if entry.EnvironmentURL != "" {
+			urls[entry.Name] = entry.EnvironmentURL
 		}
 	}
 	sb.WriteString(body + "  environment_url=\"\"\n")

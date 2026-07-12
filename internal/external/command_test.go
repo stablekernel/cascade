@@ -68,7 +68,7 @@ other_key: preserved
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"dev": {
