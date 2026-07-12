@@ -1,6 +1,7 @@
 package simulate
 
 import (
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -39,7 +40,15 @@ func normalizeGitRemote(raw string) string {
 
 	switch {
 	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "http://"):
-		return raw
+		// Strip any embedded userinfo (for example a token-carrying
+		// x-access-token:<token>@host on a CI checkout remote) so a
+		// credential never survives into the printed compare URL.
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return ""
+		}
+		u.User = nil
+		return u.Scheme + "://" + u.Host + u.Path
 	case strings.HasPrefix(raw, "ssh://"):
 		rest := strings.TrimPrefix(raw, "ssh://")
 		if at := strings.Index(rest, "@"); at >= 0 {

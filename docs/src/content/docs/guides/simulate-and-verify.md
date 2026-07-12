@@ -17,16 +17,19 @@ cascade simulate promote
 Simulating: promote (mode=default)
 State diff:
   uat:
-    version:  (none) -> v1.2.0-rc.1
-    sha:      (none) -> a1b2c3d
+    version:  v1.1.0 -> v1.2.0-rc.1
+    sha:      a1b2c3d -> 9f8e7d6
+    diff:     https://github.com/acme/app/compare/a1b2c3d...9f8e7d6
 Effects (in order):
   1. deploy uat from dev
-  2. write state uat (sha a1b2c3d, version v1.2.0-rc.1)
-  3. release prerelease v1.2.0 (rc v1.2.0-rc.1, sha a1b2c3d)
+  2. write state uat (sha 9f8e7d6, version v1.2.0-rc.1)
+  3. release prerelease v1.2.0 (rc v1.2.0-rc.1, sha 9f8e7d6)
   4. skipped promote prod (no change required)
 
 Note: build and deploy results are simulated, not executed. cascade validates orchestration, not your build and deploy scripts.
 ```
+
+Here `uat` already held a prior sha, so the diff moves it between two known shas and the `diff:` line links a compare view; a first deploy into an empty environment (`(none) -> <sha>`) has no prior sha to compare, so that line is omitted.
 
 The other three actions follow the same shape:
 
