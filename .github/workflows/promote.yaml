@@ -10,7 +10,7 @@
 #              All intermediate environments updated with same artifact
 #              Fails entirely if any step fails (no partial state)
 #
-# Release states (based on position):
+# Release states (role, or position when no role is set):
 #
 # Breaking changes:
 #   Breaking changes block at: pre-release → release AND release → prod
