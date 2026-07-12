@@ -190,8 +190,8 @@ func TestComponentReapOptions_ThreadsStrictComponentGrammar(t *testing.T) {
     components:
       api:
         path: services/api
-        tag_prefix: api-
         tag_grammar:
+          prefix: api-
           prerelease_token: beta
 `
 	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {

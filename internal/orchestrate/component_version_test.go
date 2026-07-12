@@ -51,10 +51,12 @@ func componentRepo(t *testing.T) string {
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
 `
 	if err := os.WriteFile(configPath, []byte(manifest), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)

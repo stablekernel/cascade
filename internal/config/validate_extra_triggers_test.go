@@ -33,8 +33,8 @@ func TestValidate_ExtraTriggersMergeGroup_PerComponentRejected(t *testing.T) {
 	cfg := extraTriggersBaseConfig()
 	cfg.Components = map[string]ComponentConfig{
 		"api": {
-			Path:      "services/api",
-			TagPrefix: "api-v",
+			Path:       "services/api",
+			TagGrammar: &TagGrammarConfig{Prefix: strptr("api-v")},
 			ExtraTriggers: &ExtraTriggers{
 				MergeGroup: &MergeGroupTrigger{},
 			},

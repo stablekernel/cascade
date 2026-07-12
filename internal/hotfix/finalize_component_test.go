@@ -23,10 +23,12 @@ const hotfixComponentManifest = `ci:
     components:
       api:
         path: api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
   state:
     components:
       api:
@@ -122,10 +124,12 @@ func TestHotfixFinalize_ConcurrentFinalize_SiblingSurvivesThrough409Reapply(t *t
     components:
       api:
         path: api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
   state:
     components:
       api:

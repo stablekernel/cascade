@@ -16,9 +16,19 @@ description: |
   per-component orchestrate workflow, so this scenario proves the generated wiring
   and path isolation rather than executing the per-component version calculation.
 
+  Each component declares only tag_grammar.prefix, its required and distinct tag
+  namespace. The shared prerelease_token and prerelease_separator are set once at
+  the top level, and each component inherits them under uniform deep-merge rather
+  than dropping them: setting only the prefix never clears the sibling grammar
+  sub-fields. The drift-free regenerate roundtrip proves the merged manifest
+  generates deterministically.
+
 config:
   trunk_branch: main
   environments: [dev, prod]
+  tag_grammar:
+    prerelease_token: rc
+    prerelease_separator: "-"
   builds:
     - name: app
       workflow: build.yaml
@@ -30,10 +40,12 @@ config:
   components:
     api:
       path: services/api
-      tag_prefix: api-
+      tag_grammar:
+        prefix: api-
     web:
       path: services/web
-      tag_prefix: web-
+      tag_grammar:
+        prefix: web-
 
 steps:
   - name: "Seed both component subtrees"

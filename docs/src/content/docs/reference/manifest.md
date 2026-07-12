@@ -108,8 +108,8 @@ The `environments` list is fully configurable. cascade attaches no meaning to sp
 |-------|--------|------|---------|-------------|
 | `triggers` | emitted | list | - | Global path patterns that activate orchestration. See [Trigger patterns](#trigger-patterns). |
 | `release_trigger` | emitted | string | `push` | How orchestrate fires. `push` keeps push-on-trunk plus `workflow_dispatch`; `dispatch` drops `push:` so releases run only on manual `workflow_dispatch`. |
-| `tag_prefix` | emitted | string | `v` | Version tag prefix. |
 
+The version tag prefix lives on [`tag_grammar.prefix`](#tag_grammar) and defaults to `v`.
 Workflow-level trigger types beyond `push` are set under [`extra_triggers`](#extra_triggers).
 
 ### tag_grammar
@@ -137,11 +137,9 @@ ci:
 | `dryrun_token` | emitted | string | `dryrun` | Token that marks a rehearsal tag. |
 | `strict_prefix` | emitted | bool | false | When false, reads accept any alphabetic prefix so historical and foreign-cased tags still parse. When true, reads require the exact configured prefix. |
 
-**Relationship to `tag_prefix`.** `tag_prefix` still sets the prefix on its own when
-`tag_grammar` is absent. When both `tag_prefix` and `tag_grammar.prefix` are set,
-`tag_grammar.prefix` wins, and `cascade lint` emits a non-fatal warning naming both
-keys so the redundancy is visible. Resolution is well defined either way; the warning is
-advisory only.
+**The prefix.** `tag_grammar.prefix` is the one place the version tag prefix is set. When
+`tag_grammar` is absent, or the block omits `prefix`, the prefix defaults to `v`, so an
+existing repository that never configured a grammar keeps its `vX.Y.Z` tags unchanged.
 
 **Reading pre-existing tags.** On read, cascade tolerates a pre-existing foreign pre-release
 shape (for example `beta.1` or `rc1`) and build metadata (for example `+build.5`) so a
@@ -785,14 +783,16 @@ ci:
     components:
       api:
         path: api/
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
         builds:
           - name: api
             workflow: .github/workflows/build-api.yaml
             triggers: ["api/**"]
       web:
         path: web/
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
         environments: [dev, prod]
 ```
 
@@ -803,7 +803,7 @@ any inheritable field it overrides.
 | Field | Status | Type | Required | Description |
 |-------|--------|------|----------|-------------|
 | `path` | emitted (behavior) | string | Yes | The subtree this component owns. Relative, with no `..` segments. Scopes the component's version commit walk and its default push-paths trigger. |
-| `tag_prefix` | emitted (behavior) | string | Yes | The component's version-tag prefix. Must be distinct from every other component's prefix so their tag namespaces never collide. |
+| `tag_grammar.prefix` | emitted (behavior) | string | Yes | The component's version-tag prefix, set inside the component's `tag_grammar` block. Must be distinct from every other component's prefix so their tag namespaces never collide. |
 | `extra_paths` | emitted (behavior) | list | No | Additional globs beyond `path` that both fire this component's orchestrate workflow and count toward its version bump. Use it when a component depends on a shared library or a root build file outside its own subtree. See [Shared paths](#shared-paths). |
 
 ### Inheritable overrides
@@ -890,12 +890,14 @@ ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
         extra_paths:
           - libs/proto/**  # only api depends on the proto package
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
 ```
 
 Here a commit under `libs/common/` bumps both `api` and `web`; a commit under
@@ -906,9 +908,9 @@ just each component's `path`, byte-identical to before the fields existed.
 
 `cascade lint` rejects a `components:` block that breaks isolation:
 
-- Each component must set `path` (relative, no `..`) and `tag_prefix`.
+- Each component must set `path` (relative, no `..`) and `tag_grammar.prefix`.
 - Component names must be identifier-safe.
-- Two components must not share a `tag_prefix`; a collision is a parse error, not
+- Two components must not share a `tag_grammar.prefix`; a collision is a parse error, not
   a silently shared namespace.
 - A top-level `concurrency.group` must not be set when components are declared,
   and a component may not set its own `concurrency.group`.

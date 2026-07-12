@@ -7,6 +7,8 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
+func strptr(s string) *string { return &s }
+
 // promoteMultiComponentConfig returns a two-component, multi-environment manifest
 // suitable for exercising the promote fan-out. It has no builds or deploys, so
 // generation reads no stub files from disk.
@@ -15,8 +17,8 @@ func promoteMultiComponentConfig() *config.TrunkConfig {
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
 		Components: map[string]config.ComponentConfig{
-			"api": {Path: "services/api", TagPrefix: "api-"},
-			"web": {Path: "services/web", TagPrefix: "web-"},
+			"api": {Path: "services/api", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("api-")}},
+			"web": {Path: "services/web", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("web-")}},
 		},
 	}
 }

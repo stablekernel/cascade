@@ -28,8 +28,9 @@ A component is a named subtree of the repository that versions and ships on its
 own. Each component declares two required fields:
 
 - `path`, the subtree the component owns (for example `api/` or `web/`).
-- `tag_prefix`, the prefix for that component's version tags. Each component needs
-  a distinct prefix so their tag namespaces never overlap.
+- `tag_grammar.prefix`, the prefix for that component's version tags, set inside the
+  component's `tag_grammar` block. Each component needs a distinct prefix so their tag
+  namespaces never overlap.
 
 Everything else a component needs, such as its builds, deploys, environment
 ladder, or breaking-change policy, is inherited from the shared top-level config
@@ -63,7 +64,8 @@ ci:
     components:
       api:
         path: api/
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
         builds:
           - name: api
             workflow: .github/workflows/build-api.yaml
@@ -75,7 +77,8 @@ ci:
 
       web:
         path: web/
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
         # web ships to a shorter ladder than the shared default.
         environments: [dev, prod]
         builds:
@@ -100,7 +103,7 @@ reference](/cascade/reference/manifest/#components).
 Every component computes its own version. Cascade scopes the commit walk to the
 component's `path`, so only changes under `api/` bump the `api` version and only
 changes under `web/` bump the `web` version. Each component reads and writes tags
-under its own `tag_prefix`, and that namespace is strict: `api-1.2.3` and
+under its own `tag_grammar.prefix`, and that namespace is strict: `api-1.2.3` and
 `web-1.2.3` never cross-match, and a prefix that is a substring of another (such as
 `api-` against `api-beta-`) cannot collide either.
 
@@ -129,12 +132,14 @@ ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
         extra_paths:
           - libs/proto/**  # only api depends on the proto package
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
 ```
 
 `extra_paths` widens one component's scope; top-level `shared_paths` widens every
@@ -195,7 +200,7 @@ resolved ladder.
 ## The single-component default is unchanged
 
 If you never write a `components:` block, none of the above applies. The whole
-repository is one unit, the top-level `tag_prefix` is the one tag namespace, the
+repository is one unit, the top-level `tag_grammar.prefix` is the one tag namespace, the
 top-level `environments` is the one ladder, and the generated workflows, state
 serialization, version lines, and tags are byte-identical to a pre-component
 setup. Components are strictly additive: adopt them when you have a second thing to

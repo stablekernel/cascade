@@ -533,21 +533,21 @@ func (m *Manager) create(opts Options) (*Result, error) {
 }
 
 // rcTagPattern matches an RC tag of the form <prefix><major>.<minor>.<patch>-rc.<n>.
-// The prefix is captured permissively so that any configured tag_prefix works
+// The prefix is captured permissively so that any configured tag_grammar.prefix works
 // (the default "v", a custom value like "rel-", or an empty prefix). The base
 // version capture includes the prefix, so callers can compare it directly
 // against the published release tag without reconstructing the prefix.
 var rcTagPattern = regexp.MustCompile(`^(.*\d+\.\d+\.\d+)-rc\.(\d+)$`)
 
 // isRCTag checks if a tag is a release candidate (has -rc.N suffix). It is
-// prefix-aware: it matches the default "v", a custom tag_prefix, or no prefix.
+// prefix-aware: it matches the default "v", a custom tag_grammar.prefix, or no prefix.
 func isRCTag(tag string) bool {
 	_, _, ok := parseRCTag(tag)
 	return ok
 }
 
 // parseRCTag extracts the base version (including its tag prefix) and RC number
-// from an RC tag. It is prefix-aware so that custom tag_prefix values are
+// from an RC tag. It is prefix-aware so that custom tag_grammar.prefix values are
 // handled, not just the default "v":
 //
 //	"v1.3.0-rc.3"     -> ("v1.3.0", 3, true)

@@ -72,16 +72,20 @@ func RollbackConcurrencyGroup(name string) string {
 	return fmt.Sprintf("rollback-%s", name)
 }
 
-// GetComponentTagPrefix returns the declared tag_prefix for the named component,
-// the tag namespace that component's versions and tags live under. It errors when
-// the component is not declared. Version and tag discovery use this so a
-// component's scan is scoped to its own namespace and never a sibling's.
+// GetComponentTagPrefix returns the declared tag_grammar.prefix for the named
+// component, the tag namespace that component's versions and tags live under. It
+// errors when the component is not declared. Version and tag discovery use this
+// so a component's scan is scoped to its own namespace and never a sibling's.
+// validateComponents guarantees a declared component carries a non-empty prefix.
 func (c *TrunkConfig) GetComponentTagPrefix(name string) (string, error) {
 	comp, ok := c.Components[name]
 	if !ok {
 		return "", fmt.Errorf("component %q is not declared", name)
 	}
-	return comp.TagPrefix, nil
+	if comp.TagGrammar == nil || comp.TagGrammar.Prefix == nil {
+		return "", nil
+	}
+	return *comp.TagGrammar.Prefix, nil
 }
 
 // ResolvedComponent is the effective configuration for one component: its
@@ -104,7 +108,7 @@ type ResolvedComponent struct {
 
 // ResolveComponent returns the effective configuration for the named component:
 // a copy of the shared top-level defaults with every inheritable field the
-// component overrides applied, the component's required tag prefix set, and a
+// component overrides applied (including its required tag_grammar.prefix), and a
 // concurrency group derived per component so no two components collapse onto one
 // serialization lane. Global (top-level-only) fields are carried through from
 // the shared config unchanged, and the effective config declares no nested
@@ -133,16 +137,14 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	// An override the component leaves unset keeps the inherited value; a scalar
 	// or slice the component sets replaces the inherited one; a nested block (or a
 	// keyed map such as environment_config) merges key-by-key so a partial
-	// override never drops the inherited siblings. The one axis that stays a union
-	// rather than a merge is extra_paths/shared_paths, resolved separately below.
+	// override never drops the inherited siblings. The component's required tag
+	// namespace (tag_grammar.prefix) rides this merge: the block folds onto the
+	// shared tag_grammar so a component setting only prefix keeps the inherited
+	// sibling sub-fields. The one axis that stays a union rather than a merge is
+	// extra_paths/shared_paths, resolved separately below.
 	if err := deepMergeComponentOverrides(eff, comp); err != nil {
 		return nil, err
 	}
-
-	// Required per-component tag namespace. deepMergeComponentOverrides already
-	// carries comp.TagPrefix through; set it explicitly so the required namespace
-	// is unmistakable and independent of the merge path.
-	eff.TagPrefix = comp.TagPrefix
 
 	// Concurrency: cancel_in_progress is inheritable, the group is derived per
 	// component. Start from the shared cancel policy, let the component override
@@ -312,10 +314,11 @@ func mergeJSONTrees(base, override map[string]any) {
 }
 
 // TagGrammarSpec returns the tag grammar a component reads and emits its versions
-// under: the component's resolved grammar (carrying its required tag_prefix and
-// any inherited or overridden tag_grammar block) with StrictPrefix forced true.
+// under: the component's resolved grammar (carrying its required
+// tag_grammar.prefix and any inherited or overridden sibling sub-fields) with
+// StrictPrefix forced true.
 // The strict flip is the HLD Section 5 isolation invariant: a component with a
-// declared tag_prefix parses its tags literally so api-1.2.3 and web-1.2.3 never
+// declared prefix parses its tags literally so api-1.2.3 and web-1.2.3 never
 // cross-match, and a nested-substring prefix (api- vs api-beta-) cannot collide
 // either. It is forced on regardless of whether a tag_grammar block set
 // strict_prefix, because the per-component namespace boundary is not optional. The

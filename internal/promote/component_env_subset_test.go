@@ -21,11 +21,13 @@ const componentEnvSubsetManifest = `ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
         environments: [dev, staging]
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
   state:
     components:
       api:

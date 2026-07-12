@@ -75,7 +75,8 @@ func TestValidate_AcceptsKnownTopLevelKeys(t *testing.T) {
   config:
     trunk_branch: main
     environments: [dev, prod]
-    tag_prefix: v
+    tag_grammar:
+      prefix: v
 `
 	cfg, err := Parse(writeStrictManifest(t, body))
 	if err != nil {

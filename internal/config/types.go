@@ -131,7 +131,6 @@ type TrunkConfig struct {
 	// version tag is emitted (today's behavior). The bump automation peels the
 	// annotated cli_version tag to its commit and writes this.
 	CLIVersionSHA string `yaml:"cli_version_sha,omitempty" json:"cli_version_sha,omitempty"`
-	TagPrefix     string   `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`       // Version tag prefix (default: "v")
 	// TagGrammar optionally reshapes the release tag grammar (prefix, pre-release
 	// token and separator, dryrun token). Absent by default; when absent the
 	// historical grammar is used. Additive and scoped to tag shape only.
@@ -332,12 +331,11 @@ func (c *TrunkConfig) GetCLIVersion() string {
 	}
 }
 
-// GetTagPrefix returns the configured tag prefix or "v" if not specified
+// GetTagPrefix returns the configured tag prefix, or "v" when none is set. The
+// prefix lives on tag_grammar.prefix; ResolveTagGrammar folds in the historical
+// default, so an unset prefix resolves to "v".
 func (c *TrunkConfig) GetTagPrefix() string {
-	if c.TagPrefix == "" {
-		return "v"
-	}
-	return c.TagPrefix
+	return c.ResolveTagGrammar().Prefix
 }
 
 // AllowsBreakingChanges reports whether the breaking-change promote gate is
@@ -1260,8 +1258,8 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 //
 // Fields fall into three kinds:
 //
-//   - Required: Path and TagPrefix, which have no sensible shared value and must
-//     be set on every component.
+//   - Required: Path and tag_grammar.prefix, which have no sensible shared value
+//     and must be set on every component.
 //   - Inheritable overrides: the remaining fields below. A nil pointer, nil map,
 //     nil slice, or empty string means the component inherits the shared
 //     top-level default; a set value overrides it for that component only. Use
@@ -1276,11 +1274,12 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 type ComponentConfig struct {
 	// Path is the subtree this component owns within the repo. Required.
 	Path string `yaml:"path,omitempty" json:"path,omitempty"`
-	// TagPrefix is the per-component version tag prefix. Required, and distinct
-	// across components so their tag namespaces never collide.
-	TagPrefix string `yaml:"tag_prefix,omitempty" json:"tag_prefix,omitempty"`
 
-	// Inheritable overrides. Each defaults to the shared top-level value.
+	// TagGrammar reshapes this component's release tag grammar. Its prefix is the
+	// per-component version tag namespace: required, and distinct across
+	// components so their tag namespaces never collide. Sibling sub-fields
+	// (prerelease_token, separator, dryrun_token) deep-merge onto the shared
+	// top-level tag_grammar, so a component setting only prefix inherits the rest.
 	TagGrammar           *TagGrammarConfig            `yaml:"tag_grammar,omitempty" json:"tag_grammar,omitempty"`
 	Environments         []string                     `yaml:"environments,omitempty" json:"environments,omitempty"`
 	ReleaseTrigger       string                       `yaml:"release_trigger,omitempty" json:"release_trigger,omitempty"`

@@ -60,17 +60,18 @@ func TestConfigReusesTrunkConfig(t *testing.T) {
 // TestConfigCarriesFieldWithoutHarnessEdit proves the regression the reuse
 // closes: a manifest field that the retired hand-mirrored struct never listed is
 // now parsed from a scenario and marshaled back into the generated ci.config
-// block with no harness change. tag_prefix stands in for any such field. It was
-// absent from the old parallel struct, so before the reuse it was silently
+// block with no harness change. tag_grammar.prefix stands in for any such field.
+// It was absent from the old parallel struct, so before the reuse it was silently
 // dropped; now it round-trips because the harness marshals the CLI's own type.
 func TestConfigCarriesFieldWithoutHarnessEdit(t *testing.T) {
 	const scenarioYAML = `
 name: "Field reach"
-description: "tag_prefix survives the marshal round-trip"
+description: "tag_grammar.prefix survives the marshal round-trip"
 setup:
   config:
     trunk_branch: main
-    tag_prefix: component-
+    tag_grammar:
+      prefix: component-
     environments:
       - dev
 trigger:
@@ -82,7 +83,7 @@ expect:
 `
 	scenario, err := ParseScenario([]byte(scenarioYAML))
 	require.NoError(t, err)
-	require.Equal(t, "component-", scenario.Setup.Config.TagPrefix,
+	require.Equal(t, "component-", scenario.Setup.Config.GetTagPrefix(),
 		"scenario YAML must parse the field the old struct dropped")
 
 	// Mirror how the harness writes manifest.yaml: the config under ci.config.
@@ -93,7 +94,7 @@ expect:
 	}
 	out, err := yaml.Marshal(manifest)
 	require.NoError(t, err)
-	assert.Contains(t, string(out), "tag_prefix: component-",
+	assert.Contains(t, string(out), "prefix: component-",
 		"the field must reach the generated manifest without a harness edit")
 
 	// The config block must parse back into the CLI's type unchanged, so the
@@ -102,7 +103,7 @@ expect:
 	require.NoError(t, err)
 	var roundTrip config.TrunkConfig
 	require.NoError(t, yaml.Unmarshal(configOut, &roundTrip))
-	assert.Equal(t, "component-", roundTrip.TagPrefix)
+	assert.Equal(t, "component-", roundTrip.GetTagPrefix())
 }
 
 func TestDiscoverScenarios(t *testing.T) {

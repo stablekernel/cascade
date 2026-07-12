@@ -52,7 +52,8 @@ const fullSurfaceManifest = `ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-v
+        tag_grammar:
+          prefix: api-v
     validate:
       workflow: .github/workflows/validate.yaml
       supports_dry_run: true
