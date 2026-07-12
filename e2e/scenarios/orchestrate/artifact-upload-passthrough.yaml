@@ -1,0 +1,53 @@
+name: "Artifact Upload Passthrough Emits Upload And Download Steps"
+description: |
+  Exercises the artifact_upload passthrough on build callbacks: a compile build
+  uploads its output and a dependent sign build downloads it, both within a
+  single orchestrate run. The generator must emit the actions/upload-artifact
+  post-job for the producer and an actions/download-artifact pre-step for the
+  consumer, keyed on the build-{name} artifact name.
+
+  Generator-output verification scenario; assertion runs on the staged repo after
+  StageRepoFromConfig generates workflows but before any orchestrate runs. Guards
+  the artifact_upload key name (renamed from the former singular artifact) so a
+  regression that stops parsing the key would drop the passthrough steps and fail
+  here.
+
+config:
+  trunk_branch: main
+  environments: ["dev"]
+  builds:
+    - name: compile
+      workflow: build-compile.yaml
+      triggers: ["src/**"]
+      artifact_upload:
+        upload: dist/
+    - name: sign
+      workflow: build-sign.yaml
+      triggers: ["src/**"]
+      depends_on: ["compile"]
+      artifact_upload:
+        downloads: ["compile"]
+  deploys:
+    - name: app
+      workflow: deploy-app.yaml
+      triggers: []
+
+steps:
+  - name: "Initial commit; assert the artifact_upload passthrough steps are emitted"
+    action: commit
+    commit:
+      message: "feat: add compile and sign builds with artifact_upload passthrough"
+      files:
+        src/main.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # Producer uploads under the build-{name} artifact name.
+            - "name: Upload artifact build-compile"
+            - "path: dist/"
+            # Consumer downloads the producer's artifact before running.
+            - "name: Download artifact from compile"
+            - "name: build-compile"

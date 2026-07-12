@@ -13,7 +13,15 @@ import (
 // hand-registered in a second place. The inline catch-all (Extra) and any
 // yaml:"-" field are excluded.
 func knownTrunkFields() []string {
-	t := reflect.TypeOf(TrunkConfig{})
+	return knownYAMLFields(reflect.TypeOf(TrunkConfig{}))
+}
+
+// knownYAMLFields returns the modeled yaml key names for a struct type, derived
+// from its yaml struct tags. The inline catch-all (yaml:",inline") and any
+// yaml:"-" field are excluded. Reflecting the tags keeps every known-field set
+// in lockstep with its struct, so a renamed or added field never has to be
+// hand-registered in a second place.
+func knownYAMLFields(t reflect.Type) []string {
 	fields := make([]string, 0, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("yaml")
@@ -29,6 +37,41 @@ func knownTrunkFields() []string {
 	}
 	sort.Strings(fields)
 	return fields
+}
+
+// validateUnknownCallbackFields rejects any key on a build or deploy callback
+// that is not a modeled field of the callback struct. Unknown keys are captured
+// by the inline Extra map; each becomes a hard error with a "did you mean X?"
+// suggestion when a close modeled field exists. This mirrors validateUnknownTopLevel
+// one level down, so a renamed key (for example the former artifact:, now
+// artifact_upload:) is caught rather than silently dropped by the yaml decoder.
+func validateUnknownCallbackFields(scope string, extra map[string]any, known []string) []string {
+	if len(extra) == 0 {
+		return nil
+	}
+	var errs []string
+	for _, key := range sortedKeys(toAnyKeyed(extra)) {
+		suggestion := legacyCallbackFieldRenames[key]
+		if suggestion == "" {
+			suggestion = suggestField(key, known)
+		}
+		if suggestion != "" {
+			errs = append(errs, fmt.Sprintf("%s has unknown field %q; did you mean %q?", scope, key, suggestion))
+		} else {
+			errs = append(errs, fmt.Sprintf("%s has unknown field %q", scope, key))
+		}
+	}
+	return errs
+}
+
+// legacyCallbackFieldRenames maps a former callback key to its current name so
+// the did-you-mean points at the intended replacement rather than the nearest
+// field by edit distance. The singular artifact: (the upload passthrough) was
+// renamed to artifact_upload:; without this hint a plain Levenshtein match would
+// steer a user to the unrelated plural artifacts: (release artifacts), which is
+// exactly the one-letter-apart confusion the rename removes.
+var legacyCallbackFieldRenames = map[string]string{
+	"artifact": "artifact_upload",
 }
 
 // validateUnknownTopLevel rejects any top-level config key that is not a modeled

@@ -364,11 +364,14 @@ ci:
 | `run_policy` | emitted | string | No | Execution policy. See [Policy fields](#policy-fields). |
 | `on_failure` | emitted | string | No | Failure handling. See [Policy fields](#policy-fields). |
 | `retries` | emitted | int | No | Retry attempts (0-3). |
+| `artifact_upload` | emitted | object | No | GitHub Actions artifact passthrough between jobs in one orchestrate run: `upload` is a path glob uploaded via `actions/upload-artifact` (named `build-{name}`), and `downloads` names upstream builds whose artifacts to fetch first. Distinct from the release `artifacts` list, which attaches assets to a published release. |
 | `runs_on` | validated-only | object | No | Parsed and validated, never emitted. See [Validated-only fields](#validated-only-fields). |
 | `concurrency` | validated-only | object | No | Parsed and validated, never emitted. See [Validated-only fields](#validated-only-fields). |
 | `timeout_minutes` | validated-only | int | No | Parsed and validated, never emitted. See [Validated-only fields](#validated-only-fields). |
 
 The build's `artifact_id` output (if declared) is captured into state automatically. Other declared outputs are forwarded to dependent deploys as inputs.
+
+`artifact_upload` (the singular GitHub Actions passthrough) and `artifacts` (the plural list of release assets) are two different fields with two different meanings; set the one you need and do not confuse them.
 
 ### matrix
 
@@ -433,6 +436,7 @@ ci:
 | `run_policy` | emitted | string | No | Execution policy. |
 | `on_failure` | emitted | string | No | Failure handling. |
 | `retries` | emitted | int | No | Retry attempts (0-3). |
+| `artifact_upload` | emitted | object | No | GitHub Actions artifact passthrough between jobs in one orchestrate run, as for builds (`upload`/`downloads`). |
 | `runs_on` | validated-only | object | No | Parsed and validated, never emitted. |
 | `concurrency` | validated-only | object | No | Parsed and validated, never emitted. |
 | `timeout_minutes` | validated-only | int | No | Parsed and validated, never emitted. |
