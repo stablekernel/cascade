@@ -17,7 +17,7 @@ import (
 func TestPromote_SupportsDryRun_SingleDeploy(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:           "app",
@@ -60,7 +60,7 @@ func TestPromote_SupportsDryRun_SingleDeploy(t *testing.T) {
 func TestPromote_NoSupportsDryRun_SingleDeploy(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -92,7 +92,7 @@ func TestPromote_NoSupportsDryRun_SingleDeploy(t *testing.T) {
 func TestPromote_SupportsDryRun_ProdDeploy(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:           "app",
@@ -122,7 +122,7 @@ func TestPromote_SupportsDryRun_ProdDeploy(t *testing.T) {
 func TestPromote_SupportsDryRun_NormalRunUnaffected(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:           "app",
@@ -169,7 +169,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:           "app",
@@ -219,7 +219,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -263,7 +263,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:           "app",
@@ -312,7 +312,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",

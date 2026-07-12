@@ -49,7 +49,7 @@ components:
 	if eff.JobTimeoutMinutes != 30 {
 		t.Errorf("job_timeout_minutes = %d, want inherited 30", eff.JobTimeoutMinutes)
 	}
-	if len(eff.Environments) != 2 || eff.Environments[0] != "dev" {
+	if len(eff.Environments) != 2 || eff.Environments[0].Name != "dev" {
 		t.Errorf("environments = %v, want inherited [dev prod]", eff.Environments)
 	}
 	if len(eff.Builds) != 1 || eff.Builds[0].Name != "app" {
@@ -85,7 +85,7 @@ components:
 	}
 	eff := rc.Config
 
-	if got := eff.Environments; len(got) != 1 || got[0] != "dev" {
+	if got := eff.Environments; len(got) != 1 || got[0].Name != "dev" {
 		t.Errorf("environments override = %v, want [dev]", got)
 	}
 	if eff.ReleaseTrigger != "dispatch" {

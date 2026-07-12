@@ -16,7 +16,7 @@ import (
 func driftCheckConfig(comment bool) *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		DriftCheck:   &config.DriftCheckConfig{Enabled: true, Comment: comment},
 	}
 }

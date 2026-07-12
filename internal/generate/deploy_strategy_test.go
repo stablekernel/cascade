@@ -17,7 +17,7 @@ func boolPtr(b bool) *bool { return &b }
 func minimalCfg(deploys []config.DeployConfig) *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys:      deploys,
 	}
 }

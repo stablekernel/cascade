@@ -1068,14 +1068,15 @@ cascade environments | jq -c '.environments[] | {gha_environment, environment}' 
 done
 ```
 
-The per-environment settings come from the manifest under
-`config.environment_config.<env>`:
+The per-environment settings come from the inline fields on each
+`config.environments` entry:
 
 ```yaml
 config:
-  environments: [dev, test, prod]
-  environment_config:
-    prod:
+  environments:
+    - dev
+    - test
+    - name: prod
       gha_environment: production
       required_reviewers: [team/ops]
       wait_timer: 10

@@ -82,8 +82,8 @@
         },
         "environments": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "Ordered list of promotion environments. Empty means a no-environment setup (library or CLI projects)."
+          "items": { "$ref": "#/definitions/environmentEntry" },
+          "description": "Ordered promotion ladder. Each entry is a bare name (sugar) or an object with the environment's name, optional role, and inline settings. Empty means a no-environment setup (library or CLI projects)."
         },
         "cli_version": {
           "type": "string",
@@ -181,11 +181,6 @@
           "description": "Explicit action reference pins keyed by action name."
         },
         "telemetry": { "$ref": "#/definitions/telemetryConfig" },
-        "environment_config": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/environmentConfig" },
-          "description": "Per-environment settings keyed by environment name."
-        },
         "components": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/componentConfig" },
@@ -527,7 +522,7 @@
       "properties": {
         "path": { "type": "string", "description": "Subtree this component owns within the repo. Required." },
         "tag_grammar": { "$ref": "#/definitions/tagGrammarConfig" },
-        "environments": { "type": "array", "items": { "type": "string" }, "description": "Overrides the shared promotion environments for this component." },
+        "environments": { "type": "array", "items": { "$ref": "#/definitions/environmentEntry" }, "description": "Overrides the shared promotion ladder for this component (bare names or objects with inline settings); whole-replaces the inherited list." },
         "release_trigger": { "type": "string", "enum": ["push", "dispatch"], "description": "Overrides how this component's orchestrate workflow fires." },
         "allow_breaking_changes": { "type": "boolean", "description": "Overrides the shared breaking-change promote gate for this component." },
         "validate": { "$ref": "#/definitions/validateConfig" },
@@ -547,7 +542,6 @@
         "validate_check": { "$ref": "#/definitions/validateCheckConfig" },
         "rollback": { "$ref": "#/definitions/rollbackConfig" },
         "deployments": { "$ref": "#/definitions/deploymentsConfig" },
-        "environment_config": { "type": "object", "additionalProperties": { "$ref": "#/definitions/environmentConfig" }, "description": "Overrides the shared per-environment settings for this component." },
         "triggers": { "type": "array", "items": { "type": "string" }, "description": "Overrides the shared orchestrate path filter for this component." },
         "extra_paths": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative globs beyond this component's own path that both fire its orchestrate workflow and count toward its version bump, so a change to a shared dependency this component consumes bumps it correctly. Additive to path and to any top-level shared_paths." },
         "release_token": { "type": "string", "description": "Overrides the shared release-operations token expression for this component." },
@@ -822,11 +816,28 @@
         "secret_name": { "type": "string", "description": "Name of a GitHub Actions secret holding the auth token (a reference, never an inline token). Reserved." }
       }
     },
+    "environmentEntry": {
+      "oneOf": [
+        { "type": "string", "description": "Environment name; sugar for an environment with no inline settings." },
+        { "$ref": "#/definitions/environmentConfig" }
+      ],
+      "description": "One entry in the environments ladder: a bare name or an object carrying the name, an optional role, and inline per-environment settings."
+    },
     "environmentConfig": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Per-environment settings block. All fields are optional and additive; the cascade environments command emits these as an operator-appliable GitHub Environments REST config.",
+      "required": ["name"],
+      "description": "An environments entry in object form: the environment name, an optional promotion role, and the inline per-environment settings the cascade environments command emits as an operator-appliable GitHub Environments REST config.",
       "properties": {
+        "name": {
+          "type": "string",
+          "description": "Environment name. Keys job IDs and expression references and defines this entry's rung on the promotion ladder."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["prerelease", "release"],
+          "description": "Optional explicit promotion stage, overriding the positional default (last entry = release, second-from-last = prerelease)."
+        },
         "gha_environment": {
           "type": "string",
           "description": "Maps this environment to a GitHub Environment (deployment records, required reviewers, wait timers, env-scoped secrets)."

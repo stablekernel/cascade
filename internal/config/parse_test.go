@@ -212,7 +212,7 @@ func TestValidate(t *testing.T) {
 			name: "valid config",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: ".github/workflows/build.yaml"},
 				},
@@ -232,7 +232,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing build name",
 			config: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Workflow: ".github/workflows/build.yaml"},
 				},
@@ -242,7 +242,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing build workflow",
 			config: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "app"},
 				},
@@ -252,7 +252,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "duplicate build names",
 			config: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: ".github/workflows/build1.yaml"},
 					{Name: "app", Workflow: ".github/workflows/build2.yaml"},
@@ -263,7 +263,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing deploy name",
 			config: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Deploys: []DeployConfig{
 					{Workflow: ".github/workflows/deploy.yaml"},
 				},
@@ -273,7 +273,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing deploy workflow",
 			config: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Deploys: []DeployConfig{
 					{Name: "cdk"},
 				},
@@ -283,7 +283,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "duplicate deploy names",
 			config: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Deploys: []DeployConfig{
 					{Name: "cdk", Workflow: ".github/workflows/deploy1.yaml"},
 					{Name: "cdk", Workflow: ".github/workflows/deploy2.yaml"},
@@ -294,7 +294,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid env_inputs matching environments",
 			config: TrunkConfig{
-				Environments: []string{"dev", "test", "prod"},
+				Environments: EnvNames("dev", "test", "prod"),
 				Deploys: []DeployConfig{
 					{
 						Name:     "app",
@@ -311,7 +311,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid env_inputs key not in environments",
 			config: TrunkConfig{
-				Environments: []string{"dev", "prod"},
+				Environments: EnvNames("dev", "prod"),
 				Deploys: []DeployConfig{
 					{
 						Name:     "app",
@@ -435,7 +435,7 @@ func TestParse_NewSchemaFields(t *testing.T) {
 	if len(cfg.Environments) != 2 {
 		t.Errorf("len(Environments) = %d, want 2", len(cfg.Environments))
 	}
-	if cfg.Environments[0] != "dev" || cfg.Environments[1] != "prod" {
+	if cfg.Environments[0].Name != "dev" || cfg.Environments[1].Name != "prod" {
 		t.Errorf("Environments = %v, want [dev prod]", cfg.Environments)
 	}
 
@@ -566,7 +566,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "valid run_policy values",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", RunPolicy: "default"},
 					{Name: "b", Workflow: "w.yaml", RunPolicy: "always"},
@@ -578,7 +578,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "invalid run_policy",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", RunPolicy: "invalid"},
 				},
@@ -588,7 +588,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "invalid on_failure",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", OnFailure: "invalid"},
 				},
@@ -598,7 +598,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "retries out of range",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", Retries: 5},
 				},
@@ -608,7 +608,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "invalid depends_on reference",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", DependsOn: []string{"nonexistent"}},
 				},
@@ -618,7 +618,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "build env_inputs key not in environments",
 			cfg: TrunkConfig{
-				Environments: []string{"dev", "prod"},
+				Environments: EnvNames("dev", "prod"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", EnvInputs: map[string]map[string]interface{}{
 						"staging": {"key": "value"},
@@ -630,7 +630,7 @@ func TestValidate_NewFields(t *testing.T) {
 		{
 			name: "circular dependency",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "a", Workflow: "w.yaml", DependsOn: []string{"b"}},
 					{Name: "b", Workflow: "w.yaml", DependsOn: []string{"a"}},
@@ -767,7 +767,7 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		{
 			name: "valid release.tag reference",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Release:      &ReleaseConfig{Tag: "goreleaser.tag"},
 				Builds: []BuildConfig{
 					{Name: "goreleaser", Workflow: "w.yaml"},
@@ -778,7 +778,7 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		{
 			name: "invalid release.tag - unknown callback",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Release:      &ReleaseConfig{Tag: "nonexistent.tag"},
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: "w.yaml"},
@@ -789,7 +789,7 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		{
 			name: "invalid release.tag - bad format",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Release:      &ReleaseConfig{Tag: "invalid"},
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: "w.yaml"},
@@ -800,7 +800,7 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		{
 			name: "release.tag with deploy callback",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Release:      &ReleaseConfig{Tag: "release.version"},
 				Deploys: []DeployConfig{
 					{Name: "release", Workflow: "w.yaml"},
@@ -811,7 +811,7 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		{
 			name: "deploy depends_on references valid build",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: "w.yaml", Triggers: []string{"src/**"}},
 				},
@@ -824,7 +824,7 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		{
 			name: "deploy depends_on references unknown build",
 			cfg: TrunkConfig{
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: "w.yaml", Triggers: []string{"src/**"}},
 				},
@@ -882,7 +882,7 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 			name: "build name with dot rejected",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds:       []BuildConfig{{Name: "app.web", Workflow: ".github/workflows/build.yaml"}},
 			},
 			wantErr: `builds[0].name "app.web"`,
@@ -891,7 +891,7 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 			name: "build name with space rejected",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Builds:       []BuildConfig{{Name: "my app", Workflow: ".github/workflows/build.yaml"}},
 			},
 			wantErr: `builds[0].name "my app"`,
@@ -900,7 +900,7 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 			name: "deploy name with slash rejected",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				Deploys:      []DeployConfig{{Name: "svc/api", Workflow: ".github/workflows/deploy.yaml"}},
 			},
 			wantErr: `deploys[0].name "svc/api"`,
@@ -909,7 +909,7 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 			name: "external deploy name with dot rejected",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev"},
+				Environments: EnvNames("dev"),
 				External: []ExternalRepoConfig{{
 					Repo:    "owner/repo",
 					Deploys: []ExternalDeployConfig{{Name: "svc.api", Workflow: ".github/workflows/deploy.yaml"}},
@@ -921,7 +921,7 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 			name: "environment name with dot rejected",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"us.east"},
+				Environments: EnvNames("us.east"),
 			},
 			wantErr: `environments[0] "us.east"`,
 		},
@@ -929,7 +929,7 @@ func TestValidate_JobIDSafeNames(t *testing.T) {
 			name: "valid names: hyphen, uppercase, leading digit, underscore",
 			config: TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev-1", "Prod", "2nd", "us_west"},
+				Environments: EnvNames("dev-1", "Prod", "2nd", "us_west"),
 				Builds: []BuildConfig{
 					{Name: "my-app", Workflow: ".github/workflows/build.yaml"},
 					{Name: "MyApp", Workflow: ".github/workflows/build.yaml"},
@@ -1025,7 +1025,7 @@ func TestExternalDeployOnUpdate_Validation(t *testing.T) {
 	base := func() *TrunkConfig {
 		return &TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "prod"},
+			Environments: EnvNames("dev", "prod"),
 			External: []ExternalRepoConfig{
 				{
 					Repo: "example/cdk-infra",

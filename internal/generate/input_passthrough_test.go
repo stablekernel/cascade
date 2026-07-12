@@ -35,7 +35,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -80,7 +80,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -111,7 +111,7 @@ on:
 func TestPromoteVarsExpressionPassthrough(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -146,7 +146,7 @@ func TestPromoteVarsExpressionPassthrough(t *testing.T) {
 func TestPromoteStateReferenceResolves(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -177,7 +177,7 @@ func TestPromoteStateReferenceResolves(t *testing.T) {
 func TestPromoteLiteralInputsUnchanged(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -210,7 +210,7 @@ func TestValidateWarnsUnwrappedExpression(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",

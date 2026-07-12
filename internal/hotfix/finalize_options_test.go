@@ -146,13 +146,13 @@ func TestAllocateVersion(t *testing.T) {
 // TestIsPrereleaseEnv identifies the second-from-top env as the prerelease env.
 func TestIsPrereleaseEnv(t *testing.T) {
 	f := &Finalizer{}
-	cfg := &config.TrunkConfig{Environments: []string{"dev", "test", "uat", "prod"}}
+	cfg := &config.TrunkConfig{Environments: config.EnvNames("dev", "test", "uat", "prod")}
 
 	assert.True(t, f.isPrereleaseEnv(cfg, "uat"), "second-from-top is the prerelease env")
 	assert.False(t, f.isPrereleaseEnv(cfg, "prod"))
 	assert.False(t, f.isPrereleaseEnv(cfg, "dev"))
 
-	single := &config.TrunkConfig{Environments: []string{"prod"}}
+	single := &config.TrunkConfig{Environments: config.EnvNames("prod")}
 	assert.False(t, f.isPrereleaseEnv(single, "prod"), "fewer than two envs has no prerelease env")
 }
 

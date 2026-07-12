@@ -1,18 +1,29 @@
 name: "Environment Config Emit"
 description: |
-  Exercises the additive per-environment fields under environment_config
+  Exercises the per-environment fields inlined on the environments entries
   (required_reviewers, wait_timer, branch_policy with branch_patterns and
   tag_patterns, secrets, and variables). These fields are emit-on-demand: the
   cascade environments command serializes them into an operator-appliable
   environments.json, but the workflow generator does not consume them. The
-  scenario declares the enriched environment_config block, generates the
+  scenario declares the enriched environments list of objects, generates the
   workflows, then regenerates and proves the output is byte-identical with no
-  drift, confirming the new fields parse and validate without changing
+  drift, confirming the folded fields parse and validate without changing
   generation. secrets and variables are expected NAMES only, never values.
 
 config:
   trunk_branch: main
-  environments: [dev, prod]
+  environments:
+    - name: dev
+      branch_policy: custom
+      branch_patterns: [main, "release/*"]
+      tag_patterns: ["v*"]
+    - name: prod
+      gha_environment: production
+      required_reviewers: [octocat, team/ops]
+      wait_timer: 10
+      branch_policy: protected
+      secrets: [MY_SECRET, DB_PASSWORD]
+      variables: [REGION]
   builds:
     - name: app
       workflow: build.yaml
@@ -21,18 +32,6 @@ config:
     - name: app
       workflow: deploy.yaml
       triggers: ["src/**"]
-  environment_config:
-    prod:
-      gha_environment: production
-      required_reviewers: [octocat, team/ops]
-      wait_timer: 10
-      branch_policy: protected
-      secrets: [MY_SECRET, DB_PASSWORD]
-      variables: [REGION]
-    dev:
-      branch_policy: custom
-      branch_patterns: [main, "release/*"]
-      tag_patterns: ["v*"]
 
 steps:
   - name: "Seed a minimal source tree"

@@ -38,7 +38,7 @@ func newRepo(t *testing.T) string {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod"},
+		Environments: config.EnvNames("dev", "staging", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "image", Workflow: ".github/workflows/image-build.yaml", Triggers: []string{"src/**"}},
 		},

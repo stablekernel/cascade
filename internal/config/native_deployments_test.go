@@ -7,21 +7,20 @@ import "testing"
 func TestParseDeployments(t *testing.T) {
 	cfg := parseInline(t, `
 trunk_branch: main
-environments: [production]
+environments:
+  - name: production
+    environment_url: "https://app.example.com"
 deployments:
   enabled: true
   keep_prior_active: true
-environment_config:
-  production:
-    environment_url: "https://app.example.com"
 `)
 	if !cfg.Deployments.IsEnabled() || !cfg.Deployments.KeepsPriorActive() {
 		t.Fatalf("deployments: %#v", cfg.Deployments)
 	}
-	ec, ok := cfg.EnvironmentConfig["production"]
-	if !ok {
-		t.Fatalf("environment_config missing production: %#v", cfg.EnvironmentConfig)
+	if len(cfg.Environments) != 1 || cfg.Environments[0].Name != "production" {
+		t.Fatalf("environments missing production: %#v", cfg.Environments)
 	}
+	ec := cfg.Environments[0].EnvironmentConfig
 	if ec.EnvironmentURL != "https://app.example.com" {
 		t.Fatalf("environment_url: %q", ec.EnvironmentURL)
 	}
@@ -34,11 +33,10 @@ func TestDeploymentsValidatesAtCurrentSchemaVersion(t *testing.T) {
 	cfg := &TrunkConfig{
 		SchemaVersion: CurrentSchemaVersion,
 		TrunkBranch:   "main",
-		Environments:  []string{"production"},
-		Deployments:   &DeploymentsConfig{Enabled: boolPtr(true), KeepPriorActive: boolPtr(true)},
-		EnvironmentConfig: map[string]EnvironmentConfig{
-			"production": {EnvironmentURL: "https://app.example.com"},
+		Environments: []EnvironmentEntry{
+			{Name: "production", EnvironmentConfig: EnvironmentConfig{EnvironmentURL: "https://app.example.com"}},
 		},
+		Deployments: &DeploymentsConfig{Enabled: boolPtr(true), KeepPriorActive: boolPtr(true)},
 	}
 	for _, e := range Validate(cfg) {
 		t.Fatalf("unexpected validation error for deployments at current schema version: %s", e)

@@ -132,7 +132,7 @@ func TestRun_SuccessWritesValidScaffold(t *testing.T) {
 	}
 	require.NoError(t, scaffold.SelfCheck(onDisk))
 
-	assert.Equal(t, []string{"dev", "prod"}, parsed.Config.Environments)
+	assert.Equal(t, []string{"dev", "prod"}, parsed.Config.EnvironmentNames())
 }
 
 func TestRun_NoEnvOmitsDeployStub(t *testing.T) {
@@ -202,7 +202,7 @@ func TestRun_CustomEnvsListedAndReleaseStageLast(t *testing.T) {
 
 	parsed, err := config.ParseManifestFile(manifestPathFor(dir), config.DefaultManifestKey)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"staging", "production"}, parsed.Config.Environments)
+	assert.Equal(t, []string{"staging", "production"}, parsed.Config.EnvironmentNames())
 }
 
 func TestRun_CLIVersionOverride(t *testing.T) {
@@ -246,7 +246,7 @@ func TestRun_AllTopologiesOrderedManifestEnvs(t *testing.T) {
 			} else {
 				// Exact ordered equality: order is load-bearing because the last
 				// environment is the release stage.
-				assert.Equal(t, tc.want, parsed.Config.Environments)
+				assert.Equal(t, tc.want, parsed.Config.EnvironmentNames())
 			}
 
 			// The manifest that landed on disk must survive the real generator.

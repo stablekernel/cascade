@@ -387,7 +387,7 @@ func TestCalculateChangelogRefs(t *testing.T) {
 				environment: tt.environment,
 				cicdFile: &config.CICDFile{
 					Config: &config.TrunkConfig{
-						Environments: tt.envs,
+						Environments: config.EnvNames(tt.envs...),
 					},
 					State:         tt.state,
 					LatestRelease: tt.latest,

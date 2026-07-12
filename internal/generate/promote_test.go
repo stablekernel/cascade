@@ -87,7 +87,7 @@ func stepRunBody(t *testing.T, content, stepName string) string {
 func TestPromoteGenerator_ModeInputNotInterpolatedIntoRun(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -138,7 +138,7 @@ func TestPromoteGenerator_Generate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: tt.environments,
+				Environments: config.EnvNames(tt.environments...),
 			}
 
 			gen := NewPromoteGenerator(cfg, "")
@@ -180,7 +180,7 @@ func TestPromoteGenerator_Generate(t *testing.T) {
 func TestPromoteGenerator_EnvironmentCases(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "uat", "prod"},
+		Environments: config.EnvNames("dev", "staging", "uat", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -208,7 +208,7 @@ func TestPromoteGenerator_EnvironmentCases(t *testing.T) {
 func TestPromoteGenerator_ValidYAML(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -235,7 +235,7 @@ func TestPromoteGenerator_ValidYAML(t *testing.T) {
 func TestPromoteGenerator_OrphanCleanup(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "uat", "perf", "prod"},
+		Environments: config.EnvNames("dev", "staging", "uat", "perf", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -251,7 +251,7 @@ func TestPromoteGenerator_OrphanCleanup(t *testing.T) {
 func TestPromoteGenerator_PublishOnProd(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -283,7 +283,7 @@ func TestPromoteGenerator_PublishOnProd(t *testing.T) {
 func TestPromoteGenerator_PreflightDeclaresSourceImageTag(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -325,7 +325,7 @@ jobs:
 func TestPromoteGenerator_PreflightDeclaresSourceImageDigest(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -349,7 +349,7 @@ func TestPromoteGenerator_DeployThreadsImageDigestWhenDeclared(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -401,7 +401,7 @@ jobs:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -424,7 +424,7 @@ jobs:
 func TestPromoteGenerator_DryRunSupport(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -442,7 +442,7 @@ func TestPromoteGenerator_DryRunSupport(t *testing.T) {
 func TestPromoteGenerator_DeployCheckboxes(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app-deploy", Workflow: ".github/workflows/deploy.yaml", DependsOn: []string{"app"}},
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml", Triggers: []string{".aws/cdk/**"}},
@@ -504,7 +504,7 @@ func TestPromoteGenerator_DeployCheckboxes(t *testing.T) {
 func TestPromoteGenerator_DeployDetectionOutputs(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml", Triggers: []string{".aws/cdk/**"}},
 		},
@@ -528,7 +528,7 @@ func TestPromoteGenerator_DeployDetectionOutputs(t *testing.T) {
 func TestPromoteGenerator_ConditionalDeployJobs(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml", Triggers: []string{".aws/cdk/**"}},
 			{Name: "k8s", Workflow: ".github/workflows/deploy-k8s.yaml", Triggers: []string{".k8s/**"}},
@@ -555,7 +555,7 @@ func TestPromoteGenerator_ConditionalDeployJobs(t *testing.T) {
 func TestPromoteGenerator_FinalizeNeedsAllDeploys(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml"},
 			{Name: "k8s", Workflow: ".github/workflows/deploy-k8s.yaml"},
@@ -573,7 +573,7 @@ func TestPromoteGenerator_FinalizeNeedsAllDeploys(t *testing.T) {
 func TestPromoteGenerator_PerDeployManifestUpdate(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml"},
 		},
@@ -598,7 +598,7 @@ func TestPromoteGenerator_MixedDeployTypes(t *testing.T) {
 	// Test with all three deploy types: build-linked, trigger-based, and unconstrained
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -634,7 +634,7 @@ func TestPromoteGenerator_MixedDeployTypes(t *testing.T) {
 func TestPromoteGenerator_DeployCheckboxEnvVarPassing(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "my-deploy", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 			{Name: "other-deploy", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"lib/**"}},
@@ -661,7 +661,7 @@ func TestPromoteGenerator_EmptyDeploys(t *testing.T) {
 	// Config with no deploys should still generate valid workflow
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -689,7 +689,7 @@ func TestPromoteGenerator_EmptyDeploys(t *testing.T) {
 func TestPromoteGenerator_SingleDeploy(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "only-deploy", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -712,7 +712,7 @@ func TestPromoteGenerator_SingleDeploy(t *testing.T) {
 func TestPromoteGenerator_DeployNameWithSpecialChars(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "my-app-deploy", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 			{Name: "cdk_infra", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"cdk/**"}},
@@ -735,7 +735,7 @@ func TestPromoteGenerator_DeployNameWithSpecialChars(t *testing.T) {
 func TestPromoteGenerator_DeployJobPassesEnvironmentAndSHA(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml", Triggers: []string{"src/**"}},
 		},
@@ -753,7 +753,7 @@ func TestPromoteGenerator_DeployJobPassesEnvironmentAndSHA(t *testing.T) {
 func TestPromoteGenerator_DeployResultEnvVars(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "cdk", Workflow: ".github/workflows/deploy-cdk.yaml"},
 			{Name: "k8s", Workflow: ".github/workflows/deploy-k8s.yaml"},
@@ -775,7 +775,7 @@ func TestPromoteGenerator_DeployResultEnvVars(t *testing.T) {
 func TestPromoteGenerator_DeployManifestUpdateTimestamp(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -795,7 +795,7 @@ func TestPromoteGenerator_DeployManifestUpdateTimestamp(t *testing.T) {
 func TestPromoteGenerator_PreflightOutputsDeploysToRun(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -816,7 +816,7 @@ func TestPromoteGenerator_PreflightOutputsDeploysToRun(t *testing.T) {
 func TestPromoteGenerator_BuildLinkedDeployInheritsTriggersForDetection(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "api", Workflow: ".github/workflows/build.yaml", Triggers: []string{"api/src/**", "api/go.mod"}},
 		},
@@ -840,7 +840,7 @@ func TestPromoteGenerator_BuildLinkedDeployInheritsTriggersForDetection(t *testi
 func TestPromoteGenerator_TriggerBasedDeployUsesOwnTriggers(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "infra", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"terraform/**", "cdk/**"}},
 		},
@@ -861,7 +861,7 @@ func TestPromoteGenerator_TriggerBasedDeployUsesOwnTriggers(t *testing.T) {
 func TestPromoteGenerator_UnconstrainedDeployAlwaysInList(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "notify", Workflow: ".github/workflows/notify.yaml"}, // No triggers or depends_on
 		},
@@ -883,7 +883,7 @@ func TestPromoteGenerator_UnconstrainedDeployAlwaysInList(t *testing.T) {
 func TestPromoteGenerator_NeverDeployedEnvHandling(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
@@ -904,7 +904,7 @@ func TestPromoteGenerator_NeverDeployedEnvHandling(t *testing.T) {
 func TestPromoteGenerator_DeployDryRunCondition(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -921,7 +921,7 @@ func TestPromoteGenerator_DeployDryRunCondition(t *testing.T) {
 func TestPromoteGenerator_ManifestCommitOnlyIfChanged(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -941,7 +941,7 @@ func TestPromoteGenerator_ManifestCommitOnlyIfChanged(t *testing.T) {
 
 func TestResolveDeployInputs(t *testing.T) {
 	cfg := &config.TrunkConfig{
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -976,7 +976,7 @@ func TestResolveDeployInputs(t *testing.T) {
 func TestPreflightDeployMatrixOutputs(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "app",
@@ -1058,7 +1058,7 @@ func TestPreflightDeployMatrixOutputs(t *testing.T) {
 func TestPreflightNoMatrixStepWhenNoInputs(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "simple",
@@ -1090,7 +1090,7 @@ func TestDeployJobsMatrixStrategy(t *testing.T) {
 			name: "deploy with inputs uses matrix strategy",
 			config: &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "test", "prod"},
+				Environments: config.EnvNames("dev", "test", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "app",
@@ -1128,7 +1128,7 @@ func TestDeployJobsMatrixStrategy(t *testing.T) {
 			name: "deploy without inputs uses single deploy",
 			config: &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "simple",
@@ -1155,7 +1155,7 @@ func TestDeployJobsMatrixStrategy(t *testing.T) {
 			name: "mixed deploy types",
 			config: &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "app",
@@ -1193,7 +1193,7 @@ func TestDeployJobsMatrixStrategy(t *testing.T) {
 			name: "deploy with multiple custom inputs",
 			config: &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "infra",
@@ -1281,7 +1281,7 @@ func TestPromoteGenerator_APIQueryStep(t *testing.T) {
 			name: "Finalize using CLI instead of bash",
 			config: &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "test", "prod"},
+				Environments: config.EnvNames("dev", "test", "prod"),
 				Deploys: []config.DeployConfig{
 					{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 					{Name: "infra", Workflow: ".github/workflows/deploy-infra.yaml"},
@@ -1308,7 +1308,7 @@ func TestPromoteGenerator_APIQueryStep(t *testing.T) {
 			name: "Finalize with single deploy uses CLI",
 			config: &config.TrunkConfig{
 				TrunkBranch:  "main",
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 				},
@@ -1343,7 +1343,7 @@ func TestPromoteGenerator_APIQueryStep(t *testing.T) {
 func TestPromoteGenerator_CascadeDeployStateUpdate(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 		},
@@ -1367,7 +1367,7 @@ func TestPromoteGenerator_CascadeDeployStateUpdate(t *testing.T) {
 func TestPromoteGenerator_PreflightUsesCLI(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 			{Name: "infra", Workflow: ".github/workflows/deploy-infra.yaml"},
@@ -1399,7 +1399,7 @@ func TestPromoteGenerator_PreflightUsesCLI(t *testing.T) {
 func TestPromoteGenerator_FinalizeUsesCLI(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "uat", "prod"},
+		Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "infra", Workflow: ".github/workflows/deploy.yaml"},
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
@@ -1427,7 +1427,7 @@ func TestPromoteGenerator_FinalizeUsesCLI(t *testing.T) {
 func TestPromoteGenerator_RollbackJobs(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 			{Name: "infra", Workflow: ".github/workflows/deploy-infra.yaml"},
@@ -1474,7 +1474,7 @@ func TestPromoteGenerator_RollbackJobs(t *testing.T) {
 func TestPromoteGenerator_NoRollbackWhenNoEnvironments(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{},
+		Environments: config.EnvNames(),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 		},
@@ -1506,7 +1506,7 @@ func TestPromoteGenerator_NoRollbackWhenNoEnvironments(t *testing.T) {
 func TestPromoteGenerator_RollbackOnFailureInput(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -1529,7 +1529,7 @@ func TestPromoteGenerator_RollbackOnFailureInput(t *testing.T) {
 func TestPromoteGenerator_ExternalDeployRollbackJobs(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "test", "prod"},
+		Environments: config.EnvNames("dev", "test", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
 		},
@@ -1569,7 +1569,7 @@ func TestBuildDeployMatrix(t *testing.T) {
 		{
 			name: "multiple promotions with env_inputs overrides",
 			config: &config.TrunkConfig{
-				Environments: []string{"dev", "test", "prod"},
+				Environments: config.EnvNames("dev", "test", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "app",
@@ -1601,7 +1601,7 @@ func TestBuildDeployMatrix(t *testing.T) {
 		{
 			name: "single promotion",
 			config: &config.TrunkConfig{
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "cdk",
@@ -1626,7 +1626,7 @@ func TestBuildDeployMatrix(t *testing.T) {
 		{
 			name: "deploy not found returns empty matrix",
 			config: &config.TrunkConfig{
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "app",
@@ -1645,7 +1645,7 @@ func TestBuildDeployMatrix(t *testing.T) {
 		{
 			name: "empty promotions returns empty matrix",
 			config: &config.TrunkConfig{
-				Environments: []string{"dev", "prod"},
+				Environments: config.EnvNames("dev", "prod"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "app",
@@ -1662,7 +1662,7 @@ func TestBuildDeployMatrix(t *testing.T) {
 		{
 			name: "version substitution",
 			config: &config.TrunkConfig{
-				Environments: []string{"dev", "test"},
+				Environments: config.EnvNames("dev", "test"),
 				Deploys: []config.DeployConfig{
 					{
 						Name:     "app",
@@ -1742,7 +1742,7 @@ on:
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -1773,7 +1773,7 @@ func TestPromoteGenerator_NoPublishCallbackWhenNotConfigured(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -1797,7 +1797,7 @@ func TestPromoteGenerator_NoPublishCallbackWhenNotConfigured(t *testing.T) {
 func TestPromoteGenerator_HasConcurrencyBlock(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod"},
+		Environments: config.EnvNames("dev", "staging", "prod"),
 	}
 
 	gen := NewPromoteGenerator(cfg, "")
@@ -1816,7 +1816,7 @@ func TestPromoteGenerator_HasConcurrencyBlock(t *testing.T) {
 func TestPromoteGenerator_ConcurrencyOverride(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Concurrency: &config.ConcurrencyConfig{
 			Group:            "my-custom-promote",
 			CancelInProgress: true,
@@ -1841,7 +1841,7 @@ func TestPromoteGenerator_ConcurrencyOverride(t *testing.T) {
 func TestPromoteGenerator_SelectiveDeploysAndForcePassthrough(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "infra", Workflow: "deploy-infra.yaml"},
 			{Name: "app", Workflow: "deploy-app.yaml"},

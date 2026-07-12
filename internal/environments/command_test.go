@@ -11,26 +11,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// minimalManifest is a hand-written manifest declaring two environments and an
-// environment_config block exercising the additive fields, so the integration
-// path runs the real parse -> validate -> build -> emit chain end to end.
+// minimalManifest is a hand-written manifest declaring two environments, one of
+// them (production) carrying inline per-environment settings exercising the
+// additive fields, so the integration path runs the real parse -> validate ->
+// build -> emit chain end to end.
 const minimalManifest = `ci:
   config:
     trunk_branch: main
     environments:
       - staging
-      - production
-    deploys:
-      - name: services
-        workflow: .github/workflows/deploy.yaml
-    environment_config:
-      production:
+      - name: production
         gha_environment: prod
         required_reviewers: [octocat, team/ops]
         wait_timer: 15
         branch_policy: protected
         secrets: [MY_SECRET]
         variables: [REGION]
+    deploys:
+      - name: services
+        workflow: .github/workflows/deploy.yaml
 `
 
 // writeManifest writes minimalManifest into a temp .github/manifest.yaml and

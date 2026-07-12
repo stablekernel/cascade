@@ -25,7 +25,7 @@ func TestReusableWorkflowCallbackRendersPermissionsNotForbiddenAttributes(t *tes
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:        "app",
@@ -62,7 +62,7 @@ func TestReusableWorkflowCallbackRendersOIDCPermissions(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:        "app",

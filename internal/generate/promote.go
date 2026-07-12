@@ -442,7 +442,7 @@ func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[stri
 	for env := range deploy.EnvInputs {
 		envNames[env] = struct{}{}
 	}
-	for _, env := range g.config.Environments {
+	for _, env := range g.config.EnvironmentNames() {
 		envNames[env] = struct{}{}
 	}
 	for env := range envNames {
@@ -536,7 +536,7 @@ func (g *PromoteGenerator) writeHeader(sb *strings.Builder) {
 
 	// Document environments
 	sb.WriteString("# Environments: ")
-	for i, env := range g.config.Environments {
+	for i, env := range g.config.EnvironmentNames() {
 		if i > 0 {
 			sb.WriteString(" → ")
 		}
@@ -554,8 +554,8 @@ func (g *PromoteGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString("#\n")
 	sb.WriteString("# Release states (based on position):\n")
 	if len(g.config.Environments) >= 2 {
-		fmt.Fprintf(sb, "#   %s (second-from-top) = prerelease\n", g.config.Environments[len(g.config.Environments)-2])
-		fmt.Fprintf(sb, "#   %s (top)             = released\n", g.config.Environments[len(g.config.Environments)-1])
+		fmt.Fprintf(sb, "#   %s (second-from-top) = prerelease\n", g.config.Environments[len(g.config.Environments)-2].Name)
+		fmt.Fprintf(sb, "#   %s (top)             = released\n", g.config.Environments[len(g.config.Environments)-1].Name)
 	}
 	sb.WriteString("#\n")
 
@@ -813,7 +813,7 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		return
 	}
 
-	finalEnv := g.config.Environments[len(g.config.Environments)-1]
+	finalEnv := g.config.Environments[len(g.config.Environments)-1].Name
 
 	// Write local deploy jobs
 	for _, d := range g.config.Deploys {

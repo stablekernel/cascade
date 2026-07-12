@@ -41,21 +41,22 @@ func BuildEnvViewModel(cfg *config.TrunkConfig, state map[string]*config.EnvStat
 		Node{ID: endNodeID, Kind: NodeEnd},
 	)
 
-	for _, env := range cfg.Environments {
+	envs := cfg.EnvironmentNames()
+	for _, env := range envs {
 		vm.Nodes = append(vm.Nodes, Node{ID: env, Label: env, Kind: NodeEnv})
 	}
 
 	// The entry transition lands on the first environment; the exit transition
 	// leaves the last one.
-	first := cfg.Environments[0]
-	last := cfg.Environments[len(cfg.Environments)-1]
+	first := envs[0]
+	last := envs[len(envs)-1]
 	vm.Edges = append(vm.Edges, Edge{From: startNodeID, To: first, Kind: EdgeTransition})
 
 	// Promotion transitions chain each environment to the next in order.
-	for i := 0; i+1 < len(cfg.Environments); i++ {
+	for i := 0; i+1 < len(envs); i++ {
 		vm.Edges = append(vm.Edges, Edge{
-			From:  cfg.Environments[i],
-			To:    cfg.Environments[i+1],
+			From:  envs[i],
+			To:    envs[i+1],
 			Kind:  EdgePromote,
 			Label: "promote",
 		})
@@ -64,7 +65,7 @@ func BuildEnvViewModel(cfg *config.TrunkConfig, state map[string]*config.EnvStat
 
 	// Divergence branches are appended after the linear ladder so the chain reads
 	// top to bottom before the hotfix detours, keeping the model order stable.
-	for i, env := range cfg.Environments {
+	for i, env := range envs {
 		es := state[env]
 		if !es.IsDiverged() {
 			continue
@@ -74,8 +75,8 @@ func BuildEnvViewModel(cfg *config.TrunkConfig, state map[string]*config.EnvStat
 		vm.Edges = append(vm.Edges, Edge{From: env, To: hotfixID, Kind: EdgeDiverge, Label: "diverge"})
 
 		rejoinTo := endNodeID
-		if i+1 < len(cfg.Environments) {
-			rejoinTo = cfg.Environments[i+1]
+		if i+1 < len(envs) {
+			rejoinTo = envs[i+1]
 		}
 		vm.Edges = append(vm.Edges, Edge{From: hotfixID, To: rejoinTo, Kind: EdgeRejoin, Label: "rejoin"})
 	}

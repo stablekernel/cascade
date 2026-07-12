@@ -5,7 +5,7 @@ import "testing"
 func twoComponentTrunk() *TrunkConfig {
 	return &TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: EnvNames("dev", "prod"),
 		Components: map[string]ComponentConfig{
 			"api": {Path: "services/api", TagGrammar: &TagGrammarConfig{Prefix: strptr("api-")}},
 			"web": {Path: "services/web", TagGrammar: &TagGrammarConfig{Prefix: strptr("web-")}},

@@ -18,13 +18,12 @@ description: |
 
 config:
   trunk_branch: main
-  environments: [production]
+  environments:
+    - name: production
+      environment_url: "https://app.example.com"
   deployments:
     enabled: true
     keep_prior_active: true
-  environment_config:
-    production:
-      environment_url: "https://app.example.com"
   builds:
     - name: app
       workflow: build.yaml

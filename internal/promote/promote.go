@@ -216,7 +216,7 @@ func (p *Promoter) Promote(mode PromotionMode, target string) (*PromotionResult,
 // If force=true, continues to next env even if current step fails.
 // State is committed for successful steps (partial commit on force+failure).
 func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
-	envs := p.cicdFile.Config.Environments
+	envs := p.cicdFile.Config.EnvironmentNames()
 
 	// Handle no-environment mode (library/CLI projects)
 	// Use implicit environments: prerelease → release
@@ -247,13 +247,16 @@ func (p *Promoter) defaultPromotion() (*PromotionResult, error) {
 	// the prerelease env and prod where the publish action lands. Each
 	// `mode: default` invocation advances state through the chain by one
 	// logical step, stopping at the publish boundary.
-	prodEnv := envs[len(envs)-1]
+	// Role-aware, positional by default: role: on an environments entry moves the
+	// release/prerelease markers; unset roles keep the last/second-from-last
+	// positional defaults, so a manifest without roles behaves exactly as before.
+	prodEnv := p.cicdFile.Config.ReleaseEnvironment()
 	releaseIdx := indexOf(envs, "release")
 	var prereleaseEnv string
 	if releaseIdx > 0 {
 		prereleaseEnv = envs[releaseIdx-1]
 	} else if len(envs) >= 2 {
-		prereleaseEnv = envs[len(envs)-2]
+		prereleaseEnv = p.cicdFile.Config.PrereleaseEnvironment()
 	}
 
 	result := &PromotionResult{
@@ -608,7 +611,7 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 		}, nil
 	}
 
-	envs := p.cicdFile.Config.Environments
+	envs := p.cicdFile.Config.EnvironmentNames()
 	sourceIdx := indexOf(envs, sourceEnv)
 	targetIdx := indexOf(envs, targetEnv)
 

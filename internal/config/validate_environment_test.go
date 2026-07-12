@@ -11,149 +11,117 @@ func TestValidateEnvironmentConfigFields(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		envConfig   map[string]EnvironmentConfig
+		envConfig   EnvironmentConfig
 		wantErr     bool
 		errContains string
 	}{
 		{
 			name:      "nil environment_config is valid",
-			envConfig: nil,
+			envConfig: EnvironmentConfig{},
 			wantErr:   false,
 		},
 		{
 			name:      "empty per-env block is valid (shape only)",
-			envConfig: map[string]EnvironmentConfig{"prod": {}},
+			envConfig: EnvironmentConfig{},
 			wantErr:   false,
 		},
 		{
 			name: "full valid block",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {
-					GHAEnvironment:    "production",
-					RequiredReviewers: []string{"octocat", "team/ops"},
-					WaitTimer:         intPtr(10),
-					BranchPolicy:      EnvBranchPolicyCustom,
-					BranchPatterns:    []string{"main", "release/*"},
-					TagPatterns:       []string{"v*"},
-					Secrets:           []string{"MY_SECRET", "DB_PASSWORD"},
-					Variables:         []string{"REGION", "TIER"},
-				},
+			envConfig: EnvironmentConfig{
+				GHAEnvironment:    "production",
+				RequiredReviewers: []string{"octocat", "team/ops"},
+				WaitTimer:         intPtr(10),
+				BranchPolicy:      EnvBranchPolicyCustom,
+				BranchPatterns:    []string{"main", "release/*"},
+				TagPatterns:       []string{"v*"},
+				Secrets:           []string{"MY_SECRET", "DB_PASSWORD"},
+				Variables:         []string{"REGION", "TIER"},
 			},
 			wantErr: false,
 		},
 		{
-			name: "wait_timer zero is valid",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: intPtr(0)},
-			},
-			wantErr: false,
+			name:      "wait_timer zero is valid",
+			envConfig: EnvironmentConfig{WaitTimer: intPtr(0)},
+			wantErr:   false,
 		},
 		{
-			name: "wait_timer at maximum is valid",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: intPtr(MaxWaitTimerMinutes)},
-			},
-			wantErr: false,
+			name:      "wait_timer at maximum is valid",
+			envConfig: EnvironmentConfig{WaitTimer: intPtr(MaxWaitTimerMinutes)},
+			wantErr:   false,
 		},
 		{
-			name: "wait_timer above maximum is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: intPtr(MaxWaitTimerMinutes + 1)},
-			},
+			name:        "wait_timer above maximum is rejected",
+			envConfig:   EnvironmentConfig{WaitTimer: intPtr(MaxWaitTimerMinutes + 1)},
 			wantErr:     true,
 			errContains: "wait_timer must be between 0 and 43200 minutes",
 		},
 		{
-			name: "negative wait_timer is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {WaitTimer: intPtr(-1)},
-			},
+			name:        "negative wait_timer is rejected",
+			envConfig:   EnvironmentConfig{WaitTimer: intPtr(-1)},
 			wantErr:     true,
 			errContains: "wait_timer must be between 0 and 43200 minutes",
 		},
 		{
-			name: "protected branch policy is valid",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {BranchPolicy: EnvBranchPolicyProtected},
-			},
-			wantErr: false,
+			name:      "protected branch policy is valid",
+			envConfig: EnvironmentConfig{BranchPolicy: EnvBranchPolicyProtected},
+			wantErr:   false,
 		},
 		{
-			name: "all branch policy is valid",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {BranchPolicy: EnvBranchPolicyAll},
-			},
-			wantErr: false,
+			name:      "all branch policy is valid",
+			envConfig: EnvironmentConfig{BranchPolicy: EnvBranchPolicyAll},
+			wantErr:   false,
 		},
 		{
-			name: "unknown branch policy is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {BranchPolicy: "sometimes"},
-			},
+			name:        "unknown branch policy is rejected",
+			envConfig:   EnvironmentConfig{BranchPolicy: "sometimes"},
 			wantErr:     true,
 			errContains: "branch_policy must be one of: protected, custom, all",
 		},
 		{
-			name: "branch_patterns without custom policy is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {BranchPolicy: EnvBranchPolicyProtected, BranchPatterns: []string{"main"}},
-			},
+			name:        "branch_patterns without custom policy is rejected",
+			envConfig:   EnvironmentConfig{BranchPolicy: EnvBranchPolicyProtected, BranchPatterns: []string{"main"}},
 			wantErr:     true,
 			errContains: "branch_patterns is only valid when branch_policy is custom",
 		},
 		{
-			name: "tag_patterns without custom policy is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {TagPatterns: []string{"v*"}},
-			},
+			name:        "tag_patterns without custom policy is rejected",
+			envConfig:   EnvironmentConfig{TagPatterns: []string{"v*"}},
 			wantErr:     true,
 			errContains: "tag_patterns is only valid when branch_policy is custom",
 		},
 		{
-			name: "empty reviewer slug is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {RequiredReviewers: []string{""}},
-			},
+			name:        "empty reviewer slug is rejected",
+			envConfig:   EnvironmentConfig{RequiredReviewers: []string{""}},
 			wantErr:     true,
 			errContains: "required_reviewers[0]",
 		},
 		{
-			name: "whitespace reviewer slug is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {RequiredReviewers: []string{"team ops"}},
-			},
+			name:        "whitespace reviewer slug is rejected",
+			envConfig:   EnvironmentConfig{RequiredReviewers: []string{"team ops"}},
 			wantErr:     true,
 			errContains: "required_reviewers[0]",
 		},
 		{
-			name: "reviewer slug with too many segments is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {RequiredReviewers: []string{"my-org/team/ops"}},
-			},
+			name:        "reviewer slug with too many segments is rejected",
+			envConfig:   EnvironmentConfig{RequiredReviewers: []string{"my-org/team/ops"}},
 			wantErr:     true,
 			errContains: "required_reviewers[0]",
 		},
 		{
-			name: "secret name starting with a digit is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {Secrets: []string{"1SECRET"}},
-			},
+			name:        "secret name starting with a digit is rejected",
+			envConfig:   EnvironmentConfig{Secrets: []string{"1SECRET"}},
 			wantErr:     true,
 			errContains: "secrets[0]",
 		},
 		{
-			name: "secret name with interpolation is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {Secrets: []string{"${{ secrets.X }}"}},
-			},
+			name:        "secret name with interpolation is rejected",
+			envConfig:   EnvironmentConfig{Secrets: []string{"${{ secrets.X }}"}},
 			wantErr:     true,
 			errContains: "secrets[0]",
 		},
 		{
-			name: "variable name with whitespace is rejected",
-			envConfig: map[string]EnvironmentConfig{
-				"prod": {Variables: []string{"BAD NAME"}},
-			},
+			name:        "variable name with whitespace is rejected",
+			envConfig:   EnvironmentConfig{Variables: []string{"BAD NAME"}},
 			wantErr:     true,
 			errContains: "variables[0]",
 		},
@@ -164,8 +132,9 @@ func TestValidateEnvironmentConfigFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &TrunkConfig{
-				Environments:      []string{"prod"},
-				EnvironmentConfig: tt.envConfig,
+				Environments: []EnvironmentEntry{
+					{Name: "prod", EnvironmentConfig: tt.envConfig},
+				},
 			}
 			errs := validateEnvironmentConfig(cfg)
 			if tt.wantErr {
@@ -185,18 +154,16 @@ func TestValidateEnvironmentConfigFields(t *testing.T) {
 }
 
 // TestParseEnvironmentConfigReservedFields asserts a manifest carrying the
-// additive environment_config fields parses into the typed fields, validates at
-// CurrentSchemaVersion, and does not bump schema_version.
+// additive per-environment fields, folded inline onto an environments: entry,
+// parses into the typed fields, validates at CurrentSchemaVersion, and does not
+// bump schema_version.
 func TestParseEnvironmentConfigReservedFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := parseInline(t, `
-environments: [dev, prod]
-deploys:
-  - name: app
-    workflow: .github/workflows/deploy.yaml
-environment_config:
-  prod:
+environments:
+  - dev
+  - name: prod
     gha_environment: production
     required_reviewers: [octocat, team/ops]
     wait_timer: 10
@@ -205,11 +172,21 @@ environment_config:
     tag_patterns: ["v*"]
     secrets: [MY_SECRET, DB_PASSWORD]
     variables: [REGION, TIER]
+deploys:
+  - name: app
+    workflow: .github/workflows/deploy.yaml
 `)
 
-	ec, ok := cfg.EnvironmentConfig["prod"]
-	if !ok {
-		t.Fatalf("environment_config.prod did not parse")
+	var ec EnvironmentConfig
+	found := false
+	for _, entry := range cfg.Environments {
+		if entry.Name == "prod" {
+			ec = entry.EnvironmentConfig
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("environments entry for prod did not parse")
 	}
 	if ec.GHAEnvironment != "production" {
 		t.Fatalf("gha_environment: %q", ec.GHAEnvironment)

@@ -42,7 +42,7 @@ func TestCheckBreakingChangesForMode_ManifestGate(t *testing.T) {
 		return NewPreflighter(PreflighterOptions{
 			Config: &config.CICDFile{
 				Config: &config.TrunkConfig{
-					Environments:         []string{"staging"},
+					Environments:         config.EnvNames("staging"),
 					AllowBreakingChanges: allow,
 				},
 				State: map[string]*config.EnvState{

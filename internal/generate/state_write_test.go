@@ -50,7 +50,7 @@ func TestOrchestrateFinalizeDualStateWrite(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -77,7 +77,7 @@ func TestOrchestrateFinalizeStateTokenOverride(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		StateToken:   "${{ secrets.CASCADE_BOT_TOKEN }}",
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
@@ -97,7 +97,7 @@ func TestOrchestrateFinalizeStateTokenOverride(t *testing.T) {
 func TestReleaseFinalizeDualStateWrite(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	gen := NewReleaseGenerator(cfg, "")
@@ -116,7 +116,7 @@ func TestPromoteFinalizeStateTokenAuth(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		StateToken:   "${{ secrets.CASCADE_BOT_TOKEN }}",
 	}
 
@@ -159,7 +159,7 @@ func TestOrchestrateFinalizeStampsBotAuthor(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -176,7 +176,7 @@ func TestOrchestrateFinalizeStampsBotAuthor(t *testing.T) {
 func TestReleaseFinalizeStampsBotAuthor(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 	}
 
 	content, err := NewReleaseGenerator(cfg, "").Generate()
@@ -195,7 +195,7 @@ func TestStateWriteHonorsCustomGitIdentity(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Git: &config.GitConfig{
 			Mode:      config.GitModeCustom,
 			UserName:  "release-bot",
@@ -225,7 +225,7 @@ func TestStateWriteRetryCeilingAndConvergenceMarker(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -265,7 +265,7 @@ func TestStateWriteEmitsSkipCIMarker(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -316,7 +316,7 @@ func TestStateWriteBindsCASTokenToBaseBlob(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -355,7 +355,7 @@ func TestStateWriteNoEmDash(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},

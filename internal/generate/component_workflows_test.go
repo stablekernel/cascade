@@ -15,7 +15,7 @@ import (
 func twoComponentConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Components: map[string]config.ComponentConfig{
 			"api": {Path: "services/api", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("api-")}},
 			"web": {Path: "services/web", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("web-")}},
@@ -28,7 +28,7 @@ func twoComponentConfig() *config.TrunkConfig {
 // at the output path whose content is byte-identical to a directly built
 // generator. This is the byte-identical guarantee for existing manifests.
 func TestOrchestrateTargets_SingleComponent_ByteIdentical(t *testing.T) {
-	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}}
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "prod")}
 
 	targets, err := orchestrateTargets(cfg, "", ".github/workflows/orchestrate.yaml", nil, false)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestOrchestrate_Components_ScopeSeedStateWrite(t *testing.T) {
 // no components: block keeps writing the flat state.<env> row, byte-identical to
 // the historical behavior (no state.components. path leaks in).
 func TestOrchestrate_SingleComponent_SeedStateWriteStaysFlat(t *testing.T) {
-	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}}
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "prod")}
 	workflow, err := NewGenerator(cfg, "").Generate()
 	require.NoError(t, err)
 	step := updateManifestStep(t, workflow)
@@ -198,7 +198,7 @@ func TestOrchestrate_SingleComponent_SeedStateWriteStaysFlat(t *testing.T) {
 // orchestrate workflow emits no --component flag, keeping its setup invocation
 // byte-identical to the pre-component generator.
 func TestGenerator_SingleComponent_NoComponentFlag(t *testing.T) {
-	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev", "prod"}}
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "prod")}
 	got, err := NewGenerator(cfg, "").Generate()
 	if err != nil {
 		t.Fatalf("Generate: %v", err)

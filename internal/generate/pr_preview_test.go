@@ -15,7 +15,7 @@ import (
 func prPreviewConfig(comment bool) *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		PRPreview: &config.PRPreviewConfig{
 			Enabled: boolPtr(true),
 			Comment: boolPtr(comment),
@@ -61,7 +61,7 @@ func TestPRPreviewGenerator_PRFieldsAreNotInterpolatedIntoRun(t *testing.T) {
 func TestPRPreviewGenerator_DryRunResolvesEnvironment(t *testing.T) {
 	t.Run("multi-env passes first environment", func(t *testing.T) {
 		cfg := prPreviewConfig(false)
-		cfg.Environments = []string{"staging", "prod"}
+		cfg.Environments = config.EnvNames("staging", "prod")
 
 		gen := NewPRPreviewGenerator(cfg, "")
 		content, err := gen.Generate()

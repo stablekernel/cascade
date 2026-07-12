@@ -2,21 +2,23 @@ package config
 
 import "testing"
 
-// TestResolveComponent_DeepMergesEnvironmentConfig proves a component that sets
-// only one environment's config inherits the shared entries for the others, and
-// that within an overridden entry the unset fields fall back to the shared
-// entry's values. Under the previous whole-replace semantics the component's
-// single-key map dropped the shared dev/staging entries entirely.
-func TestResolveComponent_DeepMergesEnvironmentConfig(t *testing.T) {
+// TestResolveComponent_EnvironmentsWholeReplaces proves the folded environments:
+// list is a replace-leaf under component inheritance: a component that sets its
+// own environments: list (settings and all) replaces the shared list outright
+// rather than merging per-entry, while a component that leaves environments:
+// unset inherits the shared list, per-entry settings and all. This mirrors the
+// documented EnvironmentEntry contract (its custom UnmarshalYAML makes it a
+// replace-leaf) now that the per-env settings live inline on each entry instead
+// of in a separately-keyed environment_config map.
+func TestResolveComponent_EnvironmentsWholeReplaces(t *testing.T) {
 	cfg := parseInline(t, `
 trunk_branch: main
-environments: [dev, staging, prod]
-environment_config:
-  dev:
+environments:
+  - name: dev
     gha_environment: development
-  staging:
+  - name: staging
     gha_environment: staging-env
-  prod:
+  - name: prod
     gha_environment: production
     wait_timer: 10
 components:
@@ -24,8 +26,9 @@ components:
     path: services/api
     tag_grammar:
       prefix: api-
-    environment_config:
-      prod:
+    environments:
+      - name: prod
+        gha_environment: production
         wait_timer: 15
   web:
     path: services/web
@@ -33,27 +36,36 @@ components:
       prefix: web-
 `)
 
-	rc, err := cfg.ResolveComponent("api")
+	api, err := cfg.ResolveComponent("api")
 	if err != nil {
 		t.Fatalf("ResolveComponent(api): %v", err)
 	}
-	ec := rc.Config.EnvironmentConfig
-	if len(ec) != 3 {
-		t.Fatalf("environment_config keys = %v, want dev/staging/prod all present", ec)
+	// api set its own environments: list, so the shared dev/staging entries do
+	// not carry over; only the component's own prod entry is present.
+	if got := api.Config.Environments; len(got) != 1 || got[0].Name != "prod" {
+		t.Fatalf("api environments = %v, want only its own override [prod]", got)
 	}
-	if ec["dev"].GHAEnvironment != "development" {
-		t.Errorf("dev env_config dropped: %#v", ec["dev"])
+	if got := api.Config.Environments[0].WaitTimerMinutes(); got != 15 {
+		t.Errorf("api prod wait_timer = %d, want override 15", got)
 	}
-	if ec["staging"].GHAEnvironment != "staging-env" {
-		t.Errorf("staging env_config dropped: %#v", ec["staging"])
+
+	web, err := cfg.ResolveComponent("web")
+	if err != nil {
+		t.Fatalf("ResolveComponent(web): %v", err)
 	}
-	// Within the overridden prod entry: wait_timer overrides, gha_environment
-	// inherits the shared entry (within-key deep merge).
-	if ec["prod"].WaitTimerMinutes() != 15 {
-		t.Errorf("prod wait_timer = %d, want override 15", ec["prod"].WaitTimerMinutes())
+	// web left environments: unset, so it inherits the shared list intact,
+	// including each entry's inline settings.
+	if len(web.Config.Environments) != 3 {
+		t.Fatalf("web environments = %v, want inherited dev/staging/prod", web.Config.Environments)
 	}
-	if ec["prod"].GHAEnvironment != "production" {
-		t.Errorf("prod gha_environment = %q, want inherited production", ec["prod"].GHAEnvironment)
+	if web.Config.Environments[0].GHAEnvironment != "development" {
+		t.Errorf("web dev env dropped: %#v", web.Config.Environments[0])
+	}
+	if web.Config.Environments[1].GHAEnvironment != "staging-env" {
+		t.Errorf("web staging env dropped: %#v", web.Config.Environments[1])
+	}
+	if web.Config.Environments[2].WaitTimerMinutes() != 10 {
+		t.Errorf("web prod wait_timer = %d, want inherited 10", web.Config.Environments[2].WaitTimerMinutes())
 	}
 }
 

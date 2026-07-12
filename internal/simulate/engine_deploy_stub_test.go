@@ -19,7 +19,7 @@ func seedManifestWithCallbacks(t *testing.T) string {
 	return writeManifest(t, &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "uat", "prod"},
+			Environments: config.EnvNames("dev", "uat", "prod"),
 			Builds: []config.BuildConfig{
 				{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 			},

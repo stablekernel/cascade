@@ -146,13 +146,13 @@ func New(opts Options) (*Rollbacker, error) {
 	// ladder, so the guards behave byte-identically to before.
 	var environments []string
 	if cicdFile.Config != nil {
-		environments = cicdFile.Config.Environments
+		environments = cicdFile.Config.EnvironmentNames()
 		if opts.Component != "" {
 			resolved, err := cicdFile.Config.ResolveComponent(opts.Component)
 			if err != nil {
 				return nil, fmt.Errorf("resolving component %q: %w", opts.Component, err)
 			}
-			environments = resolved.Config.Environments
+			environments = resolved.Config.EnvironmentNames()
 		}
 	}
 

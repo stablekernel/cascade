@@ -94,12 +94,12 @@ func TestEnvGate_Orchestrate_ExternalDeploy_NoJobLevelEnvironment(t *testing.T) 
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "staging"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -121,12 +121,12 @@ func TestEnvGate_Orchestrate_ExternalDeploy_NoJobLevelEnvironment(t *testing.T) 
 func TestEnvGate_Promote_ExternalSingleDeploy_NoJobLevelEnvironment(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -151,12 +151,12 @@ func TestEnvGate_Promote_ExternalSingleDeploy_NoJobLevelEnvironment(t *testing.T
 func TestEnvGate_Promote_ExternalProdDeploy_NoJobLevelEnvironment(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "svc", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -185,12 +185,12 @@ func TestEnvGate_Warning_ExternalDeployWithGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "staging"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -215,12 +215,12 @@ func TestEnvGate_Warning_InlineDeployWithGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"staging", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "staging"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "app", Run: "echo deploying", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 
@@ -249,12 +249,13 @@ func TestEnvGate_Actionlint_ExternalDeployWithGHAEnvironment(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "dev"},
+			{Name: "staging"},
+			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
-		},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"prod": {GHAEnvironment: "production"},
 		},
 	}
 

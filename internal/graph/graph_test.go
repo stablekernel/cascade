@@ -24,7 +24,7 @@ func writeManifest(t *testing.T) string {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Validate: &config.ValidateConfig{
 			Workflow: ".github/workflows/validate.yaml",
 		},
@@ -53,7 +53,7 @@ func writeDivergedManifest(t *testing.T) string {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 	}
 	manifest := map[string]any{
 		config.DefaultManifestKey: config.CICDFile{
@@ -157,7 +157,7 @@ func writeCrossRepoManifest(t *testing.T) string {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 		},

@@ -73,7 +73,7 @@ func TestDefaultPromotion(t *testing.T) {
 			cicdFile := &config.CICDFile{
 				Config: &config.TrunkConfig{
 					TrunkBranch:  "master",
-					Environments: tt.environments,
+					Environments: config.EnvNames(tt.environments...),
 				},
 				State: tt.state,
 			}
@@ -217,7 +217,7 @@ func TestCascadePromotion(t *testing.T) {
 			cicdFile := &config.CICDFile{
 				Config: &config.TrunkConfig{
 					TrunkBranch:  "master",
-					Environments: []string{"dev", "test", "uat", "prod"},
+					Environments: config.EnvNames("dev", "test", "uat", "prod"),
 				},
 				State: tt.state,
 			}
@@ -293,7 +293,7 @@ func TestDefaultPromotion_StripsRCSuffixOnPublishEnv(t *testing.T) {
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "master",
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"dev":  {SHA: "abc123", Version: "v1.0.0-rc.0"},
@@ -359,7 +359,7 @@ func TestCascadePromotion_StripsRCSuffixOnPublishEnv(t *testing.T) {
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "master",
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"dev":  {SHA: "abc123", Version: "v1.0.0-rc.0"},
@@ -422,7 +422,7 @@ func TestCascadePromotion_AtomicBehavior(t *testing.T) {
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "master",
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		},
 		State: map[string]*config.EnvState{
 			"dev":  {SHA: "new-sha", Version: "v1.0.0-rc.0"},

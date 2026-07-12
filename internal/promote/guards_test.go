@@ -20,7 +20,7 @@ func writeGuardConfig(t *testing.T, environments []string, state map[string]*con
 	cicdFile := &config.CICDFile{
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: environments,
+			Environments: config.EnvNames(environments...),
 		},
 		State: state,
 	}
@@ -130,7 +130,7 @@ func TestPromote_IntoDivergedEnv_MissingPatch_Blocked(t *testing.T) {
 	}
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		},
 		State: state,
 	}
@@ -164,7 +164,7 @@ func TestPromote_IntoDivergedEnv_PatchesContained_Allowed(t *testing.T) {
 	}
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		},
 		State: state,
 	}
@@ -197,7 +197,7 @@ func TestPromote_IntoDivergedEnv_Force_OverridesWithWarning(t *testing.T) {
 	}
 	cfg := &config.CICDFile{
 		Config: &config.TrunkConfig{
-			Environments: []string{"dev", "test", "uat", "prod"},
+			Environments: config.EnvNames("dev", "test", "uat", "prod"),
 		},
 		State: state,
 	}

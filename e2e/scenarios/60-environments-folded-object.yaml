@@ -1,0 +1,54 @@
+name: "Environments Folded Object"
+description: |
+  Exercises the folded environments list end to end: a single environments list
+  mixes the bare-string sugar (dev) with object entries carrying inline
+  per-environment settings (a gha_environment mapping, a wait timer, and an
+  environment_url), replacing the former separate environment_config map. The
+  scenario declares native GitHub Deployments so the folded environment_url is
+  consumed by generation, generates the workflows, then regenerates and proves
+  the output is byte-identical with no drift, confirming the folded object shape
+  parses, validates, and reaches the native-environment and deployment sinks.
+
+config:
+  trunk_branch: main
+  environments:
+    - dev
+    - name: staging
+      gha_environment: staging
+      wait_timer: 5
+    - name: prod
+      gha_environment: production
+      environment_url: "https://app.example.com"
+  deployments:
+    enabled: true
+    keep_prior_active: true
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Seed a minimal source tree and generate"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "environment_url=\"https://app.example.com\""
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

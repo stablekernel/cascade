@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/stablekernel/cascade/internal/config"
 )
 
 func TestRunner_ExecuteStep_Commit(t *testing.T) {
@@ -35,7 +37,7 @@ func TestRunner_ValidateScenario(t *testing.T) {
 	scenario := &MultiStepScenario{
 		Name: "Test",
 		Config: Config{
-			Environments: []string{"dev", "prod"},
+			Environments: config.EnvNames("dev", "prod"),
 		},
 		Steps: []Step{
 			{Name: "Step 1", Action: "commit", Commit: &CommitStep{Message: "test", Files: map[string]string{"a": "b"}}},
@@ -381,7 +383,7 @@ func TestRunner_Run_SimpleScenario(t *testing.T) {
 	scenario := &MultiStepScenario{
 		Name: "Simple test",
 		Config: Config{
-			Environments: []string{},
+			Environments: config.EnvNames(),
 		},
 		Steps: []Step{
 			{

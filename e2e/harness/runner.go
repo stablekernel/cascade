@@ -1254,7 +1254,7 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 			// diverged env to exercise the diverged-source guard.
 			source := "dev"
 			if len(config.Environments) > 0 {
-				source = config.Environments[0]
+				source = config.Environments[0].Name
 			}
 			if promote.Source != "" {
 				source = promote.Source
@@ -1376,7 +1376,7 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 	// once it's been promoted into any later env, it's "blessed" and the
 	// workflow's prerelease step would have flipped its draft flag. Collect
 	// the set of RC versions that are present in any non-firstEnv state.
-	promotedRCs := r.readPromotedRCVersions(ctx, config.Environments)
+	promotedRCs := r.readPromotedRCVersions(ctx, config.EnvironmentNames())
 
 	// Record tags and create release entries for version tags
 	// In real GitHub, the workflow creates both tags and releases

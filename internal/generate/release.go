@@ -98,7 +98,7 @@ func (g *ReleaseGenerator) writeHeader(sb *strings.Builder) {
 	// Document single environment
 	sb.WriteString("# Environment: ")
 	if len(g.config.Environments) > 0 {
-		sb.WriteString(g.config.Environments[0])
+		sb.WriteString(g.config.Environments[0].Name)
 	}
 	sb.WriteString("\n#\n")
 
@@ -161,7 +161,7 @@ func (g *ReleaseGenerator) writeJobs(sb *strings.Builder) {
 func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 	env := ""
 	if len(g.config.Environments) > 0 {
-		env = g.config.Environments[0]
+		env = g.config.Environments[0].Name
 	}
 
 	sb.WriteString("  preflight:\n")

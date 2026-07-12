@@ -100,13 +100,13 @@ func TestMultiRepoRunner_Setup(t *testing.T) {
 			"service-a": {
 				Config: config.TrunkConfig{
 					TrunkBranch:  "main",
-					Environments: []string{"dev", "prod"},
+					Environments: config.EnvNames("dev", "prod"),
 				},
 			},
 			"service-b": {
 				Config: config.TrunkConfig{
 					TrunkBranch:  "main",
-					Environments: []string{"dev", "prod"},
+					Environments: config.EnvNames("dev", "prod"),
 				},
 			},
 		},
@@ -144,7 +144,7 @@ func TestMultiRepoRunner_CommitStep(t *testing.T) {
 			"my-repo": {
 				Config: config.TrunkConfig{
 					TrunkBranch:  "main",
-					Environments: []string{"dev"},
+					Environments: config.EnvNames("dev"),
 				},
 			},
 		},
@@ -198,7 +198,7 @@ func TestMultiRepoRunner_Interpolation(t *testing.T) {
 			"my-repo": {
 				Config: config.TrunkConfig{
 					TrunkBranch:  "main",
-					Environments: []string{"dev"},
+					Environments: config.EnvNames("dev"),
 				},
 			},
 		},
@@ -250,7 +250,7 @@ func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
 		Name: "primary",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "master",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			External: []config.ExternalRepoConfig{
 				{
 					Repo: "org/satellite",
@@ -275,7 +275,7 @@ func TestMultiRepoRunner_CrossRepoDispatch(t *testing.T) {
 		Name: "satellite",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "cdk", Workflow: ".github/workflows/deploy.yaml"},
 			},
@@ -330,13 +330,13 @@ func TestMultiRepoRunner_FullScenario(t *testing.T) {
 			"primary": {
 				Config: config.TrunkConfig{
 					TrunkBranch:  "master",
-					Environments: []string{"dev", "test", "prod"},
+					Environments: config.EnvNames("dev", "test", "prod"),
 				},
 			},
 			"satellite": {
 				Config: config.TrunkConfig{
 					TrunkBranch:  "main",
-					Environments: []string{"dev", "test", "prod"},
+					Environments: config.EnvNames("dev", "test", "prod"),
 				},
 			},
 		},
@@ -403,7 +403,7 @@ func TestMultiRepoRunner_ConcurrentExternalUpdatesPreserveBothSlots(t *testing.T
 		Name: "primary",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "master",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			External: []config.ExternalRepoConfig{
 				{
 					Repo: "org/cdk-infra",
@@ -435,7 +435,7 @@ func TestMultiRepoRunner_ConcurrentExternalUpdatesPreserveBothSlots(t *testing.T
 		Name: "cdk-infra",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "cdk", Workflow: ".github/workflows/deploy.yaml"},
 			},
@@ -450,7 +450,7 @@ func TestMultiRepoRunner_ConcurrentExternalUpdatesPreserveBothSlots(t *testing.T
 		Name: "lambda-service",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "lambda", Workflow: ".github/workflows/deploy.yaml"},
 			},

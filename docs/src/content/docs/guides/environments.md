@@ -7,7 +7,7 @@ This guide covers adding an environment to an existing pipeline, configuring eac
 
 ## Add an environment
 
-`environments` is an ordered list; position, not name, carries meaning. The last environment is the release stage, the second-to-last is the prerelease stage. Add a name at the position you want, then regenerate:
+`environments` is an ordered list; position defines the promotion ladder. By default the last environment is the release stage and the second-to-last is the prerelease stage. Each entry is a bare name (an environment with no extra settings) or an object carrying that environment's name, optional `role`, and inline settings. Add an entry at the position you want, then regenerate:
 
 ```yaml
 environments: [dev, staging, prod]
@@ -17,15 +17,16 @@ environments: [dev, staging, prod]
 cascade generate-workflow -f
 ```
 
-cascade adds the new environment's `state.<env>` entry automatically the next time orchestrate or promote finalizes; you never hand-author `state:`. Appending to the end of the list shifts which environment is the release stage, since that role is always the last position, so reorder deliberately rather than just appending if you want to keep an existing environment as production.
+cascade adds the new environment's `state.<env>` entry automatically the next time orchestrate or promote finalizes; you never hand-author `state:`. Appending to the end of the list shifts which environment is the release stage, since that role defaults to the last position, so reorder deliberately rather than just appending if you want to keep an existing environment as production. To pin the release stage regardless of order, set `role: release` on that entry (see [Roles](#pin-a-role-explicitly)).
 
 ## Per-environment config
 
-`environment_config.<env>` carries settings for one environment, keyed by its cascade name. All fields are optional and additive.
+Per-environment settings live inline on an environment's object entry, replacing the bare string. All fields are optional and additive; a bare-string entry carries none of them.
 
 ```yaml
-environment_config:
-  prod:
+environments:
+  - dev
+  - name: prod
     gha_environment: production
     required_reviewers: ["octocat", "team/ops"]
     wait_timer: 10
@@ -52,6 +53,21 @@ A few more fields round out the block, mostly for the `custom` branch policy or 
 | `environment_url` | URL reported to the GitHub Deployments API for this environment's deployment status. |
 
 GitHub Environment support is shipped: `gha_environment` drives native GitHub deployments and `environment_url`, and the fields above feed the `environments` command below. It lands in generated output today, not a "modeled but not emitted" state.
+
+## Pin a role explicitly
+
+By default the release and prerelease stages are positional: the last environment is the release stage, the second-to-last is prerelease. Set `role: release` or `role: prerelease` on an entry to declare that stage explicitly, so reordering the list no longer silently changes which environment publishes.
+
+```yaml
+environments:
+  - name: dev
+  - name: prod
+    role: release       # prod publishes even if it is not last
+  - name: canary
+    role: prerelease
+```
+
+`role` is optional; when omitted the positional default applies unchanged. At most one entry may declare `role: release` and at most one `role: prerelease`.
 
 ## Apply GitHub Environment settings with the `environments` command
 

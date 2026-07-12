@@ -14,7 +14,7 @@ import (
 func envConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod"},
+		Environments: config.EnvNames("dev", "staging", "prod"),
 	}
 }
 

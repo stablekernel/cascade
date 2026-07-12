@@ -17,7 +17,7 @@ import (
 func rollbackTestConfig() *config.TrunkConfig {
 	return &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:     "services",
@@ -32,13 +32,13 @@ func TestRollbackGenerator_Enabled_FalseWithOneEnv(t *testing.T) {
 	// environment, which reverts via a merge to trunk, not a rollback. With no
 	// promoted environment to roll back, the workflow is not emitted, mirroring
 	// the hotfix generator.
-	cfg := &config.TrunkConfig{Environments: []string{"prod"}}
+	cfg := &config.TrunkConfig{Environments: config.EnvNames("prod")}
 	g := NewRollbackGenerator(cfg, "")
 	assert.False(t, g.Enabled())
 }
 
 func TestRollbackGenerator_Enabled_TrueWithTwoEnvs(t *testing.T) {
-	cfg := &config.TrunkConfig{Environments: []string{"dev", "prod"}}
+	cfg := &config.TrunkConfig{Environments: config.EnvNames("dev", "prod")}
 	g := NewRollbackGenerator(cfg, "")
 	assert.True(t, g.Enabled())
 }
@@ -52,7 +52,7 @@ func TestRollbackGenerator_Enabled_FalseWithZeroEnv(t *testing.T) {
 func TestRollbackGenerator_EnvironmentChoices_ExcludeFirstEnv(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "staging", "prod"},
+		Environments: config.EnvNames("dev", "staging", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "services", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -130,7 +130,7 @@ func TestRollbackGenerator_FinalizeNeedsWiring(t *testing.T) {
 func TestRollbackGenerator_FinalizeThreadsDeployResults(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "services", Workflow: ".github/workflows/deploy.yaml"},
 			{Name: "web-api", Workflow: ".github/workflows/deploy-web-api.yaml"},

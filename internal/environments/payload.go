@@ -115,8 +115,8 @@ type OperatorTodo struct {
 // "all branches" policy, and no reviewers, secrets, or variables.
 func Build(cfg *config.TrunkConfig) Payload {
 	out := Payload{Environments: make([]Environment, 0, len(cfg.Environments))}
-	for _, name := range cfg.Environments {
-		ec := cfg.EnvironmentConfig[name]
+	for _, name := range cfg.EnvironmentNames() {
+		ec, _ := cfg.EnvConfig(name)
 
 		ghaEnv := ec.GHAEnvironment
 		if ghaEnv == "" {

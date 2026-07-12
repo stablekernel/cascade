@@ -27,7 +27,7 @@ func TestMultiRepoHarness_CreateRepo(t *testing.T) {
 		Name: "test-service",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "app", Workflow: ".github/workflows/deploy.yaml"},
 			},
@@ -67,7 +67,7 @@ func TestMultiRepoHarness_SetupPrimarySatellite(t *testing.T) {
 		Name: "primary-backend",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "master",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "api", Workflow: ".github/workflows/deploy-api.yaml"},
 			},
@@ -87,7 +87,7 @@ func TestMultiRepoHarness_SetupPrimarySatellite(t *testing.T) {
 		Name: "cdk-infra",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev", "test", "prod"},
+			Environments: config.EnvNames("dev", "test", "prod"),
 			Deploys: []config.DeployConfig{
 				{Name: "cdk", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"cdk/**"}},
 			},
@@ -137,7 +137,7 @@ func TestMultiRepoHarness_CommitToRepo(t *testing.T) {
 		Name: "commit-test",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev"},
+			Environments: config.EnvNames("dev"),
 		},
 	}
 
@@ -173,7 +173,7 @@ func TestMultiRepoHarness_TagOperations(t *testing.T) {
 		Name: "tag-test",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev"},
+			Environments: config.EnvNames("dev"),
 		},
 	}
 
@@ -207,7 +207,7 @@ func TestMultiRepoHarness_FileContent(t *testing.T) {
 		Name: "file-test",
 		Config: &config.TrunkConfig{
 			TrunkBranch:  "main",
-			Environments: []string{"dev"},
+			Environments: config.EnvNames("dev"),
 		},
 		Commits: []Commit{
 			{
@@ -242,9 +242,9 @@ func TestMultiRepoHarness_MultipleRepos(t *testing.T) {
 
 	// Create multiple independent repos
 	repos := []MultiRepoSetup{
-		{Name: "service-a", Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev"}}},
-		{Name: "service-b", Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev"}}},
-		{Name: "service-c", Config: &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"dev"}}},
+		{Name: "service-a", Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev")}},
+		{Name: "service-b", Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev")}},
+		{Name: "service-c", Config: &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev")}},
 	}
 
 	for _, setup := range repos {

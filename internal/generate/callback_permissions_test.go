@@ -60,7 +60,7 @@ func TestOrchestrate_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:        "app",
@@ -95,7 +95,7 @@ func TestOrchestrate_CallbackJobPermissions_CarryDeclaredScopes(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",
@@ -149,7 +149,7 @@ func TestOrchestrate_TopLevelPermissions_NoCallbackPermsByteIdentical(t *testing
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{
 				Name:     "app",
@@ -171,7 +171,7 @@ func TestOrchestrate_TopLevelPermissions_NoCallbackPermsByteIdentical(t *testing
 func TestPromote_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:        "services",
@@ -201,7 +201,7 @@ func TestPromote_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 func TestRollback_TopLevelPermissions_ExcludesCallbackScopes(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{
 				Name:        "services",

@@ -147,10 +147,10 @@ func TestApplyComponentLadder_EmptyComponentUnchanged(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(path, config.DefaultManifestKey)
 	require.NoError(t, err)
 
-	before := append([]string(nil), cicdFile.Config.Environments...)
+	before := append([]string(nil), cicdFile.Config.EnvironmentNames()...)
 	require.NoError(t, applyComponentLadder(cicdFile, ""))
-	require.Equal(t, before, cicdFile.Config.Environments, "empty component must not narrow the ladder")
-	require.Equal(t, []string{"dev", "staging", "prod"}, cicdFile.Config.Environments)
+	require.Equal(t, before, cicdFile.Config.EnvironmentNames(), "empty component must not narrow the ladder")
+	require.Equal(t, []string{"dev", "staging", "prod"}, cicdFile.Config.EnvironmentNames())
 }
 
 // TestApplyComponentLadder_NarrowsToComponentSubset proves the helper narrows the
@@ -161,5 +161,5 @@ func TestApplyComponentLadder_NarrowsToComponentSubset(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, applyComponentLadder(cicdFile, "api"))
-	require.Equal(t, []string{"dev", "staging"}, cicdFile.Config.Environments)
+	require.Equal(t, []string{"dev", "staging"}, cicdFile.Config.EnvironmentNames())
 }

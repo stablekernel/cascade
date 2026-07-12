@@ -398,18 +398,9 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 		}
 	}
 
-	// environment_config keys must reference declared environments.
-	if len(cfg.EnvironmentConfig) > 0 {
-		envSet := make(map[string]bool, len(cfg.Environments))
-		for _, e := range cfg.Environments {
-			envSet[e] = true
-		}
-		for _, name := range sortedKeys(toEnvKeyed(cfg.EnvironmentConfig)) {
-			if !envSet[name] {
-				errs = append(errs, fmt.Sprintf("environment_config has key %q which is not in environments %v", name, cfg.Environments))
-			}
-		}
-	}
+	// Folding per-environment settings onto each environments entry makes the
+	// former "environment_config key must be a declared environment" check
+	// structurally impossible to violate: settings ride on the entry itself.
 
 	errs = append(errs, validateTelemetry(cfg.Telemetry)...)
 	errs = append(errs, validateEnvironmentConfig(cfg)...)
@@ -664,13 +655,13 @@ func validateSecretReference(field, value string) []string {
 // credential values. The env-key-references-a-declared-environment check lives
 // in validateConfigLevel and is not duplicated here.
 func validateEnvironmentConfig(cfg *TrunkConfig) []string {
-	if len(cfg.EnvironmentConfig) == 0 {
+	if len(cfg.Environments) == 0 {
 		return nil
 	}
 	var errs []string
-	for _, name := range sortedKeys(toEnvKeyed(cfg.EnvironmentConfig)) {
-		ec := cfg.EnvironmentConfig[name]
-		prefix := "environment_config." + name
+	for i, entry := range cfg.Environments {
+		ec := entry.EnvironmentConfig
+		prefix := fmt.Sprintf("environments[%d]", i)
 
 		if ec.WaitTimer != nil && (*ec.WaitTimer < 0 || *ec.WaitTimer > MaxWaitTimerMinutes) {
 			errs = append(errs, fmt.Sprintf("%s.wait_timer must be between 0 and %d minutes", prefix, MaxWaitTimerMinutes))
@@ -707,6 +698,54 @@ func validateEnvironmentConfig(cfg *TrunkConfig) []string {
 				errs = append(errs, fmt.Sprintf("%s.variables[%d] %q must be a valid GitHub Actions variable name (letters, digits, underscores; not starting with a digit)", prefix, i, v))
 			}
 		}
+	}
+	return errs
+}
+
+// validateEnvironments enforces the structural rules the folded environments
+// list of objects introduces: every entry needs a non-empty, unique name; a
+// declared role must be a known value with at most one release and one
+// prerelease across the list; and any unmodeled key on an environment mapping is
+// a hard error with a did-you-mean suggestion (mirroring the top-level and
+// per-callback strictness).
+func validateEnvironments(cfg *TrunkConfig) []string {
+	if len(cfg.Environments) == 0 {
+		return nil
+	}
+	var errs []string
+	known := knownEnvironmentEntryFields()
+	seen := make(map[string]bool, len(cfg.Environments))
+	roleCount := make(map[string]int, 2)
+	for i, entry := range cfg.Environments {
+		prefix := fmt.Sprintf("environments[%d]", i)
+		if entry.Name == "" {
+			errs = append(errs, fmt.Sprintf("%s.name is required", prefix))
+		} else if seen[entry.Name] {
+			errs = append(errs, fmt.Sprintf("duplicate environment name: %s", entry.Name))
+		} else {
+			seen[entry.Name] = true
+		}
+		switch entry.Role {
+		case "", EnvRolePrerelease, EnvRoleRelease:
+			if entry.Role != "" {
+				roleCount[entry.Role]++
+			}
+		default:
+			errs = append(errs, fmt.Sprintf("%s.role must be one of: %s, %s", prefix, EnvRolePrerelease, EnvRoleRelease))
+		}
+		for _, key := range sortedKeys(toAnyKeyed(entry.Extra)) {
+			if suggestion := fieldSuggestion(key, known, legacyFieldRenames); suggestion != "" {
+				errs = append(errs, fmt.Sprintf("%s has unknown field %q; did you mean %q?", prefix, key, suggestion))
+			} else {
+				errs = append(errs, fmt.Sprintf("%s has unknown field %q", prefix, key))
+			}
+		}
+	}
+	if roleCount[EnvRoleRelease] > 1 {
+		errs = append(errs, fmt.Sprintf("at most one environment may declare role: %s", EnvRoleRelease))
+	}
+	if roleCount[EnvRolePrerelease] > 1 {
+		errs = append(errs, fmt.Sprintf("at most one environment may declare role: %s", EnvRolePrerelease))
 	}
 	return errs
 }
@@ -893,15 +932,6 @@ func sortedKeys(m map[string]string) []string {
 
 // toStringKeyed adapts a DispatchInput map to a string-keyed map for sortedKeys.
 func toStringKeyed(m map[string]DispatchInput) map[string]string {
-	out := make(map[string]string, len(m))
-	for k := range m {
-		out[k] = ""
-	}
-	return out
-}
-
-// toEnvKeyed adapts an EnvironmentConfig map to a string-keyed map for sortedKeys.
-func toEnvKeyed(m map[string]EnvironmentConfig) map[string]string {
 	out := make(map[string]string, len(m))
 	for k := range m {
 		out[k] = ""

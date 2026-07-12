@@ -72,7 +72,7 @@ func NewOrchestrator(configPath, manifestKey, environment string, opts ...Option
 		log.Debug("No environment specified and no environments configured - using state key: %s", environment)
 	}
 
-	log.Debug("Environments: %v", cicdFile.Config.Environments)
+	log.Debug("Environments: %v", cicdFile.Config.EnvironmentNames())
 	log.Debug("Base directory: %s", baseDir)
 
 	o := &Orchestrator{
@@ -399,7 +399,7 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 		return o.calculateComponentVersion()
 	}
 
-	envs := o.cicdFile.Config.Environments
+	envs := o.cicdFile.Config.EnvironmentNames()
 
 	// Get current environment's version and next env's version
 	var currentDevVersion, nextEnvVersion, nextEnvSHA string
@@ -594,7 +594,7 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 //  3. Initial commit: only when nothing has been released yet (truly the
 //     first release). The changelog is then the full repo introduction.
 func (o *Orchestrator) calculateChangelogRefs() (string, string) {
-	envs := o.cicdFile.Config.Environments
+	envs := o.cicdFile.Config.EnvironmentNames()
 	envIndex := indexOf(envs, o.environment)
 
 	// 1. Intermediate env: compare against the next env's state.

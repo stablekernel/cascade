@@ -47,7 +47,7 @@ func TestOrchestrate_TopLevelLeastPrivilege(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev"},
+		Environments: config.EnvNames("dev"),
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -93,7 +93,7 @@ func TestOrchestrate_NativeDeployments_JobLevelDeploymentsWrite(t *testing.T) {
 func TestPromote_TopLevelLeastPrivilege(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "services", Workflow: ".github/workflows/deploy.yaml"},
 		},
@@ -122,14 +122,13 @@ func TestPromote_NativeDeployments_JobLevelDeploymentsWrite(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"production"},
+		Environments: []config.EnvironmentEntry{
+			{Name: "production", EnvironmentConfig: config.EnvironmentConfig{EnvironmentURL: "https://app.example.com"}},
+		},
 		Deploys: []config.DeployConfig{
 			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
 		},
 		Deployments: &config.DeploymentsConfig{Enabled: boolPtr(true)},
-		EnvironmentConfig: map[string]config.EnvironmentConfig{
-			"production": {EnvironmentURL: "https://app.example.com"},
-		},
 	}
 
 	out, err := NewPromoteGenerator(cfg, tmpDir).Generate()
@@ -149,7 +148,7 @@ func TestPromote_NativeDeployments_JobLevelDeploymentsWrite(t *testing.T) {
 func TestHotfix_TopLevelLeastPrivilege(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 	}
 
 	out, err := NewHotfixGenerator(cfg, "").Generate()
@@ -178,7 +177,7 @@ func TestHotfix_TopLevelLeastPrivilege(t *testing.T) {
 func TestRollback_TopLevelLeastPrivilege(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"dev", "prod"},
+		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{
 			{Name: "services", Workflow: ".github/workflows/deploy.yaml"},
 		},

@@ -16,7 +16,7 @@ import (
 // token source configured, no minting step and no minted-token fallback ref are
 // emitted, so generated output stays exactly as before.
 func TestReleaseGenerator_NoAppTokenByDefault(t *testing.T) {
-	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}}
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("prod")}
 	content, err := NewReleaseGenerator(cfg, "").Generate()
 	require.NoError(t, err)
 
@@ -33,7 +33,7 @@ func TestReleaseGenerator_NoAppTokenByDefault(t *testing.T) {
 func TestReleaseGenerator_ReleaseAppTokenMints(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		ReleaseTokenApp: &config.AppTokenSource{
 			AppID:      "CASCADE_APP_ID",
 			PrivateKey: "CASCADE_APP_PRIVATE_KEY",
@@ -62,7 +62,7 @@ func TestReleaseGenerator_ReleaseAppTokenMints(t *testing.T) {
 func TestReleaseGenerator_StateAppTokenMints(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		StateTokenApp: &config.AppTokenSource{
 			AppID:      "CASCADE_APP_ID",
 			PrivateKey: "CASCADE_APP_PRIVATE_KEY",
@@ -83,7 +83,7 @@ func TestReleaseGenerator_StateAppTokenMints(t *testing.T) {
 func TestMintStep_FallbackPrefersConfiguredStaticToken(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		ReleaseToken: "MY_RELEASE_PAT",
 		ReleaseTokenApp: &config.AppTokenSource{
 			AppID:      "CASCADE_APP_ID",
@@ -114,7 +114,7 @@ func TestResolveTokenRef_OffStateIdentity(t *testing.T) {
 func TestReleaseGenerator_ReleaseTokenDefaultsToStateToken(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		StateToken:   "${{ secrets.CASCADE_BOT_TOKEN }}",
 	}
 	content, err := NewReleaseGenerator(cfg, "").Generate()
@@ -129,7 +129,7 @@ func TestReleaseGenerator_ReleaseTokenDefaultsToStateToken(t *testing.T) {
 // compat state: with neither release_token nor state_token set, release steps
 // keep emitting the historical GITHUB_TOKEN default byte-for-byte.
 func TestReleaseGenerator_BothTokensUnsetKeepsGithubToken(t *testing.T) {
-	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: []string{"prod"}}
+	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("prod")}
 	content, err := NewReleaseGenerator(cfg, "").Generate()
 	require.NoError(t, err)
 
@@ -142,7 +142,7 @@ func TestReleaseGenerator_BothTokensUnsetKeepsGithubToken(t *testing.T) {
 func TestMintStepIndentation(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		ReleaseTokenApp: &config.AppTokenSource{
 			AppID:      "CASCADE_APP_ID",
 			PrivateKey: "CASCADE_APP_PRIVATE_KEY",
@@ -166,7 +166,7 @@ func TestAppTokenSource_Actionlint(t *testing.T) {
 
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
-		Environments: []string{"prod"},
+		Environments: config.EnvNames("prod"),
 		ReleaseTokenApp: &config.AppTokenSource{
 			AppID:      "CASCADE_APP_ID",
 			PrivateKey: "CASCADE_APP_PRIVATE_KEY",
