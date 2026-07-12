@@ -650,16 +650,19 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 	// [envs..., "release", prodEnv]. Cascade walks this chain atomically;
 	// when it crosses into the prod env, a "release" promotion is inserted
 	// before the prod promotion (release marker advance + then deploy).
+	// Role-aware, positional by default: role: on an environments entry moves the
+	// prerelease/release markers, matching the default (single-step) path so both
+	// modes agree on where prerelease and release land for the same manifest.
 	releaseIdx := indexOf(envs, "release")
 	var prereleaseEnv, publishEnv string
 	if releaseIdx > 0 {
 		prereleaseEnv = envs[releaseIdx-1]
 		publishEnv = "release"
 	} else if len(envs) >= 2 {
-		prereleaseEnv = envs[len(envs)-2]
-		publishEnv = envs[len(envs)-1]
+		prereleaseEnv = p.cicdFile.Config.PrereleaseEnvironment()
+		publishEnv = p.cicdFile.Config.ReleaseEnvironment()
 	}
-	prodEnv := envs[len(envs)-1]
+	prodEnv := p.cicdFile.Config.ReleaseEnvironment()
 	semVersion := p.stripPreRelease(sourceState.Version)
 
 	// Build promotions for envs[sourceIdx+1..targetIdx]. Materialize "release"

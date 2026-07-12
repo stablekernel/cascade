@@ -10,9 +10,9 @@
 #              All intermediate environments updated with same artifact
 #              Fails entirely if any step fails (no partial state)
 #
-# Release states (based on position):
-#   prod (second-from-top) = prerelease
-#   canary (top)             = released
+# Release states (role, or position when no role is set):
+#   prod = prerelease
+#   canary = released
 #
 # Cascade targets (for cascade mode):
 #   dev-to-staging   - Promotes dev → staging

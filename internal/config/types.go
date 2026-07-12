@@ -1099,7 +1099,11 @@ func (c *TrunkConfig) IsFirstEnvironment(env string) bool {
 	return c.Environments[0].Name == env
 }
 
-// IsLastEnvironment returns true if env is the last (production)
+// IsLastEnvironment returns true if env is the last entry by position. This is a
+// positional query, NOT the release-role query: with an explicit role: release on
+// a non-last entry the release environment differs from the last one, so callers
+// deciding the release stage must use ReleaseEnvironment, not this. It has no
+// production consumer today; the ladder-position semantics are kept for tests.
 func (c *TrunkConfig) IsLastEnvironment(env string) bool {
 	if len(c.Environments) == 0 {
 		return false

@@ -552,10 +552,10 @@ func (g *PromoteGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString("#              All intermediate environments updated with same artifact\n")
 	sb.WriteString("#              Fails entirely if any step fails (no partial state)\n")
 	sb.WriteString("#\n")
-	sb.WriteString("# Release states (based on position):\n")
+	sb.WriteString("# Release states (role, or position when no role is set):\n")
 	if len(g.config.Environments) >= 2 {
-		fmt.Fprintf(sb, "#   %s (second-from-top) = prerelease\n", g.config.Environments[len(g.config.Environments)-2].Name)
-		fmt.Fprintf(sb, "#   %s (top)             = released\n", g.config.Environments[len(g.config.Environments)-1].Name)
+		fmt.Fprintf(sb, "#   %s = prerelease\n", g.config.PrereleaseEnvironment())
+		fmt.Fprintf(sb, "#   %s = released\n", g.config.ReleaseEnvironment())
 	}
 	sb.WriteString("#\n")
 
@@ -813,7 +813,11 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 		return
 	}
 
-	finalEnv := g.config.Environments[len(g.config.Environments)-1].Name
+	// The prod deploy job targets the release environment, which is role-aware:
+	// role: release on an entry moves it off the positional last, and the runtime
+	// prod-deployment gate (ProdDeployment.Environment = ReleaseEnvironment) reads
+	// the same env, so the generated job and the runtime SHA must agree.
+	finalEnv := g.config.ReleaseEnvironment()
 
 	// Write local deploy jobs
 	for _, d := range g.config.Deploys {
