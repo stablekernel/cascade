@@ -1264,10 +1264,12 @@ const simulateMonorepoManifest = `ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-v
+        tag_grammar:
+          prefix: api-v
       web:
         path: services/web
-        tag_prefix: web-v
+        tag_grammar:
+          prefix: web-v
   state:
     components:
       api:
@@ -1299,10 +1301,12 @@ const simulateMonorepoRollbackManifest = `ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-v
+        tag_grammar:
+          prefix: api-v
       web:
         path: services/web
-        tag_prefix: web-v
+        tag_grammar:
+          prefix: web-v
   state:
     components:
       api:

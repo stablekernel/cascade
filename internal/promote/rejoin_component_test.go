@@ -27,10 +27,12 @@ func divergedComponentManifest(t *testing.T) string {
     components:
       api:
         path: api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
   state:
     dev:
       sha: trunkhead

@@ -15,8 +15,8 @@ func lifecycleMultiComponentConfig() *config.TrunkConfig {
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
 		Components: map[string]config.ComponentConfig{
-			"api": {Path: "services/api", TagPrefix: "api-"},
-			"web": {Path: "services/web", TagPrefix: "web-"},
+			"api": {Path: "services/api", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("api-")}},
+			"web": {Path: "services/web", TagGrammar: &config.TagGrammarConfig{Prefix: strptr("web-")}},
 		},
 	}
 }

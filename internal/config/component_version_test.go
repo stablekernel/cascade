@@ -7,8 +7,8 @@ func twoComponentTrunk() *TrunkConfig {
 		TrunkBranch:  "main",
 		Environments: []string{"dev", "prod"},
 		Components: map[string]ComponentConfig{
-			"api": {Path: "services/api", TagPrefix: "api-"},
-			"web": {Path: "services/web", TagPrefix: "web-"},
+			"api": {Path: "services/api", TagGrammar: &TagGrammarConfig{Prefix: strptr("api-")}},
+			"web": {Path: "services/web", TagGrammar: &TagGrammarConfig{Prefix: strptr("web-")}},
 		},
 	}
 }

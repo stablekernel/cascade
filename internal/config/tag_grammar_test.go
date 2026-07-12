@@ -9,9 +9,8 @@ import (
 
 func strptr(s string) *string { return &s }
 
-// A nil tag_grammar block resolves to the historical default grammar, and an
-// existing tag_prefix still lands on Spec.Prefix so the legacy knob keeps
-// working unchanged.
+// A nil tag_grammar block resolves to the historical default grammar, and a
+// tag_grammar.prefix lands on Spec.Prefix so the prefix knob keeps working.
 func TestResolveTagGrammar_NilUsesDefaultWithPrefix(t *testing.T) {
 	def := taggrammar.Default()
 
@@ -21,12 +20,12 @@ func TestResolveTagGrammar_NilUsesDefaultWithPrefix(t *testing.T) {
 		t.Fatalf("nil tag_grammar: got %+v, want default %+v", got, def)
 	}
 
-	cfg = &TrunkConfig{TagPrefix: "release"}
+	cfg = &TrunkConfig{TagGrammar: &TagGrammarConfig{Prefix: strptr("release")}}
 	got = cfg.ResolveTagGrammar()
 	want := def
 	want.Prefix = "release"
 	if got != want {
-		t.Fatalf("tag_prefix only: got %+v, want %+v", got, want)
+		t.Fatalf("tag_grammar.prefix only: got %+v, want %+v", got, want)
 	}
 }
 
@@ -52,44 +51,6 @@ func TestResolveTagGrammar_PopulatedOverrides(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("populated block: got %+v, want %+v", got, want)
-	}
-}
-
-// When both tag_prefix and tag_grammar.prefix are set, the block wins in the
-// resolved spec and a redundancy advisory names both keys.
-func TestResolveTagGrammar_RedundantPrefixWarnsAndBlockWins(t *testing.T) {
-	cfg := &TrunkConfig{
-		TagPrefix:  "old",
-		TagGrammar: &TagGrammarConfig{Prefix: strptr("new")},
-	}
-
-	got := cfg.ResolveTagGrammar()
-	if got.Prefix != "new" {
-		t.Fatalf("block should win: got prefix %q, want %q", got.Prefix, "new")
-	}
-
-	warns := cfg.TagGrammarWarnings()
-	if len(warns) != 1 {
-		t.Fatalf("want exactly one advisory, got %d: %v", len(warns), warns)
-	}
-	w := warns[0]
-	if !strings.Contains(w, "tag_prefix") || !strings.Contains(w, "tag_grammar.prefix") {
-		t.Fatalf("advisory must name both keys, got %q", w)
-	}
-}
-
-// No redundancy advisory when only one prefix source is set.
-func TestTagGrammarWarnings_NoRedundancyWhenSingleSource(t *testing.T) {
-	cases := []*TrunkConfig{
-		{},
-		{TagPrefix: "v"},
-		{TagGrammar: &TagGrammarConfig{Prefix: strptr("v")}},
-		{TagGrammar: &TagGrammarConfig{PreReleaseToken: strptr("beta")}},
-	}
-	for i, cfg := range cases {
-		if w := cfg.TagGrammarWarnings(); len(w) != 0 {
-			t.Fatalf("case %d: want no advisory, got %v", i, w)
-		}
 	}
 }
 

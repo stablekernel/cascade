@@ -53,7 +53,6 @@ func runLint(configPath string, jsonOutput bool) error {
 
 	errors := Validate(cfg)
 	warnings, _ := cfg.ValidateSchemaVersion()
-	warnings = append(warnings, cfg.TagGrammarWarnings()...)
 
 	if jsonOutput {
 		for _, w := range warnings {

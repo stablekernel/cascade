@@ -966,10 +966,12 @@ environments: [dev, prod]
 components:
   api:
     path: services/api
-    tag_prefix: api-v
+    tag_grammar:
+      prefix: api-v
   worker:
     path: services/worker
-    tag_prefix: worker-v
+    tag_grammar:
+      prefix: worker-v
 `)
 		if cfg.Components == nil {
 			t.Fatal("Components map should be parsed")
@@ -978,8 +980,8 @@ components:
 		if cfg.Components["api"].Path != "services/api" {
 			t.Fatalf("unexpected path: %q", cfg.Components["api"].Path)
 		}
-		if cfg.Components["api"].TagPrefix != "api-v" {
-			t.Fatalf("unexpected tag_prefix: %q", cfg.Components["api"].TagPrefix)
+		if p, _ := cfg.GetComponentTagPrefix("api"); p != "api-v" {
+			t.Fatalf("unexpected tag_grammar.prefix: %q", p)
 		}
 		errs := Validate(cfg)
 		if len(errs) != 0 {

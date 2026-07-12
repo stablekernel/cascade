@@ -416,7 +416,7 @@ func TestGetTagPrefix(t *testing.T) {
 	assert.Equal(t, "v", cfg.GetTagPrefix())
 
 	// Configured value
-	cfg.TagPrefix = "release-"
+	cfg.TagGrammar = &TagGrammarConfig{Prefix: strptr("release-")}
 	assert.Equal(t, "release-", cfg.GetTagPrefix())
 }
 
@@ -1064,7 +1064,7 @@ func TestComponentsRoundTrip(t *testing.T) {
 			TrunkBranch:   "main",
 			Environments:  []string{"dev", "prod"},
 			Components: map[string]ComponentConfig{
-				"api": {Path: "services/api", TagPrefix: "api-v"},
+				"api": {Path: "services/api", TagGrammar: &TagGrammarConfig{Prefix: strptr("api-v")}},
 			},
 		},
 		State: map[string]*EnvState{

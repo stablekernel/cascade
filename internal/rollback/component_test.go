@@ -24,10 +24,12 @@ const twoComponentManifest = `ci:
     components:
       checkout:
         path: services/checkout
-        tag_prefix: checkout-
+        tag_grammar:
+          prefix: checkout-
       billing:
         path: services/billing
-        tag_prefix: billing-
+        tag_grammar:
+          prefix: billing-
   state:
     components:
       checkout:
@@ -181,10 +183,12 @@ func TestConcurrentFinalize_SiblingSurvivesThrough409Reapply(t *testing.T) {
     components:
       checkout:
         path: services/checkout
-        tag_prefix: checkout-
+        tag_grammar:
+          prefix: checkout-
       billing:
         path: services/billing
-        tag_prefix: billing-
+        tag_grammar:
+          prefix: billing-
   state:
     components:
       checkout:
@@ -291,7 +295,8 @@ func TestFirstEnv_ScopedToComponentSubset(t *testing.T) {
     components:
       checkout:
         path: services/checkout
-        tag_prefix: checkout-
+        tag_grammar:
+          prefix: checkout-
         environments: [staging, prod]
   state:
     components:

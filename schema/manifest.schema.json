@@ -94,10 +94,6 @@
           "pattern": "^[0-9a-f]{40}$",
           "description": "40-character lowercase-hex commit SHA that cli_version resolves to. When set and pin_mode is sha, generated setup-cli self-action refs are pinned to this commit with cli_version carried as a trailing comment. Written by the version-bump automation, which peels the annotated cli_version tag to its commit."
         },
-        "tag_prefix": {
-          "type": "string",
-          "description": "Version tag prefix (default: \"v\")."
-        },
         "tag_grammar": { "$ref": "#/definitions/tagGrammarConfig" },
         "allow_breaking_changes": {
           "type": "boolean",
@@ -526,11 +522,10 @@
     "componentConfig": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "tag_prefix"],
-      "description": "Per-component descriptor for independently versioned components sharing one manifest (#176). When a components: block is present the top-level config is the shared default set each component inherits. path and tag_prefix are required per component; the remaining fields override the shared default only where set. Top-level-only (global) fields cannot appear here, and concurrency may carry only cancel_in_progress (the group is derived per component).",
+      "required": ["path", "tag_grammar"],
+      "description": "Per-component descriptor for independently versioned components sharing one manifest (#176). When a components: block is present the top-level config is the shared default set each component inherits. path and tag_grammar.prefix are required per component; the remaining fields override the shared default only where set. Top-level-only (global) fields cannot appear here, and concurrency may carry only cancel_in_progress (the group is derived per component).",
       "properties": {
         "path": { "type": "string", "description": "Subtree this component owns within the repo. Required." },
-        "tag_prefix": { "type": "string", "description": "Per-component version tag prefix. Required, and distinct across components so their tag namespaces never collide." },
         "tag_grammar": { "$ref": "#/definitions/tagGrammarConfig" },
         "environments": { "type": "array", "items": { "type": "string" }, "description": "Overrides the shared promotion environments for this component." },
         "release_trigger": { "type": "string", "enum": ["push", "dispatch"], "description": "Overrides how this component's orchestrate workflow fires." },
@@ -760,7 +755,7 @@
         "prefix": {
           "type": "string",
           "pattern": "^[A-Za-z0-9._-]*$",
-          "description": "Version tag prefix (default: \"v\"). When set, this wins over the manifest-level tag_prefix. May be empty for a prefix-less grammar."
+          "description": "Version tag prefix (default: \"v\"). May be empty for a prefix-less grammar."
         },
         "prerelease_token": {
           "type": "string",

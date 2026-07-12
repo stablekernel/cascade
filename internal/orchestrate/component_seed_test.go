@@ -20,10 +20,12 @@ const componentSeedManifest = `ci:
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
   state:
     components:
       web:
@@ -169,10 +171,12 @@ func TestWriteConfig_Component_ReapplyPreservesUnmodeledSibling(t *testing.T) {
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
   state:
     components:
       api:

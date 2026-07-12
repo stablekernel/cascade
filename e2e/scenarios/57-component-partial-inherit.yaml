@@ -33,12 +33,14 @@ config:
   components:
     api:
       path: services/api
-      tag_prefix: api-
+      tag_grammar:
+        prefix: api-
       deployments:
         keep_prior_active: true
     web:
       path: services/web
-      tag_prefix: web-
+      tag_grammar:
+        prefix: web-
 
 steps:
   - name: "Seed both component subtrees"

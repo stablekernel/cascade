@@ -13,8 +13,8 @@ func baseComponentConfig() *TrunkConfig {
 		ActionPins:   map[string]string{"actions/checkout": "v4"},
 		Git:          &GitConfig{UserName: "shared-bot", UserEmail: "bot@example.com"},
 		Components: map[string]ComponentConfig{
-			"api": {Path: "services/api", TagPrefix: "api-"},
-			"web": {Path: "services/web", TagPrefix: "web-"},
+			"api": {Path: "services/api", TagGrammar: &TagGrammarConfig{Prefix: strptr("api-")}},
+			"web": {Path: "services/web", TagGrammar: &TagGrammarConfig{Prefix: strptr("web-")}},
 		},
 	}
 }

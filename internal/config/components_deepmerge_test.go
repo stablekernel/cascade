@@ -22,13 +22,15 @@ environment_config:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     environment_config:
       prod:
         wait_timer: 15
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
 `)
 
 	rc, err := cfg.ResolveComponent("api")
@@ -68,7 +70,6 @@ tag_grammar:
 components:
   api:
     path: services/api
-    tag_prefix: api-
     tag_grammar:
       prefix: api
 `)
@@ -102,7 +103,8 @@ shared_paths: [libs/**]
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     extra_paths: [protos/**]
 `)
 
@@ -136,14 +138,16 @@ changelog:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     deployments:
       enabled: false
     changelog:
       disabled: false
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
 `)
 
 	api, err := cfg.ResolveComponent("api")
@@ -187,13 +191,15 @@ validate:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     validate:
       secrets:
         NPM_TOKEN: NPM_TOKEN
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
 `)
 	api, err := cfg.ResolveComponent("api")
 	if err != nil {
@@ -229,7 +235,8 @@ validate:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     validate:
       secrets: inherit
 `)
@@ -259,7 +266,8 @@ runs_on:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     runs_on: ubuntu-latest
 `)
 	api, err := cfg.ResolveComponent("api")
@@ -290,7 +298,6 @@ tag_grammar:
 components:
   api:
     path: services/api
-    tag_prefix: api-
     tag_grammar:
       prefix: api
       prerelease_token: beta

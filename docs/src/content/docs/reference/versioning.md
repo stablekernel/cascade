@@ -122,13 +122,13 @@ to its `path`, so only changes under that subtree bump that component's version.
 Two components version on separate lines from the same trunk.
 
 **Strict per-component tag namespace.** Each component reads and emits tags under
-its own `tag_prefix`, parsed strictly. `svc-1.2.3` and `web-1.2.3` never
+its own `tag_grammar.prefix`, parsed strictly. `svc-1.2.3` and `web-1.2.3` never
 cross-match, and a prefix that is a substring of another (such as `svc-` against
 `svc-beta-`) cannot collide. Release-candidate cleanup is scoped the same way, so
 publishing one component's release reaps only that component's prerelease tags. A
 component's resolved grammar still honors any inherited or overridden
-[`tag_grammar`](/cascade/reference/manifest/#tag_grammar); the per-component prefix
-is layered on top as a hard namespace boundary.
+[`tag_grammar`](/cascade/reference/manifest/#tag_grammar), with its required
+`tag_grammar.prefix` acting as a hard namespace boundary.
 
 **The implicit default stays permissive.** A repository with no `components:`
 block keeps the historical permissive prefix parsing (any alphabetic prefix on

@@ -454,8 +454,7 @@ func tagGrammarUnsafeChar(s string) bool {
 // component carrying a character outside tagGrammarAllowedChars, or a dryrun
 // token that collides with the pre-release token would each produce a
 // grammar that cannot round-trip, so generation must not proceed. A nil block
-// is valid and preserves the historical grammar. The redundant-prefix case is
-// handled separately as a non-fatal advisory (see TrunkConfig.TagGrammarWarnings).
+// is valid and preserves the historical grammar.
 func validateTagGrammar(cfg *TrunkConfig) []string {
 	g := cfg.TagGrammar
 	if g == nil {
@@ -784,8 +783,8 @@ func safeSecretName(name string) bool {
 //
 //   - Component names must be job-ID-safe (so a generator can key job IDs on the
 //     name without breakage).
-//   - path and tag_prefix are required per component; path must be a clean
-//     relative path (no leading slash, no ".." segments).
+//   - path and tag_grammar.prefix are required per component; path must be a
+//     clean relative path (no leading slash, no ".." segments).
 //   - Per-component tag prefixes must be distinct, so no two components share a
 //     tag namespace and reap or read each other's tags.
 //   - A component may not override a top-level-only (global) field, and may not
@@ -805,6 +804,7 @@ func validateComponents(cfg *TrunkConfig) []string {
 	}
 
 	tagPrefixOwner := make(map[string]string, len(cfg.Components))
+	componentFields := knownComponentFields()
 	for _, name := range sortedComponentKeys(cfg.Components) {
 		errs = append(errs, validateJobIDSafeName("components."+name, name)...)
 		comp := cfg.Components[name]
@@ -817,14 +817,14 @@ func validateComponents(cfg *TrunkConfig) []string {
 			errs = append(errs, fmt.Sprintf("components.%s.path must not contain '..' segments", name))
 		}
 
-		if comp.TagPrefix == "" {
-			errs = append(errs, fmt.Sprintf("components.%s.tag_prefix is required so each component has its own tag namespace", name))
-		} else if prior, seen := tagPrefixOwner[comp.TagPrefix]; seen {
+		if comp.TagGrammar == nil || comp.TagGrammar.Prefix == nil || *comp.TagGrammar.Prefix == "" {
+			errs = append(errs, fmt.Sprintf("components.%s.tag_grammar.prefix is required so each component has its own tag namespace", name))
+		} else if prior, seen := tagPrefixOwner[*comp.TagGrammar.Prefix]; seen {
 			errs = append(errs, fmt.Sprintf(
-				"components.%s.tag_prefix %q collides with component %q; each component needs a distinct tag namespace",
-				name, comp.TagPrefix, prior))
+				"components.%s.tag_grammar.prefix %q collides with component %q; each component needs a distinct tag namespace",
+				name, *comp.TagGrammar.Prefix, prior))
 		} else {
-			tagPrefixOwner[comp.TagPrefix] = name
+			tagPrefixOwner[*comp.TagGrammar.Prefix] = name
 		}
 
 		if comp.Concurrency != nil && comp.Concurrency.Group != "" {
@@ -838,6 +838,9 @@ func validateComponents(cfg *TrunkConfig) []string {
 			if _, global := globalOnlyComponentFields[key]; global {
 				errs = append(errs, fmt.Sprintf(
 					"components.%s.%s is a top-level-only field and cannot be overridden per component", name, key))
+			} else if suggestion := fieldSuggestion(key, componentFields, legacyFieldRenames); suggestion != "" {
+				errs = append(errs, fmt.Sprintf(
+					"components.%s has unknown field %q; did you mean %q?", name, key, suggestion))
 			} else {
 				errs = append(errs, fmt.Sprintf("components.%s has unknown field %q", name, key))
 			}

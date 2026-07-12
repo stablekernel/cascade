@@ -16,10 +16,12 @@ builds:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
 `)
 
 	rc, err := cfg.ResolveComponent("api")
@@ -34,8 +36,8 @@ components:
 	if rc.Path != "services/api" {
 		t.Errorf("path = %q, want services/api", rc.Path)
 	}
-	if eff.TagPrefix != "api-" {
-		t.Errorf("tag_prefix = %q, want api-", eff.TagPrefix)
+	if eff.GetTagPrefix() != "api-" {
+		t.Errorf("tag_grammar.prefix = %q, want api-", eff.GetTagPrefix())
 	}
 	// Inherited shared defaults.
 	if eff.ReleaseTrigger != "dispatch" {
@@ -69,7 +71,8 @@ job_timeout_minutes: 30
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     environments: [dev]
     release_trigger: dispatch
     allow_breaking_changes: false
@@ -106,10 +109,12 @@ trunk_branch: main
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
 `)
 
 	api, err := cfg.ResolveComponent("api")
@@ -137,10 +142,12 @@ concurrency:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
     concurrency:
       cancel_in_progress: true
 `)
@@ -168,19 +175,21 @@ trunk_branch: main
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
 `)
 	if _, err := cfg.ResolveComponent("missing"); err == nil {
 		t.Fatal("expected an error resolving an undeclared component")
 	}
 }
 
-func TestValidateComponents_RequiresPathAndTagPrefix(t *testing.T) {
+func TestValidateComponents_RequiresPathAndTagGrammarPrefix(t *testing.T) {
 	cfg := parseInline(t, `
 trunk_branch: main
 components:
   api:
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
   web:
     path: services/web
 `)
@@ -188,21 +197,23 @@ components:
 	if !hasErrContaining(errs, "components.api.path is required") {
 		t.Errorf("expected api.path required error, got %v", errs)
 	}
-	if !hasErrContaining(errs, "components.web.tag_prefix is required") {
-		t.Errorf("expected web.tag_prefix required error, got %v", errs)
+	if !hasErrContaining(errs, "components.web.tag_grammar.prefix is required") {
+		t.Errorf("expected web.tag_grammar.prefix required error, got %v", errs)
 	}
 }
 
-func TestValidateComponents_DistinctTagPrefixes(t *testing.T) {
+func TestValidateComponents_DistinctTagGrammarPrefixes(t *testing.T) {
 	cfg := parseInline(t, `
 trunk_branch: main
 components:
   api:
     path: services/api
-    tag_prefix: svc-
+    tag_grammar:
+      prefix: svc-
   web:
     path: services/web
-    tag_prefix: svc-
+    tag_grammar:
+      prefix: svc-
 `)
 	errs := Validate(cfg)
 	if !hasErrContaining(errs, "collides") {
@@ -216,7 +227,8 @@ trunk_branch: main
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     trunk_branch: other
     cli_version: v9.9.9
 `)
@@ -235,7 +247,8 @@ trunk_branch: main
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     nonsense: true
 `)
 	errs := Validate(cfg)
@@ -250,7 +263,8 @@ trunk_branch: main
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
     concurrency:
       group: shared-lane
 `)
@@ -268,7 +282,8 @@ concurrency:
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
 `)
 	errs := Validate(cfg)
 	if !hasErrContaining(errs, "concurrency.group must not be set to a shared literal when components are declared") {
@@ -284,10 +299,12 @@ environments: [dev, prod]
 components:
   api:
     path: services/api
-    tag_prefix: api-
+    tag_grammar:
+      prefix: api-
   web:
     path: services/web
-    tag_prefix: web-
+    tag_grammar:
+      prefix: web-
 `)
 		if errs := Validate(cfg); len(errs) != 0 {
 			t.Errorf("schema_version %q: expected clean validation, got %v", sv, errs)

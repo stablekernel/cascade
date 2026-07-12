@@ -55,10 +55,12 @@ func sharedPathRepo(t *testing.T, topSugar bool) string {
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
 `
 	} else {
 		// Only api declares the shared library under its extra_paths.
@@ -71,12 +73,14 @@ func sharedPathRepo(t *testing.T, topSugar bool) string {
     components:
       api:
         path: services/api
-        tag_prefix: api-
+        tag_grammar:
+          prefix: api-
         extra_paths:
           - libs/shared/**
       web:
         path: services/web
-        tag_prefix: web-
+        tag_grammar:
+          prefix: web-
 `
 	}
 	if err := os.WriteFile(configPath, []byte(manifest), 0o600); err != nil {

@@ -16,6 +16,14 @@ func knownTrunkFields() []string {
 	return knownYAMLFields(reflect.TypeOf(TrunkConfig{}))
 }
 
+// knownComponentFields returns the set of modeled per-component config keys,
+// derived from the yaml struct tags on ComponentConfig. Like knownTrunkFields it
+// reflects the tags so the set stays in lockstep with the struct, backing the
+// component-level did-you-mean suggestion.
+func knownComponentFields() []string {
+	return knownYAMLFields(reflect.TypeOf(ComponentConfig{}))
+}
+
 // knownYAMLFields returns the modeled yaml key names for a struct type, derived
 // from its yaml struct tags. The inline catch-all (yaml:",inline") and any
 // yaml:"-" field are excluded. Reflecting the tags keeps every known-field set
@@ -51,11 +59,7 @@ func validateUnknownCallbackFields(scope string, extra map[string]any, known []s
 	}
 	var errs []string
 	for _, key := range sortedKeys(toAnyKeyed(extra)) {
-		suggestion := legacyCallbackFieldRenames[key]
-		if suggestion == "" {
-			suggestion = suggestField(key, known)
-		}
-		if suggestion != "" {
+		if suggestion := fieldSuggestion(key, known, legacyCallbackFieldRenames); suggestion != "" {
 			errs = append(errs, fmt.Sprintf("%s has unknown field %q; did you mean %q?", scope, key, suggestion))
 		} else {
 			errs = append(errs, fmt.Sprintf("%s has unknown field %q", scope, key))
@@ -74,6 +78,25 @@ var legacyCallbackFieldRenames = map[string]string{
 	"artifact": "artifact_upload",
 }
 
+// legacyFieldRenames maps a former top-level or per-component key to its current
+// name so the did-you-mean points at the intended replacement rather than the
+// nearest field by edit distance. The standalone tag_prefix: was folded into
+// tag_grammar.prefix:; without this hint a Levenshtein match would not surface
+// the nested destination, since it is not a single top-level field name.
+var legacyFieldRenames = map[string]string{
+	"tag_prefix": "tag_grammar.prefix",
+}
+
+// fieldSuggestion returns the best did-you-mean replacement for an unknown key:
+// an explicit legacy-rename target when one is registered, otherwise the closest
+// modeled field by Levenshtein distance, or "" when nothing is close enough.
+func fieldSuggestion(key string, known []string, renames map[string]string) string {
+	if suggestion, ok := renames[key]; ok {
+		return suggestion
+	}
+	return suggestField(key, known)
+}
+
 // validateUnknownTopLevel rejects any top-level config key that is not a modeled
 // TrunkConfig field. Unknown keys are captured by the inline Extra map; each one
 // becomes a hard error with a "did you mean X?" suggestion when a close modeled
@@ -86,7 +109,7 @@ func validateUnknownTopLevel(cfg *TrunkConfig) []string {
 	known := knownTrunkFields()
 	var errs []string
 	for _, key := range sortedKeys(toAnyKeyed(cfg.Extra)) {
-		if suggestion := suggestField(key, known); suggestion != "" {
+		if suggestion := fieldSuggestion(key, known, legacyFieldRenames); suggestion != "" {
 			errs = append(errs, fmt.Sprintf("config has unknown field %q; did you mean %q?", key, suggestion))
 		} else {
 			errs = append(errs, fmt.Sprintf("config has unknown field %q", key))
