@@ -17,16 +17,19 @@ cascade simulate promote
 Simulating: promote (mode=default)
 State diff:
   uat:
-    version: (none) -> v1.2.0-rc.1
-    sha:     (none) -> a1b2c3d4e5f6
+    version:  v1.1.0 -> v1.2.0-rc.1
+    sha:      a1b2c3d -> 9f8e7d6
+    diff:     https://github.com/acme/app/compare/a1b2c3d...9f8e7d6
 Effects (in order):
-  1. [run] deploy uat (from dev (sha a1b2c3d, version v1.2.0-rc.1))
-  2. [run] write state uat (sha a1b2c3d, version v1.2.0-rc.1)
-  3. [run] release prerelease v1.2.0 (rc v1.2.0-rc.1, sha a1b2c3d)
-  4. [skip] promote prod (no change required)
+  1. deploy uat from dev
+  2. write state uat (sha 9f8e7d6, version v1.2.0-rc.1)
+  3. release prerelease v1.2.0 (rc v1.2.0-rc.1, sha 9f8e7d6)
+  4. skipped promote prod (no change required)
 
 Note: build and deploy results are simulated, not executed. cascade validates orchestration, not your build and deploy scripts.
 ```
+
+Here `uat` already held a prior sha, so the diff moves it between two known shas and the `diff:` line links a compare view; a first deploy into an empty environment (`(none) -> <sha>`) has no prior sha to compare, so that line is omitted.
 
 The other three actions follow the same shape:
 
@@ -36,7 +39,9 @@ cascade simulate rollback --env prod                        # preview reverting 
 cascade simulate hotfix --env uat --fix <sha>[,<sha>...]     # preview applying trunk commits as a hotfix
 ```
 
-Each step in the effect list carries a disposition: `run` (the orchestration would carry it out), `skip` (a no-op), or `gate` (held back behind a guard, such as a finalize blocked by a failed deploy). `rollback` resolves its target from the in-state deploy-history ring, never from git, so it needs `--env` and optionally `--to`. `hotfix` needs `--env` and `--fix`; with multiple fix commits, add `--merge-sha` to name the resolution-branch tip. Full flag lists for every action live in the [CLI reference](/cascade/reference/cli/).
+The state diff shortens every sha to 7 characters, and when a change moves an environment between two known shas it adds a `diff:` line with a compare link. The repository is read from `GITHUB_REPOSITORY` (with `GITHUB_SERVER_URL`, defaulting to `https://github.com`) or, failing that, the `origin` remote of the working directory; when neither identifies a repository, the compare line is omitted.
+
+Each step in the effect list carries a disposition. A `run` step (the orchestration would carry it out) is shown unadorned; a `skipped` step is a no-op; a `gated` step is held back behind a guard, such as a finalize blocked by a failed deploy. `rollback` resolves its target from the in-state deploy-history ring, never from git, so it needs `--env` and optionally `--to`. `hotfix` needs `--env` and `--fix`; with multiple fix commits, add `--merge-sha` to name the resolution-branch tip. Full flag lists for every action live in the [CLI reference](/cascade/reference/cli/).
 
 ## Deploy stubs and outcome injection
 
@@ -50,11 +55,11 @@ cascade simulate promote --deploy-result services=failure
 
 ```
 Effects (in order):
-  1. [run] deploy uat (from dev (sha a1b2c3d, version v1.2.0-rc.1))
-  2. [run] deploy services (simulated failure (not executed))
-  3. [gate] write state uat (deploy "services" simulated failure; trunk state left unchanged)
-  4. [run] release prerelease v1.2.0 (rc v1.2.0-rc.1, sha a1b2c3d)
-  5. [skip] promote prod (no change required)
+  1. deploy uat from dev
+  2. deploy services (simulated failure (not executed))
+  3. gated write state uat (deploy "services" simulated failure; trunk state left unchanged)
+  4. release prerelease v1.2.0 (rc v1.2.0-rc.1, sha a1b2c3d)
+  5. skipped promote prod (no change required)
 ```
 
 A `skipped` outcome is never a failure, but it does not count as a success either. When every configured deploy is skipped, nothing was deployed, so the finalize still gates.

@@ -1111,8 +1111,8 @@ func TestSimulateCommand_PromoteEmitsDiffAndEffects(t *testing.T) {
 		"Simulating: promote (mode=default)",
 		"State diff:",
 		"uat:",
-		"version: (none) -> v1.2.0-rc.1",
-		"sha:     (none) -> a1b2c3d4e5f6",
+		"version:  (none) -> v1.2.0-rc.1",
+		"sha:      (none) -> a1b2c3d",
 		"Effects (in order):",
 		"write state",
 		// The orchestration-not-deploys note must accompany the effect sequence.
@@ -1165,8 +1165,11 @@ func TestSimulateCommand_PromoteJSONMatchesHumanRender(t *testing.T) {
 	if uatTo != "a1b2c3d4e5f6" {
 		t.Errorf("expected uat sha.to a1b2c3d4e5f6 in JSON, got %q", uatTo)
 	}
-	if !contains(human, uatTo) {
-		t.Errorf("human render is missing the JSON-reported sha %q:\n%s", uatTo, human)
+	// The human render shortens shas to 7 characters, so it carries the 7-char
+	// prefix of the full sha the JSON envelope reports.
+	shortUATTo := uatTo[:7]
+	if !contains(human, shortUATTo) {
+		t.Errorf("human render is missing the shortened JSON-reported sha %q:\n%s", shortUATTo, human)
 	}
 	if env.Note == "" || !contains(human, "build and deploy results are simulated") {
 		t.Errorf("note should appear in both renders; json note=%q", env.Note)
@@ -1215,8 +1218,8 @@ func TestSimulateCommand_RollbackEmitsRevert(t *testing.T) {
 	for _, want := range []string{
 		"Simulating: rollback",
 		"prod:",
-		"sha:     newsha0000000 -> oldsha0000000",
-		"version: v2.0.0 -> v1.0.0",
+		"newsha0 -> oldsha0",
+		"v2.0.0 -> v1.0.0",
 		"revert",
 		"write state",
 	} {
@@ -1311,12 +1314,12 @@ const simulateMonorepoRollbackManifest = `ci:
     components:
       api:
         prod:
-          sha: apiprodnew001
+          sha: apicur1000001
           version: api-v2.0.0
           committed_at: "2026-02-01T10:00:00Z"
           committed_by: seed-user
           previous:
-            - sha: apiprodold001
+            - sha: apiold1000001
               version: api-v1.0.0
               committed_at: "2026-01-01T10:00:00Z"
               committed_by: seed-user
@@ -1336,8 +1339,8 @@ func TestSimulateCommand_MonorepoPromoteScopedToComponent(t *testing.T) {
 	}
 	for _, want := range []string{
 		"staging:",
-		"version: (none) -> api-v1.2.0-rc.1",
-		"sha:     (none) -> apidevsha0001",
+		"version:  (none) -> api-v1.2.0-rc.1",
+		"sha:      (none) -> apidevs",
 		"write state",
 	} {
 		if !contains(stdout, want) {
@@ -1345,7 +1348,7 @@ func TestSimulateCommand_MonorepoPromoteScopedToComponent(t *testing.T) {
 		}
 	}
 	// The sibling component's rows must never leak into an api-scoped simulation.
-	if contains(stdout, "webdevsha0001") {
+	if contains(stdout, "webdevs") {
 		t.Errorf("api-scoped simulation leaked web's sha:\n%s", stdout)
 	}
 }
@@ -1356,10 +1359,10 @@ func TestSimulateCommand_MonorepoPromoteIsolatesSibling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("simulate promote --component web failed: %v\nstderr: %s", err, stderr)
 	}
-	if !contains(stdout, "webdevsha0001") {
+	if !contains(stdout, "webdevs") {
 		t.Errorf("web-scoped simulation should carry web's sha, got:\n%s", stdout)
 	}
-	if contains(stdout, "apidevsha0001") {
+	if contains(stdout, "apidevs") {
 		t.Errorf("web-scoped simulation leaked api's sha:\n%s", stdout)
 	}
 }
@@ -1394,8 +1397,8 @@ func TestSimulateCommand_MonorepoRollbackScopedToComponent(t *testing.T) {
 	}
 	for _, want := range []string{
 		"prod:",
-		"sha:     apiprodnew001 -> apiprodold001",
-		"version: api-v2.0.0 -> api-v1.0.0",
+		"apicur1 -> apiold1",
+		"api-v2.0.0 -> api-v1.0.0",
 		"revert",
 	} {
 		if !contains(stdout, want) {

@@ -154,7 +154,7 @@ func runSimulation(cf *commonFlags, a Action) error {
 	if cf.json {
 		return result.RenderJSON(os.Stdout)
 	}
-	return result.RenderHuman(os.Stdout)
+	return result.RenderHuman(os.Stdout, WithRepoURL(resolveRepoURL()))
 }
 
 // newPromoteCommand builds the `simulate promote` subcommand.

@@ -4,17 +4,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
+
+// renderOptions carry the display-only inputs the human renderer needs beyond
+// the Result itself. They never affect the JSON output.
+type renderOptions struct {
+	repoURL string
+}
+
+// RenderOption configures the human renderer.
+type RenderOption func(*renderOptions)
+
+// WithRepoURL supplies the repository browse URL (for example
+// https://github.com/owner/name) used to build the per-environment compare link
+// in the state diff. When empty, the compare line is omitted rather than a
+// broken URL emitted.
+func WithRepoURL(url string) RenderOption {
+	return func(o *renderOptions) { o.repoURL = url }
+}
 
 // RenderHuman writes a human-readable report of the simulation to w. The output
 // is deterministic: environment keys are sorted and run-stamped timestamps are
 // excluded from the diff.
-func (r *Result) RenderHuman(w io.Writer) error {
+func (r *Result) RenderHuman(w io.Writer, opts ...RenderOption) error {
+	o := renderOptions{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	if _, err := fmt.Fprintf(w, "Simulating: %s\n", r.ActionDescribe); err != nil {
 		return err
 	}
 
-	if err := r.renderDiff(w); err != nil {
+	if err := r.renderDiff(w, o.repoURL); err != nil {
 		return err
 	}
 	if err := r.renderEffects(w); err != nil {
@@ -28,7 +51,14 @@ func (r *Result) RenderHuman(w io.Writer) error {
 	return nil
 }
 
-func (r *Result) renderDiff(w io.Writer) error {
+// labeledValue is one rendered row inside an environment's diff block: a label
+// and its value. Rows are aligned on their labels for a scannable column.
+type labeledValue struct {
+	label string
+	value string
+}
+
+func (r *Result) renderDiff(w io.Writer, repoURL string) error {
 	if _, err := fmt.Fprintln(w, "State diff:"); err != nil {
 		return err
 	}
@@ -41,9 +71,15 @@ func (r *Result) renderDiff(w io.Writer) error {
 		if _, err := fmt.Fprintf(w, "  %s:\n", env.Environment); err != nil {
 			return err
 		}
-		lines := envDiffLines(env)
-		for _, line := range lines {
-			if _, err := fmt.Fprintf(w, "    %s\n", line); err != nil {
+		rows := envDiffRows(env, repoURL)
+		width := 0
+		for _, row := range rows {
+			if len(row.label) > width {
+				width = len(row.label)
+			}
+		}
+		for _, row := range rows {
+			if _, err := fmt.Fprintf(w, "    %-*s  %s\n", width, row.label, row.value); err != nil {
 				return err
 			}
 		}
@@ -51,30 +87,51 @@ func (r *Result) renderDiff(w io.Writer) error {
 	return nil
 }
 
-// envDiffLines returns the ordered, rendered change lines for one environment.
-func envDiffLines(env EnvDiff) []string {
-	var lines []string
+// envDiffRows returns the ordered, aligned change rows for one environment. SHA
+// values are shortened to 7 characters, and a compare link is inserted after the
+// sha row when both endpoints are real shas and the repository is known.
+func envDiffRows(env EnvDiff, repoURL string) []labeledValue {
+	var rows []labeledValue
 	if env.Version.Changed {
-		lines = append(lines, fmt.Sprintf("version: %s -> %s", env.Version.From, env.Version.To))
+		rows = append(rows, labeledValue{"version:", fmt.Sprintf("%s -> %s", env.Version.From, env.Version.To)})
 	}
 	if env.SHA.Changed {
-		lines = append(lines, fmt.Sprintf("sha:     %s -> %s", env.SHA.From, env.SHA.To))
+		rows = append(rows, labeledValue{"sha:", fmt.Sprintf("%s -> %s", shortOrNone(env.SHA.From), shortOrNone(env.SHA.To))})
+		if url := compareURL(repoURL, env.SHA.From, env.SHA.To); url != "" {
+			rows = append(rows, labeledValue{"diff:", url})
+		}
 	}
 	for _, d := range env.Deploys {
 		if d.SHA.Changed {
-			lines = append(lines, fmt.Sprintf("deploy/%s sha: %s -> %s", d.Name, d.SHA.From, d.SHA.To))
+			rows = append(rows, labeledValue{
+				fmt.Sprintf("deploy/%s sha:", d.Name),
+				fmt.Sprintf("%s -> %s", shortOrNone(d.SHA.From), shortOrNone(d.SHA.To)),
+			})
 		}
 		if d.Version.Changed {
-			lines = append(lines, fmt.Sprintf("deploy/%s version: %s -> %s", d.Name, d.Version.From, d.Version.To))
+			rows = append(rows, labeledValue{
+				fmt.Sprintf("deploy/%s version:", d.Name),
+				fmt.Sprintf("%s -> %s", d.Version.From, d.Version.To),
+			})
 		}
 	}
 	if env.Divergence.Changed {
-		lines = append(lines, fmt.Sprintf("divergence: %s -> %s", env.Divergence.From, env.Divergence.To))
+		rows = append(rows, labeledValue{"divergence:", fmt.Sprintf("%s -> %s", env.Divergence.From, env.Divergence.To)})
 	}
 	if env.PreviousRing.Changed {
-		lines = append(lines, fmt.Sprintf("previous ring: %s -> %s", env.PreviousRing.From, env.PreviousRing.To))
+		rows = append(rows, labeledValue{"previous ring:", fmt.Sprintf("%s -> %s", env.PreviousRing.From, env.PreviousRing.To)})
 	}
-	return lines
+	return rows
+}
+
+// compareURL builds a compare link between two shas, or "" when the repository
+// is unknown or either endpoint is not a real sha. Both endpoints are shortened
+// to match the sha row.
+func compareURL(repoURL, from, to string) string {
+	if repoURL == "" || from == "" || to == "" || from == noneValue || to == noneValue {
+		return ""
+	}
+	return fmt.Sprintf("%s/compare/%s...%s", repoURL, shortOrNone(from), shortOrNone(to))
 }
 
 func (r *Result) renderEffects(w io.Writer) error {
@@ -86,15 +143,47 @@ func (r *Result) renderEffects(w io.Writer) error {
 		return err
 	}
 	for i, e := range r.Effects {
-		line := fmt.Sprintf("  %d. [%s] %s %s", i+1, e.Disposition, e.Action, e.Target)
-		if e.Detail != "" {
-			line += fmt.Sprintf(" (%s)", e.Detail)
-		}
-		if _, err := fmt.Fprintln(w, line); err != nil {
+		if _, err := fmt.Fprintf(w, "  %d. %s\n", i+1, effectLine(e)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// effectLine renders one effect as a human line. The run disposition carries no
+// prefix; skip and gate are worded ("skipped", "gated"). The promotion deploy
+// marker is trimmed to "deploy <target> from <source>" because the state diff
+// already carries the sha and version; every other effect appends its detail in
+// parentheses.
+func effectLine(e Effect) string {
+	if e.Disposition == DispositionRun && e.Action == "deploy" && strings.HasPrefix(e.Detail, "from ") {
+		return fmt.Sprintf("%s %s %s", e.Action, e.Target, trimParenthetical(e.Detail))
+	}
+
+	prefix := ""
+	switch e.Disposition {
+	case DispositionSkip:
+		prefix = "skipped "
+	case DispositionGate:
+		prefix = "gated "
+	case DispositionRun:
+		prefix = ""
+	}
+
+	body := fmt.Sprintf("%s%s %s", prefix, e.Action, e.Target)
+	if e.Detail != "" {
+		body += fmt.Sprintf(" (%s)", e.Detail)
+	}
+	return body
+}
+
+// trimParenthetical drops a trailing " (...)" clause from a detail string,
+// leaving the leading phrase (for example "from dev").
+func trimParenthetical(detail string) string {
+	if i := strings.Index(detail, " ("); i >= 0 {
+		return detail[:i]
+	}
+	return detail
 }
 
 // RenderJSON writes the simulation result as deterministic, 2-space-indented
