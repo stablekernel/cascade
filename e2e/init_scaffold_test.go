@@ -62,7 +62,7 @@ func TestInitScaffoldOrchestratesAndPromotes(t *testing.T) {
 	require.NoError(t, err, "parsing scaffolded manifest into harness config")
 
 	require.Equal(t, "main", cfg.TrunkBranch, "scaffolded trunk branch")
-	require.Equal(t, envs, cfg.Environments, "scaffolded environments")
+	require.Equal(t, envs, cfg.EnvironmentNames(), "scaffolded environments")
 	require.Len(t, cfg.Builds, 1, "scaffolded builds")
 	require.Len(t, cfg.Deploys, 1, "scaffolded deploys")
 	require.Equal(t, "build", cfg.Builds[0].Name, "scaffolded build name")

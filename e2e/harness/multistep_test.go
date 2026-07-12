@@ -53,7 +53,7 @@ steps:
 	require.NoError(t, err)
 
 	assert.Equal(t, "Two Environment Happy Path", scenario.Name)
-	assert.Equal(t, []string{"dev", "prod"}, scenario.Config.Environments)
+	assert.Equal(t, []string{"dev", "prod"}, scenario.Config.EnvironmentNames())
 	assert.Len(t, scenario.Steps, 2)
 
 	// First step is a commit
