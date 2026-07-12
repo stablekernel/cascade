@@ -146,7 +146,7 @@
           "description": "External repositories this primary coordinates."
         },
         "notify": { "$ref": "#/definitions/notifyConfig" },
-        "release": { "$ref": "#/definitions/releaseConfig" },
+        "release_build": { "$ref": "#/definitions/releaseBuildConfig" },
         "changelog": { "$ref": "#/definitions/changelogConfig" },
         "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
         "runs_on": {
@@ -495,10 +495,10 @@
         "workflow": { "type": "string", "description": "Path to the reusable publish workflow." }
       }
     },
-    "releaseConfig": {
+    "releaseBuildConfig": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Release management settings.",
+      "description": "Post-publish release-build dispatch settings (dispatched against the release tag after a release is published).",
       "properties": {
         "disabled": { "type": "boolean", "description": "Disable cascade-managed releases." },
         "tag": { "type": "string", "description": "callback.output reference for releases created by an external tool." },
@@ -531,7 +531,7 @@
         "publish": { "$ref": "#/definitions/publishConfig" },
         "external": { "type": "array", "items": { "$ref": "#/definitions/externalRepoConfig" }, "description": "Overrides the shared external repositories for this component." },
         "notify": { "$ref": "#/definitions/notifyConfig" },
-        "release": { "$ref": "#/definitions/releaseConfig" },
+        "release_build": { "$ref": "#/definitions/releaseBuildConfig" },
         "changelog": { "$ref": "#/definitions/changelogConfig" },
         "concurrency": { "$ref": "#/definitions/concurrencyConfig" },
         "runs_on": { "$ref": "#/definitions/runsOn" },

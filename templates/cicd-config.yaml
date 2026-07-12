@@ -12,7 +12,7 @@ environments:                # Valid environment names
 
 # Release management (optional)
 # Omit to use framework defaults (framework creates releases with conventional commit changelog)
-# release:
+# release_build:
 #   enabled: true            # Set to false to disable release management entirely
 #   tag: goreleaser.tag      # Reference to callback.output if external tool creates release
 

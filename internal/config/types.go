@@ -167,7 +167,7 @@ type TrunkConfig struct {
 	Publish       *PublishConfig       `yaml:"publish,omitempty" json:"publish,omitempty"`   // Optional: retag artifacts after a release is published
 	External      []ExternalRepoConfig `yaml:"external,omitempty" json:"external,omitempty"` // External repos this primary coordinates
 	Notify        *NotifyConfig        `yaml:"notify,omitempty" json:"notify,omitempty"`     // Satellite: notify primary after dev deploy
-	Release       *ReleaseConfig       `yaml:"release,omitempty" json:"release,omitempty"`
+	ReleaseBuild       *ReleaseBuildConfig       `yaml:"release_build,omitempty" json:"release_build,omitempty"`
 	Changelog     *ChangelogConfig     `yaml:"changelog,omitempty" json:"changelog,omitempty"`
 	Concurrency   *ConcurrencyConfig   `yaml:"concurrency,omitempty" json:"concurrency,omitempty"` // Optional: top-level concurrency: block on the orchestrate workflow
 
@@ -724,8 +724,8 @@ type PublishConfig struct {
 	Workflow string `yaml:"workflow" json:"workflow"` // Path to the reusable workflow (e.g., ".github/workflows/publish.yaml")
 }
 
-// ReleaseConfig defines release management settings
-type ReleaseConfig struct {
+// ReleaseBuildConfig defines release management settings
+type ReleaseBuildConfig struct {
 	// Disabled is a pointer so an explicit per-component opt-in (disabled: false
 	// against an inherited disabled: true) survives the inheritance deep merge
 	// rather than marshalling to nothing and silently inheriting the true.
@@ -862,18 +862,18 @@ func (c *ChangelogConfig) IncludesContributors() bool {
 
 // IsDisabled reports whether release management is turned off. Nil-safe;
 // defaults to false (enabled) when unset.
-func (r *ReleaseConfig) IsDisabled() bool {
+func (r *ReleaseBuildConfig) IsDisabled() bool {
 	return r != nil && r.Disabled != nil && *r.Disabled
 }
 
 // ReleaseEnabled returns true if release management is enabled (default: true)
 func (c *TrunkConfig) ReleaseEnabled() bool {
-	return c.Release == nil || !c.Release.IsDisabled()
+	return c.ReleaseBuild == nil || !c.ReleaseBuild.IsDisabled()
 }
 
 // HasExternalRelease returns true if an external tool creates releases
 func (c *TrunkConfig) HasExternalRelease() bool {
-	return c.Release != nil && c.Release.Tag != ""
+	return c.ReleaseBuild != nil && c.ReleaseBuild.Tag != ""
 }
 
 // HasCustomChangelog returns true if a custom changelog workflow is configured
@@ -1358,7 +1358,7 @@ type ComponentConfig struct {
 	Publish              *PublishConfig               `yaml:"publish,omitempty" json:"publish,omitempty"`
 	External             []ExternalRepoConfig         `yaml:"external,omitempty" json:"external,omitempty"`
 	Notify               *NotifyConfig                `yaml:"notify,omitempty" json:"notify,omitempty"`
-	Release              *ReleaseConfig               `yaml:"release,omitempty" json:"release,omitempty"`
+	ReleaseBuild              *ReleaseBuildConfig               `yaml:"release_build,omitempty" json:"release_build,omitempty"`
 	Changelog            *ChangelogConfig             `yaml:"changelog,omitempty" json:"changelog,omitempty"`
 	Concurrency          *ConcurrencyConfig           `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 	RunsOn               *RunsOn                      `yaml:"runs_on,omitempty" json:"runs_on,omitempty"`

@@ -27,14 +27,14 @@ description: |
     exactly as every other generator scenario (none of which set own_repo)
     already proves for the rest of the fleet
 
-  Requires release_trigger: dispatch and release.workflow (validation enforces
+  Requires release_trigger: dispatch and release_build.workflow (validation enforces
   both, independent of own_repo). Generator-output verification only.
 
 config:
   trunk_branch: main
   release_trigger: dispatch
   release_token: ${{ secrets.CASCADE_STATE_TOKEN }}
-  release:
+  release_build:
     workflow: .github/workflows/release.yaml
   environments: [dev]
   builds:

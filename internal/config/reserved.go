@@ -55,7 +55,7 @@ var reservedFieldRegistry = []reservedFieldDoc{
 	{"deploys[].rollout.canary", reservedNotWired},
 	{"deploys[].rollout.blue_green", reservedNotWired},
 	{"deploys[].deploy_target", reservedNotWired},
-	{"release.version_overrides", reservedNotWired},
+	{"release_build.version_overrides", reservedNotWired},
 	{"<callback>.timeout_minutes", reservedWrongPlace},
 }
 
@@ -75,7 +75,7 @@ func validateReservedFields(cfg *TrunkConfig) []string {
 		errs = append(errs, reservedNotWired.errorFor("telemetry"))
 	}
 
-	errs = append(errs, reservedInScope("", cfg.Builds, cfg.Deploys, cfg.Validate, cfg.Release, cfg.External)...)
+	errs = append(errs, reservedInScope("", cfg.Builds, cfg.Deploys, cfg.Validate, cfg.ReleaseBuild, cfg.External)...)
 
 	names := make([]string, 0, len(cfg.Components))
 	for name := range cfg.Components {
@@ -85,7 +85,7 @@ func validateReservedFields(cfg *TrunkConfig) []string {
 	for _, name := range names {
 		c := cfg.Components[name]
 		scope := fmt.Sprintf("components.%s.", name)
-		errs = append(errs, reservedInScope(scope, c.Builds, c.Deploys, c.Validate, c.Release, c.External)...)
+		errs = append(errs, reservedInScope(scope, c.Builds, c.Deploys, c.Validate, c.ReleaseBuild, c.External)...)
 	}
 
 	return errs
@@ -95,7 +95,7 @@ func validateReservedFields(cfg *TrunkConfig) []string {
 // scope (the top level, scope "", or a single component, scope
 // "components.<name>."). Factoring it keeps the top-level and per-component walks
 // identical.
-func reservedInScope(scope string, builds []BuildConfig, deploys []DeployConfig, validate *ValidateConfig, release *ReleaseConfig, external []ExternalRepoConfig) []string {
+func reservedInScope(scope string, builds []BuildConfig, deploys []DeployConfig, validate *ValidateConfig, release *ReleaseBuildConfig, external []ExternalRepoConfig) []string {
 	var errs []string
 
 	for i := range builds {
@@ -111,7 +111,7 @@ func reservedInScope(scope string, builds []BuildConfig, deploys []DeployConfig,
 		errs = append(errs, reservedCallbackTimeout(scope+"validate", validate.TimeoutMinutes)...)
 	}
 	if release != nil && release.VersionOverrides != nil {
-		errs = append(errs, reservedNotWired.errorFor(scope+"release.version_overrides"))
+		errs = append(errs, reservedNotWired.errorFor(scope+"release_build.version_overrides"))
 	}
 	for i := range external {
 		for j := range external[i].Deploys {

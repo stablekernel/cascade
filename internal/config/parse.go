@@ -342,13 +342,13 @@ func Validate(cfg *TrunkConfig) []string {
 	// Config-level structural validation for v1 reserved fields.
 	errors = append(errors, validateConfigLevel(cfg)...)
 	errors = append(errors, validateComponents(cfg)...)
-	errors = append(errors, validateVersionOverrides(cfg.Release)...)
+	errors = append(errors, validateVersionOverrides(cfg.ReleaseBuild)...)
 
-	// Validate release.tag reference
-	if cfg.Release != nil && cfg.Release.Tag != "" {
-		parts := strings.SplitN(cfg.Release.Tag, ".", 2)
+	// Validate release_build.tag reference
+	if cfg.ReleaseBuild != nil && cfg.ReleaseBuild.Tag != "" {
+		parts := strings.SplitN(cfg.ReleaseBuild.Tag, ".", 2)
 		if len(parts) != 2 {
-			errors = append(errors, "release.tag invalid format (expected callback.output, e.g., goreleaser.tag)")
+			errors = append(errors, "release_build.tag invalid format (expected callback.output, e.g., goreleaser.tag)")
 		} else {
 			callbackName := parts[0]
 			// Check where callback exists
@@ -357,7 +357,7 @@ func Validate(cfg *TrunkConfig) []string {
 			inValidate := callbackName == "validate" && cfg.Validate != nil
 
 			if !inBuilds && !inDeploys && !inValidate {
-				errors = append(errors, fmt.Sprintf("release.tag references unknown callback: %s", callbackName))
+				errors = append(errors, fmt.Sprintf("release_build.tag references unknown callback: %s", callbackName))
 			} else if (inBuilds && inDeploys) || (inBuilds && inValidate) || (inDeploys && inValidate) {
 				// Conflict - multiple callbacks with same name
 				var locations []string
@@ -370,7 +370,7 @@ func Validate(cfg *TrunkConfig) []string {
 				if inValidate {
 					locations = append(locations, "validate:"+callbackName)
 				}
-				errors = append(errors, fmt.Sprintf("release.tag '%s' is ambiguous: exists as %s. Use explicit prefix (e.g., build:%s.output)",
+				errors = append(errors, fmt.Sprintf("release_build.tag '%s' is ambiguous: exists as %s. Use explicit prefix (e.g., build:%s.output)",
 					callbackName, strings.Join(locations, ", "), callbackName))
 			}
 		}

@@ -12,8 +12,8 @@ import (
 
 // candidateDispatchConfig builds a minimal orchestrate config with a single
 // build callback, allowing the caller to toggle dispatch mode and the
-// release.workflow that the candidate build is dispatched against.
-func candidateDispatchConfig(t *testing.T, dispatchOnly bool, release *config.ReleaseConfig) (*config.TrunkConfig, string) {
+// release_build.workflow that the candidate build is dispatched against.
+func candidateDispatchConfig(t *testing.T, dispatchOnly bool, release *config.ReleaseBuildConfig) (*config.TrunkConfig, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
@@ -24,7 +24,7 @@ func candidateDispatchConfig(t *testing.T, dispatchOnly bool, release *config.Re
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
-		Release: release,
+		ReleaseBuild: release,
 	}
 	if dispatchOnly {
 		cfg.ReleaseTrigger = config.ReleaseTriggerDispatch
@@ -34,7 +34,7 @@ func candidateDispatchConfig(t *testing.T, dispatchOnly bool, release *config.Re
 
 // TestGenerator_CandidateDispatchStep asserts that the orchestrate finalize job
 // emits an explicit release-workflow dispatch against the candidate tag only
-// when the trunk is dispatch-driven AND a release.workflow is configured. The
+// when the trunk is dispatch-driven AND a release_build.workflow is configured. The
 // tag-push trigger is unreliable for a candidate tag that points at a CI-skip
 // state commit, so the explicit dispatch is the dependable build path; gating it
 // on dispatch mode keeps it from racing a push-mode trunk's native tag trigger.
@@ -42,13 +42,13 @@ func TestGenerator_CandidateDispatchStep(t *testing.T) {
 	tests := []struct {
 		name         string
 		dispatchOnly bool
-		release      *config.ReleaseConfig
+		release      *config.ReleaseBuildConfig
 		wantStep     bool
 	}{
 		{
 			name:         "dispatch mode with release workflow emits the dispatch",
 			dispatchOnly: true,
-			release:      &config.ReleaseConfig{Workflow: ".github/workflows/release.yaml"},
+			release:      &config.ReleaseBuildConfig{Workflow: ".github/workflows/release.yaml"},
 			wantStep:     true,
 		},
 		{
@@ -60,7 +60,7 @@ func TestGenerator_CandidateDispatchStep(t *testing.T) {
 		{
 			name:         "push mode with release workflow omits the dispatch",
 			dispatchOnly: false,
-			release:      &config.ReleaseConfig{Workflow: ".github/workflows/release.yaml"},
+			release:      &config.ReleaseBuildConfig{Workflow: ".github/workflows/release.yaml"},
 			wantStep:     false,
 		},
 	}
@@ -94,7 +94,7 @@ func TestGenerator_CandidateDispatchStep(t *testing.T) {
 // workflow by file name (or numeric ID), never by a "./"-prefixed repository
 // path, so an already-bare name needs no further normalization.
 func TestGenerator_CandidateDispatchNormalizesBareFilename(t *testing.T) {
-	cfg, tmpDir := candidateDispatchConfig(t, true, &config.ReleaseConfig{Workflow: "release.yaml"})
+	cfg, tmpDir := candidateDispatchConfig(t, true, &config.ReleaseBuildConfig{Workflow: "release.yaml"})
 
 	content, err := NewGenerator(cfg, tmpDir).Generate()
 	require.NoError(t, err)

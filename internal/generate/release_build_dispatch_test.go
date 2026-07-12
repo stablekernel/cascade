@@ -21,13 +21,13 @@ func generatePromote(t *testing.T, cfg *config.TrunkConfig) string {
 }
 
 // TestPromoteGenerator_ReleaseBuildDispatch asserts that the finalize stage only
-// emits the "Trigger Release Build" step when release.workflow is configured, and
+// emits the "Trigger Release Build" step when release_build.workflow is configured, and
 // that when emitted it dispatches the configured reusable workflow rather than a
 // hardcoded literal.
 func TestPromoteGenerator_ReleaseBuildDispatch(t *testing.T) {
 	tests := []struct {
 		name            string
-		release         *config.ReleaseConfig
+		release         *config.ReleaseBuildConfig
 		wantStep        bool
 		wantDispatch    string
 		notWantDispatch string
@@ -40,19 +40,19 @@ func TestPromoteGenerator_ReleaseBuildDispatch(t *testing.T) {
 		},
 		{
 			name:            "release config without workflow omits the step",
-			release:         &config.ReleaseConfig{Tag: "callback.output.release_id"},
+			release:         &config.ReleaseBuildConfig{Tag: "callback.output.release_id"},
 			wantStep:        false,
 			notWantDispatch: "gh workflow run Release",
 		},
 		{
 			name:         "release workflow configured emits a dispatch to it",
-			release:      &config.ReleaseConfig{Workflow: ".github/workflows/release-build.yaml"},
+			release:      &config.ReleaseBuildConfig{Workflow: ".github/workflows/release-build.yaml"},
 			wantStep:     true,
 			wantDispatch: "gh workflow run release-build.yaml",
 		},
 		{
 			name:         "bare release workflow filename dispatches unchanged",
-			release:      &config.ReleaseConfig{Workflow: "release-build.yaml"},
+			release:      &config.ReleaseBuildConfig{Workflow: "release-build.yaml"},
 			wantStep:     true,
 			wantDispatch: "gh workflow run release-build.yaml",
 		},
@@ -63,14 +63,14 @@ func TestPromoteGenerator_ReleaseBuildDispatch(t *testing.T) {
 			cfg := &config.TrunkConfig{
 				TrunkBranch:  "main",
 				Environments: config.EnvNames("dev", "prod"),
-				Release:      tt.release,
+				ReleaseBuild:      tt.release,
 			}
 
 			content := generatePromote(t, cfg)
 
 			if tt.wantStep {
 				assert.Contains(t, content, "- name: Trigger Release Build",
-					"expected the Trigger Release Build step when release.workflow is set")
+					"expected the Trigger Release Build step when release_build.workflow is set")
 				body := stepRunBody(t, content, "Trigger Release Build")
 				assert.Contains(t, body, tt.wantDispatch,
 					"expected the step to dispatch the configured release workflow")
@@ -78,9 +78,9 @@ func TestPromoteGenerator_ReleaseBuildDispatch(t *testing.T) {
 					"the configured dispatch must not fall back to the hardcoded Release literal")
 			} else {
 				assert.NotContains(t, content, "Trigger Release Build",
-					"the Trigger Release Build step must be absent without release.workflow")
+					"the Trigger Release Build step must be absent without release_build.workflow")
 				assert.NotContains(t, content, tt.notWantDispatch,
-					"no hardcoded Release dispatch may be emitted without release.workflow")
+					"no hardcoded Release dispatch may be emitted without release_build.workflow")
 			}
 
 			// The literal "gh workflow run Release " (trailing space before the

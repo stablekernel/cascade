@@ -557,12 +557,12 @@ ci:
 
 The primary validates the dispatched `deploy_name` and `environment` against its own config, so a satellite whose local names differ from what the primary expects must send the parent-recognized values.
 
-## release and changelog
+## release_build and changelog
 
 ```yaml
 ci:
   config:
-    release:
+    release_build:
       disabled: false
       workflow: .github/workflows/release-assets.yaml
     changelog:
@@ -570,7 +570,9 @@ ci:
       contributors: true
 ```
 
-### release
+### release_build
+
+`release_build` configures the post-publish release-build dispatch: the workflow cascade runs against the release tag once a release is published, for example to build and attach binaries. It is distinct from the similarly-named `release_token` (the secret backing release operations), `release_trigger` (how the orchestrate workflow fires), and `latest_release` (the cascade-managed record of the most recent published release).
 
 | Field | Status | Type | Default | Description |
 |-------|--------|------|---------|-------------|
@@ -1011,7 +1013,7 @@ Reserved fields parse but have zero generator consumption today. They reserve a 
 |-------|-------|------|
 | `telemetry` | top-level | `enabled`, `adapter`, plus reserved `webhook` and `job_summary`. No generator consumption. |
 | `rollout.type` / `rollout.canary` / `rollout.blue_green` | `deploys[]` | Reserved rollout sub-blocks (`rollout.fail_fast` and `rollout.max_parallel` are emitted and stay valid; the rest are inert and rejected). |
-| `release.version_overrides` | `release` | Reserved pointer to version-intent override files. |
+| `release_build.version_overrides` | `release_build` | Reserved pointer to version-intent override files. |
 | `deploy_target` | `deploys[]` | Reserved shape for the GitOps mirror pattern. |
 
 The full reserved-shapes catalog, including the canary sub-fields (`steps`, `analysis`, `percent`, `bake_time`, `promote_callback`, `rollback_callback`), lives in [Versioning and schema](/cascade/reference/versioning/).

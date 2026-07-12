@@ -1286,10 +1286,10 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	// GitHub does not reliably fire release event webhooks when a draft release is
 	// PATCHed to non-draft via API calls inside a workflow run (cf. #86), so an
 	// explicit workflow_dispatch is the only reliably-triggered path. This step is
-	// emitted only when `release.workflow` is set, dispatches that configured
+	// emitted only when `release_build.workflow` is set, dispatches that configured
 	// workflow, and runs on publish (final release creation) but not on prerelease
 	// or env-to-env promotions.
-	if g.config.Release != nil && g.config.Release.Workflow != "" {
+	if g.config.ReleaseBuild != nil && g.config.ReleaseBuild.Workflow != "" {
 		sb.WriteString("      - name: Trigger Release Build\n")
 		sb.WriteString("        if: ${{ github.event.inputs.dry_run != 'true' && needs.preflight.outputs.is_final_env == 'true' }}\n")
 		sb.WriteString("        env:\n")
@@ -1298,7 +1298,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 		sb.WriteString("        run: |\n")
 		sb.WriteString("          # Dispatch the configured release-build workflow against the\n")
 		sb.WriteString("          # published tag so it can build and attach release binaries.\n")
-		sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.Release.Workflow) + " \\\n")
+		sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.ReleaseBuild.Workflow) + " \\\n")
 		sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 		sb.WriteString("            --ref \"$TAG\"\n\n")
 	}

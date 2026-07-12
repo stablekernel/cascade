@@ -481,7 +481,7 @@ func TestParse_ReleaseAndChangelogConfig(t *testing.T) {
     environments:
       - dev
       - prod
-    release:
+    release_build:
       tag: goreleaser.tag
     changelog:
       workflow: .github/workflows/custom-changelog.yaml
@@ -501,15 +501,15 @@ func TestParse_ReleaseAndChangelogConfig(t *testing.T) {
 	}
 
 	// Release config
-	if cfg.Release == nil {
+	if cfg.ReleaseBuild == nil {
 		t.Fatal("Release is nil")
 		return
 	}
-	if cfg.Release.IsDisabled() {
+	if cfg.ReleaseBuild.IsDisabled() {
 		t.Error("Release.Disabled should be false (enabled by default)")
 	}
-	if cfg.Release.Tag != "goreleaser.tag" {
-		t.Errorf("Release.Tag = %q, want goreleaser.tag", cfg.Release.Tag)
+	if cfg.ReleaseBuild.Tag != "goreleaser.tag" {
+		t.Errorf("Release.Tag = %q, want goreleaser.tag", cfg.ReleaseBuild.Tag)
 	}
 
 	// Changelog config
@@ -531,7 +531,7 @@ func TestParse_ReleaseDisabled(t *testing.T) {
     trunk_branch: main
     environments:
       - dev
-    release:
+    release_build:
       disabled: true
     builds:
       - name: app
@@ -548,11 +548,11 @@ func TestParse_ReleaseDisabled(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	if cfg.Release == nil {
+	if cfg.ReleaseBuild == nil {
 		t.Fatal("Release is nil")
 		return
 	}
-	if !cfg.Release.IsDisabled() {
+	if !cfg.ReleaseBuild.IsDisabled() {
 		t.Error("Release.Disabled should be true")
 	}
 }
@@ -675,17 +675,17 @@ func TestValidate_NewFields(t *testing.T) {
 func TestHasExternalRelease(t *testing.T) {
 	tests := []struct {
 		name     string
-		release  *ReleaseConfig
+		release  *ReleaseBuildConfig
 		expected bool
 	}{
 		{"nil release", nil, false},
-		{"no tag", &ReleaseConfig{}, false},
-		{"with tag", &ReleaseConfig{Tag: "goreleaser.tag"}, true},
+		{"no tag", &ReleaseBuildConfig{}, false},
+		{"with tag", &ReleaseBuildConfig{Tag: "goreleaser.tag"}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &TrunkConfig{Release: tt.release}
+			cfg := &TrunkConfig{ReleaseBuild: tt.release}
 			if got := cfg.HasExternalRelease(); got != tt.expected {
 				t.Errorf("HasExternalRelease() = %v, want %v", got, tt.expected)
 			}
@@ -739,18 +739,18 @@ func TestChangelogEnabled(t *testing.T) {
 func TestReleaseEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
-		release  *ReleaseConfig
+		release  *ReleaseBuildConfig
 		expected bool
 	}{
 		{"nil release - enabled by default", nil, true},
-		{"disabled false - enabled", &ReleaseConfig{Disabled: boolPtr(false)}, true},
-		{"disabled true - explicitly disabled", &ReleaseConfig{Disabled: boolPtr(true)}, false},
-		{"with tag - external release enabled", &ReleaseConfig{Tag: "goreleaser.tag"}, true},
+		{"disabled false - enabled", &ReleaseBuildConfig{Disabled: boolPtr(false)}, true},
+		{"disabled true - explicitly disabled", &ReleaseBuildConfig{Disabled: boolPtr(true)}, false},
+		{"with tag - external release enabled", &ReleaseBuildConfig{Tag: "goreleaser.tag"}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &TrunkConfig{Release: tt.release}
+			cfg := &TrunkConfig{ReleaseBuild: tt.release}
 			if got := cfg.ReleaseEnabled(); got != tt.expected {
 				t.Errorf("ReleaseEnabled() = %v, want %v", got, tt.expected)
 			}
@@ -765,10 +765,10 @@ func TestValidate_ReleaseTag(t *testing.T) {
 		wantErrs []string
 	}{
 		{
-			name: "valid release.tag reference",
+			name: "valid release_build.tag reference",
 			cfg: TrunkConfig{
 				Environments: EnvNames("dev"),
-				Release:      &ReleaseConfig{Tag: "goreleaser.tag"},
+				ReleaseBuild:      &ReleaseBuildConfig{Tag: "goreleaser.tag"},
 				Builds: []BuildConfig{
 					{Name: "goreleaser", Workflow: "w.yaml"},
 				},
@@ -776,32 +776,32 @@ func TestValidate_ReleaseTag(t *testing.T) {
 			wantErrs: nil,
 		},
 		{
-			name: "invalid release.tag - unknown callback",
+			name: "invalid release_build.tag - unknown callback",
 			cfg: TrunkConfig{
 				Environments: EnvNames("dev"),
-				Release:      &ReleaseConfig{Tag: "nonexistent.tag"},
+				ReleaseBuild:      &ReleaseBuildConfig{Tag: "nonexistent.tag"},
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: "w.yaml"},
 				},
 			},
-			wantErrs: []string{"release.tag references unknown callback: nonexistent"},
+			wantErrs: []string{"release_build.tag references unknown callback: nonexistent"},
 		},
 		{
-			name: "invalid release.tag - bad format",
+			name: "invalid release_build.tag - bad format",
 			cfg: TrunkConfig{
 				Environments: EnvNames("dev"),
-				Release:      &ReleaseConfig{Tag: "invalid"},
+				ReleaseBuild:      &ReleaseBuildConfig{Tag: "invalid"},
 				Builds: []BuildConfig{
 					{Name: "app", Workflow: "w.yaml"},
 				},
 			},
-			wantErrs: []string{"release.tag invalid format"},
+			wantErrs: []string{"release_build.tag invalid format"},
 		},
 		{
-			name: "release.tag with deploy callback",
+			name: "release_build.tag with deploy callback",
 			cfg: TrunkConfig{
 				Environments: EnvNames("dev"),
-				Release:      &ReleaseConfig{Tag: "release.version"},
+				ReleaseBuild:      &ReleaseBuildConfig{Tag: "release.version"},
 				Deploys: []DeployConfig{
 					{Name: "release", Workflow: "w.yaml"},
 				},

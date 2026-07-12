@@ -73,16 +73,16 @@ deploys:
 			wantPath: "deploys[0].deploy_target",
 		},
 		{
-			name: "release.version_overrides",
+			name: "release_build.version_overrides",
 			manifest: `
 builds:
   - name: app
     workflow: b.yaml
-release:
+release_build:
   version_overrides:
     dir: .cascade/version-overrides
 `,
-			wantPath: "release.version_overrides",
+			wantPath: "release_build.version_overrides",
 		},
 	}
 	for _, tt := range tests {

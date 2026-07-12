@@ -28,7 +28,7 @@ cascade owns orchestration: promotion, state, versioning, and the release bounda
 | Hand-rolled env-promotion scripts | cascade's promotion chain | Delete your promotion glue. cascade orchestrates, pins SHAs, and gates the release boundary for you. |
 | Manual or tool-driven version bumping | Conventional-commit-driven version derivation | Your bump logic goes away; commit messages drive the semver, and this is required, not optional. |
 | A changelog tool (release-please, git-cliff) | A **changelog** callback, or keep the tool standalone | See [Keep release-please or git-cliff](#keep-release-please-or-git-cliff). |
-| A release tool (goreleaser) | An external release via `release.tag`, or keep the tool standalone | See [Keep goreleaser](#keep-goreleaser). |
+| A release tool (goreleaser) | An external release via `release_build.tag`, or keep the tool standalone | See [Keep goreleaser](#keep-goreleaser). |
 
 Every callback is a reusable workflow with an `on: workflow_call` trigger; see the [Callback contract](/cascade/reference/callbacks/) for the full input/output shape of each callback type. A minimal manifest expressing the mapping above:
 
@@ -69,12 +69,12 @@ Two supported paths, both configured under `changelog:` in the [manifest referen
 
 ## Keep goreleaser
 
-cascade has no dedicated "release callback" that receives `build_name`/`old_version`/`new_version`. Releasing is either cascade's own job or your external tool, configured under `release:`:
+cascade has no dedicated "release callback" that receives `build_name`/`old_version`/`new_version`. Releasing is either cascade's own job or your external tool, configured under `release_build:`:
 
-- **External release tool.** Keep your goreleaser step as a normal build or deploy callback that emits a tag output, then set `release.tag` to that `callback.output` reference. cascade defers the tag to your tool's output.
-- **Disable and keep goreleaser standalone.** Set `release.disabled: true` to turn off cascade's release management and run goreleaser on its own trigger.
+- **External release tool.** Keep your goreleaser step as a normal build or deploy callback that emits a tag output, then set `release_build.tag` to that `callback.output` reference. cascade defers the tag to your tool's output.
+- **Disable and keep goreleaser standalone.** Set `release_build.disabled: true` to turn off cascade's release management and run goreleaser on its own trigger.
 
-Omitting `release:` entirely uses cascade's defaults: it creates releases with conventional-commit changelogs.
+Omitting `release_build:` entirely uses cascade's defaults: it creates releases with conventional-commit changelogs.
 
 ## Split a monolithic pipeline
 

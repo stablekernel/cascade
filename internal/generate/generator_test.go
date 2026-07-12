@@ -745,7 +745,7 @@ func TestGenerator_FinalizeJob_ReleaseDisabled(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("dev"),
-		Release:      &config.ReleaseConfig{Disabled: boolPtr(true)},
+		ReleaseBuild:      &config.ReleaseBuildConfig{Disabled: boolPtr(true)},
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},
@@ -780,7 +780,7 @@ func TestGenerator_FinalizeJob_ExternalRelease(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("dev"),
-		Release:      &config.ReleaseConfig{Tag: "goreleaser.tag"},
+		ReleaseBuild:      &config.ReleaseBuildConfig{Tag: "goreleaser.tag"},
 		Builds: []config.BuildConfig{
 			{Name: "goreleaser", Workflow: ".github/workflows/goreleaser.yaml", Triggers: []string{"cmd/**"}},
 		},
@@ -886,7 +886,7 @@ func TestGenerator_FinalizeJob_FrameworkManagedRelease(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("dev"),
-		Release:      &config.ReleaseConfig{}, // No tag specified = framework-managed
+		ReleaseBuild:      &config.ReleaseBuildConfig{}, // No tag specified = framework-managed
 		Builds: []config.BuildConfig{
 			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
 		},

@@ -37,7 +37,7 @@ config:
     - name: cdk
       workflow: deploy.yaml
       triggers: ["cdk/**"]
-  release:
+  release_build:
     workflow: .github/workflows/release-build.yaml
 
 # Published v0.1.0 baseline: prerelease envs hold the last RC, release and prod

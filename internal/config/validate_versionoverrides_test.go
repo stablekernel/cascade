@@ -3,7 +3,7 @@ package config
 import "testing"
 
 // TestValidateVersionOverridesReservedField exercises the reserved
-// release.version_overrides.dir pointer. Validation applies only when the block
+// release_build.version_overrides.dir pointer. Validation applies only when the block
 // is present, mirrors the components.path rules (no absolute path, no ".."
 // segments), and never rejects a manifest that is valid without the block.
 func TestValidateVersionOverridesReservedField(t *testing.T) {
@@ -11,7 +11,7 @@ func TestValidateVersionOverridesReservedField(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		release     *ReleaseConfig
+		release     *ReleaseBuildConfig
 		wantErr     bool
 		errContains string
 	}{
@@ -22,30 +22,30 @@ func TestValidateVersionOverridesReservedField(t *testing.T) {
 		},
 		{
 			name:    "release without version_overrides is valid",
-			release: &ReleaseConfig{},
+			release: &ReleaseBuildConfig{},
 			wantErr: false,
 		},
 		{
 			name:    "version_overrides with empty dir is valid",
-			release: &ReleaseConfig{VersionOverrides: &VersionOverridesConfig{}},
+			release: &ReleaseBuildConfig{VersionOverrides: &VersionOverridesConfig{}},
 			wantErr: false,
 		},
 		{
 			name:    "version_overrides with a clean relative dir is valid",
-			release: &ReleaseConfig{VersionOverrides: &VersionOverridesConfig{Dir: ".cascade/overrides"}},
+			release: &ReleaseBuildConfig{VersionOverrides: &VersionOverridesConfig{Dir: ".cascade/overrides"}},
 			wantErr: false,
 		},
 		{
 			name:        "absolute dir is rejected",
-			release:     &ReleaseConfig{VersionOverrides: &VersionOverridesConfig{Dir: "/etc/overrides"}},
+			release:     &ReleaseBuildConfig{VersionOverrides: &VersionOverridesConfig{Dir: "/etc/overrides"}},
 			wantErr:     true,
-			errContains: "release.version_overrides.dir must be a relative path, not absolute",
+			errContains: "release_build.version_overrides.dir must be a relative path, not absolute",
 		},
 		{
 			name:        "dir with parent segment is rejected",
-			release:     &ReleaseConfig{VersionOverrides: &VersionOverridesConfig{Dir: "../escape"}},
+			release:     &ReleaseBuildConfig{VersionOverrides: &VersionOverridesConfig{Dir: "../escape"}},
 			wantErr:     true,
-			errContains: "release.version_overrides.dir must not contain '..' segments",
+			errContains: "release_build.version_overrides.dir must not contain '..' segments",
 		},
 	}
 
@@ -71,7 +71,7 @@ func TestValidateVersionOverridesReservedField(t *testing.T) {
 }
 
 // TestParseVersionOverridesReservedField asserts a manifest carrying the reserved
-// release.version_overrides block parses into the typed field, validates at
+// release_build.version_overrides block parses into the typed field, validates at
 // CurrentSchemaVersion, and does not bump schema_version.
 func TestParseVersionOverridesReservedField(t *testing.T) {
 	t.Parallel()
@@ -81,24 +81,24 @@ environments: [dev, prod]
 deploys:
   - name: app
     workflow: .github/workflows/deploy.yaml
-release:
+release_build:
   version_overrides:
     dir: .cascade/version-overrides
 `)
-	if cfg.Release == nil {
+	if cfg.ReleaseBuild == nil {
 		t.Fatalf("release block did not parse")
 		return
 	}
-	if cfg.Release.VersionOverrides == nil {
-		t.Fatalf("release.version_overrides did not parse")
+	if cfg.ReleaseBuild.VersionOverrides == nil {
+		t.Fatalf("release_build.version_overrides did not parse")
 		return
 	}
-	if got := cfg.Release.VersionOverrides.Dir; got != ".cascade/version-overrides" {
-		t.Fatalf("release.version_overrides.dir = %q", got)
+	if got := cfg.ReleaseBuild.VersionOverrides.Dir; got != ".cascade/version-overrides" {
+		t.Fatalf("release_build.version_overrides.dir = %q", got)
 	}
 	// version_overrides parses and structurally validates, but using it is a hard
 	// lint error: the pointer is reserved and not wired to generation.
-	if errs := Validate(cfg); !hasErrContaining(errs, "release.version_overrides is reserved and not implemented in this cascade version") {
+	if errs := Validate(cfg); !hasErrContaining(errs, "release_build.version_overrides is reserved and not implemented in this cascade version") {
 		t.Fatalf("expected reserved version_overrides rejection, got %v", errs)
 	}
 	if got := cfg.GetSchemaVersion(); got != CurrentSchemaVersion {
@@ -120,15 +120,15 @@ environments: [dev, prod]
 deploys:
   - name: app
     workflow: .github/workflows/deploy.yaml
-release:
+release_build:
   disabled: false
 `)
-	if cfg.Release == nil {
+	if cfg.ReleaseBuild == nil {
 		t.Fatalf("release block did not parse")
 		return
 	}
-	if cfg.Release.VersionOverrides != nil {
-		t.Fatalf("version_overrides should be nil when absent, got %#v", cfg.Release.VersionOverrides)
+	if cfg.ReleaseBuild.VersionOverrides != nil {
+		t.Fatalf("version_overrides should be nil when absent, got %#v", cfg.ReleaseBuild.VersionOverrides)
 	}
 	if errs := Validate(cfg); len(errs) != 0 {
 		t.Fatalf("expected no errors, got %v", errs)
