@@ -53,7 +53,7 @@ func TestGenerator_OwnRepoRelease(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			release := &config.ReleaseConfig{Workflow: ".github/workflows/release.yaml"}
+			release := &config.ReleaseBuildConfig{Workflow: ".github/workflows/release.yaml"}
 			cfg, tmpDir := candidateDispatchConfig(t, true /* dispatch */, release)
 			cfg.ReleaseToken = pat
 
@@ -96,7 +96,7 @@ func TestGenerator_OwnRepoRelease(t *testing.T) {
 // generation (every downstream manifest) must keep the pinned setup-cli and never
 // download the from-source artifact.
 func TestGenerator_OwnRepoFinalizeBuildsFromSource(t *testing.T) {
-	release := &config.ReleaseConfig{Workflow: ".github/workflows/release.yaml"}
+	release := &config.ReleaseBuildConfig{Workflow: ".github/workflows/release.yaml"}
 
 	t.Run("own-repo finalize downloads the from-source binary", func(t *testing.T) {
 		cfg, tmpDir := candidateDispatchConfig(t, true, release)
@@ -145,7 +145,7 @@ func TestGenerator_OwnRepoFinalizeBuildsFromSource(t *testing.T) {
 // caller in the codebase already uses must keep behaving exactly as before
 // WithOwnRepoRelease existed. Own-repo mode is opt-in only.
 func TestGenerator_NewGeneratorTwoArgDefaultsToPlainMode(t *testing.T) {
-	release := &config.ReleaseConfig{Workflow: ".github/workflows/release.yaml"}
+	release := &config.ReleaseBuildConfig{Workflow: ".github/workflows/release.yaml"}
 	cfg, tmpDir := candidateDispatchConfig(t, true, release)
 	cfg.ReleaseToken = pat
 

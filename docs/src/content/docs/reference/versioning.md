@@ -96,7 +96,7 @@ See the full field list in the [manifest reference](/cascade/reference/manifest/
 
 ### Version-intent overrides
 
-cascade derives the next version from conventional commits. Some version intent cannot be expressed that way, for example forcing a pre-release line or a specific exact version for a release. Under `release:`, a `version_overrides:` block addresses maintainer-committed override files carrying that intent:
+cascade derives the next version from conventional commits. Some version intent cannot be expressed that way, for example forcing a pre-release line or a specific exact version for a release. Under `release_build:`, a `version_overrides:` block addresses maintainer-committed override files carrying that intent:
 
 - `dir`, a relative directory pointer to the override files. Must be relative with no `..` segments. Empty means the implementation default (reserved).
 

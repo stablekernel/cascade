@@ -19,7 +19,7 @@ config:
   trunk_branch: main
   release_trigger: dispatch
   release_token: ${{ secrets.CASCADE_STATE_TOKEN }}
-  release:
+  release_build:
     workflow: .github/workflows/release.yaml
   environments: [dev]
   builds:

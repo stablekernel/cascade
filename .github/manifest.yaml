@@ -21,7 +21,7 @@ ci:
       - name: cli
         workflow: .github/workflows/build-cli.yaml
         triggers: []
-    release:
+    release_build:
       workflow: .github/workflows/release.yaml
     changelog:
       contributors: true

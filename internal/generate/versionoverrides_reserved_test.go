@@ -9,7 +9,7 @@ import (
 )
 
 // TestVersionOverridesReservedFieldIsByteIdentical asserts that populating the
-// reserved release.version_overrides.dir pointer produces byte-identical output
+// reserved release_build.version_overrides.dir pointer produces byte-identical output
 // to a config that leaves the block absent. The pointer is reserved shape but is
 // not wired to generation.
 func TestVersionOverridesReservedFieldIsByteIdentical(t *testing.T) {
@@ -25,7 +25,7 @@ func TestVersionOverridesReservedFieldIsByteIdentical(t *testing.T) {
 				Workflow: ".github/workflows/deploy-app.yaml",
 			},
 		},
-		Release: &config.ReleaseConfig{
+		ReleaseBuild: &config.ReleaseBuildConfig{
 			VersionOverrides: &config.VersionOverridesConfig{
 				Dir: ".cascade/version-overrides",
 			},
@@ -42,7 +42,7 @@ func TestVersionOverridesReservedFieldIsByteIdentical(t *testing.T) {
 				Workflow: ".github/workflows/deploy-app.yaml",
 			},
 		},
-		Release: &config.ReleaseConfig{},
+		ReleaseBuild: &config.ReleaseBuildConfig{},
 	}
 
 	gA := NewPromoteGenerator(cfgA, t.TempDir())

@@ -888,12 +888,12 @@ func validateComponents(cfg *TrunkConfig) []string {
 	return errs
 }
 
-// validateVersionOverrides validates the reserved release.version_overrides
+// validateVersionOverrides validates the reserved release_build.version_overrides
 // pointer. Rules frozen at v1 mirror components.path: any configured dir must be
 // a clean relative path (no leading slash, no ".." segments). Validation applies
 // only when the block is present, so it never rejects a manifest that is valid
 // without it.
-func validateVersionOverrides(release *ReleaseConfig) []string {
+func validateVersionOverrides(release *ReleaseBuildConfig) []string {
 	if release == nil || release.VersionOverrides == nil {
 		return nil
 	}
@@ -903,9 +903,9 @@ func validateVersionOverrides(release *ReleaseConfig) []string {
 	}
 	var errs []string
 	if strings.HasPrefix(dir, "/") {
-		errs = append(errs, "release.version_overrides.dir must be a relative path, not absolute")
+		errs = append(errs, "release_build.version_overrides.dir must be a relative path, not absolute")
 	} else if strings.Contains(dir, "..") {
-		errs = append(errs, "release.version_overrides.dir must not contain '..' segments")
+		errs = append(errs, "release_build.version_overrides.dir must not contain '..' segments")
 	}
 	return errs
 }

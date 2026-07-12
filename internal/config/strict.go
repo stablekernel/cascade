@@ -101,6 +101,12 @@ var legacyFieldRenames = map[string]string{
 	// ({name: dev, wait_timer: 5, ...}). Point a stale environment_config: at the
 	// list rather than at the nearest field by edit distance.
 	"environment_config": "environments",
+	// The user-facing release: block (the post-publish release-build dispatch that
+	// carries workflow: and the reserved version_overrides pointer) was renamed to
+	// release_build:, disambiguating it from the similarly-named release_token,
+	// release_trigger, and latest_release keys. Point a stale release: there
+	// explicitly rather than letting Levenshtein steer to one of those neighbors.
+	"release": "release_build",
 }
 
 // fieldSuggestion returns the best did-you-mean replacement for an unknown key:

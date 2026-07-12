@@ -161,7 +161,7 @@ type GeneratorOption func(*Generator)
 // WithOwnRepoRelease switches the orchestrate generator into cascade's own-repo
 // release-plumbing mode instead of the plain output every downstream manifest
 // produces. Cascade self-publishes its own rc cut through GoReleaser
-// (dispatched via the configured release.workflow), so cascade's own finalize
+// (dispatched via the configured release_build.workflow), so cascade's own finalize
 // job cuts the candidate tag only, without pre-creating a draft release, and
 // creates that tag with the non-triggering GITHUB_TOKEN so the tag push does
 // not also fire the release workflow alongside the explicit dispatch. A
@@ -2013,7 +2013,7 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		// External release - update existing
 		sb.WriteString("          action: update\n")
 		// Parse callback.output reference to get the job output
-		parts := strings.SplitN(g.config.Release.Tag, ".", 2)
+		parts := strings.SplitN(g.config.ReleaseBuild.Tag, ".", 2)
 		callbackName := parts[0]
 		outputName := parts[1]
 		// Find the job ID for this callback name. Iterate in declaration order
@@ -2084,7 +2084,7 @@ func (g *Generator) writeCandidateDispatchStep(sb *strings.Builder) {
 	if g.config.HasExternalRelease() {
 		return
 	}
-	if g.config.Release == nil || g.config.Release.Workflow == "" {
+	if g.config.ReleaseBuild == nil || g.config.ReleaseBuild.Workflow == "" {
 		return
 	}
 	if !g.config.OrchestrateDispatchOnly() {
@@ -2100,7 +2100,7 @@ func (g *Generator) writeCandidateDispatchStep(sb *strings.Builder) {
 	sb.WriteString("          # The tag-push trigger is unreliable here: the candidate tag can\n")
 	sb.WriteString("          # point at a state commit whose message suppresses CI, so an explicit\n")
 	sb.WriteString("          # dispatch against the tag is the dependable way to build the candidate.\n")
-	sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.Release.Workflow) + " \\\n")
+	sb.WriteString("          gh workflow run " + workflowDispatchTarget(g.config.ReleaseBuild.Workflow) + " \\\n")
 	sb.WriteString("            --repo \"${{ github.repository }}\" \\\n")
 	sb.WriteString("            --ref \"$TAG\"\n")
 }
