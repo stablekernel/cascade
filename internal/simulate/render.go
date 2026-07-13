@@ -40,6 +40,9 @@ func (r *Result) RenderHuman(w io.Writer, opts ...RenderOption) error {
 	if err := r.renderDiff(w, o.repoURL); err != nil {
 		return err
 	}
+	if err := r.renderChain(w); err != nil {
+		return err
+	}
 	if err := r.renderEffects(w); err != nil {
 		return err
 	}
@@ -132,6 +135,27 @@ func compareURL(repoURL, from, to string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s/compare/%s...%s", repoURL, shortOrNone(from), shortOrNone(to))
+}
+
+// renderChain writes the multi-environment cherry-pick chain: one numbered step
+// per environment the fix elevates through, bottom-up from the second
+// environment up to and including the target. It is omitted entirely when the
+// action produced no chain (every action other than a hotfix, and a hotfix whose
+// chain could not be computed). The steps render in the same effect vocabulary
+// as the effect list.
+func (r *Result) renderChain(w io.Writer) error {
+	if len(r.Chain) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "Cherry-pick chain (in order):"); err != nil {
+		return err
+	}
+	for i, e := range r.Chain {
+		if _, err := fmt.Fprintf(w, "  %d. %s\n", i+1, effectLine(e)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Result) renderEffects(w io.Writer) error {

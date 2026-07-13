@@ -380,9 +380,11 @@ cascade simulate hotfix --env uat --fix <sha>
 ```
 
 Each run prints a before/after state diff and an ordered effect sequence. The four
-subcommands are `promote`, `release`, `rollback`, and `hotfix`. See
-[Simulate and verify](/cascade/guides/simulate-and-verify/) for the full walkthrough,
-example output, and the deploy-stub model.
+subcommands are `promote`, `release`, `rollback`, and `hotfix`. `hotfix` also prints a
+`Cherry-pick chain` section: the ordered environments the fix elevates through, bottom-up
+from the second environment up to and including the `--env` target, one cherry-pick per
+environment. See [Simulate and verify](/cascade/guides/simulate-and-verify/) for the full
+walkthrough, example output, and the deploy-stub model.
 
 On a multi-component (monorepo) manifest, pass `--component <name>` to scope the
 simulation to one declared component. The engine then reads and replays that

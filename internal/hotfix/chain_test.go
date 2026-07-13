@@ -3,11 +3,53 @@ package hotfix
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/git"
 )
+
+// writeTempManifestFull writes a manifest with per-env state into a fresh temp
+// dir and returns its path. Unlike writeManifestFull it does not depend on the
+// current working directory, so a no-git seam test can run without a scratch
+// repository.
+func writeTempManifestFull(t *testing.T, envs []string, state map[string]envSpec) string {
+	t.Helper()
+
+	var b strings.Builder
+	b.WriteString("ci:\n  config:\n    environments:\n")
+	for _, e := range envs {
+		b.WriteString("      - " + e + "\n")
+	}
+	b.WriteString("  state:\n")
+	for _, e := range envs {
+		spec, ok := state[e]
+		if !ok {
+			continue
+		}
+		version := spec.version
+		if version == "" {
+			version = "v1.0.0-rc.1"
+		}
+		b.WriteString("    " + e + ":\n")
+		b.WriteString("      sha: " + spec.sha + "\n")
+		b.WriteString("      version: " + version + "\n")
+		if len(spec.patches) > 0 {
+			b.WriteString("      patches:\n")
+			for _, p := range spec.patches {
+				b.WriteString("        - " + p + "\n")
+			}
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return path
+}
 
 // envSpec describes one environment row for writeManifestFull: its recorded
 // state SHA, optional version override, and optional applied patch SHAs.
@@ -448,5 +490,85 @@ func TestPlanChain_RemoteEnvTipInSync_PlansCleanly(t *testing.T) {
 	}
 	if ep.BaseSHA != base {
 		t.Errorf("base SHA = %q, want %q", ep.BaseSHA, base)
+	}
+}
+
+// --- T6: injectable ancestry seam (no git) ---------------------------------
+
+// TestPlanChain_InjectedAncestorCheckerDrivesChain proves the chain is computed
+// through the injected AncestorChecker, not a hardwired git call: with a
+// record-only git runner and a checker that reports the fix present only in uat,
+// PlanChain marks uat a no-op and still plans prod. It runs against no git
+// repository, which is exactly the seam the what-if simulator relies on.
+func TestPlanChain_InjectedAncestorCheckerDrivesChain(t *testing.T) {
+	const (
+		trunkTip = "HEAD" // the record-only runner resolves HEAD to itself
+		fix      = "fixsha0000000"
+		uatBase  = "uatbase000000"
+		prodBase = "prodbase00000"
+	)
+
+	manifest := writeTempManifestFull(t, []string{"dev", "uat", "prod"}, map[string]envSpec{
+		"uat":  {sha: uatBase},
+		"prod": {sha: prodBase},
+	})
+
+	// The checker reports trunk ancestry for the trunk gate (descendant is the
+	// trunk tip) and reports the fix already present ONLY in uat's base, so the
+	// chain differs from the all-plan default purely because of this injection.
+	checker := func(_, descendant string) (bool, error) {
+		return descendant == trunkTip || descendant == uatBase, nil
+	}
+
+	p, err := NewPlanner(
+		PlannerOptions{ConfigPath: manifest},
+		WithGitRunner(&fakeGitRunner{}),
+		WithAncestorChecker(checker),
+	)
+	if err != nil {
+		t.Fatalf("NewPlanner: %v", err)
+	}
+
+	res, err := p.PlanChain([]string{fix}, "prod")
+	if err != nil {
+		t.Fatalf("PlanChain: %v", err)
+	}
+	if len(res.Envs) != 2 {
+		t.Fatalf("expected chain [uat prod], got %d envs: %+v", len(res.Envs), res.Envs)
+	}
+	if uat := res.Envs[0]; uat.Env != "uat" || !uat.NoOp || len(uat.Commits) != 0 {
+		t.Errorf("uat should be a no-op because the injected checker reports the fix present, got %+v", uat)
+	}
+	if prod := res.Envs[1]; prod.Env != "prod" || prod.NoOp || len(prod.Commits) != 1 || prod.Commits[0] != fix {
+		t.Errorf("prod should plan the fix, got %+v", prod)
+	}
+}
+
+// TestPlanner_DefaultAncestorCheckerIsGitIsAncestor guards that the real hotfix
+// path is byte-identical: NewPlanner with no override leaves the ancestry seam
+// pointed at git.IsAncestor, and a nil override is ignored rather than clearing
+// it. This is what keeps production behavior unchanged while the simulator
+// injects its own checker.
+func TestPlanner_DefaultAncestorCheckerIsGitIsAncestor(t *testing.T) {
+	manifest := writeTempManifestFull(t, []string{"dev", "uat"}, map[string]envSpec{
+		"uat": {sha: "uatbase000000"},
+	})
+
+	want := reflect.ValueOf(git.IsAncestor).Pointer()
+
+	p, err := NewPlanner(PlannerOptions{ConfigPath: manifest})
+	if err != nil {
+		t.Fatalf("NewPlanner: %v", err)
+	}
+	if got := reflect.ValueOf(p.ancestor).Pointer(); got != want {
+		t.Error("default ancestor checker must be git.IsAncestor, so the real hotfix path is unchanged")
+	}
+
+	pNil, err := NewPlanner(PlannerOptions{ConfigPath: manifest}, WithAncestorChecker(nil))
+	if err != nil {
+		t.Fatalf("NewPlanner (nil override): %v", err)
+	}
+	if got := reflect.ValueOf(pNil.ancestor).Pointer(); got != want {
+		t.Error("a nil AncestorChecker override must be ignored, leaving git.IsAncestor in place")
 	}
 }

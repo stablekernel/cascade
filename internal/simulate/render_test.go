@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -162,3 +163,50 @@ func checkGolden(t *testing.T, path string, got []byte) {
 	require.NoError(t, err, "golden file missing; run with -update")
 	require.Equal(t, string(want), string(got))
 }
+
+// TestRenderHuman_ChainSection renders the multi-environment cherry-pick chain
+// as its own numbered section, in effect vocabulary, positioned between the
+// state diff and the effects. A no-op environment reads as "skipped".
+func TestRenderHuman_ChainSection(t *testing.T) {
+	result := &Result{
+		ActionName:     "hotfix",
+		ActionDescribe: "hotfix (env=prod, commits=1)",
+		Chain: []Effect{
+			{Disposition: DispositionRun, Action: "cherry-pick", Target: "uat", Detail: "commit fixaaa1"},
+			{Disposition: DispositionSkip, Action: "cherry-pick", Target: "prod", Detail: "already present"},
+		},
+		Effects: []Effect{
+			{Disposition: DispositionRun, Action: "apply patch", Target: "prod", Detail: "commit fixaaa1"},
+		},
+		Note: boundaryNote,
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, result.RenderHuman(&buf))
+	out := buf.String()
+
+	assert.Contains(t, out, "Cherry-pick chain (in order):")
+	assert.Contains(t, out, "1. cherry-pick uat (commit fixaaa1)")
+	assert.Contains(t, out, "2. skipped cherry-pick prod (already present)")
+	assert.Less(t, indexOf(out, "Cherry-pick chain"), indexOf(out, "Effects (in order):"),
+		"the chain section renders before the effects")
+}
+
+// TestRenderHuman_NoChainSectionWhenEmpty proves the chain section is omitted
+// entirely for an action that produced no chain, so non-hotfix output is
+// unchanged.
+func TestRenderHuman_NoChainSectionWhenEmpty(t *testing.T) {
+	result := &Result{
+		ActionName:     "promote",
+		ActionDescribe: "promote",
+		Effects:        []Effect{{Disposition: DispositionRun, Action: "deploy", Target: "prod", Detail: "from uat"}},
+		Note:           boundaryNote,
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, result.RenderHuman(&buf))
+	assert.NotContains(t, buf.String(), "Cherry-pick chain")
+}
+
+// indexOf returns the byte index of sub in s, or -1 when absent.
+func indexOf(s, sub string) int { return strings.Index(s, sub) }
