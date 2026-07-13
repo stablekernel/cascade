@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
-	"github.com/stablekernel/cascade/internal/git"
 )
 
 // PlanChainResult is the computed, validated plan for elevating a set of trunk
@@ -108,7 +107,7 @@ func (p *Planner) resolveTrunkAncestors(refs []string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolving fix commit %q: %w", ref, err)
 		}
-		onTrunk, err := git.IsAncestor(sha, trunkSHA)
+		onTrunk, err := p.ancestor(sha, trunkSHA)
 		if err != nil {
 			return nil, fmt.Errorf("checking trunk ancestry of %q: %w", ref, err)
 		}
@@ -124,12 +123,14 @@ func (p *Planner) resolveTrunkAncestors(refs []string) ([]string, error) {
 // whose recorded state SHA is baseSHA and whose applied-patch list is patches. A
 // commit counts as present when it is an ancestor of the state SHA OR it is
 // already recorded in the patch list. The patch-list check is what makes
-// re-elevation idempotent across the diverged env branch.
-func commitPresentInEnv(fixSHA, baseSHA string, patches []string) (bool, error) {
+// re-elevation idempotent across the diverged env branch. The ancestry test
+// runs through the injectable seam so a caller without a git checkout can
+// resolve presence with a record-only oracle.
+func (p *Planner) commitPresentInEnv(fixSHA, baseSHA string, patches []string) (bool, error) {
 	if slices.Contains(patches, fixSHA) {
 		return true, nil
 	}
-	already, err := git.IsAncestor(fixSHA, baseSHA)
+	already, err := p.ancestor(fixSHA, baseSHA)
 	if err != nil {
 		return false, err
 	}
@@ -240,7 +241,7 @@ func (p *Planner) PlanChain(refs []string, targetEnv string) (*PlanChainResult, 
 			Commits:     make([]string, 0, len(shas)),
 		}
 		for _, sha := range shas {
-			present, err := commitPresentInEnv(sha, baseSHA, state.Patches)
+			present, err := p.commitPresentInEnv(sha, baseSHA, state.Patches)
 			if err != nil {
 				return nil, fmt.Errorf("checking whether commit is already in %q: %w", env, err)
 			}

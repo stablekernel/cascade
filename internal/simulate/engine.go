@@ -28,6 +28,12 @@ type Result struct {
 	// Effects is the ordered list of orchestration steps.
 	Effects []Effect `json:"effects"`
 
+	// Chain is the ordered multi-environment cherry-pick preview: one step per
+	// environment the fix elevates through, bottom-up from the second environment
+	// up to and including the target. It is populated only for a hotfix; other
+	// actions leave it empty.
+	Chain []Effect `json:"chain,omitempty"`
+
 	// Note states the orchestration-not-deploys boundary so a green simulation
 	// is never read as a passing deploy.
 	Note string `json:"note,omitempty"`
@@ -145,6 +151,7 @@ func (e *Engine) Simulate(a Action) (*Result, error) {
 		ActionDescribe: a.Describe(),
 		Diff:           DiffState(beforeState, afterState),
 		Effects:        outcome.Effects,
+		Chain:          outcome.Chain,
 		Note:           boundaryNote,
 	}, nil
 }

@@ -52,7 +52,7 @@ func (f *fakeGitRunner) ResetBranch(remote, name, sha string) error {
 // tests) and intercepts ResetBranch so a PlanChain run against a real scratch
 // repo can assert the self-heal fired without force-pushing to a live remote.
 type recordingResetRunner struct {
-	gitRunner
+	GitRunner
 	resets   []resetCall
 	resetErr error
 }
@@ -275,7 +275,7 @@ func TestPlanChain_OrphanRemoteTipSelfHealsWithRealChecker(t *testing.T) {
 	// Remote env/test points at the abandoned orphan tip, not the recorded base.
 	setRemoteEnvTip(t, "test", orphanTip)
 
-	rr := &recordingResetRunner{gitRunner: execGitRunner{}}
+	rr := &recordingResetRunner{GitRunner: execGitRunner{}}
 	checker := &stubPRChecker{prs: nil}
 	p := newPlanner(t, manifest, WithPRChecker(checker))
 	p.gitRunner = rr
@@ -314,7 +314,7 @@ func TestPlanChain_OrphanRemoteTipNoopCheckerFailsClosed(t *testing.T) {
 	})
 	setRemoteEnvTip(t, "test", orphanTip)
 
-	rr := &recordingResetRunner{gitRunner: execGitRunner{}}
+	rr := &recordingResetRunner{GitRunner: execGitRunner{}}
 	p := newPlanner(t, manifest) // no PRChecker: realPRChecker stays false
 	p.gitRunner = rr
 
@@ -351,7 +351,7 @@ func TestPlanChain_AbortsOnOpenConflictPR(t *testing.T) {
 	})
 	setRemoteEnvTip(t, "test", orphanTip)
 
-	rr := &recordingResetRunner{gitRunner: execGitRunner{}}
+	rr := &recordingResetRunner{GitRunner: execGitRunner{}}
 	// Stub returns a PR as if the restPRChecker found one labeled cascade-hotfix-conflict.
 	checker := &stubPRChecker{prs: []OpenPR{{Number: 55, URL: "https://example.test/pr/55"}}}
 	p := newPlanner(t, manifest, WithPRChecker(checker))
@@ -386,7 +386,7 @@ func TestPlanChain_AbortsOnOpenHotfixPR(t *testing.T) {
 	})
 	setRemoteEnvTip(t, "test", orphanTip)
 
-	rr := &recordingResetRunner{gitRunner: execGitRunner{}}
+	rr := &recordingResetRunner{GitRunner: execGitRunner{}}
 	checker := &stubPRChecker{prs: []OpenPR{{Number: 77, URL: "https://example.test/pr/77"}}}
 	p := newPlanner(t, manifest, WithPRChecker(checker))
 	p.gitRunner = rr

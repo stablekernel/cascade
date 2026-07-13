@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stablekernel/cascade/internal/version"
 )
@@ -56,10 +57,12 @@ type noopPRChecker struct{}
 
 func (noopPRChecker) OpenHotfixPRs(string) ([]OpenPR, error) { return nil, nil }
 
-// gitRunner abstracts the few git operations the planner performs so tests can
-// observe and so dry-run can suppress mutation. The default implementation
-// shells out to git in the current working directory.
-type gitRunner interface {
+// GitRunner abstracts the few git operations the planner performs so tests can
+// observe, so dry-run can suppress mutation, and so a caller without a git
+// checkout (the what-if simulator) can inject a record-only implementation via
+// WithGitRunner. The default implementation shells out to git in the current
+// working directory.
+type GitRunner interface {
 	// ResolveSHA resolves a ref or short SHA to a full commit SHA.
 	ResolveSHA(ref string) (string, error)
 	// LocalBranchExists reports whether a local branch exists.
@@ -157,7 +160,13 @@ type Planner struct {
 	// no-op default, and gates orphan self-heal: the planner resets an env branch
 	// only when a real checker actually proved no resolution PR is open.
 	realPRChecker bool
-	gitRunner     gitRunner
+	gitRunner     GitRunner
+	// ancestor resolves whether one commit is an ancestor of another. It is the
+	// seam the trunk-ancestry gate and the per-(commit,env) presence check run
+	// through, so a caller without a git checkout (the what-if simulator) can
+	// inject a record-only ancestry oracle via WithAncestorChecker. The default
+	// is git.IsAncestor, so production behavior is unchanged.
+	ancestor AncestorChecker
 	// component, when non-empty, names the declared component this hotfix is
 	// scoped to. It is set only via WithPlanComponent by a per-component generated
 	// hotfix workflow. An empty value selects the single-component path, whose
@@ -174,8 +183,39 @@ type PlannerOptions struct {
 	Actor       string
 }
 
+// AncestorChecker reports whether ancestor is an ancestor of descendant. It is
+// the seam the trunk-ancestry gate and the per-(commit,env) presence check run
+// through. The default is git.IsAncestor; the what-if simulator injects a
+// record-only oracle so PlanChain can compute the cherry-pick chain without a
+// git checkout.
+type AncestorChecker func(ancestor, descendant string) (bool, error)
+
 // Option configures optional, additive Planner behavior.
 type Option func(*Planner)
+
+// WithGitRunner injects the git operations the planner performs. The default
+// shells out to git in the current working directory; a caller without a
+// checkout (the what-if simulator) supplies a record-only implementation. A nil
+// runner is ignored, keeping the default.
+func WithGitRunner(r GitRunner) Option {
+	return func(p *Planner) {
+		if r != nil {
+			p.gitRunner = r
+		}
+	}
+}
+
+// WithAncestorChecker injects the ancestry oracle the trunk-ancestry gate and
+// the commit-presence check consult. The default is git.IsAncestor, so the real
+// hotfix path is unchanged; a caller without a checkout (the what-if simulator)
+// supplies a record-only checker. A nil checker is ignored, keeping the default.
+func WithAncestorChecker(fn AncestorChecker) Option {
+	return func(p *Planner) {
+		if fn != nil {
+			p.ancestor = fn
+		}
+	}
+}
 
 // WithDryRun controls whether the planner mutates anything. When true the env
 // branch is computed but not created.
@@ -247,6 +287,7 @@ func NewPlanner(opts PlannerOptions, options ...Option) (*Planner, error) {
 		remote:    defaultRemote,
 		prChecker: noopPRChecker{},
 		gitRunner: execGitRunner{},
+		ancestor:  git.IsAncestor,
 	}
 	for _, o := range options {
 		o(p)
@@ -358,7 +399,7 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 	// applied-patch list. Consulting state.Patches closes the gap where a prior
 	// hotfix applied the commit onto the diverged env branch without advancing
 	// state.SHA, which a pure ancestry check would miss and replan.
-	already, err := commitPresentInEnv(fixSHA, baseSHA, state.Patches)
+	already, err := p.commitPresentInEnv(fixSHA, baseSHA, state.Patches)
 	if err != nil {
 		return nil, fmt.Errorf("checking whether fix is already in %q: %w", targetEnv, err)
 	}

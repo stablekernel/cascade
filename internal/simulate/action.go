@@ -32,6 +32,11 @@ type ActionOutcome struct {
 	// Effects is the ordered list of steps the orchestration would take.
 	Effects []Effect
 
+	// Chain is the ordered multi-environment cherry-pick preview for a hotfix:
+	// one step per environment the fix elevates through, in chain order. Actions
+	// that have no cross-environment chain leave it nil.
+	Chain []Effect
+
 	// AfterStatePath is the manifest path holding the after-state.
 	AfterStatePath string
 }

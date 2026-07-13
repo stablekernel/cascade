@@ -43,6 +43,36 @@ The state diff shortens every sha to 7 characters, and when a change moves an en
 
 Each step in the effect list carries a disposition. A `run` step (the orchestration would carry it out) is shown unadorned; a `skipped` step is a no-op; a `gated` step is held back behind a guard, such as a finalize blocked by a failed deploy. `rollback` resolves its target from the in-state deploy-history ring, never from git, so it needs `--env` and optionally `--to`. `hotfix` needs `--env` and `--fix`; with multiple fix commits, add `--merge-sha` to name the resolution-branch tip. Full flag lists for every action live in the [CLI reference](/cascade/reference/cli/).
 
+## Hotfix cherry-pick chain preview
+
+A hotfix into a mid-ladder environment does not touch that one environment alone: the fix elevates bottom-up from the second environment up to and including the target, one cherry-pick per environment along the way, so every environment the target promotes from carries the same commit. `simulate hotfix` previews that ordered chain in a `Cherry-pick chain` section, above the finalize effects for the target:
+
+```bash
+cascade simulate hotfix --env prod --fix <sha>
+```
+
+```
+Simulating: hotfix (env=prod, commits=1)
+State diff:
+  prod:
+    version:        v1.0.0 -> v1.0.1
+    sha:            prodbas -> fixaaa1
+    diff:           https://github.com/acme/app/compare/prodbas...fixaaa1
+    divergence:     no -> yes
+    previous ring:  0 -> 1
+Cherry-pick chain (in order):
+  1. cherry-pick uat (commit fixaaa1)
+  2. cherry-pick prod (commit fixaaa1)
+Effects (in order):
+  1. apply patch prod (commit fixaaa1)
+  2. write state prod (diverge env onto integration branch)
+  3. release create prod (tag v1.0.1)
+
+Note: build and deploy results are simulated, not executed. cascade validates orchestration, not your build and deploy scripts.
+```
+
+The chain lists the target as its last step, and an environment that already carries the fix (recorded in its applied-patch list) reads as `skipped cherry-pick <env> (already present)` rather than a fresh cherry-pick. The preview drives the same planner the live hotfix workflow uses, so the elevation order it shows is the order the workflow would follow, computed with no git and no network. On a multi-component manifest, `--component` scopes the chain to the selected component's environment ladder.
+
 ## Deploy stubs and outcome injection
 
 Real build and deploy callbacks never run in a simulation. Each one is recorded as a stubbed step instead, and every stub resolves to `success` by default, so the orchestration sequences as if all callbacks had passed.

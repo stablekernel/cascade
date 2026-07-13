@@ -107,6 +107,65 @@ func TestHotfixAction_LeavesOriginalUntouched(t *testing.T) {
 	assert.Equal(t, before, after, "the original manifest bytes must be unchanged")
 }
 
+// seedChainManifest writes a manifest whose uat and prod envs both carry a
+// recorded state SHA on the dev->uat->prod ladder, so a hotfix targeting prod
+// has a real bottom-up elevation chain (uat then prod) to preview.
+func seedChainManifest(t *testing.T) string {
+	t.Helper()
+
+	return writeManifest(t, &config.CICDFile{
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: config.EnvNames("dev", "uat", "prod"),
+		},
+		State: map[string]*config.EnvState{
+			"uat": {
+				SHA:         "uatbase000000",
+				Version:     "v1.1.0-rc.1",
+				CommittedAt: "2026-01-02T10:00:00Z",
+				CommittedBy: "seed-user",
+			},
+			"prod": {
+				SHA:         "prodbase00000",
+				Version:     "v1.0.0",
+				CommittedAt: "2026-01-01T10:00:00Z",
+				CommittedBy: "seed-user",
+			},
+		},
+	})
+}
+
+// TestHotfixAction_PreviewsMultiEnvCherryPickChain proves a hotfix targeting a
+// mid-ladder environment previews the ordered cherry-pick chain: the fix
+// elevates bottom-up from the second environment up to and including the target,
+// one step per environment, in chain order. This drives the real
+// hotfix.Planner.PlanChain through the record-only ancestry seam; it touches no
+// git and no network.
+func TestHotfixAction_PreviewsMultiEnvCherryPickChain(t *testing.T) {
+	t.Parallel()
+
+	path := seedChainManifest(t)
+
+	engine, err := NewEngine(path, WithActor("tester"))
+	require.NoError(t, err)
+
+	result, err := engine.Simulate(NewHotfixAction("prod", []string{"fixaaa1110000"}, ""))
+	require.NoError(t, err)
+
+	require.Len(t, result.Chain, 2, "the chain elevates through uat then prod")
+
+	assert.Equal(t, "cherry-pick", result.Chain[0].Action)
+	assert.Equal(t, "uat", result.Chain[0].Target)
+	assert.Equal(t, DispositionRun, result.Chain[0].Disposition)
+	assert.Contains(t, result.Chain[0].Detail, "fixaaa1")
+
+	assert.Equal(t, "cherry-pick", result.Chain[1].Action)
+	assert.Equal(t, "prod", result.Chain[1].Target,
+		"the target environment is the last step in the chain")
+	assert.Equal(t, DispositionRun, result.Chain[1].Disposition)
+	assert.Contains(t, result.Chain[1].Detail, "fixaaa1")
+}
+
 func TestHotfixAction_NoStateErrors(t *testing.T) {
 	t.Parallel()
 

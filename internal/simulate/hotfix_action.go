@@ -3,6 +3,7 @@ package simulate
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/release"
@@ -62,6 +63,18 @@ func (a *HotfixAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 	}
 	baseSHA := cur.SHA
 
+	// Preview the multi-environment cherry-pick chain before the finalizer
+	// mutates the clone. This drives the real hotfix.Planner.PlanChain through
+	// record-only git and ancestry seams, so the previewed elevation order is the
+	// genuine plan the workflow would follow, computed with no git and no network.
+	// It is best-effort: a chain that cannot be computed (for example an
+	// intermediate environment with no recorded state) leaves the preview empty
+	// rather than failing an otherwise valid what-if.
+	chain, err := a.previewChain(ctx)
+	if err != nil {
+		chain = nil
+	}
+
 	pusher := &recordingPusher{}
 	relMgr := &recordingReleaseManager{}
 
@@ -85,8 +98,99 @@ func (a *HotfixAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 
 	return &ActionOutcome{
 		Effects:        a.effects(pusher, relMgr),
+		Chain:          chain,
 		AfterStatePath: ctx.ClonePath,
 	}, nil
+}
+
+// previewChain drives the real hotfix.Planner.PlanChain against the clone in
+// record-only mode and returns the ordered cherry-pick chain as effects: one
+// step per environment the fix elevates through, bottom-up from the second
+// environment up to and including the target. Git reads and the ancestry check
+// run through injected record-only seams, so no git repository is touched. The
+// preview assumes each fix is already on trunk (the what-if is not validating
+// trunk membership) and not yet present in any environment, except the
+// idempotency the recorded patch list encodes, which PlanChain honors without
+// git.
+func (a *HotfixAction) previewChain(ctx ActionContext) ([]Effect, error) {
+	planner, err := hotfix.NewPlanner(
+		hotfix.PlannerOptions{ConfigPath: ctx.ClonePath, Actor: ctx.Actor},
+		hotfix.WithDryRun(true),
+		hotfix.WithPlanComponent(ctx.Component),
+		hotfix.WithGitRunner(recordOnlyGit{}),
+		hotfix.WithAncestorChecker(previewAncestor),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := planner.PlanChain(a.fixSHAs, a.targetEnv)
+	if err != nil {
+		return nil, err
+	}
+
+	effects := make([]Effect, 0, len(result.Envs))
+	for _, ep := range result.Envs {
+		eff := Effect{Action: "cherry-pick", Target: ep.Env}
+		if ep.NoOp {
+			eff.Disposition = DispositionSkip
+			eff.Detail = "already present"
+		} else {
+			eff.Disposition = DispositionRun
+			eff.Detail = commitsDetail(ep.Commits)
+		}
+		effects = append(effects, eff)
+	}
+	return effects, nil
+}
+
+// commitsDetail renders the ordered commit SHAs a chain step cherry-picks as a
+// short-sha detail string ("commit abc1234" or "commits abc1234, def5678").
+func commitsDetail(shas []string) string {
+	short := make([]string, 0, len(shas))
+	for _, s := range shas {
+		short = append(short, shortOrNone(s))
+	}
+	noun := "commit"
+	if len(short) != 1 {
+		noun = "commits"
+	}
+	return fmt.Sprintf("%s %s", noun, strings.Join(short, ", "))
+}
+
+// previewTrunkTip is the sentinel recordOnlyGit resolves HEAD to, so the
+// record-only ancestry oracle can tell the trunk-ancestry gate (descendant is
+// the trunk tip, always true in a what-if) apart from the per-environment
+// presence check (descendant is an env base SHA, treated as not-yet-present).
+const previewTrunkTip = "cascade-simulate-trunk-tip"
+
+// recordOnlyGit is a hotfix.GitRunner that performs no git operations. It
+// resolves HEAD to the trunk-tip sentinel and every other ref to itself, reports
+// no remote env branch, and no-ops the mutating operations PlanChain never
+// reaches in a preview. It lets PlanChain run without a checkout.
+type recordOnlyGit struct{}
+
+func (recordOnlyGit) ResolveSHA(ref string) (string, error) {
+	if ref == "HEAD" {
+		return previewTrunkTip, nil
+	}
+	return ref, nil
+}
+func (recordOnlyGit) LocalBranchExists(string) (bool, error) { return false, nil }
+func (recordOnlyGit) LocalBranchSHA(string) (string, error)  { return "", nil }
+func (recordOnlyGit) RemoteBranchSHA(string, string) (string, bool, error) {
+	return "", false, nil
+}
+func (recordOnlyGit) CreateBranch(string, string) error        { return nil }
+func (recordOnlyGit) ResetBranch(string, string, string) error { return nil }
+
+// previewAncestor is the record-only ancestry oracle. It reports the fix as an
+// ancestor of trunk (descendant is the trunk-tip sentinel) so the trunk-ancestry
+// gate passes, and as not an ancestor of any environment base SHA so the chain
+// previews the cherry-pick into every environment whose recorded patch list does
+// not already contain the fix. It touches no git.
+func previewAncestor(_, descendant string) (bool, error) {
+	return descendant == previewTrunkTip, nil
 }
 
 // effects assembles the ordered effect sequence from the fix commits the hotfix
