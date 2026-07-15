@@ -1,3 +1,7 @@
+// Package e2e contains cascade's end-to-end scenario tests. Each
+// scenario generates workflows from a manifest, runs them with act
+// against a local gitea instance, and asserts the resulting repository
+// and manifest state. Package harness provides the infrastructure.
 package e2e
 
 import (

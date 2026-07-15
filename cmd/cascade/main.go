@@ -1,3 +1,7 @@
+// Command cascade compiles a declarative manifest (.github/manifest.yaml)
+// into GitHub Actions workflows for trunk-based, multi-environment release
+// pipelines, and provides the lifecycle subcommands the generated workflows
+// invoke, such as orchestrate, promote, release, hotfix, and rollback.
 package main
 
 import (
@@ -50,10 +54,18 @@ var (
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "cascade",
-		Short: "CI/CD orchestration tool for trunk-based development",
-		Long: `cascade is a CLI tool that provides CI/CD orchestration capabilities
-for trunk-based development workflows. It handles configuration parsing,
-change detection, and changelog generation.`,
+		Short: "Compile a release manifest into GitHub Actions workflows",
+		Long: `cascade compiles a declarative manifest (.github/manifest.yaml) into
+GitHub Actions workflows for trunk-based, multi-environment release
+pipelines. It is a compiler, not a control plane: after generation,
+everything runs as native GitHub Actions with no external service
+watching your repository.
+
+The manifest describes your environments, builds, deploys, and release
+policy, and also records live deployment state. Subcommands cover the
+full lifecycle: generating workflows, orchestrating builds and deploys,
+promoting releases through environments, and the hotfix and rollback
+off-ramps.`,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			// Configure logging based on flags
 			if flagTrace {

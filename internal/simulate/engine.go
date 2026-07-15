@@ -1,3 +1,7 @@
+// Package simulate implements the what-if engine behind cascade
+// simulate: it applies a hypothetical promote, rollback, release, or
+// hotfix action to an in-memory copy of the manifest and reports the
+// resulting state diff and side effects without changing anything.
 package simulate
 
 import (

@@ -1,3 +1,6 @@
+// Package changes detects which files changed between two commits and,
+// from the path rules in the manifest, which component builds and
+// deploys those changes trigger.
 package changes
 
 import (

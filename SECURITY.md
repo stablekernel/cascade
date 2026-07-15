@@ -29,6 +29,12 @@ Include a description of the issue, steps to reproduce, and any relevant version
 
 We follow [coordinated disclosure](https://en.wikipedia.org/wiki/Coordinated_vulnerability_disclosure): please allow us reasonable time to address the issue before making it public.
 
+## Verifying release artifacts
+
+Release artifacts are signed with keyless [cosign](https://github.com/sigstore/cosign) (Sigstore) and GPG, and carry SLSA build provenance in GitHub's attestation store. Builds are reproducible with GoReleaser.
+
+See [Verifying cascade releases](https://stablekernel.github.io/cascade/security/#verifying-cascade-releases) for step-by-step verification of each path, including reproducing the build from the tagged source.
+
 ## Security model
 
 Cascade is a build-time tool that generates GitHub Actions workflows you commit and review in your own repository. The generated workflows run under your own runners, branch protection, and environment gates, and cross-repo coordination uses a same-organization, shared-token model where a dispatch token you provision is the trust boundary. Deploying cascade safely is therefore a shared responsibility between cascade and your organization's GitHub and cloud configuration.
