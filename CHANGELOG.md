@@ -3,12 +3,424 @@
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The manifest schema is versioned with a single integer `schema_version`; the
-schema-version compatibility policy is documented in
-[docs/versioning.md](docs/versioning.md). A `Migration` section is added to any
-release that bumps `schema_version`.
+Entries from 0.2.1 onward are derived from the conventional-commit history, the
+same source the release automation uses to build the notes on each
+[GitHub Release](https://github.com/stablekernel/cascade/releases), so this
+file and the release notes always tell the same story. The manifest schema is
+versioned with a single integer `schema_version`; the schema-version
+compatibility policy is documented in
+[versioning and schema compatibility](https://stablekernel.github.io/cascade/reference/versioning/).
+A `Migration` section is added to any release that bumps `schema_version`.
 
 ## [Unreleased]
+
+## [0.16.0] - 2026-07-12
+
+### Added
+
+- **simulate:** Preview the multi-env hotfix cherry-pick chain (#571)
+- **simulate:** Reformat the human-readable what-if output (#570)
+
+## [0.15.0] - 2026-07-12
+
+### Added
+
+- **config:** Fold environment config into the environments list with explicit roles (#568)
+- **config:** Uniform deep-merge for component inheritance (#565)
+- **config:** Lint errors on reserved-schema usage (#564)
+- **simulate:** Support monorepo component-scoped state (#562)
+- **docs:** Make dark the only theme and remove the theme switcher (#560)
+
+### Changed
+
+- **config:** Rename the release block to release_build (#569)
+- **config:** Canonicalize tag prefix on tag_grammar.prefix (#567)
+- **config:** Rename artifact upload field to artifact_upload (#566)
+- **config:** Rename parse-config to lint and reject unknown keys (#563)
+
+### Maintenance
+
+- **docs:** Upgrade to Astro 7 and Starlight 0.41 (#559)
+
+## [0.14.2] - 2026-07-11
+
+### Fixed
+
+- **merge-queue:** Pass --environment to the speculative orchestrate setup (#555)
+
+### Maintenance
+
+- **deps:** Bump github/codeql-action to 4.36.3 (#556)
+- **deps:** Bump github/codeql-action/upload-sarif (#512)
+- **deps:** Bump dorny/paths-filter from 4.0.1 to 4.0.2 (#513)
+
+## [0.14.1] - 2026-07-11
+
+### Fixed
+
+- **schema:** Allow the user-facing reconcile block in the manifest schema (#554)
+
+### Maintenance
+
+- **e2e:** Assert runtime outcomes instead of emitted script text (#552)
+
+## [0.14.0] - 2026-07-10
+
+### Added
+
+- **coverage:** Gate generated workflow kinds on executing coverage (#546)
+
+### Fixed
+
+- **release:** Cut the git tag on update()'s existing-release branch (#551)
+- **generate:** Bind state-write CAS token to the rendered base blob (#550)
+- **orchestrate:** Re-derive component leaf onto fresh trunk before first state commit (#549)
+- **generate:** Scope hotfix finalize trigger to its own component (#548)
+- **hotfix:** Match per-component env branches in finalize trigger (#547)
+
+### Maintenance
+
+- **fleet:** Serialize the remainder lane to lower peak hosted-runner demand (#544)
+
+## [0.13.0] - 2026-07-09
+
+### Added
+
+- **config:** Shared-path change semantics via extra_paths and shared_paths (#540)
+
+### Fixed
+
+- **statewrite:** Retry an empty or errored manifest re-fetch instead of parsing it (#542)
+- **config:** Reject merge_group on extra_triggers, pointing at merge_queue.enabled (#539)
+- **statewrite:** Raise the state-write retry ceiling with jittered backoff and convergence markers (#538)
+- **orchestrate:** Re-apply the component state leaf on a rejected finalize push (#537)
+- **statewrite:** Classify the branch-ref-CAS 409 as a conflict so concurrent writes retry (#535)
+
+### Maintenance
+
+- **fleet:** Retry transient lane failures and fix the self-repin version SIGPIPE (#543)
+
+## [0.12.0] - 2026-07-08
+
+### Added
+
+- **promote:** Honor a component's environment-ladder subset at runtime (#530)
+- **rollback:** Scope the git-history fallback to the component (#529)
+- **hotfix,rollback:** Execute the per-component lifecycle in the harness and prove isolation (#528)
+- **hotfix:** Thread the component through the hotfix plan and generated apply lane (#527)
+- **generate:** Fan out per-component hotfix and rollback workflows (#526)
+- **rollback:** Record per-component rollback state and namespace the rollback ref (#525)
+- **promote:** Scope hotfix rejoin cleanup to the component (#524)
+- **hotfix:** Record per-component finalize state and scope hotfix tags (#523)
+- **hotfix:** Namespace env branches per component and scope orphan detection (#522)
+- **release:** Reap rc tags per component using the tag grammar (#521)
+- **orchestrate:** Record per-component seed state and read it on promote (#520)
+- **e2e:** Execute per-component promote workflows and assert component-scoped state (#519)
+- **generate:** Fan out per-component promote workflows with isolated concurrency (#518)
+- **promote:** Record per-component finalize state via scoped writes (#517)
+- **version:** Derive per-component versions from path-scoped commits and strict tag namespaces (#516)
+- **generate:** Fan out per-component orchestrate workflows (#514)
+- **state:** Scoped state serializer preserving sibling components on concurrent writes (#508)
+- **config:** Parse, validate, and resolve the components model under schema_version 1 (#507)
+
+### Maintenance
+
+- **security:** Bump the Go toolchain to 1.26.5 for GO-2026-5856 (#533)
+- **fleet:** Add the monorepo example repo to the fleet roster (#532)
+- **generate:** Add absolute byte-identical baseline gate for single-component output (#515)
+
+## [0.11.0] - 2026-07-07
+
+### Added
+
+- Add allow_breaking_changes manifest field to disable the breaking-change gate (#502)
+
+### Fixed
+
+- **fleet:** Only fan out the fleet for rc and dryrun tags (#501)
+
+## [0.10.0] - 2026-07-06
+
+### Added
+
+- Configurable tag_grammar manifest block, wiring, and release-path sinks (#500)
+- **taggrammar:** Canonical dependency-free tag grammar spec (#498)
+
+### Changed
+
+- **version,git:** Derive the tag grammar from the canonical spec (#499)
+
+### Maintenance
+
+- **e2e:** Repin act runner image to current upstream digest (#480)
+
+## [0.9.3] - 2026-07-06
+
+### Fixed
+
+- **release:** Run own-repo finalize from the source-built cascade binary (#497)
+- **release:** One Release run per tag and no orphan draft on rc cut (#496)
+
+## [0.9.2] - 2026-07-06
+
+### Fixed
+
+- **ci:** Make Release single-flight and idempotent to end double-trigger 422s (#491)
+
+### Maintenance
+
+- Block PR merge on a broken docs-site build
+
+## [0.9.1] - 2026-07-06
+
+### Fixed
+
+- **reconcile:** Generate own self-heal companion with a stable-release install (#489)
+- **fleet:** Repin example repos to the rc before fan-out (#488)
+- **ci:** Pass the action-pins path to the self-heal own-repo reconcile (#486)
+- **ci:** Correct the self-heal companion release-asset pattern (#484)
+- **ci:** Pass changed files to the self-heal reconcile check and companion (#482)
+- **ci:** Harden the release-cut path (bootstrap pin, dry-run sweep, dispatch target) (#479)
+
+### Maintenance
+
+- **generate:** Assert emit-filter and pin shape, not frozen versions (#487)
+
+## [0.9.0] - 2026-07-06
+
+### Added
+
+- **generate:** Emit the opt-in reconcile companion (#478)
+- **cli:** Add the reconcile command (#476)
+- **release:** Group the changelog by conventional-commit type (#472)
+- **ci:** Bump example-suite bootstrap pins on final release (#468)
+- **fleet:** Add shared fleet-repin composite action (#467)
+- **fleet:** Add optional cascade_version inputs to dispatch-suite action (#466)
+
+### Changed
+
+- **generate:** Promote the shared pin-reconcile core (#474)
+- **fleet:** Dispatch suites with rc inputs and drop parent repin and floor gate (#470)
+- **git:** Unify state-push rebase-retry into one dir-aware helper (#463)
+
+### Fixed
+
+- **config:** Harden manifest input validation (#475)
+- **release:** Span the final-release changelog since the previous stable tag (#471)
+- **fleet:** Install the rc from the cascade repo, not the example repo (#469)
+- **release:** Dispatch the release workflow for a candidate tag (#465)
+- **fleet:** Fan out on a dispatched Release and fail closed on a no-op (#464)
+
+### Maintenance
+
+- Self-heal action-pin drift on cascade's own repo (#477)
+- **configuration:** Document cascade's ownership of generated action pins (#473)
+- **contributing:** Require fleet suites to move with generator eligibility changes (#462)
+
+## [0.8.0] - 2026-07-05
+
+### Added
+
+- **ci:** Surface failing-job root cause in the PR failure comment
+- **release:** Sign release artifacts and add build provenance (#395)
+
+### Fixed
+
+- **release:** Assert required release assets by presence in auto-promote (#460)
+- **ci:** Label the failure-report log region as excerpt not tail
+- **release:** Migrate cosign signing to the Sigstore bundle format (#459)
+- **ci:** Surface action-pins remediation in the PR failure report
+- Batch low-risk hardening (rebase abort, nil guards, injectable clock, rc parsing) (#455)
+- **config:** Charset-validate dispatch_input names and choice options (#454)
+- **orchestrate:** Retry state-write push on a non-fast-forward trunk (#451)
+- **config:** Match trigger globs with slash-native path.Match (#450)
+- **git:** Surface git log failures instead of swallowing them as empty range (#448)
+- **orchestrate:** Correct trigger glob matching for recursive and single-star patterns (#446)
+- **security:** Build with go1.26.4 to clear stdlib advisories (#445)
+- **git:** Scope GetLatest* tag lookups to the repo dir (#423)
+- **version:** Tolerate prerelease dryrun tags in next-env calc (#420)
+- **rollback:** Guard the first environment against rollback (#418)
+
+### Maintenance
+
+- **release:** Drop redundant E2E from the orchestrate build path (#461)
+- Bump actions/cache to the node24 v6.1.0 release
+- **validate:** Pin govulncheck to an immutable commit (#449)
+- **validate:** Extend the vulnerability scan to the e2e module (#447)
+- **generate:** Make actionlint normalization test hermetic (#444)
+- **deps:** Bump actions/setup-go from 6.4.0 to 6.5.0 (#404)
+- **deps:** Bump golangci/golangci-lint-action from 8.0.0 to 9.3.0 (#428)
+- **deps:** Bump goreleaser/goreleaser-action from 7.2.2 to 7.2.3 (#429)
+- **fleet:** Guard example-suite tooling pins against floor drift (#427)
+- **e2e:** Add scheduled act runner image repin (#426)
+- **e2e:** Reuse config.TrunkConfig in the scenario harness (#422)
+- **hotfix:** Document orphan self-heal, correct stale reserved-shape comments, add callbacks matrix row (#425)
+- **configuration:** Add rows for action_pins, pin_mode, release_trigger, validate_check, merge_queue (#424)
+- **cli-reference:** Document status, rollback, and graph command families (#421)
+- **release:** Sweep accumulated dry-run prerelease tags (#419)
+
+## [0.7.0] - 2026-06-29
+
+### Added
+
+- **branch-protection:** Add --apply flag for direct branch-protection PUT (#416)
+
+### Maintenance
+
+- **branch-protection:** Document --apply mode and admin-token caveat (#417)
+- **release:** Cover the auto-promote resolve decision logic (#415)
+- **e2e:** Add scenarios 42-44 covering consistency-fix, rollout strategy, and components reserve (#414)
+
+## [0.6.0] - 2026-06-28
+
+### Added
+
+- **status:** Add consistency --fix to delete orphan env branches (#409)
+- **release:** Nightly-gated rc-cutting and promotion with a dispatch test vector (#380)
+- **fleet:** Add cascade-example-rollback-dispatch to the staged remainder (#379)
+
+### Changed
+
+- Converge artifact action versions and add pin consistency lint (#401)
+- **generate:** Source action pins from an embedded manifest (#398)
+
+### Fixed
+
+- **hotfix:** Self-heal orphan env branches during plan (#408)
+- **e2e:** Pin act runner image to a Node 24 digest (#399)
+- **fleet:** Raise dispatch-suite watch cap 75->180 min (#394)
+- **fleet:** Preserve cli_version_sha across state writes and restore the sha-pin repin (#393)
+- **fleet:** Repin rewrites stale dryrun refs, not just rc refs (#392)
+- **statewrite:** Route orchestrate and external state writes through WriteManifestState (#389)
+- **fleet:** Tag-pin the example repos in the repin instead of SHA-pinning (#391)
+- **security:** SHA-pin the setup-cli action in generated workflows (#384)
+- **version:** Ignore non-version tags in latest-tag discovery (#382)
+- **fleet:** Stage the fan-out and add a selective repos input (#378)
+
+### Maintenance
+
+- **fleet:** Retry heavy lane on suite failure (#407)
+- **e2e:** Shard scenarios across a retrying matrix (#405)
+- **deps:** Scope dependabot to action-pins manifest (#403)
+- **deps:** Bump actions/checkout to v7.0.0 and github-script to v9.0.0 (#402)
+- **deps:** Bump github.com/moby/moby/api from 1.54.2 to 1.55.0 in /e2e (#271)
+- **deps:** Bump github.com/testcontainers/testcontainers-go in /e2e (#269)
+- **deps:** Bump actions/download-artifact from 4.3.0 to 8.0.1 (#270)
+- **deps:** Bump dorny/paths-filter from 3.0.2 to 4.0.1 (#273)
+
+## [0.5.1] - 2026-06-26
+
+### Fixed
+
+- **statewrite:** Preserve unmodeled manifest config across state writes (#371)
+- **fleet:** Raise per-repo suite watch cap to clear the longer 4env run (#368)
+
+## [0.5.0] - 2026-06-26
+
+### Added
+
+- **visualize:** Render the cross-repo flow as per-repo lanes (#362)
+- **simulate:** Record build and deploy callbacks as stubbed effects with gating (#360)
+- **visualize:** Add theme layer with cascade and bland built-in themes (#359)
+- **simulate:** Add rollback, release, and hotfix what-if actions (#355)
+- **graph:** Add env and stages render granularities (#356)
+- **graph:** Add cascade graph command rendering the pipeline as mermaid (#354)
+- **simulate:** Add what-if engine for state diff and effect sequence (#353)
+- **visualize:** Pipeline view model, pluggable emitter, and Mermaid emitter (#352)
+- **fleet:** Fan out to cascade-example-no-env and cascade-example-callbacks (#345)
+
+### Fixed
+
+- **hotfix:** Fail loudly when a remote env tip diverges from recorded state (#367)
+- **statewrite:** Stamp the bot on orchestrate, release, and rollback state writes (#366)
+- **statewrite:** Attribute state commits to the bot, not the token owner (#364)
+- **reset:** Retry reset push on non-fast-forward, re-applying the baseline (#361)
+- **fleet:** Retry repin verify read-back to absorb contents-API lag (#358)
+- **orchestrate:** Skip unchanged builds via build-state base ladder (#351)
+- **release:** Require --sha only for tag-creating manage-release actions (#346)
+- **e2e:** Make act container start and CLI tar-copy deterministic (#342)
+- **e2e:** Make hotfix-conflict scenario anchor deterministic (#309)
+
+### Maintenance
+
+- **e2e:** Add emission coverage for triggers, action-pins, breaking-gate (#344)
+- **rollback:** Isolate resolution source in e2e + surface it in the rollback workflow (#347)
+- **cli:** Cover init, status, and generate-flag CLI gaps (#343)
+
+## [0.4.1] - 2026-06-24
+
+### Fixed
+
+- **generate:** Disable pyflakes in actionlint test for hermeticity (#341)
+- **fleet:** Tolerate transient watch API errors with a bounded retry (#340)
+
+## [0.4.0] - 2026-06-24
+
+### Added
+
+- Add notify deploy_name and environment overrides (#267)
+- Add fleet run-ledger reconcile gate (#266)
+
+### Fixed
+
+- **generate:** Pass github.token to setup-cli so cold-cache CLI download authenticates (#277)
+- **fleet:** Download ledger artifacts per-subdir so multi-job ledgers do not clobber (#276)
+- **fleet:** Correct the register-run upload-artifact pin to the real v4.6.2 sha (#275)
+
+## [0.3.0] - 2026-06-23
+
+### Added
+
+- Default release_token to state_token to arm the rc-to-release chain (#258)
+- Emit least-privilege top-level workflow permissions (#251)
+- Elevate a hotfix commit set across the env chain in the generated workflow (#248)
+- Plan multi-commit hotfix elevation across the env chain (#246)
+- Add cascade plan command to preview workflow diffs (#243)
+- Add repository_dispatch trigger to the rollback workflow (#242)
+- Emit native GitHub Deployment objects for promotions (#241)
+- Support GitHub App token sources for state and release tokens (#240)
+- Emit environments.json from the manifest (#239)
+- Emit branch-protection.json from the manifest (#238)
+- Complete cascade init starter scaffold (#237)
+- Generate an opt-in PR drift-check workflow (#236)
+- Detect orphaned generated workflows in cascade verify (#235)
+- Reserve release version-override location pointer (#234)
+- Reserve telemetry webhook and job-summary fields (#233)
+- Reserve gitops deploy target branch and sha-tracking fields (#232)
+- Reserve canary and blue-green deploy fields on rollout (#231)
+- Add cascade verify command to detect workflow drift (#225)
+- Reserve components schema shape for per-component versioning (#222)
+
+### Fixed
+
+- Reap superseded rc tags at publish time (#265)
+- Complete hotfix-rejoin cleanup for published releases (#264)
+- Retry manifest state writes on contents API 409 conflicts (#261)
+- Record every commit of a multi-commit hotfix set per environment (#260)
+- Eliminate eventual-consistency race in multi-env hotfix finalize (#259)
+- Wire release_token to the trigger-capable state token (#254)
+
+### Maintenance
+
+- **e2e:** Raise TestActRunner_Start deadline to 5m for cold image pulls (#262)
+- **docs:** Patch astro, dompurify, and esbuild advisories (#253)
+- **deps:** Bump github/codeql-action from 3.36.2 to 4.36.2
+- **deps:** Bump github.com/moby/moby/api from 1.54.1 to 1.54.2 in /e2e
+- Comment on PR workflow drift via fork-safe workflow_run (#228)
+- Use cascade verify for the dogfood workflow drift check (#227)
+
+## [0.2.1] - 2026-06-18
+
+### Fixed
+
+- Hand resolved version-under-test to auto-promote via artifact (#221)
+- Repin fleet with normal push and propagate failures (#220)
+
+### Maintenance
+
+- Promote final release when the rc fleet gate is green (#219)
+- Repin example fleet to the rc under test before fan-out (#217)
+- Gate merges on Integration e2e via always-run gate (#216)
 
 ## [0.2.0] - 2026-06-18
 
@@ -45,8 +457,10 @@ stricter callback validation).
   manifest below the supported minimum is rejected (migrate), and a manifest
   that omits the field is accepted with a warning. `parse-config` surfaces
   non-fatal advisories in a new `warnings` field on its JSON output. (#43, #63)
-- `docs/versioning.md` describing the schema-version compatibility policy, the
-  schema-version to CLI-version matrix, and the deprecation window.
+- Versioning documentation describing the schema-version compatibility policy,
+  the schema-version to CLI-version matrix, and the deprecation window (now
+  published as
+  [versioning and schema compatibility](https://stablekernel.github.io/cascade/reference/versioning/)).
 - Inline run callbacks: cascade-owned callback jobs may use `run:` / `shell:`
   in place of `uses:` (reusable workflow). The `workflow` XOR `run` constraint
   is enforced at parse time. (#62)
@@ -89,6 +503,28 @@ Initial release of cascade: a trunk-based CI/CD orchestrator for GitHub Actions.
 - Self-hosted CI: cascade manages its own build, release, e2e, and promote
   workflows using the same manifest.
 
-[Unreleased]: https://github.com/stablekernel/cascade/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/stablekernel/cascade/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/stablekernel/cascade/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/stablekernel/cascade/compare/v0.14.2...v0.15.0
+[0.14.2]: https://github.com/stablekernel/cascade/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/stablekernel/cascade/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/stablekernel/cascade/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/stablekernel/cascade/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/stablekernel/cascade/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/stablekernel/cascade/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/stablekernel/cascade/compare/v0.9.3...v0.10.0
+[0.9.3]: https://github.com/stablekernel/cascade/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/stablekernel/cascade/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/stablekernel/cascade/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/stablekernel/cascade/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/stablekernel/cascade/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/stablekernel/cascade/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/stablekernel/cascade/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/stablekernel/cascade/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/stablekernel/cascade/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/stablekernel/cascade/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/stablekernel/cascade/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/stablekernel/cascade/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/stablekernel/cascade/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/stablekernel/cascade/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/stablekernel/cascade/releases/tag/v0.1.0
