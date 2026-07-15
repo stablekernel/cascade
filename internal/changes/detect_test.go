@@ -26,9 +26,13 @@ func TestMatchGlob(t *testing.T) {
 		{"**/*.go", "src/main.go", true},
 		{"**", "anything/at/all.txt", true},
 
-		// Question mark
-		{"?.go", "a.go", true},
-		{"?.go", "ab.go", false},
+		// Question mark: GitHub Actions grammar, zero or one of the
+		// preceding character. A leading "?" has nothing preceding it and is
+		// treated as a literal character.
+		{"*.jsx?", "page.js", true},
+		{"*.jsx?", "page.jsx", true},
+		{"*.jsx?", "page.jsxx", false},
+		{"?.go", "a.go", false},
 
 		// No match
 		{"src/**", "other/main.go", false},
@@ -83,9 +87,10 @@ func TestIsTriggered(t *testing.T) {
 			want:         true,
 		},
 
-		// Negation ("!") patterns: a path triggers when it matches at least
-		// one positive pattern AND no negation pattern. This mirrors the
-		// emitted GitHub Actions paths filter so CLI detection agrees with GHA.
+		// Negation ("!") patterns: evaluation is order-dependent, exactly as
+		// the emitted GitHub Actions paths filter evaluates them. A matching
+		// negation after a positive match excludes the path; a matching
+		// positive after a negation includes it again (last match wins).
 		{
 			name:         "docs-only change excluded by negation does not trigger",
 			triggers:     []string{"**", "!**/*.md", "!docs/**"},
@@ -123,10 +128,16 @@ func TestIsTriggered(t *testing.T) {
 			want:         false,
 		},
 		{
-			name:         "ordering does not matter: negation before positive still excludes",
+			name:         "ordering matters: a positive after a negation re-includes",
 			triggers:     []string{"!**/*.md", "**"},
 			changedFiles: []string{"docs/README.md"},
-			want:         false,
+			want:         true,
+		},
+		{
+			name:         "re-inclusion after exclusion triggers",
+			triggers:     []string{"src/**", "!src/vendor/**", "src/vendor/keep/**"},
+			changedFiles: []string{"src/vendor/keep/patch.go"},
+			want:         true,
 		},
 		{
 			name:         "positive-only behaviour is unchanged by negation support",

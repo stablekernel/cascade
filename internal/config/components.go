@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/taggrammar"
@@ -169,8 +168,8 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	}
 
 	// Effective additional paths: the component's own extra_paths unioned with the
-	// manifest's top-level shared_paths, deduplicated and sorted for a single stable
-	// downstream representation. These fire the workflow (folded into the push
+	// manifest's top-level shared_paths, deduplicated in declaration order for a
+	// single stable downstream representation. These fire the workflow (folded into the push
 	// filter below) and, threaded by the orchestrator, count toward the version bump
 	// and change detection. When both are empty this is nil and nothing changes.
 	extraPaths := mergePaths(comp.ExtraPaths, c.SharedPaths)
@@ -186,10 +185,15 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	return &ResolvedComponent{Name: name, Path: comp.Path, ExtraPaths: extraPaths, Config: eff}, nil
 }
 
-// mergePaths returns the union of the given path lists with duplicates removed and
-// a deterministic (sorted) order, or nil when the union is empty. It backs the
-// shared_paths fan-out and the push-filter fold so every downstream sink sees one
-// stable representation of a component's effective additional paths.
+// mergePaths returns the union of the given path lists with duplicates removed
+// and a deterministic (first-occurrence) order, or nil when the union is empty.
+// It backs the shared_paths fan-out and the push-filter fold so every
+// downstream sink sees one stable representation of a component's effective
+// additional paths. Declaration order is preserved, never re-sorted: trigger
+// pattern order is semantic under the GitHub Actions paths filter
+// (last-match-wins), and extra paths are positive patterns appended after the
+// component's own list so they trigger unconditionally without disturbing the
+// list's "!" exclusions.
 func mergePaths(lists ...[]string) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -205,10 +209,6 @@ func mergePaths(lists ...[]string) []string {
 			out = append(out, p)
 		}
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	sort.Strings(out)
 	return out
 }
 

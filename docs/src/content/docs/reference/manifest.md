@@ -964,7 +964,7 @@ versioning](/cascade/reference/versioning/#per-component-versioning).
 
 ### Trigger patterns
 
-Triggers use glob patterns:
+Triggers use the glob grammar of the GitHub Actions paths filter:
 
 | Pattern | Matches |
 |---------|---------|
@@ -973,17 +973,40 @@ Triggers use glob patterns:
 | `**/*.yaml` | YAML files anywhere in the repo. |
 | `Dockerfile` | Exact file match. |
 | `cdk/*.ts` | TypeScript files directly in `cdk/` (not recursive). |
-| `!src/vendor/**` | Exclusion: subtracts matching files from the trigger set. |
+| `!src/vendor/**` | Exclusion: excludes matching files included by an earlier pattern. |
 
-`*` matches any characters except `/`, `**` matches any path segments, and `?` matches a single character.
+`*` matches zero or more characters but never `/`; `**` matches zero or more of
+any character, including `/` (so `**.js` matches `src/js/app.js`, and a leading
+`**/` also matches files at the repository root); `?` matches zero or one of
+the preceding character (`*.jsx?` matches both `page.js` and `page.jsx`); `+`
+matches one or more of the preceding character; and `[]` matches one character
+from a bracketed set or range over `a-z`, `A-Z`, and `0-9`.
 
-A leading `!` marks a pattern as an exclusion, mirroring the `!` semantics of the
-GitHub Actions `paths:` filter that cascade generates from the same list: a file
-triggers when it matches at least one positive pattern and no exclusion. A list
-containing only exclusions behaves like `paths-ignore`: any changed file that is
-not excluded triggers. CLI-side change detection (orchestrate setup and promotion
-preflight) evaluates trigger lists with these same rules, so it always predicts
-what the emitted workflow filter will do.
+A leading `!` marks a pattern as an exclusion, and **pattern order matters**,
+exactly as it does in the GitHub Actions `paths:` filter that cascade generates
+from the same list. Patterns evaluate in order and the last match wins: a
+matching exclusion after a positive match excludes the file, and a matching
+positive pattern after an exclusion includes it again. So
+`["src/**", "!src/vendor/**", "src/vendor/keep/**"]` triggers on any source
+change except the vendored subtree, while still triggering for
+`src/vendor/keep/`. An exclusion listed before every positive pattern excludes
+nothing. CLI-side change detection (orchestrate setup and promotion preflight)
+evaluates trigger lists with these same rules, so it predicts what the emitted
+workflow filter will do.
+
+A list containing only exclusions cannot be a `paths:` filter (GitHub requires
+at least one non-`!` entry), so cascade emits it as `paths-ignore`, which means
+the same thing: any changed file that is not excluded triggers.
+
+When several callbacks declare different trigger lists, the orchestrate
+workflow's single push filter is their union, normalized so the workflow fires
+whenever any callback's own list would trigger: identical lists collapse to one
+list emitted in manifest order, positive patterns union in declaration order,
+and a `!` exclusion stays in the emitted filter only when every
+trigger-declaring callback shares the same list. A callback-scoped exclusion is
+otherwise dropped from the workflow-level filter (it would suppress a sibling
+callback's build under last-match-wins); per-callback change detection still
+applies it, so the affected callback is skipped inside the run instead.
 
 ### Input inheritance
 
