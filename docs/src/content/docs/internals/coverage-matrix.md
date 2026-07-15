@@ -16,11 +16,14 @@ one line on what the chosen layer proves. A blank cell means the feature is not
 covered at that layer by design, not by omission. The "why both layers" section
 below explains those choices.
 
-:::tip[Last validated]
-This matrix was last validated against the fully green live-fleet run behind `v0.5.1`:
-all twelve example repos (primary, artifact-a, artifact-b, single-env, 2env, 3env, 4env,
-release-only, no-env, callbacks, rollback-dispatch, monorepo) passed every probe, and the
-shared fail-closed reconcile gate accounted for every run in each scenario window.
+:::tip[How this matrix is validated]
+The last full cell-by-cell validation of this matrix ran against the green live-fleet
+run behind `v0.5.1`: all twelve example repos (primary, artifact-a, artifact-b,
+single-env, 2env, 3env, 4env, release-only, no-env, callbacks, rollback-dispatch,
+monorepo) passed every probe, and the shared fail-closed reconcile gate accounted for
+every run in each scenario window. Rows added or changed since then are updated in the
+same pull request as the feature they trace, and every release since has published only
+after its own green fleet run, but no later full pass over every cell has been recorded.
 :::
 
 ## Why two layers, restated for this matrix

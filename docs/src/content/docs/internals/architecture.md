@@ -126,10 +126,21 @@ re-applies its own leaf mutation on top of whatever the other writer already
 committed, and retries. The retry ceiling is 10 attempts with exponential,
 jittered backoff, sized to survive a realistic wave (every component of a
 monorepo racing to write into the same file) rather than only a handful of
-parallel environments. Each attempt and its outcome are logged with a stable,
-greppable marker, `cascade-state-write: attempt=N/10`, `cascade-state-write: ok
-attempt=N`, or `cascade-state-write: exhausted attempts=10`, so a live run's
-convergence (or exhaustion) is provable from its logs.
+parallel environments. Only contention and transient failures retry: an
+optimistic-lock 409, a rate-limited response (HTTP 429, or a 403 carrying a
+rate, secondary, or abuse limit message, which is how GitHub surfaces
+secondary limits under exactly this kind of write wave), a 5xx, and transport
+blips (on the API write and on the git push alike) all retry within the same
+bounded loop, while a permanent API failure (a revoked token, a 403
+authorization refusal, a missing branch or manifest path, a validation error)
+fails immediately with its real cause instead of being relabeled as
+contention, and the Contents API write always carries its optimistic-lock
+`sha`, refusing to write at all when the manifest has no blob at the fetched
+trunk tip. Each attempt and its outcome are logged with a stable, greppable
+marker, `cascade-state-write: attempt=N/10`, `cascade-state-write: ok
+attempt=N`, `cascade-state-write: permanent-error attempt=N`, or
+`cascade-state-write: exhausted attempts=10`, so a live run's convergence (or
+exhaustion) is provable from its logs.
 
 **Merge queues without a side-effecting speculative build.** A merge queue's
 speculative build runs against a commit that may never land, so a lane that

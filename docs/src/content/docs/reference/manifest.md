@@ -617,7 +617,7 @@ byte-identical workflows to before.
 
 ## Per-environment settings
 
-Per-environment settings live inline on each [`environments`](#environments) entry in its
+Per-environment settings live inline on each [`environments`](#top-level-identity) entry in its
 object form, keyed by that entry rather than in a separate map. They are consumed for
 native GitHub Environment support and deployment URLs.
 
@@ -770,7 +770,7 @@ Reports deployment status through the GitHub Deployments API from the finalize j
 | `enabled` | emitted | bool | false | Create a Deployment and report status. Adds `deployments: write` to top-level permissions only when enabled. |
 | `keep_prior_active` | emitted | bool | false | Set `auto_inactive: false` so GitHub leaves prior deployments Active. |
 
-Every Deployments API step carries an `if: ${{ github.server_url == 'https://github.com' }}` guard, so on act or gitea the steps are skipped. Pair with the `environment_url` field on that environment's [`environments`](#environments) entry so the status links to the running environment.
+Every Deployments API step carries an `if: ${{ github.server_url == 'https://github.com' }}` guard, so on act or gitea the steps are skipped. Pair with the `environment_url` field on that environment's [`environments`](#top-level-identity) entry so the status links to the running environment.
 
 ### validate_check
 

@@ -1,4 +1,6 @@
-# Tests & Lint - runs go test -race + coverage and golangci-lint.
+# Tests & Lint - runs go test -race + coverage, golangci-lint, and the
+# workflow/action lint pass (actionlint over .github/workflows plus shellcheck
+# over the composite actions' scripts).
 #
 # Triggers:
 #   push: branches main  standalone run on every push to trunk - this is what
@@ -88,6 +90,32 @@ jobs:
         with:
           version: v2.10.1
 
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # actionlint parses every workflow and runs shellcheck (preinstalled on
+      # ubuntu runners) over the embedded run blocks. SC2129 (grouped-redirect
+      # style) fires in the generated orchestrate/promote workflows; that
+      # style change belongs to the generator, so the rule is excluded here
+      # rather than hand-editing generated files into drift.
+      - name: Run actionlint
+        env:
+          SHELLCHECK_OPTS: -e SC2129
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca -color  # v1.7.12
+
+      # actionlint only covers workflows, not composite actions, so the
+      # actions' extracted scripts are linted directly.
+      - name: Run shellcheck on action scripts
+        run: shellcheck .github/actions/*/*.sh
+
   vuln:
     name: Vulnerability Scan
     runs-on: ubuntu-latest
@@ -108,7 +136,7 @@ jobs:
 
   validate:
     name: Validation Gate
-    needs: [test, lint, vuln]
+    needs: [test, lint, workflow-lint, vuln]
     runs-on: ubuntu-latest
     outputs:
       result: ${{ steps.result.outputs.result }}

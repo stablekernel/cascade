@@ -41,8 +41,11 @@ runs:
       run: |
         # Resolve "latest" to the concrete release tag so the cache key is
         # stable across version bumps and never aliases multiple releases.
+        # Pre-releases and drafts are excluded to match GitHub's own "latest"
+        # semantics (and the pin-reconcile resolvers): a default caller must
+        # never install an rc or dryrun build.
         if [[ "$VERSION" == "latest" ]]; then
-          TAG=$(gh release list -R stablekernel/cascade -L 1 --json tagName -q '.[0].tagName')
+          TAG=$(gh release list -R stablekernel/cascade -L 1 --exclude-pre-releases --exclude-drafts --json tagName -q '.[0].tagName')
         else
           TAG="$VERSION"
         fi
@@ -70,7 +73,7 @@ runs:
         path: /usr/local/bin/cascade
         key: cascade-${{ steps.binary.outputs.name }}-${{ steps.resolve.outputs.tag }}
 
-    - name: Download and extract CLI
+    - name: Download, verify, and install CLI
       if: steps.check.outputs.installed != 'true' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
@@ -78,16 +81,10 @@ runs:
         TAG: ${{ steps.resolve.outputs.tag }}
         ARCHIVE_PATTERN: ${{ steps.binary.outputs.pattern }}
       run: |
-        echo "Downloading archive matching $ARCHIVE_PATTERN from release $TAG..."
-        TMPDIR=$(mktemp -d)
-        gh release download "$TAG" \
-          -R stablekernel/cascade \
-          -p "$ARCHIVE_PATTERN" \
-          -D "$TMPDIR"
-
-        tar -xzf "$TMPDIR"/*.tar.gz -C "$TMPDIR"
-        install -m 0755 "$TMPDIR/cascade" /usr/local/bin/cascade
-        rm -rf "$TMPDIR"
+        # The download/verify/install logic lives in install.sh so shellcheck
+        # lints it and internal/setupcli exercises it hermetically (good
+        # checksum, tampered checksum, missing entry, rejected signature).
+        bash "$GITHUB_ACTION_PATH/install.sh"
 
     - name: Get CLI version
       id: version

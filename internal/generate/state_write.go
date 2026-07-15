@@ -129,6 +129,18 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	// CAS with a token unrelated to the content and revert the sibling. Binding
 	// to the base blob turns a raced sibling write into a 409 the loop converges.
 	w("  BASE_SHA=$(git rev-parse \"origin/$BRANCH:$MANIFEST_FILE\" 2>/dev/null || true)")
+	// An empty BASE_SHA means the manifest has no blob at the fetched tip: it was
+	// deleted or the path is wrong. This step only exists because that manifest
+	// generated it and the apply function edits the local copy taken from this
+	// very tip, so there is no legitimate first-write flow. Omitting the sha
+	// parameter would let the Contents API create or overwrite the file with no
+	// optimistic lock, the exact unguarded write internal/statewrite refuses when
+	// handed an empty lock sha. Fail with the real cause instead.
+	w("  if [[ -z \"$BASE_SHA\" ]]; then")
+	w("    echo \"cascade-state-write: missing-base\" >&2")
+	w("    echo \"::error::$MANIFEST_FILE has no blob at the fetched origin/$BRANCH tip; refusing an unguarded state write\" >&2")
+	w("    exit 1")
+	w("  fi")
 	w("  %s", params.applyFn)
 	w("  if git diff --quiet \"$MANIFEST_FILE\"; then")
 	w("    echo \"%s\"", params.noChangeLabel)
@@ -140,21 +152,54 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("    -f \"message=%s\"", shellSingleLineMessage(params.commitMessage))
 	w("    -f \"content=$CONTENT_B64\"")
 	w("    -f \"branch=$BRANCH\"")
+	// The CAS token: always present, bound to the base blob captured above.
+	w("    -f \"sha=$BASE_SHA\"")
 	// Stamp author and committer so the API attributes the commit to the bot
 	// identity rather than the token owner GitHub would otherwise use.
 	w("    -f \"author[name]=%s\"", authorName)
 	w("    -f \"author[email]=%s\"", authorEmail)
 	w("    -f \"committer[name]=%s\"", authorName)
 	w("    -f \"committer[email]=%s\")", authorEmail)
-	w("  if [[ -n \"$BASE_SHA\" ]]; then")
-	w("    API_ARGS+=(-f \"sha=$BASE_SHA\")")
-	w("  fi")
-	w("  if gh api \"${API_ARGS[@]}\" >/dev/null; then")
+	// Classify the PUT failure with the write-path taxonomy shared with
+	// internal/statewrite's classifyPutError and internal/git's
+	// retryablePushRejection (keep the three classifiers in sync) rather than
+	// retrying every shape as a concurrent run. A 409 is a genuine
+	// optimistic-lock conflict and retries. A rate limit is transient and
+	// retries with backoff: GitHub's secondary and abuse limits surface as
+	// HTTP 403 (with a rate-limit message) or HTTP 429, not as auth failures,
+	// and are exactly the shape the loop is sized for (a monorepo wave of
+	// components racing PUTs to one file). Any other 4xx (401 revoked token,
+	// 403 authorization such as a missing bypass, 404 branch or path gone, 422
+	// validation) is permanent, so surface the real cause immediately instead
+	// of burning ten backoff rounds and reporting a generic exhaustion.
+	// Anything else (5xx, transport blips with no HTTP status) stays
+	// retryable. Arm order matters: the rate-limit arm must precede the
+	// blanket 4xx arm so a rate-limited 403 or a 429 never reads as permanent.
+	// gh writes the response body to stdout and its "gh: ... (HTTP NNN)"
+	// summary to stderr, so capturing stderr keeps the status token and the
+	// rate-limit message for the classifier.
+	w("  if API_ERR=$(gh api \"${API_ARGS[@]}\" 2>&1 >/dev/null); then")
 	w("    echo \"%s via API on attempt $attempt\"", params.successLabel)
 	w("    echo \"cascade-state-write: ok attempt=$attempt\"")
 	w("    exit 0")
 	w("  fi")
-	w("  echo \"State write attempt $attempt failed (likely concurrent run); retrying...\" >&2")
+	w("  echo \"$API_ERR\" >&2")
+	w("  case \"$API_ERR\" in")
+	w("    *\"HTTP 409\"*|*Conflict*)")
+	w("      echo \"State write attempt $attempt hit an optimistic-lock conflict (concurrent run); retrying...\" >&2")
+	w("      ;;")
+	w("    *\"HTTP 429\"*|*\"Too Many Requests\"*|*\"rate limit\"*|*\"secondary rate\"*|*\"abuse\"*|*\"Retry-After\"*|*\"retry-after\"*)")
+	w("      echo \"State write attempt $attempt was rate limited; retrying with backoff...\" >&2")
+	w("      ;;")
+	w("    *\"HTTP 4\"*)")
+	w("      echo \"cascade-state-write: permanent-error attempt=$attempt\" >&2")
+	w("      echo \"::error::State write failed with a permanent API error (see log above); not retrying\" >&2")
+	w("      exit 1")
+	w("      ;;")
+	w("    *)")
+	w("      echo \"State write attempt $attempt failed (transient server or network error); retrying...\" >&2")
+	w("      ;;")
+	w("  esac")
 	writeStateBackoffSleep(sb, indent+"  ")
 	w("done")
 	w("echo \"cascade-state-write: exhausted attempts=10\" >&2")

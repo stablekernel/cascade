@@ -95,10 +95,10 @@ func TestGHContents_PutContent_StampsIdentityAndLock(t *testing.T) {
 		}
 	}
 
-	err = ghContents{}.PutContent("acme/widgets", "m.yaml", "main", "",
+	err = ghContents{}.PutContent("acme/widgets", "m.yaml", "main", "cafef00d",
 		"msg", []byte("content"), Identity{Name: "release-bot", Email: "release-bot@example.com"})
 	if err != nil {
-		t.Fatalf("PutContent() create error: %v", err)
+		t.Fatalf("PutContent() with custom identity error: %v", err)
 	}
 	argv, err = os.ReadFile(argvPath)
 	if err != nil {
@@ -107,13 +107,11 @@ func TestGHContents_PutContent_StampsIdentityAndLock(t *testing.T) {
 	for _, want := range []string{
 		"author[name]=release-bot",
 		"committer[email]=release-bot@example.com",
+		"sha=cafef00d",
 	} {
 		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(want) + `$`).Match(argv) {
 			t.Errorf("PutContent argv missing %q:\n%s", want, argv)
 		}
-	}
-	if regexp.MustCompile(`(?m)^sha=`).Match(argv) {
-		t.Errorf("empty sha must not add a sha arg:\n%s", argv)
 	}
 }
 

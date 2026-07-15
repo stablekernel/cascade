@@ -449,10 +449,11 @@ func pushWithRebaseRetry(o pushOptions) error {
 		}
 		lastOut = out
 
-		// Only a stale-ref rejection can be fixed by rebasing onto the advanced
-		// upstream and pushing again. Anything else (a GH013 workflow-scope
-		// refusal, branch protection, auth, a missing remote) fails identically
-		// on every retry, so surface the real output immediately instead of
+		// A stale-ref rejection is fixed by rebasing onto the advanced
+		// upstream and pushing again, and a transient transport failure by
+		// the retry itself. Anything else (a GH013 workflow-scope refusal,
+		// branch protection, auth, a missing remote) fails identically on
+		// every retry, so surface the real output immediately instead of
 		// hiding it behind no-op rebases and a generic exhaustion summary.
 		if !retryablePushRejection(out) {
 			return fmt.Errorf("git push failed: %s: %w", strings.TrimSpace(string(out)), err)
@@ -493,24 +494,103 @@ func pushWithRebaseRetry(o pushOptions) error {
 	return fmt.Errorf("git push failed after %d retries: %s", pushRetryAttempts, strings.TrimSpace(string(lastOut)))
 }
 
-// retryablePushRejection reports whether a failed push is the optimistic kind
-// the retry loop exists for: the remote ref advanced under us (a client-side
-// "! [rejected] ... (fetch first)" / non-fast-forward) or a concurrent writer
-// held the ref lock. A "! [remote rejected]" (pre-receive hook, branch
-// protection, GH013 scope refusal), an auth failure, or a transport error
-// cannot be fixed by rebase-and-retry, so those are not retryable.
+// retryablePushRejection reports whether a failed push is worth another
+// bounded attempt, applying the transient-vs-permanent taxonomy shared with
+// internal/statewrite's classifyPutError/transientPutFailure and the
+// generated state-write shell's case arms (internal/generate/state_write.go);
+// keep the three classifiers in sync. Classification is ordered, first match
+// wins, over the lowercased output:
+//
+//  1. Rate limits retry: GitHub throttles git-over-HTTPS with 429 or a
+//     rate-limited 403 ("secondary rate limit", "Retry-After"), and a rerun
+//     after backoff is exactly the prescribed recovery. Matched before the
+//     4xx test so the message, not the status, decides where a 403 lands,
+//     mirroring statewrite's arm order.
+//  2. Any other HTTP 4xx fails fast: "RPC failed; HTTP 400/401/403" and the
+//     plain curl "The requested URL returned error: 4xx" shapes (auth, not
+//     found, policy) fail identically on every attempt.
+//  3. Transient transport failures retry (connection reset, timeout, DNS,
+//     TLS handshake, early EOF or an unexpected disconnect, a bare "RPC
+//     failed" with no 4xx status, an HTTP 5xx from the remote); the rebase
+//     is a no-op and the retry itself is the fix.
+//  4. The optimistic rejections the rebase-and-retry loop exists for retry:
+//     the remote ref advanced under us (a client-side "! [rejected] ...
+//     (fetch first)" / non-fast-forward) or a concurrent writer held the
+//     ref lock. Note "! [rejected]" is client-side and retryable, while
+//     "! [remote rejected]" is a server policy refusal and is not.
+//  5. Everything else fails fast with the remote's real output: a
+//     "! [remote rejected]" (pre-receive hook, branch protection, GH013
+//     scope refusal), an auth failure, or anything unrecognized.
 func retryablePushRejection(out []byte) bool {
-	s := string(out)
+	ls := strings.ToLower(string(out))
+
+	// 1. Rate limits retry, and win over the 4xx test below so a
+	// rate-limited 403/429 stays transient.
+	for _, marker := range []string{
+		"429",
+		"too many requests",
+		"rate limit",
+		"secondary rate",
+		"retry-after",
+		"you have exceeded",
+	} {
+		if strings.Contains(ls, marker) {
+			return true
+		}
+	}
+
+	// 2. Any other HTTP 4xx is permanent. "http 4" catches the "RPC failed;
+	// HTTP 4xx" shape and "returned error: 4" the plain curl "The requested
+	// URL returned error: 4xx" shape.
+	for _, marker := range []string{
+		"http 4",
+		"returned error: 4",
+	} {
+		if strings.Contains(ls, marker) {
+			return false
+		}
+	}
+
+	// 3. Transient transport failures retry. "rpc failed" is safe here
+	// because a 4xx-carrying RPC failure already failed fast above; "http 5"
+	// catches the "RPC failed; HTTP 502" shape and "returned error: 5" the
+	// plain curl 5xx shape.
+	for _, marker := range []string{
+		"connection reset",
+		"timed out",
+		"could not resolve host",
+		"failed to connect",
+		"rpc failed",
+		"early eof",
+		"remote end hung up",
+		"unexpected disconnect",
+		"gnutls_handshake",
+		"ssl_read",
+		"ssl_connect",
+		"tls connection",
+		"http 5",
+		"returned error: 5",
+	} {
+		if strings.Contains(ls, marker) {
+			return true
+		}
+	}
+
+	// 4. Ref advanced under us or a concurrent writer held the lock; the
+	// rebase-and-retry loop exists for exactly these. "! [rejected]" does
+	// not match a "! [remote rejected]" policy refusal, which falls through.
 	for _, marker := range []string{
 		"non-fast-forward",
 		"fetch first",
 		"cannot lock ref",
 		"! [rejected]",
 	} {
-		if strings.Contains(s, marker) {
+		if strings.Contains(ls, marker) {
 			return true
 		}
 	}
+
+	// 5. Everything else is permanent.
 	return false
 }
 

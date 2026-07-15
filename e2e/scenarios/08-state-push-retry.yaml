@@ -12,6 +12,15 @@ description: |
   the file. Reproducing the actual concurrent-push 409 race needs real GHA and
   stays a fleet concern.
 
+  The Contents-API branch of the same step (real GitHub only, so it cannot
+  execute under act/gitea) is asserted on the emitted workflow instead: the PUT
+  always carries the CAS sha and refuses to write when the manifest has no blob
+  at the fetched tip, and the retry loop classifies failures, retrying a 409
+  conflict or a rate-limited response (HTTP 429, or a 403 carrying a rate,
+  secondary, or abuse limit message) but failing fast on any other 4xx instead
+  of relabeling revoked tokens or missing branches as "likely concurrent run"
+  for ten attempts.
+
 config:
   trunk_branch: main
   environments: [dev]
@@ -30,6 +39,30 @@ steps:
         src/app.go: |
           package main
           func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # The Contents-API PUT refuses to write without a base blob rather
+            # than degrading to an sha-less create-or-overwrite.
+            - 'if [[ -z "$BASE_SHA" ]]; then'
+            - "refusing an unguarded state write"
+            # The CAS sha rides in the argument list unconditionally.
+            - '-f "sha=$BASE_SHA"'
+            # PUT failures are classified: 409 and rate limits retry, other
+            # 4xx fail fast. The rate-limit arm must recognize both the 429
+            # status and the message shapes GitHub uses for secondary and
+            # abuse limits on a 403.
+            - '*"HTTP 409"*'
+            - '*"HTTP 429"*'
+            - '*"secondary rate"*'
+            - "State write attempt $attempt was rate limited"
+            - "cascade-state-write: permanent-error attempt=$attempt"
+          not_contains:
+            # The old branch that omitted the CAS sha on an empty base.
+            - 'if [[ -n "$BASE_SHA" ]]; then'
+            # The old blanket relabeling of every PUT failure as concurrency.
+            - "State write attempt $attempt failed (likely concurrent run)"
 
   - name: "Orchestrate; assert the retry loop ran and wrote state"
     action: orchestrate

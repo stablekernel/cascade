@@ -28,12 +28,13 @@ func NewGHClient() ContentsClient {
 // optimistic lock while silently dropping the racer's committed keys, which is
 // precisely the lost update the retry loop exists to prevent.
 //
-// A file that does not yet exist (a genuine HTTP 404, or an empty SHA in the
-// response) returns nil bytes, an empty SHA, and a nil error so the first write
-// creates it rather than failing. Every other failure (auth, rate limit, 5xx,
-// network) propagates with the gh CLI's stderr attached: mapping an outage to
-// "file absent" would hide the real cause behind blind retries and make the
-// create-on-first-write branch indistinguishable from a failure.
+// A real HTTP 404 (or a response carrying no blob SHA) returns a typed
+// NotFoundError naming the repo, path, and ref. GitHub answers 404 both for a
+// file that does not exist and for a private repository the token cannot read,
+// so mapping the status to "file absent" would hide an access failure behind
+// blind retries; the caller fails fast on it instead. Every other failure
+// (auth, rate limit, 5xx, network) propagates with the gh CLI's stderr
+// attached so it stays distinguishable and retryable.
 func (ghContents) GetContent(repo, path, ref string) ([]byte, string, error) {
 	apiPath := fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, path, ref)
 
@@ -41,11 +42,11 @@ func (ghContents) GetContent(repo, path, ref string) ([]byte, string, error) {
 	if err != nil {
 		detail := ghFailureDetail(err, out)
 		if isNotFound(detail) {
-			return nil, "", nil
+			return nil, "", &NotFoundError{Repo: repo, Path: path, Ref: ref, Detail: detail}
 		}
 		return nil, "", fmt.Errorf("gh api %s: %s: %w", apiPath, detail, err)
 	}
-	return decodeContentsSnapshot(out, repo)
+	return decodeContentsSnapshot(out, repo, path, ref)
 }
 
 // ghFailureDetail collects the diagnostic text a failed gh invocation produced:
@@ -85,17 +86,18 @@ type contentsSnapshot struct {
 }
 
 // decodeContentsSnapshot parses one Contents API response into (bytes, sha).
-// An empty SHA reads as file-absent (create-on-first-write semantics). A body
-// the API declined to inline (encoding "none", returned for oversized files) is
-// fetched through the blob endpoint keyed by the SAME snapshot SHA, so the
-// bytes still belong to the SHA used as the optimistic-lock token.
-func decodeContentsSnapshot(out []byte, repo string) ([]byte, string, error) {
+// A response carrying no blob SHA offers nothing to lock the write against, so
+// it reads as not-found rather than as content. A body the API declined to
+// inline (encoding "none", returned for oversized files) is fetched through
+// the blob endpoint keyed by the SAME snapshot SHA, so the bytes still belong
+// to the SHA used as the optimistic-lock token.
+func decodeContentsSnapshot(out []byte, repo, path, ref string) ([]byte, string, error) {
 	var snap contentsSnapshot
 	if err := json.Unmarshal(out, &snap); err != nil {
 		return nil, "", fmt.Errorf("parsing contents API response: %w", err)
 	}
 	if snap.SHA == "" {
-		return nil, "", nil
+		return nil, "", &NotFoundError{Repo: repo, Path: path, Ref: ref, Detail: "contents response carried no blob SHA"}
 	}
 
 	if snap.Content == "" && snap.Encoding != "" && snap.Encoding != "base64" {
@@ -124,13 +126,18 @@ func decodeBase64Body(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
 }
 
-// PutContent writes content at ref through the Contents API. When sha is
-// non-empty the write is an update guarded by that optimistic-lock token; an
-// empty sha creates the file. It stamps author with both the commit author and
-// committer so the state commit is attributed to the bot identity rather than
-// the token owner, and classifies a 409 optimistic-lock failure as a
-// ConflictError so the retry loop recognizes it.
+// PutContent writes content at ref through the Contents API, guarded by sha as
+// the optimistic-lock token. A state write only ever targets an already
+// committed manifest, so an empty sha is a caller bug and is refused: without
+// the lock the Contents API would create or blindly overwrite the file,
+// exactly the unguarded write this package exists to prevent. It stamps author
+// with both the commit author and committer so the state commit is attributed
+// to the bot identity rather than the token owner, and classifies a 409
+// optimistic-lock failure as a ConflictError so the retry loop recognizes it.
 func (ghContents) PutContent(repo, path, ref, sha, message string, content []byte, author Identity) error {
+	if sha == "" {
+		return fmt.Errorf("refusing to write %s/%s@%s without an optimistic-lock sha: a state write only targets an already committed manifest", repo, path, ref)
+	}
 	author = author.OrDefault()
 	b64 := base64.StdEncoding.EncodeToString(content)
 	args := []string{
@@ -142,28 +149,62 @@ func (ghContents) PutContent(repo, path, ref, sha, message string, content []byt
 		"-f", "author[email]=" + author.Email,
 		"-f", "committer[name]=" + author.Name,
 		"-f", "committer[email]=" + author.Email,
-	}
-	if sha != "" {
-		args = append(args, "-f", "sha="+sha)
+		"-f", "sha=" + sha,
 	}
 	out, err := exec.Command("gh", args...).CombinedOutput()
 	return classifyPutError(string(out), err)
 }
 
-// classifyPutError maps a gh PUT result to a typed error. A nil err is success.
-// An optimistic-lock failure becomes a ConflictError so the retry loop re-fetches
-// and re-applies; any other failure is wrapped verbatim. GitHub returns two 409
-// shapes for a stale write: a blob If-Match mismatch whose body carries "does not
-// match", and a branch-ref compare-and-swap failure whose body reads "... is at X
-// but expected Y ..." with no "does not match". Either lock marker alongside a
-// 409 or "Conflict" status is recognized so both shapes drive a retry.
+// classifyPutError maps a gh PUT result to a typed error, applying the
+// write-path taxonomy shared with the generated state-write shell
+// (internal/generate/state_write.go) and internal/git's
+// retryablePushRejection; keep the three classifiers in sync. A nil err is
+// success. An optimistic-lock failure becomes a ConflictError so the retry
+// loop re-fetches and re-applies; a transient failure (a rate limit, an HTTP
+// 5xx, a transport blip with no HTTP status) becomes a TransientError so the
+// same loop retries it with backoff; any other 4xx (401 revoked token, 403
+// authorization, 404, 422 validation) is wrapped verbatim so the loop fails
+// fast with the real cause.
+//
+// GitHub returns two 409 shapes for a stale write: a blob If-Match mismatch
+// whose body carries "does not match", and a branch-ref compare-and-swap
+// failure whose body reads "... is at X but expected Y ..." with no "does not
+// match". Either lock marker alongside a 409 or "Conflict" status is
+// recognized so both shapes drive a retry.
 func classifyPutError(out string, err error) error {
 	if err == nil {
 		return nil
 	}
+	wrapped := fmt.Errorf("%s: %w", strings.TrimSpace(out), err)
 	if (strings.Contains(out, "does not match") || strings.Contains(out, "is at")) &&
 		(strings.Contains(out, "409") || strings.Contains(out, "Conflict")) {
-		return &ConflictError{Err: fmt.Errorf("%s: %w", strings.TrimSpace(out), err)}
+		return &ConflictError{Err: wrapped}
 	}
-	return fmt.Errorf("%s: %w", strings.TrimSpace(out), err)
+	if transientPutFailure(out) {
+		return &TransientError{Err: wrapped}
+	}
+	return wrapped
+}
+
+// transientPutFailure mirrors the emitted shell classifier's arm order: rate
+// limits are matched before the blanket 4xx test, so a rate-limited 403 or a
+// 429 stays retryable while a plain 403 authorization refusal does not.
+// GitHub's secondary and abuse limits surface as 403/429 with a rate-limit
+// message, never as auth failures, which is why the message decides where a
+// 403 lands. A bare 409 without a lock marker still retries (the status is a
+// conflict even when the body carries neither lock shape), and anything with
+// no 4xx status at all (an HTTP 5xx, a transport failure that never reached
+// the API) defaults to transient, exactly like the shell's final arm.
+func transientPutFailure(out string) bool {
+	for _, marker := range []string{
+		"HTTP 429", "Too Many Requests",
+		"rate limit", "secondary rate", "abuse",
+		"Retry-After", "retry-after",
+		"HTTP 409", "Conflict",
+	} {
+		if strings.Contains(out, marker) {
+			return true
+		}
+	}
+	return !strings.Contains(out, "HTTP 4")
 }
