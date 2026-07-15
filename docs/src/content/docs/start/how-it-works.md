@@ -60,7 +60,7 @@ The boundary is positional, not a named environment. The second-from-top environ
 - **Generated file:** `cascade-rollback.yaml`.
 - **Fires on:** `workflow_dispatch`, plus `repository_dispatch` when `rollback.repository_dispatch` is set so an external signal can trigger it.
 
-**Hotfix** patches an environment off a divergent branch instead of trunk, so an urgent fix can ship to one environment without waiting for the full chain. The patched ref rejoins the chain through manifest state.
+**Hotfix** patches an environment off a divergent branch instead of trunk, so an urgent fix can target one environment without waiting for the full chain. The patched ref rejoins the chain through manifest state. The workflow cherry-picks, builds, tags, and releases the fix; its deploy jobs are placeholders for now, so running the configured deploy workflow is a manual step (see [Run a hotfix](/cascade/guides/hotfix/)).
 
 - **Manifest field:** two or more `environments` (the hotfix workflow is emitted whenever the environment chain can diverge).
 - **Generated file:** `cascade-hotfix.yaml`.

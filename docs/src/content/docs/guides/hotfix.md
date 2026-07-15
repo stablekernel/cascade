@@ -19,7 +19,11 @@ gh workflow run cascade-hotfix.yaml \
   -f target_env=test
 ```
 
-The `plan` job fetches env branches and tags and runs `cascade hotfix plan`. The `apply` job then cherry-picks the fix onto a per-environment integration branch and opens a resolution pull request labeled `cascade-hotfix` (or `cascade-hotfix-conflict` if the cherry-pick collides). Merging that pull request runs build, deploy, and finalize, which write the diverged state.
+The `plan` job fetches env branches and tags and runs `cascade hotfix plan`. The `apply` job then cherry-picks the fix onto a per-environment integration branch and opens a resolution pull request labeled `cascade-hotfix` (or `cascade-hotfix-conflict` if the cherry-pick collides). Merging that pull request runs build and finalize, which writes the diverged state, tags the hotfix version, and creates the release.
+
+:::caution[Known limitation: the hotfix deploy jobs are placeholders]
+The deploy and rollback jobs in `cascade-hotfix.yaml` do not yet invoke the configured deploy workflow. Each one holds the target's GitHub `environment:` gate, prints the deploy it stands in for, and succeeds. A green hotfix run therefore cherry-picks, builds, and finalizes (state, tag, release), but does not deploy the fix. Ship it yourself by running the configured deploy workflow against the hotfix merge SHA. The standalone `cascade-rollback.yaml` workflow is not affected; its deploy jobs invoke the real deploy callbacks.
+:::
 
 ## Environment branches and the stale-branch self-heal
 
@@ -56,7 +60,7 @@ A hotfix allocates its own version segment so it sorts correctly relative to the
 - **plan** surfaces branch-protection suggestions as `::notice::` lines when `env/*` has no required checks configured; cascade never creates protection rules itself.
 - **The resolution pull request** is the audit record even when no human touches it. It merges as the configured `state_token`, not `GITHUB_TOKEN`, because a `GITHUB_TOKEN` merge does not emit the event that triggers build/deploy/finalize.
 - **A diverged environment blocks normal promotion** until the divergence clears. Promotion into it later requires the incoming trunk SHA to contain every recorded patch; dropping one is refused unless explicitly forced.
-- **Prod is a valid target.** The deploy job binds to the GitHub `environment:` of the target, so required reviewers and wait timers apply exactly as they do for a normal promotion.
+- **Prod is a valid target.** The deploy job binds to the GitHub `environment:` of the target, so required reviewers and wait timers apply exactly as they do for a normal promotion. The job behind that gate is still the placeholder described above; approval does not run the configured deploy workflow.
 
 ## Wayfinding
 

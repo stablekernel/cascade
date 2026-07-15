@@ -629,8 +629,9 @@ elevates the commit set bottom-up across the environment chain, up to and includ
 target environment, on each environment's `env/<env>` integration branch. The fixes must
 already be on trunk; cascade refuses to apply any commit that is not an ancestor of trunk
 tip. The subcommands compute and validate the hotfix and write its final state; the
-cherry-pick, build, and deploy run in the generated `cascade-hotfix.yaml` workflow. See
-[Run a hotfix](/cascade/guides/hotfix/) for the full flow.
+cherry-pick and build run in the generated `cascade-hotfix.yaml` workflow, whose deploy
+and rollback jobs are placeholders that do not yet invoke the configured deploy workflow.
+See [Run a hotfix](/cascade/guides/hotfix/) for the full flow and the limitation.
 
 #### hotfix plan
 

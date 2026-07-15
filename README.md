@@ -93,7 +93,7 @@ A single `generate-workflow` run compiles the manifest into the orchestrate, pro
 - **SHA-keyed promotion ladder.** Promote the exact bytes that passed the previous environment, never a per-stage rebuild. See [Promote a release](https://stablekernel.github.io/cascade/guides/promote/).
 - **Security by construction.** Every caller job carries a per-callback least-privilege `permissions:` block, including OIDC `id-token: write`. See [Callback contract](https://stablekernel.github.io/cascade/reference/callbacks/).
 - **Self-healing supply chain.** Third-party action pins live in one source of truth, and a reconcile companion adopts external pin bumps back into the manifest. See [Action pins](https://stablekernel.github.io/cascade/guides/action-pins/).
-- **Hotfix and rollback, race-safe.** Patch or revert a single environment with correct, race-safe concurrency. See [Run a hotfix](https://stablekernel.github.io/cascade/guides/hotfix/) and [Roll back an environment](https://stablekernel.github.io/cascade/guides/rollback/).
+- **Hotfix and rollback, race-safe.** Patch or revert a single environment with correct, race-safe concurrency. Hotfix currently cherry-picks, builds, tags, and releases the fix; its generated deploy step is a placeholder, so running the deploy workflow is a manual follow-up. See [Run a hotfix](https://stablekernel.github.io/cascade/guides/hotfix/) and [Roll back an environment](https://stablekernel.github.io/cascade/guides/rollback/).
 
 Preview a pipeline before you merge: [`simulate`](https://stablekernel.github.io/cascade/guides/simulate-and-verify/) traces what a change would build and deploy, and [`graph`](https://stablekernel.github.io/cascade/guides/visualize/) renders the environment chain.
 
