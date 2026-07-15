@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -132,6 +134,45 @@ func TestGitHubOutputMultiple(t *testing.T) {
 	}
 	if !strings.Contains(contentStr, "sha=abc123") {
 		t.Errorf("expected sha output, got %s", contentStr)
+	}
+}
+
+// TestGitHubOutputMultipleSortedOrder proves the entries render in sorted key
+// order rather than Go's randomized map-range order, so repeated runs produce
+// identical output files.
+func TestGitHubOutputMultipleSortedOrder(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "output.txt")
+	t.Setenv("GITHUB_OUTPUT", outputFile)
+
+	outputs := map[string]string{
+		"kilo": "1", "alpha": "2", "hotel": "3", "bravo": "4", "juliet": "5",
+		"delta": "6", "india": "7", "charlie": "8", "golf": "9", "echo": "10",
+	}
+	if err := GitHubOutputMultiple(outputs); err != nil {
+		t.Fatalf("GitHubOutputMultiple failed: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		key, _, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("unexpected output line %q", line)
+		}
+		got = append(got, key)
+	}
+	want := make([]string, 0, len(outputs))
+	for k := range outputs {
+		want = append(want, k)
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("keys must render sorted: got %v want %v", got, want)
 	}
 }
 

@@ -3,6 +3,7 @@ package ghaoutput
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -143,6 +144,57 @@ func TestWriter_MultilineDelimiterIsRandom(t *testing.T) {
 		delims[delim] = true
 	}
 	require.Len(t, delims, 2, "two flushes of the same value must use different delimiters")
+}
+
+// TestWriter_FlushOrderIsSorted proves the rendered output is deterministic:
+// entries appear in sorted key order (Set entries first, then SetMultiline
+// entries), never in Go's randomized map-range order.
+func TestWriter_FlushOrderIsSorted(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := tmpDir + "/github_output"
+	t.Setenv("GITHUB_OUTPUT", outputFile)
+
+	keys := []string{"kilo", "alpha", "hotel", "bravo", "juliet", "delta", "india", "charlie", "golf", "echo", "foxtrot"}
+	w := New()
+	for _, k := range keys {
+		w.Set(k, "v")
+	}
+	w.SetMultiline("zulu", "a\nb")
+	w.SetMultiline("mike", "c\nd")
+	require.NoError(t, w.Flush())
+
+	content, err := os.ReadFile(outputFile)
+	require.NoError(t, err)
+
+	var got []string
+	for _, line := range strings.Split(string(content), "\n") {
+		if strings.HasSuffix(line, "=v") {
+			got = append(got, strings.TrimSuffix(line, "=v"))
+		}
+	}
+	want := append([]string(nil), keys...)
+	sort.Strings(want)
+	require.Equal(t, want, got, "plain outputs must render in sorted key order")
+
+	mikeIdx := strings.Index(string(content), "mike<<")
+	zuluIdx := strings.Index(string(content), "zulu<<")
+	require.GreaterOrEqual(t, mikeIdx, 0)
+	require.GreaterOrEqual(t, zuluIdx, 0)
+	require.Less(t, mikeIdx, zuluIdx, "multiline outputs must render in sorted key order")
+}
+
+// TestWriter_FlushSurfacesFinalWriteError proves a failure to persist the
+// buffered content is returned, not silently dropped: writing to a full
+// device fails and Flush must report it.
+func TestWriter_FlushSurfacesFinalWriteError(t *testing.T) {
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skip("/dev/full not available on this platform")
+	}
+	t.Setenv("GITHUB_OUTPUT", "/dev/full")
+
+	w := New()
+	w.Set("key", "value")
+	require.Error(t, w.Flush(), "a failed write to $GITHUB_OUTPUT must surface")
 }
 
 // TestWriter_SetMultilineValueRoutedToHeredoc proves a newline smuggled into a

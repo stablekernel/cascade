@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/ghaoutput"
@@ -39,10 +40,17 @@ func GitHubOutput(key, value string) (err error) {
 	return err
 }
 
-// GitHubOutputMultiple writes multiple key-value pairs to GITHUB_OUTPUT.
+// GitHubOutputMultiple writes multiple key-value pairs to GITHUB_OUTPUT in
+// sorted key order, so repeated runs produce identical output files instead
+// of Go's randomized map-range order.
 func GitHubOutputMultiple(outputs map[string]string) error {
-	for key, value := range outputs {
-		if err := GitHubOutput(key, value); err != nil {
+	keys := make([]string, 0, len(outputs))
+	for key := range outputs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := GitHubOutput(key, outputs[key]); err != nil {
 			return err
 		}
 	}
@@ -74,7 +82,7 @@ func GitHubStepSummary(content string) (err error) {
 
 // JSON outputs structured data as JSON to stdout.
 // This is used with the --json flag for workflow consumption.
-func JSON(data interface{}) error {
+func JSON(data any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(data)
@@ -82,7 +90,7 @@ func JSON(data interface{}) error {
 
 // Result outputs data either as JSON (if --json flag is set) or as human-readable text.
 // The textFn is called to produce human-readable output when not in JSON mode.
-func Result(data interface{}, textFn func()) error {
+func Result(data any, textFn func()) error {
 	if globals.JSON() {
 		return JSON(data)
 	}

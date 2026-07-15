@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -34,7 +35,7 @@ func (w *Writer) SetBool(key string, value bool) {
 }
 
 // SetJSON marshals a value to JSON and sets it as output
-func (w *Writer) SetJSON(key string, value interface{}) error {
+func (w *Writer) SetJSON(key string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("failed to marshal %s to JSON: %w", key, err)
@@ -80,20 +81,36 @@ func heredocDelimiter(value string) string {
 // render produces the full $GITHUB_OUTPUT content for this writer. Multiline
 // values registered via Set (not just SetMultiline) also take the heredoc
 // path: a plain key=value write of a value with an embedded newline would
-// inject the trailing lines as extra output entries.
+// inject the trailing lines as extra output entries. Each map renders in
+// sorted key order so repeated runs of the same writer produce identical
+// output files.
 func (w *Writer) render() string {
 	var sb strings.Builder
-	for k, v := range w.outputs {
-		sb.WriteString(FormatLine(k, v))
+	for _, k := range sortedKeys(w.outputs) {
+		sb.WriteString(FormatLine(k, w.outputs[k]))
 	}
-	for k, v := range w.multiline {
-		sb.WriteString(FormatLine(k, v))
+	for _, k := range sortedKeys(w.multiline) {
+		sb.WriteString(FormatLine(k, w.multiline[k]))
 	}
 	return sb.String()
 }
 
-// Flush writes all outputs to $GITHUB_OUTPUT or stdout
-func (w *Writer) Flush() error {
+// sortedKeys returns the map's keys in sorted order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Flush writes all outputs to $GITHUB_OUTPUT or stdout. The error return is
+// named so the deferred Close can surface a failure to persist the buffered
+// content; with an unnamed return the deferred assignment would mutate a
+// local after the return value was already copied, silently dropping the
+// flush-to-disk error.
+func (w *Writer) Flush() (err error) {
 	content := w.render()
 
 	outputFile := os.Getenv("GITHUB_OUTPUT")
