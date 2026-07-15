@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/promote"
 )
 
@@ -110,6 +111,9 @@ func NewCommand() *cobra.Command {
 		Short: "Preview a hypothetical action without changing anything",
 		Long:  simulateLong,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// This hook shadows the root's PersistentPreRun, so the global
+			// flags (--dry-run, --json, --trace) must be applied here.
+			globals.ApplyFlags(cmd)
 			if cf.config == "" {
 				cf.config = config.FindConfigFile("")
 			}

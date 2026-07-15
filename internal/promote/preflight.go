@@ -3,7 +3,6 @@ package promote
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -456,8 +455,13 @@ func (p *Preflighter) detectDeployChanges(sourceSHA, targetEnv string) ([]string
 			continue
 		}
 
-		// Check for changes in triggers
-		if p.hasChanges(targetSHA, sourceSHA, d.Triggers) {
+		// Check for changes in triggers. Build-linked deploys inherit the
+		// triggers of EVERY build they depend on for promotion change
+		// detection (see the deploy types table in the manifest reference),
+		// so resolve through GetTriggerSetsForDeploy rather than reading
+		// d.Triggers directly: the deploy is promoted when any referenced
+		// build's triggers match.
+		if p.hasChangesInSets(targetSHA, sourceSHA, p.cicdFile.Config.GetTriggerSetsForDeploy(d.Name)) {
 			localDeploys = append(localDeploys, d.Name)
 		}
 	}
@@ -503,95 +507,39 @@ func (p *Preflighter) hasChanges(baseSHA, headSHA string, triggers []string) boo
 	if len(triggers) == 0 {
 		return true // No triggers = always deploy
 	}
+	return p.hasChangesInSets(baseSHA, headSHA, [][]string{triggers})
+}
+
+// hasChangesInSets checks if there are changes between two SHAs matching any
+// of the trigger pattern sets, one set per gating source (for a build-linked
+// deploy, one per referenced build). Sets are evaluated independently and
+// OR-ed (config.MatchAnyTriggerSet), so one build's "!" exclusion cannot veto
+// a sibling build's positive match.
+func (p *Preflighter) hasChangesInSets(baseSHA, headSHA string, sets [][]string) bool {
+	if len(sets) == 0 {
+		return true // No triggers = always deploy
+	}
 
 	// Use git diff to get changed files
 	cmd := exec.Command("git", "diff", "--name-only", baseSHA, headSHA)
 	cmd.Dir = p.baseDir
+	cmd.Env = git.BoundaryEnv(p.baseDir)
 	out, err := cmd.Output()
 	if err != nil {
 		return true // On error, assume changes
 	}
 
-	changedFiles := strings.Split(string(out), "\n")
-
-	// Check if any changed file matches any trigger pattern
-	for _, file := range changedFiles {
-		file = strings.TrimSpace(file)
-		if file == "" {
-			continue
-		}
-		for _, pattern := range triggers {
-			if matchGlob(pattern, file) {
-				return true
-			}
+	var changedFiles []string
+	for _, file := range strings.Split(string(out), "\n") {
+		if file = strings.TrimSpace(file); file != "" {
+			changedFiles = append(changedFiles, file)
 		}
 	}
 
-	return false
-}
-
-// matchGlob matches a file path against a glob pattern
-// Supports: * (single segment), ** (any segments)
-func matchGlob(pattern, path string) bool {
-	// Handle ** patterns
-	if strings.Contains(pattern, "**") {
-		return matchDoublestar(pattern, path)
-	}
-
-	// For simple patterns, use filepath.Match
-	matched, _ := filepath.Match(pattern, path)
-	return matched
-}
-
-// matchDoublestar handles ** glob patterns
-func matchDoublestar(pattern, path string) bool {
-	// Split pattern and path into segments
-	patternParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(path, "/")
-
-	return matchParts(patternParts, pathParts)
-}
-
-// matchParts recursively matches pattern parts against path parts
-func matchParts(pattern, path []string) bool {
-	pi, ppi := 0, 0
-
-	for pi < len(pattern) && ppi < len(path) {
-		if pattern[pi] == "**" {
-			// ** matches zero or more path segments
-			if pi == len(pattern)-1 {
-				// ** at end matches everything
-				return true
-			}
-
-			// Try matching remaining pattern at each position
-			for i := ppi; i <= len(path); i++ {
-				if matchParts(pattern[pi+1:], path[i:]) {
-					return true
-				}
-			}
-			return false
-		}
-
-		// Match single segment
-		matched, _ := filepath.Match(pattern[pi], path[ppi])
-		if !matched {
-			return false
-		}
-
-		pi++
-		ppi++
-	}
-
-	// Check if pattern is exhausted
-	for pi < len(pattern) {
-		if pattern[pi] != "**" {
-			return false
-		}
-		pi++
-	}
-
-	return ppi == len(path)
+	// Delegate to the shared negation-aware evaluator so promotion change
+	// detection agrees with orchestrate and the emitted GitHub Actions paths
+	// filter, including "!" exclusion patterns.
+	return config.MatchAnyTriggerSet(sets, changedFiles)
 }
 
 // checkBreakingChangesForMode checks if there are breaking changes based on mode and transitions.

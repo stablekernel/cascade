@@ -22,9 +22,13 @@ func TestResolveComponent_ExtraPaths(t *testing.T) {
 	if want := []string{"libs/proto/**"}; !reflect.DeepEqual(api.ExtraPaths, want) {
 		t.Errorf("api.ExtraPaths = %v, want %v", api.ExtraPaths, want)
 	}
-	// Push filter (GetAllTriggers) must include the component path and the extra path.
+	// Push filter (GetAllTriggers) must include the component path and the extra
+	// path, in declaration order: the component's own trigger list first, extra
+	// paths appended after it so they trigger unconditionally without disturbing
+	// any "!" exclusions in the list (pattern order is semantic under the GitHub
+	// Actions paths filter).
 	got := api.Config.GetAllTriggers()
-	want := []string{"libs/proto/**", "services/api/**"}
+	want := []string{"services/api/**", "libs/proto/**"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("api triggers = %v, want %v", got, want)
 	}
@@ -56,9 +60,11 @@ func TestResolveComponent_SharedPathsFanOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveComponent(api): %v", err)
 	}
-	wantAPI := []string{"go.mod", "libs/proto/**", "libs/shared/**"}
+	// Deduplicated in declaration order: the component's own extra_paths first,
+	// then the shared paths (the overlapping go.mod is not repeated).
+	wantAPI := []string{"libs/proto/**", "go.mod", "libs/shared/**"}
 	if !reflect.DeepEqual(api.ExtraPaths, wantAPI) {
-		t.Errorf("api.ExtraPaths = %v, want %v (deduped, sorted)", api.ExtraPaths, wantAPI)
+		t.Errorf("api.ExtraPaths = %v, want %v (deduped, declaration order)", api.ExtraPaths, wantAPI)
 	}
 
 	web, err := c.ResolveComponent("web")
@@ -69,9 +75,9 @@ func TestResolveComponent_SharedPathsFanOut(t *testing.T) {
 	if !reflect.DeepEqual(web.ExtraPaths, wantWeb) {
 		t.Errorf("web.ExtraPaths = %v, want %v", web.ExtraPaths, wantWeb)
 	}
-	// Push filter for web: its own path plus the shared paths.
-	if g := web.Config.GetAllTriggers(); !reflect.DeepEqual(g, []string{"go.mod", "libs/shared/**", "services/web/**"}) {
-		t.Errorf("web triggers = %v, want [go.mod libs/shared/** services/web/**]", g)
+	// Push filter for web: its own path first, then the shared paths appended.
+	if g := web.Config.GetAllTriggers(); !reflect.DeepEqual(g, []string{"services/web/**", "go.mod", "libs/shared/**"}) {
+		t.Errorf("web triggers = %v, want [services/web/** go.mod libs/shared/**]", g)
 	}
 }
 

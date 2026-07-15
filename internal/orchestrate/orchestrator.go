@@ -337,24 +337,20 @@ func (o *Orchestrator) detectChanges(baseSHA, headSHA string, triggers []string)
 		return true
 	}
 
-	files := strings.Split(changedFiles, "\n")
-	log.Trace("Changed files: %v", files)
-
-	// Check if any changed file matches triggers
-	for _, file := range files {
-		file = strings.TrimSpace(file)
-		if file == "" {
-			continue
-		}
-		for _, trigger := range triggers {
-			if matchGlob(file, trigger) {
-				log.Trace("File %s matches trigger %s", file, trigger)
-				return true
-			}
+	var files []string
+	for _, file := range strings.Split(changedFiles, "\n") {
+		if file = strings.TrimSpace(file); file != "" {
+			files = append(files, file)
 		}
 	}
+	log.Trace("Changed files: %v", files)
 
-	return false
+	// Delegate to the shared negation-aware evaluator so change detection
+	// agrees with the emitted GitHub Actions paths filter, including "!"
+	// exclusion patterns.
+	matched := config.MatchAnyTrigger(triggers, files)
+	log.Trace("Trigger match for %v: %v", triggers, matched)
+	return matched
 }
 
 // componentExtraPaths returns the effective extra path set for the scoped
@@ -802,6 +798,7 @@ func (o *Orchestrator) reapplyStateLeaf() error {
 	message := fmt.Sprintf("chore: update state for %s [skip ci]", o.environment)
 	cmd := exec.Command("git", "commit", "-m", message)
 	cmd.Dir = o.baseDir
+	cmd.Env = git.BoundaryEnv(o.baseDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// The owned leaf is already present on the re-fetched trunk (for example
 		// a same-component racer landed it), so there is nothing to re-commit;
@@ -820,6 +817,7 @@ func (o *Orchestrator) reapplyStateLeaf() error {
 func (o *Orchestrator) gitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = o.baseDir
+	cmd.Env = git.BoundaryEnv(o.baseDir)
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -838,6 +836,7 @@ func (o *Orchestrator) gitRun(args ...string) error {
 	log.Trace("git %s", strings.Join(args, " "))
 	cmd := exec.Command("git", args...)
 	cmd.Dir = o.baseDir
+	cmd.Env = git.BoundaryEnv(o.baseDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -870,15 +869,3 @@ func indexOf(slice []string, item string) int {
 	return -1
 }
 
-// matchGlob reports whether path matches the glob pattern. It delegates to the
-// shared config.MatchGlobPattern evaluator so CLI-side change detection agrees
-// with the emitted GitHub Actions paths filter, which is generated verbatim from
-// the same pattern list. That evaluator anchors single "*" within one segment
-// (it does not cross "/") and expands "**" across any number of segments, so a
-// recursive glob such as "**/*.go" or "pkg/**/*.ts" matches files at any depth.
-func matchGlob(path, pattern string) bool {
-	if pattern == "" {
-		return false
-	}
-	return config.MatchGlobPattern(pattern, path)
-}

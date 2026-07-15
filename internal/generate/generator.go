@@ -722,13 +722,22 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 		sb.WriteString("  push:\n")
 		fmt.Fprintf(sb, "    branches: [%s]\n", g.config.TrunkBranch)
 
-		// Add paths filter based on all configured triggers
-		// This prevents orchestration from running when no relevant files changed
-		triggers := g.config.GetAllTriggers()
-		if len(triggers) > 0 {
-			sb.WriteString("    paths:\n")
-			for _, trigger := range triggers {
-				fmt.Fprintf(sb, "      - '%s'\n", trigger)
+		// Add a paths filter derived from the configured triggers so
+		// orchestration does not run when no relevant files changed. GitHub
+		// evaluates the filter in order (last-match-wins), so the patterns are
+		// emitted in manifest order; a negation-only list becomes paths-ignore
+		// (a paths filter needs at least one non-"!" entry). See
+		// OrchestratePathsFilter for how multiple callback lists are unioned
+		// without letting one callback's exclusion suppress a sibling's build.
+		filter := g.config.OrchestratePathsFilter()
+		if len(filter.Patterns) > 0 {
+			if filter.Ignore {
+				sb.WriteString("    paths-ignore:\n")
+			} else {
+				sb.WriteString("    paths:\n")
+			}
+			for _, pattern := range filter.Patterns {
+				fmt.Fprintf(sb, "      - '%s'\n", pattern)
 			}
 		}
 	}

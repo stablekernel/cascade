@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/stablekernel/cascade/internal/globals"
 )
 
 // defaultGitHubAPIURL is the public GitHub REST API base used when neither the
@@ -78,6 +80,13 @@ func resolveToken(flagValue string) string {
 // and a bounded slice of the response body so a 403 from an under-scoped token
 // is legible to the operator.
 func (a *applier) apply(ctx context.Context, repo, branch string, protection Protection) error {
+	// Dry-run backstop: the command's explicit gate previews and returns before
+	// reaching this boundary, so hitting it under --dry-run means a caller
+	// missed its gate; refuse before the PUT can leave the process.
+	if err := globals.GuardMutation(fmt.Sprintf("PUT branch protection for %s/branches/%s", repo, branch)); err != nil {
+		return err
+	}
+
 	body, err := json.Marshal(protection)
 	if err != nil {
 		return fmt.Errorf("encoding protection body: %w", err)

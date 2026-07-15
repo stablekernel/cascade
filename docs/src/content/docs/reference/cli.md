@@ -980,6 +980,9 @@ Actions:
 | `publish` | Finalize a release (drops the RC suffix) |
 | `delete` | Delete a release |
 
+Every action mutates GitHub releases or tags, so the global `--dry-run` flag prints the
+resolved action and tag plan and issues no API request.
+
 ### external
 
 Commands for multi-repo orchestration. `--config`, `--manifest-key`, and `--gha-output` are
@@ -1163,6 +1166,9 @@ guidance note. cascade resolves the target repository from `--repo`, falling bac
 back to `GITHUB_API_URL` and then `https://api.github.com`. A missing token or repository
 is reported before any network call, and a non-2xx response from GitHub (for example a
 `403` from an under-scoped token) is surfaced with GitHub's own rejection message.
+
+Combine `--apply` with `--dry-run` to preview the exact PUT target without sending the
+request; a token is not required to preview.
 
 Applying branch protection requires a token with repo-admin authority (the
 `Administration: write` permission). The workflow `GITHUB_TOKEN` does not carry that

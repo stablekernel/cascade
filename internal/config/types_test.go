@@ -230,32 +230,34 @@ func TestGetEnvironmentsInRange(t *testing.T) {
 	}
 }
 
-func TestGetTriggersForDeploy(t *testing.T) {
+func TestGetTriggerSetsForDeploy(t *testing.T) {
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
 			{Name: "app", Triggers: []string{"src/**", "go.mod"}},
 			{Name: "worker", Triggers: []string{"worker/**"}},
 		},
 		Deploys: []DeployConfig{
-			{Name: "app-deploy", DependsOn: []string{"app"}}, // Should get app's triggers
-			{Name: "cdk", Triggers: []string{".aws/cdk/**"}}, // Should get own triggers
+			{Name: "app-deploy", DependsOn: []string{"app"}},           // Should get app's triggers
+			{Name: "all-deploy", DependsOn: []string{"app", "worker"}}, // Should get both builds' triggers
+			{Name: "cdk", Triggers: []string{".aws/cdk/**"}},           // Should get own triggers
 			{Name: "notify"}, // No triggers (always deploy)
 		},
 	}
 
 	tests := []struct {
 		deployName string
-		want       []string
+		want       [][]string
 	}{
-		{"app-deploy", []string{"src/**", "go.mod"}},
-		{"cdk", []string{".aws/cdk/**"}},
+		{"app-deploy", [][]string{{"src/**", "go.mod"}}},
+		{"all-deploy", [][]string{{"src/**", "go.mod"}, {"worker/**"}}},
+		{"cdk", [][]string{{".aws/cdk/**"}}},
 		{"notify", nil},
 		{"nonexistent", nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.deployName, func(t *testing.T) {
-			got := cfg.GetTriggersForDeploy(tt.deployName)
+			got := cfg.GetTriggerSetsForDeploy(tt.deployName)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -265,11 +267,12 @@ func TestGetTriggersForDeploy(t *testing.T) {
 // are in parse_test.go
 
 // =============================================================================
-// GetTriggersForDeploy Edge Case Tests
+// GetTriggerSetsForDeploy Edge Case Tests
 // =============================================================================
 
-func TestGetTriggersForDeploy_MultipleBuildsFirstMatch(t *testing.T) {
-	// When deploy depends_on references a build, it should get that build's triggers
+func TestGetTriggerSetsForDeploy_SingleDependsOn(t *testing.T) {
+	// When deploy depends_on references one build, it gets that build's
+	// triggers as the only set
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
 			{Name: "api", Triggers: []string{"api/**"}},
@@ -281,28 +284,52 @@ func TestGetTriggersForDeploy_MultipleBuildsFirstMatch(t *testing.T) {
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("web-deploy")
-	assert.Equal(t, []string{"web/**"}, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("web-deploy")
+	assert.Equal(t, [][]string{{"web/**"}}, sets)
 }
 
-func TestGetTriggersForDeploy_MultipleDependsOnUsesFirst(t *testing.T) {
-	// When deploy has multiple depends_on, it uses the first one's triggers
+func TestGetTriggerSetsForDeploy_MultipleDependsOnGetsAll(t *testing.T) {
+	// When deploy has multiple depends_on, EVERY referenced build's triggers
+	// are returned as independent sets: the deploy is changed when any
+	// referenced build's triggers match
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
 			{Name: "api", Triggers: []string{"api/**"}},
 			{Name: "shared", Triggers: []string{"shared/**"}},
 		},
 		Deploys: []DeployConfig{
-			{Name: "full-deploy", DependsOn: []string{"api", "shared"}}, // Should get api's triggers (first)
+			{Name: "full-deploy", DependsOn: []string{"api", "shared"}},
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("full-deploy")
-	assert.Equal(t, []string{"api/**"}, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("full-deploy")
+	assert.Equal(t, [][]string{{"api/**"}, {"shared/**"}}, sets)
 }
 
-func TestGetTriggersForDeploy_DependsOnNonexistentBuild(t *testing.T) {
-	// If depends_on references a non-existent build, return nil
+func TestGetTriggerSetsForDeploy_SetsStayIndependent(t *testing.T) {
+	// The sets are NOT concatenated: trigger evaluation is order-dependent
+	// (last match wins), so one build's "!" exclusion must stay scoped to
+	// its own set and never veto a sibling build's positive match
+	cfg := &TrunkConfig{
+		Builds: []BuildConfig{
+			{Name: "md", Triggers: []string{"**/*.md"}},
+			{Name: "docs", Triggers: []string{"docs/**", "!docs/api/**"}},
+		},
+		Deploys: []DeployConfig{
+			{Name: "docs-site", DependsOn: []string{"md", "docs"}},
+		},
+	}
+
+	sets := cfg.GetTriggerSetsForDeploy("docs-site")
+	assert.Equal(t, [][]string{{"**/*.md"}, {"docs/**", "!docs/api/**"}}, sets)
+	// docs/api/readme.md matches the "md" set even though the "docs" set
+	// excludes it; a concatenated list would let the trailing exclusion win.
+	assert.True(t, MatchAnyTriggerSet(sets, []string{"docs/api/readme.md"}))
+}
+
+func TestGetTriggerSetsForDeploy_DependsOnNonexistentBuild(t *testing.T) {
+	// If depends_on references no existing build, fall back (here: nil,
+	// always run)
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
 			{Name: "app", Triggers: []string{"src/**"}},
@@ -312,11 +339,28 @@ func TestGetTriggersForDeploy_DependsOnNonexistentBuild(t *testing.T) {
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("bad-deploy")
-	assert.Nil(t, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("bad-deploy")
+	assert.Nil(t, sets)
 }
 
-func TestGetTriggersForDeploy_EmptyDependsOn(t *testing.T) {
+func TestGetTriggerSetsForDeploy_MixedBuildAndNonBuildDeps(t *testing.T) {
+	// depends_on entries that do not name a build (references to other
+	// callbacks) contribute no set; the build entries still gate the deploy
+	cfg := &TrunkConfig{
+		Builds: []BuildConfig{
+			{Name: "app", Triggers: []string{"src/**"}},
+		},
+		Deploys: []DeployConfig{
+			{Name: "db-migrate", Triggers: []string{"migrations/**"}},
+			{Name: "app-deploy", DependsOn: []string{"db-migrate", "app"}},
+		},
+	}
+
+	sets := cfg.GetTriggerSetsForDeploy("app-deploy")
+	assert.Equal(t, [][]string{{"src/**"}}, sets)
+}
+
+func TestGetTriggerSetsForDeploy_EmptyDependsOn(t *testing.T) {
 	// Empty depends_on with no triggers = unconstrained
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
@@ -327,13 +371,13 @@ func TestGetTriggersForDeploy_EmptyDependsOn(t *testing.T) {
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("notify")
-	assert.Nil(t, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("notify")
+	assert.Nil(t, sets)
 }
 
-func TestGetTriggersForDeploy_TriggersPreferredOverDependsOn(t *testing.T) {
-	// When deploy has both triggers AND depends_on, depends_on takes precedence
-	// (This is the current behavior - build-linked deploys inherit build's triggers)
+func TestGetTriggerSetsForDeploy_DependsOnPreferredOverTriggers(t *testing.T) {
+	// When deploy has both triggers AND depends_on, depends_on takes
+	// precedence (build-linked deploys inherit the builds' triggers)
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
 			{Name: "app", Triggers: []string{"src/**"}},
@@ -343,12 +387,12 @@ func TestGetTriggersForDeploy_TriggersPreferredOverDependsOn(t *testing.T) {
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("hybrid")
-	// depends_on takes precedence, so it should return build's triggers
-	assert.Equal(t, []string{"src/**"}, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("hybrid")
+	// depends_on takes precedence, so it should return the build's triggers
+	assert.Equal(t, [][]string{{"src/**"}}, sets)
 }
 
-func TestGetTriggersForDeploy_EmptyTriggers(t *testing.T) {
+func TestGetTriggerSetsForDeploy_EmptyTriggers(t *testing.T) {
 	// Empty triggers array with no depends_on = unconstrained
 	cfg := &TrunkConfig{
 		Deploys: []DeployConfig{
@@ -356,36 +400,38 @@ func TestGetTriggersForDeploy_EmptyTriggers(t *testing.T) {
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("always")
-	assert.Nil(t, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("always")
+	assert.Nil(t, sets)
 }
 
-func TestGetTriggersForDeploy_MultipleTriggerPatterns(t *testing.T) {
-	// Multiple trigger patterns should all be returned
+func TestGetTriggerSetsForDeploy_MultipleTriggerPatterns(t *testing.T) {
+	// Own-trigger deploys return their patterns as a single set
 	cfg := &TrunkConfig{
 		Deploys: []DeployConfig{
 			{Name: "infra", Triggers: []string{"terraform/**", "*.tf", "modules/**/*.tf", "environments/**"}},
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("infra")
-	assert.Equal(t, []string{"terraform/**", "*.tf", "modules/**/*.tf", "environments/**"}, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("infra")
+	assert.Equal(t, [][]string{{"terraform/**", "*.tf", "modules/**/*.tf", "environments/**"}}, sets)
 }
 
-func TestGetTriggersForDeploy_BuildWithNoTriggers(t *testing.T) {
-	// Build-linked deploy where build has no triggers
+func TestGetTriggerSetsForDeploy_BuildWithNoTriggers(t *testing.T) {
+	// Build-linked deploy where a referenced build has no triggers: the
+	// build always runs, so its empty set makes the deploy always run
 	cfg := &TrunkConfig{
 		Builds: []BuildConfig{
 			{Name: "force-build", Triggers: []string{}}, // Build with no triggers (always runs)
+			{Name: "app", Triggers: []string{"src/**"}},
 		},
 		Deploys: []DeployConfig{
-			{Name: "force-deploy", DependsOn: []string{"force-build"}},
+			{Name: "force-deploy", DependsOn: []string{"app", "force-build"}},
 		},
 	}
 
-	triggers := cfg.GetTriggersForDeploy("force-deploy")
-	// Should return empty slice (not nil) since build exists but has no triggers
-	assert.Equal(t, []string{}, triggers)
+	sets := cfg.GetTriggerSetsForDeploy("force-deploy")
+	assert.Equal(t, [][]string{{"src/**"}, {}}, sets)
+	assert.True(t, MatchAnyTriggerSet(sets, []string{"anything.txt"}))
 }
 
 // =============================================================================

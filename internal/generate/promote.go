@@ -217,91 +217,6 @@ func (g *PromoteGenerator) deployHasInput(deployName, inputName string) bool {
 	return false
 }
 
-// resolveDeployInputs builds the inputs map for a deploy, merging defaults with env-specific overrides.
-// Special variables are substituted: ${{ matrix.environment }}, ${{ matrix.sha }}, ${{ matrix.version }}
-func (g *PromoteGenerator) resolveDeployInputs(deployName, env, sha, version string) map[string]interface{} {
-	// Find deploy config
-	var deploy *config.DeployConfig
-	for i := range g.config.Deploys {
-		if g.config.Deploys[i].Name == deployName {
-			deploy = &g.config.Deploys[i]
-			break
-		}
-	}
-	if deploy == nil {
-		return nil
-	}
-
-	// Start with defaults
-	result := make(map[string]interface{})
-	for k, v := range deploy.Inputs {
-		result[k] = v
-	}
-
-	// Merge env-specific overrides
-	if envInputs, ok := deploy.EnvInputs[env]; ok {
-		for k, v := range envInputs {
-			result[k] = v
-		}
-	}
-
-	// Substitute special variables
-	substitutions := map[string]string{
-		"${{ matrix.environment }}": env,
-		"${{ matrix.sha }}":         sha,
-		"${{ matrix.version }}":     version,
-	}
-
-	for k, v := range result {
-		strVal, ok := v.(string)
-		if !ok {
-			continue
-		}
-		// Pure passthrough expressions (e.g. ${{ vars.X }}, ${{ secrets.Y }})
-		// are emitted directly into the deploy job's with: block, not routed
-		// through the matrix JSON. Drop them here so they don't become dead
-		// literals trapped inside the matrix payload.
-		if classifyInputValue(strVal) == inputPassthrough {
-			delete(result, k)
-			continue
-		}
-		// Cascade-owned state.* references resolve at generation time against
-		// the manifest state for this environment.
-		if classifyInputValue(strVal) == inputStateRef {
-			resolved, rerr := resolveInputValue(strVal, g.state)
-			if rerr != nil {
-				// Leave the value in place; generation surfaces the error via
-				// validation. Keep the unresolved expression visible rather
-				// than silently dropping it.
-				result[k] = strVal
-				continue
-			}
-			result[k] = resolved
-			continue
-		}
-		// Literal or matrix.* placeholder: apply matrix substitutions.
-		for placeholder, replacement := range substitutions {
-			strVal = strings.ReplaceAll(strVal, placeholder, replacement)
-		}
-		result[k] = strVal
-	}
-
-	return result
-}
-
-// buildDeployMatrix creates a matrix of deploy inputs by resolving each promotion through resolveDeployInputs.
-// Each promotion gets its environment, sha, and version applied to the deploy's inputs template.
-func (g *PromoteGenerator) buildDeployMatrix(deployName string, promotions []map[string]string) []map[string]interface{} {
-	var matrix []map[string]interface{}
-	for _, promo := range promotions {
-		inputs := g.resolveDeployInputs(deployName, promo["environment"], promo["sha"], promo["version"])
-		if inputs != nil {
-			matrix = append(matrix, inputs)
-		}
-	}
-	return matrix
-}
-
 // writeMatrixBuildingStep generates the bash step that builds deploy matrices from promotion result.
 // This step parses the promotion_result JSON and generates a matrix for each deploy that has inputs configured.
 func (g *PromoteGenerator) writeMatrixBuildingStep(sb *strings.Builder) {
@@ -433,9 +348,9 @@ func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[stri
 	for env := range envNames {
 		merged := make(map[string]interface{})
 		// Default-level state refs resolve per env. An unresolved ref keeps
-		// the raw expression (matching resolveDeployInputs): the deploy must
-		// not silently run without its configured input, and the surviving
-		// ${{ state.* }} text fails loudly at workflow parse.
+		// the raw expression: the deploy must not silently run without its
+		// configured input, and the surviving ${{ state.* }} text fails
+		// loudly at workflow parse.
 		for k, v := range deploy.Inputs {
 			if s, ok := v.(string); ok && classifyInputValue(s) == inputStateRef {
 				if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {

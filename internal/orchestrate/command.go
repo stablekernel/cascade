@@ -48,6 +48,9 @@ Examples:
   # Preview what would happen (dry-run mode)
   cascade orchestrate setup --environment dev --dry-run`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// This hook shadows the root's PersistentPreRun, so the global
+			// flags (--dry-run, --json, --trace) must be applied here.
+			globals.ApplyFlags(cmd)
 			// Auto-detect config file if not specified
 			if configPath == "" {
 				configPath = config.FindConfigFile("")

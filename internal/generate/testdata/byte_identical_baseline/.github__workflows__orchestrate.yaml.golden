@@ -7,10 +7,10 @@ on:
   push:
     branches: [main]
     paths:
+      - 'src/**'
       - 'bundle/**'
       - 'docs/**'
       - 'sidecar/**'
-      - 'src/**'
   workflow_dispatch:
     inputs:
       environment:

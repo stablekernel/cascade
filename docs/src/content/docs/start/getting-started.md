@@ -202,6 +202,8 @@ jobs:
         run: echo "Deploying ${{ inputs.sha }} to ${{ inputs.environment }}"
 ```
 
+The hand-written manifest above declares two more callbacks: create `.github/workflows/validate.yaml` and `.github/workflows/deploy-infra.yaml` the same way. Copy the `on: workflow_call` block from `deploy-services.yaml` (both take the same `environment`, `sha`, and `dry_run` inputs) and give each a job that runs your checks or your infrastructure deploy. Every workflow the manifest names must exist on disk before the next step, or the generator stops with a "no such file" error.
+
 If you configured `publish:` in the manifest, add a matching callback that retags an RC's artifact once it is published as a final release; see the [callback contract](/cascade/reference/callbacks/) for its inputs.
 
 ## Generate

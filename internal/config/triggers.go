@@ -1,14 +1,15 @@
 package config
 
 import (
-	"path"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // IsNegationPattern reports whether a trigger pattern is an exclusion pattern
-// (a leading "!"). Exclusion patterns mirror GitHub Actions' paths-ignore
-// semantics: a file that matches an exclusion does not count as a trigger even
-// if it also matches a positive pattern.
+// (a leading "!"). Exclusion patterns carry the "!" semantics of the GitHub
+// Actions paths filter: they subtract matching files from whatever the
+// preceding patterns included.
 func IsNegationPattern(pattern string) bool {
 	return strings.HasPrefix(pattern, "!")
 }
@@ -22,45 +23,51 @@ func stripNegation(pattern string) string {
 // MatchTrigger reports whether a single changed file path matches the supplied
 // trigger pattern list, honouring negation ("!"-prefixed) patterns.
 //
-// Semantics (frozen v1 contract, GitHub Actions paths/paths-ignore combined
-// behaviour): a file matches when it matches at least one positive pattern AND
-// matches no negation pattern. This is intentionally order-independent: a path
-// is a trigger if and only if it satisfies some positive include and is not
-// excluded by any "!" pattern. When the pattern list contains only negation
-// patterns (no positives), any file not excluded counts as a match, matching
-// GitHub Actions, which treats a negation-only list like paths-ignore.
+// Semantics (frozen v1 contract, the GitHub Actions on.push.paths behaviour
+// cascade emits): evaluation is ORDER-DEPENDENT, last match wins, and the file
+// starts excluded. A matching negative pattern after a positive match excludes
+// the file; a matching positive pattern after a negative match includes it
+// again. This mirrors the workflow-syntax reference exactly, so CLI-side
+// change detection predicts what the emitted filter does.
+//
+// A list with no positive pattern cannot be expressed as a paths filter
+// (GitHub requires at least one non-"!" entry), so cascade emits it as
+// paths-ignore. The evaluator mirrors that translation: any file not matching
+// an exclusion is a match.
 func MatchTrigger(patterns []string, file string) bool {
 	hasPositive := false
-	matchedPositive := false
+	included := false
+	excluded := false
 
 	for _, pattern := range patterns {
 		if IsNegationPattern(pattern) {
 			if matchGlobPattern(stripNegation(pattern), file) {
-				// Excluded by a "!" pattern: never a trigger.
-				return false
+				included = false
+				excluded = true
 			}
 			continue
 		}
 
 		hasPositive = true
 		if matchGlobPattern(pattern, file) {
-			matchedPositive = true
+			included = true
 		}
 	}
 
 	if !hasPositive {
-		// Negation-only list: any file not excluded above is a match.
-		return true
+		// Negation-only list, emitted as paths-ignore: any file not excluded
+		// is a match.
+		return !excluded
 	}
 
-	return matchedPositive
+	return included
 }
 
 // MatchAnyTrigger reports whether any of the changed files is a trigger under
 // the supplied pattern list (negation-aware via MatchTrigger). An empty pattern
 // list means "always triggered". This is the shared evaluator that the CLI-side
-// change detection uses so it agrees with the emitted GitHub Actions paths
-// filter, which is generated verbatim from the same pattern list.
+// change detection uses so it agrees with the GitHub Actions paths filter the
+// generator emits from the same pattern list.
 func MatchAnyTrigger(patterns []string, changedFiles []string) bool {
 	if len(patterns) == 0 {
 		return true
@@ -75,69 +82,138 @@ func MatchAnyTrigger(patterns []string, changedFiles []string) bool {
 	return false
 }
 
+// MatchAnyTriggerSet reports whether any of the trigger pattern sets matches
+// the changed files. Each set is evaluated independently with MatchAnyTrigger
+// and the results are OR-ed, so a "!" exclusion is scoped to its own set and
+// cannot veto a sibling set's positive match. An empty sets list means
+// "always triggered", as does any empty set within it (MatchAnyTrigger's
+// contract for an unconstrained source).
+func MatchAnyTriggerSet(sets [][]string, changedFiles []string) bool {
+	if len(sets) == 0 {
+		return true
+	}
+
+	for _, set := range sets {
+		if MatchAnyTrigger(set, changedFiles) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // MatchGlobPattern reports whether a single glob pattern matches a path. A
 // leading "!" is stripped before matching, so the helper reports whether the
 // bare glob matches; negation as an exclusion is applied at the pattern-list
-// level by MatchTrigger. Supports "*" (single segment), "**" (any number of
-// segments) and "?" (single character), matching the grammar used by the
-// emitted GitHub Actions paths filter.
+// level by MatchTrigger. The glob grammar is the GitHub Actions filter-pattern
+// grammar (see matchGlobPattern).
 func MatchGlobPattern(pattern, filePath string) bool {
 	return matchGlobPattern(stripNegation(pattern), filePath)
 }
 
+// patternCache memoizes compiled patterns; trigger lists are matched against
+// every changed file, so each pattern compiles once per process.
+var patternCache sync.Map // pattern string -> *regexp.Regexp
+
 // matchGlobPattern matches a file path against a single (already
-// negation-stripped) glob pattern.
+// negation-stripped) glob pattern using the GitHub Actions filter-pattern
+// grammar, the grammar of the emitted paths filter:
+//
+//   - "*"  matches zero or more characters, but never "/".
+//   - "**" matches zero or more of any character, including "/". When it forms
+//     a whole path segment followed by "/" (leading "**/" or a "/**/" run) the
+//     segment collapses entirely, so "**/README.md" matches a root README.md
+//     and "docs/**/*.md" matches "docs/README.md".
+//   - "?"  matches zero or one of the preceding character.
+//   - "+"  matches one or more of the preceding character.
+//   - "[]" matches one character listed in the brackets or in ranges.
+//
+// Patterns must match the whole path, starting from the repository root.
 func matchGlobPattern(pattern, filePath string) bool {
-	if strings.Contains(pattern, "**") {
-		return matchDoublestarPattern(pattern, filePath)
+	re, ok := patternCache.Load(pattern)
+	if !ok {
+		compiled, err := regexp.Compile(translateFilterPattern(pattern))
+		if err != nil {
+			// Unreachable by construction (every token emitted below is valid
+			// regexp); fall back to an exact literal comparison.
+			return pattern == filePath
+		}
+		re, _ = patternCache.LoadOrStore(pattern, compiled)
 	}
-
-	matched, _ := path.Match(pattern, filePath)
-	return matched
+	return re.(*regexp.Regexp).MatchString(filePath)
 }
 
-// matchDoublestarPattern handles "**" glob patterns.
-func matchDoublestarPattern(pattern, path string) bool {
-	patternParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(path, "/")
-	return matchGlobParts(patternParts, pathParts)
+// translateFilterPattern converts a GitHub Actions filter pattern into an
+// anchored Go regular expression, token by token so that the "?" and "+"
+// quantifiers can attach to the token that precedes them. Constructs GitHub
+// leaves undefined (a leading "?" or "+", an unclosed or non-alphanumeric
+// bracket expression) are treated as literal characters.
+func translateFilterPattern(pattern string) string {
+	var tokens []string
+
+	quantify := func(q byte) {
+		if len(tokens) == 0 {
+			// No preceding character: undefined in the GitHub grammar,
+			// treated as a literal.
+			tokens = append(tokens, regexp.QuoteMeta(string(q)))
+			return
+		}
+		last := tokens[len(tokens)-1]
+		tokens[len(tokens)-1] = "(?:" + last + ")" + string(q)
+	}
+
+	for i := 0; i < len(pattern); {
+		switch {
+		case strings.HasPrefix(pattern[i:], "**"):
+			// A "**" that is a whole segment followed by "/" collapses with
+			// its slash, so the pattern also matches paths where the segment
+			// is absent ("**/README.md" matches a root-level README.md).
+			atSegmentStart := i == 0 || pattern[i-1] == '/'
+			if atSegmentStart && i+2 < len(pattern) && pattern[i+2] == '/' {
+				tokens = append(tokens, "(?:.*/)?")
+				i += 3
+				continue
+			}
+			tokens = append(tokens, ".*")
+			i += 2
+		case pattern[i] == '*':
+			tokens = append(tokens, "[^/]*")
+			i++
+		case pattern[i] == '?':
+			quantify('?')
+			i++
+		case pattern[i] == '+':
+			quantify('+')
+			i++
+		case pattern[i] == '[':
+			end := strings.IndexByte(pattern[i:], ']')
+			if end > 1 && isBracketContent(pattern[i+1:i+end]) {
+				tokens = append(tokens, pattern[i:i+end+1])
+				i += end + 1
+				continue
+			}
+			// Unclosed, empty, or out-of-grammar bracket: literal "[".
+			tokens = append(tokens, regexp.QuoteMeta("["))
+			i++
+		default:
+			tokens = append(tokens, regexp.QuoteMeta(string(pattern[i])))
+			i++
+		}
+	}
+
+	return `\A` + strings.Join(tokens, "") + `\z`
 }
 
-func matchGlobParts(pattern, pathParts []string) bool {
-	pi, ppi := 0, 0
-
-	for pi < len(pattern) && ppi < len(pathParts) {
-		if pattern[pi] == "**" {
-			if pi == len(pattern)-1 {
-				// "**" at the end matches everything remaining.
-				return true
-			}
-
-			// Try matching the remaining pattern at each subsequent position.
-			for i := ppi; i <= len(pathParts); i++ {
-				if matchGlobParts(pattern[pi+1:], pathParts[i:]) {
-					return true
-				}
-			}
+// isBracketContent reports whether a bracket expression's body stays within
+// the documented GitHub grammar: alphanumeric characters and "-" ranges over
+// a-z, A-Z, and 0-9. Anything else falls back to a literal "[".
+func isBracketContent(body string) bool {
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		isAlnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !isAlnum && c != '-' {
 			return false
 		}
-
-		matched, _ := path.Match(pattern[pi], pathParts[ppi])
-		if !matched {
-			return false
-		}
-
-		pi++
-		ppi++
 	}
-
-	// Any remaining pattern parts must all be "**" to match.
-	for pi < len(pattern) {
-		if pattern[pi] != "**" {
-			return false
-		}
-		pi++
-	}
-
-	return ppi == len(pathParts)
+	return true
 }

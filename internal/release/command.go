@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/globals"
 )
 
 // NewCommand creates the manage-release command
@@ -98,6 +99,14 @@ Outputs (to stdout):
 				return err
 			}
 
+			// Every manage-release action except a pure lookup mutates GitHub
+			// state (releases and tags), so --dry-run stops here with a preview
+			// of the resolved plan and never constructs an API request.
+			if globals.DryRun() {
+				printDryRunPlan(act, repo, environment, sha, tag, newTag, deleteTag, createTag, tagOnly)
+				return nil
+			}
+
 			manager := NewManager(repo, token, opts...)
 			result, err := manager.Manage(Options{
 				Action:      act,
@@ -147,6 +156,31 @@ Outputs (to stdout):
 	_ = cmd.MarkFlagRequired("tag")
 
 	return cmd
+}
+
+// printDryRunPlan prints what a manage-release invocation would do without
+// touching GitHub. It mirrors the resolved action and every tag operation the
+// real run would perform, so an operator can preview the full mutation plan.
+func printDryRunPlan(act Action, repo, environment, sha, tag, newTag, deleteTag string, createTag, tagOnly bool) {
+	fmt.Printf("Dry run - would perform release action %q on %s (environment %s, tag %s)\n", act, repo, environment, tag)
+	if createTag {
+		fmt.Printf("Dry run - would create git tag %s at %s\n", tag, sha)
+	}
+	if tagOnly {
+		fmt.Println("Dry run - tag-only mode: no release object would be created or mutated")
+	}
+	if newTag != "" {
+		fmt.Printf("Dry run - would create new tag %s and update the release to it\n", newTag)
+	}
+	if deleteTag != "" {
+		fmt.Printf("Dry run - would delete tag %s\n", deleteTag)
+	}
+	if act == ActionPublish {
+		fmt.Printf("Dry run - would publish the release for %s and reap its RC tags\n", tag)
+	}
+	if act == ActionDelete {
+		fmt.Printf("Dry run - would delete the draft release for %s\n", tag)
+	}
 }
 
 // componentReapOptions resolves the Manager options that scope RC-tag reaping to

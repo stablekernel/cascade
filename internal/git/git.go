@@ -9,13 +9,37 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/log"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 )
+
+// BoundaryEnv returns the exec environment for a git command scoped to dir:
+// the process environment plus a GIT_CEILING_DIRECTORIES entry naming dir's
+// parent, so repository discovery may resolve dir itself as a repository but
+// can never walk up into an enclosing one. A caller that passes a dir declares
+// "operate on the repository rooted here"; without the ceiling, a dir that is
+// not itself a repository silently resolves to whatever ancestor repository
+// contains it, and every read (tag lookups feeding version derivation) or
+// write (state commits, pushes, hard resets) lands on the wrong repository.
+// An empty dir keeps the historical contract (the process working directory
+// is the repository) and stays unpinned.
+func BoundaryEnv(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	return append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(abs))
+}
 
 // IsValidVersionTag reports whether tag is a well-formed cascade version tag
 // under the default grammar. Tags that do not match (for example a
@@ -215,6 +239,7 @@ func GetLatestTagSpec(dir string, spec taggrammar.Spec) (string, string, error) 
 	// --sort=-v:refname sorts by version in descending order.
 	cmd := exec.Command("git", "tag", "-l", spec.Prefix+"*", "--sort=-v:refname")
 	cmd.Dir = dir
+	cmd.Env = BoundaryEnv(dir)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("git tag: %w", err)
@@ -233,6 +258,7 @@ func GetLatestTagSpec(dir string, spec taggrammar.Spec) (string, string, error) 
 		// First valid tag is the latest (git sorted descending by version).
 		cmd = exec.Command("git", "rev-list", "-n", "1", tag)
 		cmd.Dir = dir
+		cmd.Env = BoundaryEnv(dir)
 		output, err = cmd.Output()
 		if err != nil {
 			return tag, "", fmt.Errorf("git rev-list for tag: %w", err)
@@ -357,11 +383,13 @@ func RefetchAndReset(dir string) error { return refetchAndReset(dir) }
 func refetchAndReset(dir string) error {
 	fetch := exec.Command("git", "fetch")
 	fetch.Dir = dir
+	fetch.Env = BoundaryEnv(dir)
 	if out, err := fetch.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch failed: %s: %w", string(out), err)
 	}
 	reset := exec.Command("git", "reset", "--hard", "@{u}")
 	reset.Dir = dir
+	reset.Env = BoundaryEnv(dir)
 	if out, err := reset.CombinedOutput(); err != nil {
 		return fmt.Errorf("git reset --hard @{u} failed: %s: %w", string(out), err)
 	}
@@ -395,12 +423,14 @@ func CommitAndPushWithRetry(filePath, message string, opts ...Option) error {
 
 	cmd := exec.Command("git", "add", filePath)
 	cmd.Dir = o.dir
+	cmd.Env = BoundaryEnv(o.dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add failed: %s: %w", string(out), err)
 	}
 
 	cmd = exec.Command("git", "commit", "-m", message)
 	cmd.Dir = o.dir
+	cmd.Env = BoundaryEnv(o.dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if strings.Contains(string(out), "nothing to commit") {
 			return nil
@@ -436,12 +466,19 @@ func PushWithRebaseRetry(opts ...Option) error {
 // converged (and, on failure, that it exhausted the ceiling rather than erroring
 // for another reason).
 func pushWithRebaseRetry(o pushOptions) error {
+	// Dry-run backstop: commands gate --dry-run before reaching this shared
+	// push loop, so hitting it under --dry-run means a caller missed its gate.
+	if err := globals.GuardMutation("push commits to the remote"); err != nil {
+		return err
+	}
+
 	var lastOut []byte
 	for i := 0; i < pushRetryAttempts; i++ {
 		log.Info("cascade-state-write: attempt=%d/%d", i+1, pushRetryAttempts)
 
 		cmd := exec.Command("git", "push")
 		cmd.Dir = o.dir
+		cmd.Env = BoundaryEnv(o.dir)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			log.Info("cascade-state-write: ok attempt=%d", i+1)
@@ -476,6 +513,7 @@ func pushWithRebaseRetry(o pushOptions) error {
 		} else {
 			cmd = exec.Command("git", "pull", "--rebase")
 			cmd.Dir = o.dir
+			cmd.Env = BoundaryEnv(o.dir)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				// A failed rebase (typically a conflict) leaves the repository
 				// mid-rebase. Abort it so we neither leave a conflicted state
@@ -483,6 +521,7 @@ func pushWithRebaseRetry(o pushOptions) error {
 				// real error instead of the generic "push failed" summary.
 				abort := exec.Command("git", "rebase", "--abort")
 				abort.Dir = o.dir
+				abort.Env = BoundaryEnv(o.dir)
 				_, _ = abort.CombinedOutput() // best effort; nothing to abort is fine
 				return fmt.Errorf("git pull --rebase failed: %s: %w", string(out), err)
 			}
@@ -611,6 +650,11 @@ func CurrentBranch() (string, error) {
 
 // CommitAndPush stages a file, commits with the given message, and pushes to origin.
 func CommitAndPush(filePath, message string) error {
+	// Dry-run backstop: refuse the commit-and-push under --dry-run.
+	if err := globals.GuardMutation(fmt.Sprintf("commit and push %s", filePath)); err != nil {
+		return err
+	}
+
 	// Stage the file
 	cmd := exec.Command("git", "add", filePath)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -725,6 +769,11 @@ func ListRemoteBranches(remote string) ([]string, error) {
 // rejoin cleanup after a partial failure does not error on an already-deleted
 // branch.
 func DeleteRemoteBranch(remote, name string) error {
+	// Dry-run backstop: refuse the remote branch deletion under --dry-run.
+	if err := globals.GuardMutation(fmt.Sprintf("delete remote branch %s on %s", name, remote)); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("git", "push", remote, "--delete", name)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -740,6 +789,11 @@ func DeleteRemoteBranch(remote, name string) error {
 // "git push <remote> --delete refs/tags/<name>". Deleting a tag that does not
 // exist on the remote is treated as success so the operation is idempotent.
 func DeleteRemoteTag(remote, name string) error {
+	// Dry-run backstop: refuse the remote tag deletion under --dry-run.
+	if err := globals.GuardMutation(fmt.Sprintf("delete remote tag %s on %s", name, remote)); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("git", "push", remote, "--delete", "refs/tags/"+name)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -777,6 +831,7 @@ func GetLatestReleaseTag(dir, prefix string) (string, string, error) {
 func GetLatestReleaseTagSpec(dir string, spec taggrammar.Spec) (string, string, error) {
 	cmd := exec.Command("git", "tag", "-l", spec.Prefix+"*", "--sort=-v:refname")
 	cmd.Dir = dir
+	cmd.Env = BoundaryEnv(dir)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("git tag: %w", err)
@@ -801,6 +856,7 @@ func GetLatestReleaseTagSpec(dir string, spec taggrammar.Spec) (string, string, 
 			// Get the SHA for this tag
 			cmd = exec.Command("git", "rev-list", "-n", "1", tag)
 			cmd.Dir = dir
+			cmd.Env = BoundaryEnv(dir)
 			output, err = cmd.Output()
 			if err != nil {
 				return tag, "", fmt.Errorf("git rev-list for tag: %w", err)

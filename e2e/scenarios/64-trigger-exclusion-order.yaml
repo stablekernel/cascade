@@ -1,0 +1,100 @@
+name: "Trigger exclusion order"
+description: |
+  Verifies the order-dependent "!" trigger semantics end to end. The GitHub
+  Actions paths filter evaluates patterns in order (last match wins): a
+  matching negative pattern after a positive match excludes the path, and a
+  matching positive pattern after a negative match includes it again. The
+  generated orchestrate workflow must emit the trigger list in manifest order
+  (re-sorting would move every "!" entry to the front, where it negates
+  nothing), and CLI-side change detection must reach the same include/exclude
+  decision for every changed file.
+
+  The trigger list under test covers all three pattern roles:
+  - src/** includes the source tree,
+  - !src/vendor/** excludes the vendored subtree,
+  - src/vendor/keep/** re-includes one directory inside the exclusion.
+
+  Step flow: a src commit builds; a commit touching only the excluded vendored
+  subtree is skipped; a commit inside the re-included directory builds again.
+  On real GitHub the second push would not even fire the workflow (the filter
+  excludes it); the harness dispatches orchestrate regardless, which asserts
+  the CLI-side decision that backs the run: the build is skipped either way.
+
+config:
+  trunk_branch: main
+  environments: []
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers:
+        - "src/**"
+        - "!src/vendor/**"
+        - "src/vendor/keep/**"
+  deploys: []
+
+steps:
+  # Step 1: A plain source commit. Asserts the emitted paths filter preserves
+  # manifest order before exercising the runtime behavior.
+  - name: "Source commit; assert ordered paths filter is emitted"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {
+            println("Hello v0.1.0")
+          }
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "    paths:\n      - 'src/**'\n      - '!src/vendor/**'\n      - 'src/vendor/keep/**'\n"
+
+  - name: "Orchestrate after source commit builds"
+    action: orchestrate
+    expect:
+      jobs:
+        build-app: success
+      tags:
+        exist: ["v0.1.0-rc.0"]
+
+  # Step 2: Only the excluded vendored subtree changes. The trailing
+  # "!src/vendor/**" is the last matching pattern for this file, so neither
+  # the workflow filter nor CLI change detection may treat it as a trigger.
+  - name: "Vendored-only commit"
+    action: commit
+    commit:
+      message: "chore: refresh vendored dependency"
+      files:
+        src/vendor/upstream/lib.go: |
+          package upstream
+          const Version = "2.0.0"
+
+  - name: "Orchestrate after vendored-only commit skips"
+    action: orchestrate
+    expect:
+      jobs:
+        build-app: skipped
+      tags:
+        exist: ["v0.1.0-rc.0"]
+
+  # Step 3: A change inside the re-included directory. "src/vendor/keep/**"
+  # is the last matching pattern, so the file is included again: the build
+  # must run even though the file also matches the earlier exclusion. An
+  # order-independent evaluator (any-negation-wins) would silently skip this
+  # build.
+  - name: "Re-included subtree commit"
+    action: commit
+    commit:
+      message: "fix: patch kept vendored library"
+      files:
+        src/vendor/keep/patch.go: |
+          package keep
+          const Patched = true
+
+  - name: "Orchestrate after re-included commit builds"
+    action: orchestrate
+    expect:
+      jobs:
+        build-app: success

@@ -66,6 +66,11 @@ func EnableTrace() {
 	defaultLogger.level = LevelTrace
 }
 
+// TraceEnabled reports whether TRACE level logging is active.
+func TraceEnabled() bool {
+	return defaultLogger.level >= LevelTrace
+}
+
 // ParseLevel parses a string into a Level.
 func ParseLevel(s string) Level {
 	switch strings.ToLower(s) {

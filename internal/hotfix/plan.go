@@ -14,6 +14,7 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stablekernel/cascade/internal/version"
 )
@@ -133,6 +134,13 @@ func (execGitRunner) CreateBranch(name, sha string) error {
 }
 
 func (execGitRunner) ResetBranch(remote, name, sha string) error {
+	// Dry-run backstop: the planner's own dry-run handling reports the reset
+	// without calling this, so hitting it under --dry-run means a caller missed
+	// its gate.
+	if err := globals.GuardMutation(fmt.Sprintf("force-push %s to %s on %s", name, sha, remote)); err != nil {
+		return err
+	}
+
 	// Force-update the remote ref first: the remote env branch is the one the
 	// apply job opens its resolution PR against, so it must carry the corrected
 	// base even if aligning the local branch later fails.

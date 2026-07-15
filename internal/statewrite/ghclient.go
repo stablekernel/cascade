@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/stablekernel/cascade/internal/globals"
 )
 
 // ghContents is the production ContentsClient. It shells out to the gh CLI to
@@ -135,6 +137,13 @@ func decodeBase64Body(s string) ([]byte, error) {
 // to the bot identity rather than the token owner, and classifies a 409
 // optimistic-lock failure as a ConflictError so the retry loop recognizes it.
 func (ghContents) PutContent(repo, path, ref, sha, message string, content []byte, author Identity) error {
+	// Dry-run backstop: every contents-API state write funnels through here, so
+	// refusing under --dry-run catches any caller that missed its explicit gate
+	// before gh is even invoked.
+	if err := globals.GuardMutation(fmt.Sprintf("write %s/%s@%s via the contents API", repo, path, ref)); err != nil {
+		return err
+	}
+
 	if sha == "" {
 		return fmt.Errorf("refusing to write %s/%s@%s without an optimistic-lock sha: a state write only targets an already committed manifest", repo, path, ref)
 	}

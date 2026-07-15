@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/log"
 )
 
@@ -482,6 +483,14 @@ func (r *Resetter) gitOutput(args ...string) (string, error) {
 }
 
 func (r *Resetter) gitRun(args ...string) error {
+	// Dry-run backstop: reset's explicit DryRun checks report instead of
+	// calling this with a push, so a push here under --dry-run is a missed gate.
+	if len(args) > 0 && args[0] == "push" {
+		if err := globals.GuardMutation(fmt.Sprintf("git %s", strings.Join(args, " "))); err != nil {
+			return err
+		}
+	}
+
 	log.Trace("git %s", strings.Join(args, " "))
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.repoPath
@@ -502,6 +511,12 @@ func (r *Resetter) ghOutput(args ...string) (string, error) {
 }
 
 func (r *Resetter) ghRun(args ...string) error {
+	// Dry-run backstop: ghRun is only used for mutations (release deletion);
+	// reads go through ghOutput. Reaching it under --dry-run is a missed gate.
+	if err := globals.GuardMutation(fmt.Sprintf("gh %s", strings.Join(args, " "))); err != nil {
+		return err
+	}
+
 	allArgs := append([]string{"-R", r.repoOwner + "/" + r.repoName}, args...)
 	log.Trace("gh %s", strings.Join(allArgs, " "))
 	cmd := exec.Command("gh", allArgs...)

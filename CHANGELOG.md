@@ -38,6 +38,10 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **git:** Apply the same split to push: retry transient transport and
   rate-limit failures, fail fast on authorization, not-found, and 4xx RPC
   failures
+- **git:** Pin repository discovery to the caller-supplied directory with a
+  `GIT_CEILING_DIRECTORIES` boundary, so state commits, tag reads, and the
+  promote preflight change-detection diff can never resolve into an enclosing
+  repository
 - **generate:** Emit a state-write shell that refuses unguarded PUTs, fails
   fast on permanent API errors, and retries rate-limited writes
 - **generate:** Rebase an absolute manifest path to repo-relative in all
@@ -45,6 +49,24 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **generate:** Correct emitted output keys, branch-case resolution, manifest
   routing, and unresolved state-ref handling
 - **generate:** Emit `always()` alone when a forced job has no other conditions
+- **generate:** Emit a least-privilege `permissions` block on the
+  single-environment release workflow: read-only at the top level with
+  `contents: write` scoped to the release and finalize jobs, instead of
+  inheriting the repository default
+- **triggers:** Evaluate `!` exclusion patterns through one canonical matcher
+  in orchestrate change detection and promote preflight; exclusions were
+  previously matched as inclusions
+- **triggers:** Match the order-dependent semantics of the emitted GitHub
+  Actions `paths` filter in CLI change detection, where the last matching
+  pattern wins and a later pattern can re-include an excluded path; matching
+  was previously order-independent and could mispredict which files trigger a
+  build or deploy
+- **promote:** Resolve build-linked deploys through their build's triggers in
+  promotion change detection instead of reading the deploy's own empty trigger
+  list
+- **promote:** Gate a deploy with multiple `depends_on` builds on the union of
+  all its dependencies' triggers instead of only the first, so a change to any
+  linked build promotes the deploy
 - **config:** Reject build dependencies on deploy jobs in both resolution legs
 - **github:** Paginate workflow-job queries and match deploy job names exactly
 - **fleetreconcile:** Fail closed when a run-enumeration page slices short at
@@ -53,6 +75,15 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **visualize:** Escape graph labels, keep repo slugs injective, and encode
   theme values
 - **ci:** Wire the build-cli workflow_call result to a real job output
+- **cli:** Honor `--dry-run`, `--json`, and `--trace` on the orchestrate,
+  external, promote, simulate, and reset command trees; the flags were parsed
+  but silently ignored, so commands such as `orchestrate finalize --dry-run`
+  and `external update --dry-run` could write real state
+- **cli:** Honor `--dry-run` on `manage-release` delete and publish,
+  `branch-protection --apply`, and `promote finalize`, which previously
+  performed real deletions, publishes, protection PUTs, and state writes under
+  dry-run; a fail-loud guard at the mutation layer now refuses every external
+  mutation under `--dry-run`, so no command can mutate silently
 - **cli:** Align the root help text with the compiler positioning
 - Surface git and API errors on state and version paths instead of swallowing
   them

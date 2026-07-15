@@ -8,7 +8,7 @@ package config
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -1431,58 +1431,162 @@ func indexByte(s string, c byte) int {
 	return -1
 }
 
-// GetAllTriggers returns trigger patterns for the orchestrate workflow paths filter.
+// GetAllTriggers returns the union of the configured trigger patterns.
 // Priority order:
 //  1. Global triggers (config.triggers) - if defined, use exclusively
 //  2. Component triggers - collect from validate, builds, and deploys
 //
-// If no triggers are defined anywhere, returns nil (orchestrate runs on all pushes).
+// Pattern order is semantic under the GitHub Actions paths filter
+// (last-match-wins), so the union preserves manifest declaration order and
+// deduplicates on first occurrence; it is never re-sorted. If no triggers are
+// defined anywhere, returns nil (orchestrate runs on all pushes). The emitted
+// workflow filter is derived by OrchestratePathsFilter, which normalizes this
+// union for shapes a flat paths list cannot express.
 func (c *TrunkConfig) GetAllTriggers() []string {
-	// If global triggers are defined, use them exclusively
-	if len(c.Triggers) > 0 {
-		triggers := make([]string, len(c.Triggers))
-		copy(triggers, c.Triggers)
-		sort.Strings(triggers)
-		return triggers
-	}
-
-	// Otherwise, collect from all components
 	seen := make(map[string]bool)
 	var triggers []string
-
-	// Add validate triggers
-	if c.Validate != nil {
-		for _, t := range c.Validate.Triggers {
+	for _, list := range c.triggerSourceLists() {
+		for _, t := range list {
 			if !seen[t] {
 				seen[t] = true
 				triggers = append(triggers, t)
 			}
 		}
 	}
-
-	// Add build triggers
-	for _, b := range c.Builds {
-		for _, t := range b.Triggers {
-			if !seen[t] {
-				seen[t] = true
-				triggers = append(triggers, t)
-			}
-		}
-	}
-
-	// Add deploy triggers
-	for _, d := range c.Deploys {
-		for _, t := range d.Triggers {
-			if !seen[t] {
-				seen[t] = true
-				triggers = append(triggers, t)
-			}
-		}
-	}
-
-	// Sort for deterministic output
-	sort.Strings(triggers)
 	return triggers
+}
+
+// triggerSourceLists returns the per-source trigger lists in manifest order.
+// Global triggers, when defined, are the single source; otherwise each
+// callback (validate, builds, deploys) with a non-empty triggers list
+// contributes its list.
+func (c *TrunkConfig) triggerSourceLists() [][]string {
+	if len(c.Triggers) > 0 {
+		return [][]string{c.Triggers}
+	}
+
+	var lists [][]string
+	if c.Validate != nil && len(c.Validate.Triggers) > 0 {
+		lists = append(lists, c.Validate.Triggers)
+	}
+	for _, b := range c.Builds {
+		if len(b.Triggers) > 0 {
+			lists = append(lists, b.Triggers)
+		}
+	}
+	for _, d := range c.Deploys {
+		if len(d.Triggers) > 0 {
+			lists = append(lists, d.Triggers)
+		}
+	}
+	return lists
+}
+
+// PathsFilter is the normalized push filter for the orchestrate workflow. A
+// nil Patterns means no filter is emitted (the workflow runs on every trunk
+// push). When Ignore is set the patterns are bare (no "!") and are emitted
+// under paths-ignore instead of paths.
+type PathsFilter struct {
+	Patterns []string
+	Ignore   bool
+}
+
+// OrchestratePathsFilter derives the on.push filter the generator emits from
+// the configured trigger lists. GitHub evaluates a paths filter in order
+// (last-match-wins) and requires at least one non-"!" entry, which makes some
+// manifest shapes inexpressible as a flat pattern list. The normalization
+// never under-fires: whenever any callback's own list would trigger on a
+// changed file, the emitted filter fires the workflow (per-callback CLI
+// change detection then applies each list exactly).
+//
+//   - One distinct list (global triggers, a single callback, or identical
+//     callback lists): emitted verbatim, order preserved. Exact.
+//   - One distinct list with no positive pattern: emitted as paths-ignore
+//     with the "!" stripped, the GitHub construct for exclude-only filtering.
+//     Exact.
+//   - Multiple distinct positive-only lists: first-occurrence union. Exact.
+//   - Multiple distinct lists where some carry "!" exclusions: union of the
+//     positive patterns only. A callback-scoped exclusion placed in a shared
+//     list would veto a sibling callback's positive match under
+//     last-match-wins and silently skip that sibling's build; dropping it
+//     over-fires at worst.
+//   - A negation-only list among multiple distinct lists: no filter. Its
+//     complement cannot be unioned into a flat list, so the workflow runs on
+//     every push and defers to CLI-side detection.
+func (c *TrunkConfig) OrchestratePathsFilter() PathsFilter {
+	lists := dedupeTriggerLists(c.triggerSourceLists())
+	if len(lists) == 0 {
+		return PathsFilter{}
+	}
+
+	if len(lists) == 1 {
+		list := lists[0]
+		if !hasPositivePattern(list) {
+			stripped := make([]string, len(list))
+			for i, p := range list {
+				stripped[i] = strings.TrimPrefix(p, "!")
+			}
+			return PathsFilter{Patterns: stripped, Ignore: true}
+		}
+		return PathsFilter{Patterns: append([]string(nil), list...)}
+	}
+
+	hasNegation := false
+	for _, list := range lists {
+		if !hasPositivePattern(list) {
+			return PathsFilter{}
+		}
+		for _, p := range list {
+			if IsNegationPattern(p) {
+				hasNegation = true
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	var union []string
+	for _, list := range lists {
+		for _, p := range list {
+			if hasNegation && IsNegationPattern(p) {
+				continue
+			}
+			if !seen[p] {
+				seen[p] = true
+				union = append(union, p)
+			}
+		}
+	}
+	return PathsFilter{Patterns: union}
+}
+
+// dedupeTriggerLists drops trigger lists that repeat an earlier list verbatim,
+// so callbacks sharing one list normalize as a single source.
+func dedupeTriggerLists(lists [][]string) [][]string {
+	var distinct [][]string
+	for _, list := range lists {
+		duplicate := false
+		for _, d := range distinct {
+			if slices.Equal(d, list) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			distinct = append(distinct, list)
+		}
+	}
+	return distinct
+}
+
+// hasPositivePattern reports whether the list contains at least one non-"!"
+// pattern, the GitHub requirement for a valid paths filter.
+func hasPositivePattern(list []string) bool {
+	for _, p := range list {
+		if !IsNegationPattern(p) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsPrimary returns true if this repo coordinates external repos
@@ -1556,11 +1660,21 @@ func (e *ExternalRepoConfig) GetRef(trunkBranch string) string {
 	return e.Ref
 }
 
-// GetTriggersForDeploy returns the trigger patterns for a deploy.
-// If deploy has depends_on, returns the first referenced build's triggers.
-// If deploy has own triggers, returns those.
-// Otherwise returns nil (deploy always runs).
-func (c *TrunkConfig) GetTriggersForDeploy(deployName string) []string {
+// GetTriggerSetsForDeploy returns the trigger pattern sets that gate a
+// deploy, one set per gating source. The deploy is considered changed when
+// ANY set matches the changed files (see MatchAnyTriggerSet); the sets are
+// kept separate rather than concatenated because trigger evaluation is
+// order-dependent, so a "!" exclusion in one build's list must not veto a
+// sibling build's positive match.
+//
+// If the deploy's depends_on names builds, one set per referenced build's
+// triggers is returned: the deploy runs when any referenced build runs. A
+// referenced build with no triggers always runs, so its empty set makes the
+// deploy always run. depends_on entries that do not name a build (references
+// to other callbacks) contribute no set; if none of the entries names a
+// build, the deploy falls back to its own triggers. A nil result means the
+// deploy is unconstrained and always runs.
+func (c *TrunkConfig) GetTriggerSetsForDeploy(deployName string) [][]string {
 	// Find the deploy
 	var deploy *DeployConfig
 	for i := range c.Deploys {
@@ -1573,18 +1687,24 @@ func (c *TrunkConfig) GetTriggersForDeploy(deployName string) []string {
 		return nil
 	}
 
-	// If depends_on build, use build's triggers
-	if len(deploy.DependsOn) > 0 {
-		for _, b := range c.Builds {
-			if b.Name == deploy.DependsOn[0] {
-				return b.Triggers
+	// If depends_on names builds, the deploy inherits every referenced
+	// build's triggers.
+	var sets [][]string
+	for _, dep := range deploy.DependsOn {
+		for i := range c.Builds {
+			if c.Builds[i].Name == dep {
+				sets = append(sets, c.Builds[i].Triggers)
+				break
 			}
 		}
+	}
+	if len(sets) > 0 {
+		return sets
 	}
 
 	// Otherwise use deploy's own triggers
 	if len(deploy.Triggers) > 0 {
-		return deploy.Triggers
+		return [][]string{deploy.Triggers}
 	}
 
 	return nil
