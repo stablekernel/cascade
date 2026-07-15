@@ -65,6 +65,13 @@ jobs:
             printf "Coverage %s%% meets the 80%% threshold\n", cov
           }'
 
+      # The e2e module is excluded from the root -race run above; its harness
+      # contains real concurrency (scenario slots, runner, multi-repo), so run
+      # its Docker-free tests under the race detector here.
+      - name: Run e2e harness tests (race)
+        working-directory: e2e
+        run: go test -short -race ./harness/...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
