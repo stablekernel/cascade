@@ -1,7 +1,6 @@
 package rollback
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -294,87 +293,15 @@ func readDeployResultsFromEnv(deployNames []string) map[string]string {
 	return results
 }
 
-// commitAndPush persists the manifest at path back to the trunk branch.
-//
-// On real GitHub the write goes through the Contents REST API (via the gh CLI):
-// API-created commits are signed by GitHub and, with a bypass-capable token, can
-// update a protected trunk. In the act/gitea environment there is no GitHub API,
-// so the change is committed and pushed with plain git. The environment is
-// detected exactly as the promote finalize path does, by GITHUB_SERVER_URL.
-func commitAndPush(path, env string, author statewrite.Identity) error {
-	status, err := exec.Command("git", "status", "--porcelain", path).Output()
-	if err != nil {
-		return fmt.Errorf("git status failed: %w", err)
-	}
-	if len(status) == 0 {
-		return nil // No changes
-	}
-
-	message := fmt.Sprintf("chore: update state after rollback of %s [skip ci]", env)
-
-	if isRealGitHub() {
-		return writeStateViaAPI(path, message, author)
-	}
-	return commitAndPushGit(path, message, author)
-}
-
 // isRealGitHub reports whether the workflow runs on github.com rather than an
-// act/gitea environment, mirroring the promote finalize detection.
+// act/gitea environment, mirroring the promote finalize detection. On real
+// GitHub the state write goes through the Contents REST API via the shared
+// statewrite.CommitWithRetry optimistic-lock loop (see Rollbacker.CommitAndPush);
+// in the act/gitea environment there is no GitHub API, so the change is
+// committed and pushed with plain git.
 func isRealGitHub() bool {
 	server := os.Getenv("GITHUB_SERVER_URL")
 	return server == "" || server == "https://github.com"
-}
-
-// writeStateViaAPI writes the manifest to the trunk branch through the GitHub
-// Contents REST API using the gh CLI, producing a signed commit that can update
-// a protected branch when the token is bypass-capable.
-func writeStateViaAPI(path, message string, author statewrite.Identity) error {
-	repo := os.Getenv("GITHUB_REPOSITORY")
-	if repo == "" {
-		return fmt.Errorf("GITHUB_REPOSITORY is not set; cannot write state via API")
-	}
-	branch := trunkBranchFromEnv()
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read manifest failed: %w", err)
-	}
-	contentB64 := base64.StdEncoding.EncodeToString(data)
-
-	apiPath := fmt.Sprintf("repos/%s/contents/%s", repo, path)
-
-	shaOut, _ := exec.Command("gh", "api", fmt.Sprintf("%s?ref=%s", apiPath, branch), "--jq", ".sha").Output()
-	currentSHA := strings.TrimSpace(string(shaOut))
-
-	args := buildStatePutArgs(apiPath, branch, currentSHA, message, contentB64, author)
-
-	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("state write via API failed: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return nil
-}
-
-// buildStatePutArgs assembles the gh CLI arguments for the Contents API PUT that
-// writes the manifest. It stamps both author and committer with the resolved
-// identity so the API attributes the commit to the bot rather than the token
-// owner GitHub would otherwise use when those fields are absent. An empty
-// currentSHA creates the file rather than guarding an update.
-func buildStatePutArgs(apiPath, branch, currentSHA, message, contentB64 string, author statewrite.Identity) []string {
-	id := author.OrDefault()
-	args := []string{
-		"api", apiPath, "-X", "PUT",
-		"-f", "message=" + message,
-		"-f", "content=" + contentB64,
-		"-f", "branch=" + branch,
-		"-f", "author[name]=" + id.Name,
-		"-f", "author[email]=" + id.Email,
-		"-f", "committer[name]=" + id.Name,
-		"-f", "committer[email]=" + id.Email,
-	}
-	if currentSHA != "" {
-		args = append(args, "-f", "sha="+currentSHA)
-	}
-	return args
 }
 
 // commitAndPushGit commits the manifest and pushes with plain git, used in the

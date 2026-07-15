@@ -601,20 +601,59 @@ func (r *Rollbacker) ownedStateWrites() []config.StateWrite {
 	return []config.StateWrite{{Component: r.component, Env: r.appliedEnv, State: st}}
 }
 
-// stateMutation returns the re-appliable CommitWithRetry closure that node-patches
-// only state.components.<component>.<appliedEnv> onto whatever trunk bytes the
-// retry loop fetches. It never deserializes or rebuilds a sibling component, so on
-// a 409 the loser re-reads the winner's committed sibling subtree and re-applies
-// only its own leaf, leaving the sibling verbatim, including keys this binary does
-// not model. It is used only on the component-scoped API write path.
+// stateMutation returns the re-appliable CommitWithRetry closure that merges
+// this rollback's owned state onto whatever trunk bytes the retry loop fetches.
+//
+// Component-scoped form: node-patch only state.components.<component>.<appliedEnv>
+// via WriteScopedState. It never deserializes or rebuilds a sibling component, so
+// on a 409 the loser re-reads the winner's committed sibling subtree and
+// re-applies only its own leaf, leaving the sibling verbatim, including keys this
+// binary does not model.
+//
+// Single-component form: re-parse the fetched bytes into a full manifest, overlay
+// only the applied env (overlayOwnedState), and reconcile the flat state node via
+// WriteManifestState. Sibling envs and latest_release survive because the re-read
+// carries them into the typed map, mirroring the promote finalizer.
 func (r *Rollbacker) stateMutation(key string) statewrite.Mutate {
 	return func(current []byte) ([]byte, error) {
-		data, err := config.WriteScopedState(current, key, r.ownedStateWrites()...)
+		if r.component != "" {
+			data, err := config.WriteScopedState(current, key, r.ownedStateWrites()...)
+			if err != nil {
+				return nil, fmt.Errorf("marshaling merged manifest: %w", err)
+			}
+			return data, nil
+		}
+		into, err := config.ParseManifestBytes(current, key)
+		if err != nil {
+			return nil, fmt.Errorf("parsing current manifest: %w", err)
+		}
+		r.overlayOwnedState(into)
+		data, err := config.WriteManifestState(current, key, into.State, into.LatestRelease)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling merged manifest: %w", err)
 		}
 		return data, nil
 	}
+}
+
+// overlayOwnedState copies the one env state this rollback owns (the applied
+// env) from its already-mutated in-memory manifest onto into, the freshly
+// fetched trunk manifest. Every sibling env and latest_release stay exactly as
+// fetched, so a concurrent writer's committed keys are preserved when the
+// mutation is re-applied after a 409. A missing applied env or state is a no-op
+// rather than an accidental delete.
+func (r *Rollbacker) overlayOwnedState(into *config.CICDFile) {
+	if r.appliedEnv == "" {
+		return
+	}
+	st := r.cicdFile.State[r.appliedEnv]
+	if st == nil {
+		return
+	}
+	if into.State == nil {
+		into.State = make(map[string]*config.EnvState)
+	}
+	into.State[r.appliedEnv] = st
 }
 
 // resolvedManifestKey returns the manifest key state writes address, honoring an
@@ -630,18 +669,14 @@ func (r *Rollbacker) resolvedManifestKey() string {
 	return key
 }
 
-// CommitAndPush persists the post-rollback manifest back to the trunk branch. The
-// single-component path is unchanged: it commits the on-disk file (already written
-// by Apply) exactly as before. The component-scoped path goes through the shared
-// optimistic-lock retry so two components rolling back concurrently merge rather
-// than clobber each other on the file blob SHA: on real GitHub it re-applies its
-// own component leaf over re-fetched trunk bytes via the Contents API, and in the
-// act/gitea environment it commits the scoped on-disk file with plain git.
+// CommitAndPush persists the post-rollback manifest back to the trunk branch.
+// On real GitHub both the single-component and the component-scoped paths go
+// through the shared statewrite.CommitWithRetry optimistic-lock retry, so a
+// rollback finalize racing any concurrent state writer merges rather than
+// clobbers (or spuriously aborts) on the file blob SHA: the mutation re-applies
+// only this rollback's owned leaf over the re-fetched trunk bytes. In the
+// act/gitea environment the on-disk file is committed with plain git.
 func (r *Rollbacker) CommitAndPush() error {
-	if r.component == "" {
-		return commitAndPush(r.configPath, r.appliedEnv, r.GitIdentity())
-	}
-
 	status, err := exec.Command("git", "status", "--porcelain", r.configPath).Output()
 	if err != nil {
 		return fmt.Errorf("git status failed: %w", err)
@@ -658,10 +693,9 @@ func (r *Rollbacker) CommitAndPush() error {
 }
 
 // writeStateViaAPI writes the manifest to the trunk branch through the GitHub
-// Contents REST API using the shared optimistic-lock retry loop, node-patching
-// only this rollback's component leaf so a concurrent sibling component's write is
-// preserved rather than clobbered. It is the component-scoped counterpart to the
-// single-component free writeStateViaAPI; the Contents client is injectable so the
+// Contents REST API using the shared optimistic-lock retry loop, re-applying
+// only this rollback's owned leaf so a concurrent writer's committed state is
+// preserved rather than clobbered. The Contents client is injectable so the
 // 409 re-apply can be exercised without a live API.
 func (r *Rollbacker) writeStateViaAPI(message string) error {
 	repo := os.Getenv("GITHUB_REPOSITORY")
