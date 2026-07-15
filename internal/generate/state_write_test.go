@@ -332,17 +332,97 @@ func TestStateWriteBindsCASTokenToBaseBlob(t *testing.T) {
 		// the git blob sha the Contents API `sha` parameter expects.
 		assert.Contains(t, content, `BASE_SHA=$(git rev-parse "origin/$BRANCH:$MANIFEST_FILE" 2>/dev/null || true)`,
 			"%s must capture the base blob sha right after the reset", name)
-		// (b) The PUT's CAS token is the base blob sha, guarded so a brand-new file
-		// (no existing blob) omits sha and creates.
-		assert.Contains(t, content, `if [[ -n "$BASE_SHA" ]]; then`,
-			"%s must guard the sha arg on an existing base blob", name)
-		assert.Contains(t, content, `API_ARGS+=(-f "sha=$BASE_SHA")`,
+		// (b) The PUT's CAS token is the base blob sha, always. A missing base blob
+		// refuses the write (see TestStateWriteRefusesUnguardedPutOnMissingBaseBlob)
+		// instead of degrading to an sha-less create-or-overwrite PUT.
+		assert.Contains(t, content, `-f "sha=$BASE_SHA"`,
 			"%s PUT must bind the CAS token to the base blob sha", name)
+		assert.NotContains(t, content, `if [[ -n "$BASE_SHA" ]]; then`,
+			"%s must not branch into an sha-less PUT when the base blob is missing", name)
 		// (c) No decoupled, later current-blob read: that is the clobber.
 		assert.NotContains(t, content, "CURRENT_SHA=$(gh api",
 			"%s must not read a separate current-blob sha decoupled from the rendered content", name)
 		assert.NotContains(t, content, `API_ARGS+=(-f "sha=$CURRENT_SHA")`,
 			"%s PUT must not use the decoupled current-blob sha", name)
+	}
+}
+
+// stateWriteTestConfig returns the minimal manifest config the state-write
+// emission tests generate from.
+func stateWriteTestConfig(t *testing.T) (*config.TrunkConfig, string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/build.yaml"), []byte("on:\n  workflow_call:\n"), 0644))
+	return &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("dev"),
+		Builds: []config.BuildConfig{
+			{Name: "app", Workflow: ".github/workflows/build.yaml", Triggers: []string{"src/**"}},
+		},
+	}, tmpDir
+}
+
+// TestStateWriteRefusesUnguardedPutOnMissingBaseBlob asserts the Contents-API
+// state write refuses to PUT when the manifest has no blob at the freshly
+// fetched trunk tip. An empty BASE_SHA can only mean the manifest is absent
+// there (deleted, or the path is wrong): the finalize step exists because that
+// same manifest generated it, and the apply function edits the local copy taken
+// from that very tip, so there is no legitimate first-write flow. Omitting the
+// sha parameter would let the Contents API create or overwrite the file with no
+// optimistic lock, the exact unguarded write the internal/statewrite client
+// refuses with an empty lock sha. The shell must fail with the real cause
+// instead of branching into the weaker write.
+func TestStateWriteRefusesUnguardedPutOnMissingBaseBlob(t *testing.T) {
+	cfg, tmpDir := stateWriteTestConfig(t)
+
+	orch, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+	rel, err := NewReleaseGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	for name, content := range map[string]string{"orchestrate": orch, "release": rel} {
+		assert.Contains(t, content, `if [[ -z "$BASE_SHA" ]]; then`,
+			"%s must check for a missing base blob before the PUT", name)
+		assert.Contains(t, content, "refusing an unguarded state write",
+			"%s must state the refusal cause", name)
+		assert.NotContains(t, content, `if [[ -n "$BASE_SHA" ]]; then`,
+			"%s must not carry the old branch that omits the CAS sha", name)
+	}
+}
+
+// TestStateWriteFailsFastOnPermanentAPIError asserts the Contents-API retry
+// loop classifies PUT failures instead of retrying every shape ten times as
+// "likely concurrent run". A 409 is a genuine optimistic-lock conflict and
+// stays retryable; any other 4xx (401 revoked token, 403 rate limit or missing
+// bypass, 404 branch or path gone, 422 validation) is permanent, so the loop
+// must surface the real cause immediately rather than burning the backoff
+// budget and reporting a generic exhaustion. Unclassified failures (5xx,
+// transport blips carrying no HTTP status) stay retryable, mirroring the
+// transient tolerance of the internal/statewrite client.
+func TestStateWriteFailsFastOnPermanentAPIError(t *testing.T) {
+	cfg, tmpDir := stateWriteTestConfig(t)
+
+	orch, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+	rel, err := NewReleaseGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	for name, content := range map[string]string{"orchestrate": orch, "release": rel} {
+		// The PUT failure output is captured and classified.
+		assert.Contains(t, content, `if API_ERR=$(gh api "${API_ARGS[@]}" 2>&1 >/dev/null); then`,
+			"%s must capture the gh api failure output for classification", name)
+		// A 409 conflict retries.
+		assert.Contains(t, content, `*"HTTP 409"*`,
+			"%s must recognize the 409 optimistic-lock conflict as retryable", name)
+		// Any other 4xx fails fast with a distinct marker.
+		assert.Contains(t, content, `*"HTTP 4"*`,
+			"%s must classify non-409 4xx responses", name)
+		assert.Contains(t, content, "cascade-state-write: permanent-error",
+			"%s must emit the permanent-error marker before failing fast", name)
+		// The old blanket mislabel is gone from the API branch.
+		assert.NotContains(t, content, "State write attempt $attempt failed (likely concurrent run)",
+			"%s must not label every PUT failure as a concurrent run", name)
 	}
 }
 

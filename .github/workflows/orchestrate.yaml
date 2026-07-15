@@ -231,6 +231,11 @@ jobs:
             git fetch origin "$BRANCH"
             git reset --hard "origin/$BRANCH"
             BASE_SHA=$(git rev-parse "origin/$BRANCH:$MANIFEST_FILE" 2>/dev/null || true)
+            if [[ -z "$BASE_SHA" ]]; then
+              echo "cascade-state-write: missing-base" >&2
+              echo "::error::$MANIFEST_FILE has no blob at the fetched origin/$BRANCH tip; refusing an unguarded state write" >&2
+              exit 1
+            fi
             apply_state_edits
             if git diff --quiet "$MANIFEST_FILE"; then
               echo "No state changes"
@@ -241,19 +246,30 @@ jobs:
               -f "message=chore: update state [skip ci]"
               -f "content=$CONTENT_B64"
               -f "branch=$BRANCH"
+              -f "sha=$BASE_SHA"
               -f "author[name]=github-actions[bot]"
               -f "author[email]=github-actions[bot]@users.noreply.github.com"
               -f "committer[name]=github-actions[bot]"
               -f "committer[email]=github-actions[bot]@users.noreply.github.com")
-            if [[ -n "$BASE_SHA" ]]; then
-              API_ARGS+=(-f "sha=$BASE_SHA")
-            fi
-            if gh api "${API_ARGS[@]}" >/dev/null; then
+            if API_ERR=$(gh api "${API_ARGS[@]}" 2>&1 >/dev/null); then
               echo "Pushed state via API on attempt $attempt"
               echo "cascade-state-write: ok attempt=$attempt"
               exit 0
             fi
-            echo "State write attempt $attempt failed (likely concurrent run); retrying..." >&2
+            echo "$API_ERR" >&2
+            case "$API_ERR" in
+              *"HTTP 409"*|*Conflict*)
+                echo "State write attempt $attempt hit an optimistic-lock conflict (concurrent run); retrying..." >&2
+                ;;
+              *"HTTP 4"*)
+                echo "cascade-state-write: permanent-error attempt=$attempt" >&2
+                echo "::error::State write failed with a permanent API error (see log above); not retrying" >&2
+                exit 1
+                ;;
+              *)
+                echo "State write attempt $attempt failed (transient server or network error); retrying..." >&2
+                ;;
+            esac
             backoff=$(( 1 << (attempt - 1) ))
             if [ "$backoff" -gt 8 ]; then backoff=8; fi
             sleep $(( backoff + RANDOM % 2 ))
