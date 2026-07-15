@@ -79,6 +79,11 @@ A `Migration` section is added to any release that bumps `schema_version`.
   external, promote, simulate, and reset command trees; the flags were parsed
   but silently ignored, so commands such as `orchestrate finalize --dry-run`
   and `external update --dry-run` could write real state
+- **cli:** Honor `--dry-run` on `manage-release` delete and publish,
+  `branch-protection --apply`, and `promote finalize`, which previously
+  performed real deletions, publishes, protection PUTs, and state writes under
+  dry-run; a fail-loud guard at the mutation layer now refuses every external
+  mutation under `--dry-run`, so no command can mutate silently
 - **cli:** Align the root help text with the compiler positioning
 - Surface git and API errors on state and version paths instead of swallowing
   them
