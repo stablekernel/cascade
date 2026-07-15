@@ -449,10 +449,11 @@ func pushWithRebaseRetry(o pushOptions) error {
 		}
 		lastOut = out
 
-		// Only a stale-ref rejection can be fixed by rebasing onto the advanced
-		// upstream and pushing again. Anything else (a GH013 workflow-scope
-		// refusal, branch protection, auth, a missing remote) fails identically
-		// on every retry, so surface the real output immediately instead of
+		// A stale-ref rejection is fixed by rebasing onto the advanced
+		// upstream and pushing again, and a transient transport failure by
+		// the retry itself. Anything else (a GH013 workflow-scope refusal,
+		// branch protection, auth, a missing remote) fails identically on
+		// every retry, so surface the real output immediately instead of
 		// hiding it behind no-op rebases and a generic exhaustion summary.
 		if !retryablePushRejection(out) {
 			return fmt.Errorf("git push failed: %s: %w", strings.TrimSpace(string(out)), err)
@@ -493,12 +494,22 @@ func pushWithRebaseRetry(o pushOptions) error {
 	return fmt.Errorf("git push failed after %d retries: %s", pushRetryAttempts, strings.TrimSpace(string(lastOut)))
 }
 
-// retryablePushRejection reports whether a failed push is the optimistic kind
-// the retry loop exists for: the remote ref advanced under us (a client-side
-// "! [rejected] ... (fetch first)" / non-fast-forward) or a concurrent writer
-// held the ref lock. A "! [remote rejected]" (pre-receive hook, branch
-// protection, GH013 scope refusal), an auth failure, or a transport error
-// cannot be fixed by rebase-and-retry, so those are not retryable.
+// retryablePushRejection reports whether a failed push is worth another
+// bounded attempt, applying the transient-vs-permanent taxonomy shared with
+// internal/statewrite's classifyPutError and the generated state-write shell
+// (internal/generate/state_write.go); keep the three classifiers in sync.
+// Two families retry:
+//
+//   - the optimistic rejections the rebase-and-retry loop exists for: the
+//     remote ref advanced under us (a client-side "! [rejected] ... (fetch
+//     first)" / non-fast-forward) or a concurrent writer held the ref lock;
+//   - transient transport failures (connection reset, timeout, DNS, TLS
+//     handshake, early EOF or an unexpected disconnect, an HTTP 5xx from the
+//     remote), where the rebase is a no-op and the retry itself is the fix.
+//
+// A "! [remote rejected]" (pre-receive hook, branch protection, GH013 scope
+// refusal) or an auth failure fails identically on every attempt, so those
+// fail fast with the remote's real output.
 func retryablePushRejection(out []byte) bool {
 	s := string(out)
 	for _, marker := range []string{
@@ -508,6 +519,32 @@ func retryablePushRejection(out []byte) bool {
 		"! [rejected]",
 	} {
 		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	// Transport markers are matched case-insensitively: git and curl vary
+	// casing across versions ("Connection reset by peer" vs "connection
+	// reset"). "http 5" catches the "RPC failed; HTTP 502" shape and
+	// "returned error: 5" the plain curl "The requested URL returned error:
+	// 5xx" shape; a 4xx there (auth, not found) stays permanent.
+	ls := strings.ToLower(s)
+	for _, marker := range []string{
+		"connection reset",
+		"timed out",
+		"could not resolve host",
+		"failed to connect",
+		"rpc failed",
+		"early eof",
+		"remote end hung up",
+		"unexpected disconnect",
+		"gnutls_handshake",
+		"ssl_read",
+		"ssl_connect",
+		"tls connection",
+		"http 5",
+		"returned error: 5",
+	} {
+		if strings.Contains(ls, marker) {
 			return true
 		}
 	}
