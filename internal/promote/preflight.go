@@ -523,6 +523,7 @@ func (p *Preflighter) hasChangesInSets(baseSHA, headSHA string, sets [][]string)
 	// Use git diff to get changed files
 	cmd := exec.Command("git", "diff", "--name-only", baseSHA, headSHA)
 	cmd.Dir = p.baseDir
+	cmd.Env = git.BoundaryEnv(p.baseDir)
 	out, err := cmd.Output()
 	if err != nil {
 		return true // On error, assume changes

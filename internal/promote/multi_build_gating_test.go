@@ -116,3 +116,23 @@ func TestDetectDeployChanges_MultiBuildDependsOn(t *testing.T) {
 		})
 	}
 }
+
+// TestHasChanges_RepoBoundaryPinned pins the preflight diff exec to the repo
+// boundary contract of git.BoundaryEnv: when baseDir is not itself a
+// repository, repository discovery must fail closed (include the deploy)
+// rather than silently walking up into an enclosing repository and reading
+// that repository's diff.
+func TestHasChanges_RepoBoundaryPinned(t *testing.T) {
+	repoDir, shas := initMultiBuildRepo(t)
+
+	// A plain directory inside the repo: not a repository itself, so an
+	// unpinned "git diff" run there resolves to the enclosing repo, whose
+	// c3->c4 diff (unrelated/notes.txt) matches no trigger and would return
+	// a confident (and wrong-repo) "no changes".
+	nonRepoDir := filepath.Join(repoDir, "unrelated")
+
+	p := &Preflighter{baseDir: nonRepoDir}
+	got := p.hasChanges(shas[3], shas[4], []string{"src/**"})
+	assert.True(t, got,
+		"hasChanges must not consult an enclosing repository; a failed diff fails closed")
+}
