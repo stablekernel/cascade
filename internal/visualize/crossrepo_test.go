@@ -171,9 +171,11 @@ func TestMermaidEmitter_CrossRepoGolden(t *testing.T) {
 	for _, want := range []string{
 		"flowchart TD",
 		`subgraph primary["primary"]`,
-		`subgraph repo_org_cdk_infra["org/cdk-infra"]`,
-		`subgraph repo_org_web_edge["org/web-edge"]`,
-		`subgraph repo_org_platform["org/platform"]`,
+		// Slugged lane ids carry a short content-hash suffix so distinct repos
+		// that fold to the same alphanumeric text cannot merge into one lane.
+		`subgraph repo_org_cdk_infra_d8ebfd17["org/cdk-infra"]`,
+		`subgraph repo_org_web_edge_2d1cec96["org/web-edge"]`,
+		`subgraph repo_org_platform_e0d10933["org/platform"]`,
 		"==>|cdk|",
 		"==>|edge|",
 		"-. notify .->",

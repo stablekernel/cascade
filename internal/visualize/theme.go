@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // NodeStyle holds the presentation attributes an emitter renders for one node
@@ -129,18 +130,30 @@ func className(kind NodeKind) string {
 
 // classDefBody renders a NodeStyle as the attribute list of a Mermaid classDef,
 // emitting only the set fields in a fixed order so the output is deterministic.
+// Values are sanitized before splicing: a user-theme color carrying a comma,
+// semicolon, or newline would otherwise smuggle extra classDef attributes or
+// whole statements into the diagram.
 func classDefBody(s NodeStyle) string {
 	parts := make([]string, 0, 3)
 	if s.Fill != "" {
-		parts = append(parts, "fill:"+s.Fill)
+		parts = append(parts, "fill:"+classDefValue(s.Fill))
 	}
 	if s.Stroke != "" {
-		parts = append(parts, "stroke:"+s.Stroke)
+		parts = append(parts, "stroke:"+classDefValue(s.Stroke))
 	}
 	if s.Text != "" {
-		parts = append(parts, "color:"+s.Text)
+		parts = append(parts, "color:"+classDefValue(s.Text))
 	}
 	return joinComma(parts)
+}
+
+// classDefValueReplacer strips the runes that act as classDef separators (comma
+// between attributes, semicolon and newline between statements) from a style
+// value, so a theme file controls only the one attribute it names.
+var classDefValueReplacer = strings.NewReplacer(",", "", ";", "", "\n", "", "\r", "")
+
+func classDefValue(v string) string {
+	return classDefValueReplacer.Replace(v)
 }
 
 // joinComma joins parts with a comma. It exists so classDefBody stays free of an

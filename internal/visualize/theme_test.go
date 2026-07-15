@@ -162,7 +162,7 @@ func TestLoadTheme_AppliesStyling(t *testing.T) {
 	if !strings.Contains(out, "fill:#123456") {
 		t.Errorf("custom fill not applied in:\n%s", out)
 	}
-	if !strings.Contains(out, `"lineColor": "#abcdef"`) {
+	if !strings.Contains(out, `"lineColor":"#abcdef"`) {
 		t.Errorf("custom line color not applied in:\n%s", out)
 	}
 }

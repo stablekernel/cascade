@@ -1,7 +1,7 @@
 ---
 title: "cross-repo"
 ---
-%%{init: {"theme": "base", "themeVariables": {"lineColor": "#57606a"}}}%%
+%%{init: {"theme":"base","themeVariables":{"lineColor":"#57606a"}}}%%
 flowchart TD
     subgraph primary["primary"]
         trunk(Trunk)
@@ -10,25 +10,25 @@ flowchart TD
         promote(Promote)
         release(Release)
     end
-    subgraph repo_org_cdk_infra["org/cdk-infra"]
-        ext_org_cdk_infra_cdk[[cdk]]
+    subgraph repo_org_cdk_infra_d8ebfd17["org/cdk-infra"]
+        ext_org_cdk_infra_d8ebfd17_cdk[[cdk]]
     end
-    subgraph repo_org_web_edge["org/web-edge"]
-        ext_org_web_edge_edge[[edge]]
+    subgraph repo_org_web_edge_2d1cec96["org/web-edge"]
+        ext_org_web_edge_2d1cec96_edge[[edge]]
     end
-    subgraph repo_org_platform["org/platform"]
-        notify_org_platform[org/platform]
+    subgraph repo_org_platform_e0d10933["org/platform"]
+        notify_org_platform_e0d10933[org/platform]
     end
     trunk --> build
     build --> deploy
     deploy --> promote
     promote --> release
-    release ==>|cdk| ext_org_cdk_infra_cdk
-    release ==>|edge| ext_org_web_edge_edge
-    release -. notify .-> notify_org_platform
+    release ==>|cdk| ext_org_cdk_infra_d8ebfd17_cdk
+    release ==>|edge| ext_org_web_edge_2d1cec96_edge
+    release -. notify .-> notify_org_platform_e0d10933
     classDef node_stage fill:#bf8700,stroke:#7d4e00,color:#ffffff
     classDef node_deploy fill:#8250df,stroke:#512a97,color:#ffffff
     classDef node_repo fill:#6e7781,stroke:#424a53,color:#ffffff
     class trunk,build,deploy,promote,release node_stage
-    class ext_org_cdk_infra_cdk,ext_org_web_edge_edge node_deploy
-    class notify_org_platform node_repo
+    class ext_org_cdk_infra_d8ebfd17_cdk,ext_org_web_edge_2d1cec96_edge node_deploy
+    class notify_org_platform_e0d10933 node_repo

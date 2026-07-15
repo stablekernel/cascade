@@ -1,6 +1,7 @@
 package visualize
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -198,7 +199,9 @@ func emitState(b *strings.Builder, vm ViewModel, theme Theme) (string, error) {
 // writeThemeInit emits the Mermaid init directive carrying the theme's base and
 // edge color. It writes nothing when the theme sets neither, so an unstyled
 // theme produces no directive. The directive must follow any frontmatter block
-// and precede the diagram keyword.
+// and precede the diagram keyword. The payload is built with encoding/json,
+// never string splicing: Go's %q emits Go escape syntax, not JSON, so a theme
+// value with a quote or non-ASCII rune would produce an invalid directive.
 func writeThemeInit(b *strings.Builder, theme Theme) {
 	if theme.Base == "" && theme.LineColor == "" {
 		return
@@ -207,11 +210,21 @@ func writeThemeInit(b *strings.Builder, theme Theme) {
 	if base == "" {
 		base = "base"
 	}
-	fmt.Fprintf(b, "%%%%{init: {%q: %q", "theme", base)
-	if theme.LineColor != "" {
-		fmt.Fprintf(b, ", %q: {%q: %q}", "themeVariables", "lineColor", theme.LineColor)
+
+	type initThemeVariables struct {
+		LineColor string `json:"lineColor"`
 	}
-	b.WriteString("}}%%\n")
+	payload := struct {
+		Theme          string              `json:"theme"`
+		ThemeVariables *initThemeVariables `json:"themeVariables,omitempty"`
+	}{Theme: base}
+	if theme.LineColor != "" {
+		payload.ThemeVariables = &initThemeVariables{LineColor: theme.LineColor}
+	}
+
+	// Marshaling a struct of strings cannot fail.
+	data, _ := json.Marshal(payload)
+	fmt.Fprintf(b, "%%%%{init: %s}%%%%\n", data)
 }
 
 // writeThemeClasses emits the theme's per-kind classDef lines followed by the
@@ -276,9 +289,16 @@ func mermaidID(id string) string {
 
 // mermaidStateLabel renders a state's display name as a quoted Mermaid string
 // for the `state "name" as id` rename form, escaping any embedded quote so the
-// alias declaration cannot be broken by punctuation in the name.
+// alias declaration cannot be broken by punctuation in the name. Newlines are
+// folded to spaces: a raw newline splits the declaration mid-statement and the
+// remainder parses as diagram syntax.
 func mermaidStateLabel(label string) string {
-	return `"` + strings.ReplaceAll(label, `"`, "&quot;") + `"`
+	r := strings.NewReplacer(
+		`"`, "&quot;",
+		"\n", " ",
+		"\r", " ",
+	)
+	return `"` + r.Replace(label) + `"`
 }
 
 // mermaidTransitionLabel sanitizes a transition caption. A colon would otherwise
@@ -295,9 +315,16 @@ func mermaidTransitionLabel(label string) string {
 
 // mermaidSubgraphLabel renders a lane caption as a quoted Mermaid string for the
 // `subgraph id["label"]` form, escaping any embedded quote so a repo name with
-// punctuation cannot break the subgraph header.
+// punctuation cannot break the subgraph header. Newlines are folded to spaces:
+// a raw newline splits the header mid-statement and the remainder parses as
+// diagram syntax.
 func mermaidSubgraphLabel(label string) string {
-	return `"` + strings.ReplaceAll(label, `"`, "&quot;") + `"`
+	r := strings.NewReplacer(
+		`"`, "&quot;",
+		"\n", " ",
+		"\r", " ",
+	)
+	return `"` + r.Replace(label) + `"`
 }
 
 // mermaidEdgeLabel sanitizes a flowchart edge caption. A pipe would close the
@@ -318,6 +345,8 @@ func mermaidEdgeLabel(label string) string {
 // mermaidLabel escapes a display label for use inside a Mermaid node shape.
 // Brackets would otherwise close the shape early and quotes would confuse the
 // parser, so both are replaced with HTML entities Mermaid renders verbatim.
+// Newlines are folded to spaces: a raw newline terminates the node statement
+// mid-declaration and the remainder parses as diagram syntax.
 func mermaidLabel(label string) string {
 	r := strings.NewReplacer(
 		"[", "&#91;",
@@ -325,6 +354,8 @@ func mermaidLabel(label string) string {
 		"(", "&#40;",
 		")", "&#41;",
 		`"`, "&quot;",
+		"\n", " ",
+		"\r", " ",
 	)
 	return r.Replace(label)
 }
