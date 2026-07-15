@@ -98,13 +98,11 @@ func Run(opts Options) (bool, error) {
 // caller-supplied manifestPath (an explicit --config) is used verbatim. When
 // it is unset, the default resolves to an absolute path anchored at the
 // process working directory (matching root when root is relative), rather
-// than a root-relative join. generate.Plan embeds this exact string verbatim
-// into the generated header's "Regenerate with: cascade generate-workflow
-// --config <path>" comment, and config.FindConfigFile (the auto-detect path
-// verify and generate-workflow fall back to with no --config flag) always
-// resolves through os.Getwd(), so a relative default here would make that
-// header comment differ from what a subsequent verify recomputes: byte-for-
-// byte the same file, reported as spurious drift.
+// than a root-relative join, so the file reads and writes above stay correct
+// regardless of the process working directory. The spelling never reaches the
+// generated files: every generator rebases the manifest path to repo-relative
+// (generate.relativeManifestPath) before embedding it, so emitted output is
+// byte-identical for relative, absolute, and auto-detected paths.
 func resolveManifestPath(root, manifestPath string) string {
 	if manifestPath != "" {
 		return manifestPath

@@ -109,22 +109,7 @@ func (g *PromoteGenerator) getStateTokenRef() string {
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 // Converts absolute paths to repo-relative paths since workflows run in checked out repos.
 func (g *PromoteGenerator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
-
-	// If it's already relative, return as-is
-	if !filepath.IsAbs(manifestPath) {
-		return manifestPath
-	}
-
-	// If baseDir is set and manifestPath starts with it, make relative
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
-			return rel
-		}
-	}
-
-	// Fallback: return default relative path
-	return ".github/manifest.yaml"
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // getActionPath returns the path to the manage-release action

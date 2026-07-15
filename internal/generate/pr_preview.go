@@ -42,6 +42,12 @@ func (g *PRPreviewGenerator) getCLIRef() string {
 	return cliSetupRef(g.config)
 }
 
+// getManifestFilePath returns the repo-relative manifest path for use in the
+// generated workflow, matching the sibling generators' resolution.
+func (g *PRPreviewGenerator) getManifestFilePath() string {
+	return relativeManifestPath(g.config, g.baseDir)
+}
+
 // commentEnabled reports whether the preview should also post a PR comment.
 func (g *PRPreviewGenerator) commentEnabled() bool {
 	return g.config.PRPreview.HasComment()
@@ -66,7 +72,7 @@ func (g *PRPreviewGenerator) Generate() (string, error) {
 
 func (g *PRPreviewGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString(GeneratedFileMarker + "\n")
-	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.getManifestFilePath())
 }
 
 func (g *PRPreviewGenerator) writeWorkflowTrigger(sb *strings.Builder) {
@@ -132,7 +138,7 @@ func (g *PRPreviewGenerator) writeJob(sb *strings.Builder) {
 func (g *PRPreviewGenerator) writeValidateStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Validate manifest\n")
 	sb.WriteString("        run: |\n")
-	fmt.Fprintf(sb, "          cascade lint --config %s\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "          cascade lint --config %s\n", g.getManifestFilePath())
 	sb.WriteString("\n")
 }
 
@@ -148,7 +154,7 @@ func (g *PRPreviewGenerator) writeDetectStep(sb *strings.Builder) {
 	sb.WriteString("          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          cascade detect-changes \\\n")
-	fmt.Fprintf(sb, "            --config %s \\\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
 	sb.WriteString("            --base-sha \"$BASE_SHA\" \\\n")
 	sb.WriteString("            --head-sha \"$HEAD_SHA\" \\\n")
 	sb.WriteString("            > cascade-changes.json\n")
@@ -176,7 +182,7 @@ func (g *PRPreviewGenerator) writeDeployDryRunStep(sb *strings.Builder) {
 	sb.WriteString("          # READ-ONLY: --dry-run is enforced and never sourced from an input,\n")
 	sb.WriteString("          # so no release is cut, no state is written, and no deploy is triggered.\n")
 	sb.WriteString("          cascade --dry-run orchestrate setup \\\n")
-	fmt.Fprintf(sb, "            --config %s \\\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "            --config %s \\\n", g.getManifestFilePath())
 	if len(g.config.Environments) > 0 {
 		// Target the first environment so version calculation resolves; the
 		// preview is read-only regardless of which environment it reports on.

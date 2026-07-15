@@ -171,6 +171,41 @@ func TestHotfix_TopLevelLeastPrivilege(t *testing.T) {
 	assert.Contains(t, finalizeBlock, "contents: write")
 }
 
+// TestRelease_TopLevelLeastPrivilege asserts the single-environment release
+// workflow's top-level permissions default to contents: read only, with
+// contents: write pushed down to the release job (tag and GitHub release
+// writes via manage-release) and the finalize job (latest_release state
+// commit to trunk). The release workflow dispatches nothing and deploys
+// nothing, so no other write scope may appear anywhere.
+func TestRelease_TopLevelLeastPrivilege(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("prod"),
+	}
+
+	out, err := NewReleaseGenerator(cfg, "").Generate()
+	require.NoError(t, err)
+
+	top := topLevelPermissions(t, out)
+	assert.Equal(t, "permissions:\n  contents: read", top)
+	assert.NotContains(t, top, "contents: write")
+	assert.NotContains(t, out, "actions: write")
+	assert.NotContains(t, out, "deployments: write")
+
+	release := jobSection(out, "release:")
+	releaseBlock := jobPermissionsBlock(t, release)
+	assert.Equal(t, "    permissions:\n      contents: write", releaseBlock)
+
+	finalize := jobSection(out, "finalize:")
+	finalizeBlock := jobPermissionsBlock(t, finalize)
+	assert.Equal(t, "    permissions:\n      contents: write", finalizeBlock)
+
+	// The preflight job only reads (checkout, yq, changelog); it must not
+	// carry any job-level write scope.
+	preflight := jobSection(out, "preflight:")
+	assert.NotContains(t, preflight, "permissions:")
+}
+
 // TestRollback_TopLevelLeastPrivilege asserts the rollback workflow's top-level
 // permissions default to contents: read only, with contents: write pushed down
 // to the finalize job.

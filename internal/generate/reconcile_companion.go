@@ -2,7 +2,6 @@ package generate
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -109,7 +108,7 @@ func (g *ReconcileGenerator) Generate() (string, error) {
 
 func (g *ReconcileGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString(GeneratedFileMarker + "\n")
-	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.getManifestFilePath())
 }
 
 // writeCheckTrigger emits the pull_request trigger and the read-only
@@ -207,16 +206,7 @@ func (g *ReconcileGenerator) manifestFlags() string {
 // getManifestFilePath returns the repo-relative manifest path for use in the
 // generated workflow, matching the sibling generators' resolution.
 func (g *ReconcileGenerator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
-	if !filepath.IsAbs(manifestPath) {
-		return manifestPath
-	}
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
-			return rel
-		}
-	}
-	return ".github/manifest.yaml"
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // getStateTokenRef returns the token expression used to push the reconcile

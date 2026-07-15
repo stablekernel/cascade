@@ -2,7 +2,6 @@ package generate
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -50,22 +49,7 @@ func (g *ReleaseGenerator) getStateTokenRef() string {
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 // Converts absolute paths to repo-relative paths since workflows run in checked out repos.
 func (g *ReleaseGenerator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
-
-	// If it's already relative, return as-is
-	if !filepath.IsAbs(manifestPath) {
-		return manifestPath
-	}
-
-	// If baseDir is set and manifestPath starts with it, make relative
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
-			return rel
-		}
-	}
-
-	// Fallback: return default relative path
-	return ".github/manifest.yaml"
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // getManifestKey returns the manifest key for nested access
@@ -84,6 +68,7 @@ func (g *ReleaseGenerator) Generate() (string, error) {
 
 	g.writeHeader(&sb)
 	g.writeWorkflowTriggers(&sb)
+	g.writePermissions(&sb)
 	g.writeConcurrency(&sb)
 	g.writeJobs(&sb)
 
@@ -145,6 +130,21 @@ func (g *ReleaseGenerator) writeWorkflowTriggers(sb *strings.Builder) {
 	sb.WriteString("        type: boolean\n")
 	sb.WriteString("        default: false\n")
 	sb.WriteString("\n")
+}
+
+// writePermissions emits the least-privilege top-level permissions: block.
+// Default to reads only: the preflight job just checks out and reads the
+// manifest. The release job carries contents: write (manage-release creates,
+// updates, publishes, and deletes tags and GitHub releases) and the finalize
+// job carries contents: write (latest_release state commit to trunk); both are
+// scoped at the job level. The release workflow dispatches no other workflow
+// and performs no deploy, so no actions: or deployments: scope is granted
+// anywhere.
+func (g *ReleaseGenerator) writePermissions(sb *strings.Builder) {
+	base := [][2]string{
+		{"contents", "read"},
+	}
+	writeTopLevelPermissions(sb, base)
 }
 
 // The release workflow tags, generates the changelog, and publishes a GitHub
@@ -303,6 +303,10 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("    needs: preflight\n")
 	sb.WriteString("    if: ${{ github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// The release job writes tags and GitHub releases through manage-release,
+	// which defaults to the GITHUB_TOKEN; scope the write to this job so the
+	// top-level block stays read-only.
+	writeJobPermissions(sb, "    ", [][2]string{{"contents", "write"}})
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
@@ -381,6 +385,9 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("    needs: [preflight, release]\n")
 	sb.WriteString("    if: always() && needs.preflight.result == 'success' && github.event.inputs.release_action == 'release'\n")
 	sb.WriteString("    runs-on: ubuntu-latest\n")
+	// The finalize job commits latest_release state to the trunk branch, which
+	// needs contents: write when the state token is the default GITHUB_TOKEN.
+	writeJobPermissions(sb, "    ", [][2]string{{"contents", "write"}})
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamState)
 	writeActionStep(sb, g.config, "      ", actionCheckout)

@@ -8,6 +8,13 @@ description: |
   step contains the fetch+reset+apply retry loop (#102), mirroring the
   orchestrate.yaml push-retry assertion in 08-state-push-retry.yaml.
 
+  Also asserts the release workflow's least-privilege permissions posture,
+  mirroring orchestrate/least-privilege-permissions.yaml: the top-level block is
+  contents: read only, with contents: write scoped to the release and finalize
+  jobs (tag/release writes and the latest_release state commit). No actions: or
+  deployments: scope appears anywhere; the workflow dispatches nothing and
+  deploys nothing.
+
 config:
   trunk_branch: main
   environments: [prod]
@@ -58,6 +65,21 @@ steps:
             - "cascade-state-write: attempt=$attempt/10"
             - "git fetch origin"
             - "git reset --hard"
+            # Least-privilege permissions: the top-level block is read-only.
+            # Matching the whole block (permissions: through its trailing blank
+            # line) proves no write scope is present at the top level.
+            - "permissions:\n  contents: read\n\n"
+            # The release and finalize jobs carry the contents: write they need
+            # to publish releases/tags and commit latest_release state.
+            - "    permissions:\n      contents: write\n"
+          not_contains:
+            # No top-level write scope may appear. The job-level write above is
+            # indented (four spaces), so this unindented form only matches a
+            # top-level grant.
+            - "\npermissions:\n  contents: write"
+            # The release workflow dispatches no workflow and deploys nothing.
+            - "actions: write"
+            - "deployments: write"
 
   # Step 2: Push second commit → orchestrate updates draft RC
   - name: "Second feature commit"

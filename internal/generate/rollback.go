@@ -2,7 +2,6 @@ package generate
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -140,16 +139,7 @@ func (g *RollbackGenerator) getStateTokenRef() string {
 // getManifestFilePath returns the repo-relative manifest path for use in the
 // generated workflow, matching the other generators' resolution.
 func (g *RollbackGenerator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
-	if !filepath.IsAbs(manifestPath) {
-		return manifestPath
-	}
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
-			return rel
-		}
-	}
-	return ".github/manifest.yaml"
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // Generate renders the cascade-rollback workflow.
