@@ -1,6 +1,7 @@
 package hotfix
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -511,6 +512,149 @@ func TestFinalize_Idempotent_Rerun(t *testing.T) {
 	if len(st2.Previous) != 1 {
 		t.Errorf("rerun double-snapshotted Previous: %d entries", len(st2.Previous))
 	}
+}
+
+// TestFinalize_RerunAfterReleaseFailure_CreatesRelease reproduces the
+// partial-failure interleaving where finalize reports green with the release
+// permanently missing: the first run commits the state marker to trunk and the
+// release API then fails, so the job goes red with state already recording the
+// merge SHA. The rerun lands on the idempotency gate; it must complete the
+// missing tag/release with the version the first run recorded rather than
+// early-return success and leave the release absent forever.
+func TestFinalize_RerunAfterReleaseFailure_CreatesRelease(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cp")
+	runGit(t, "checkout", "main")
+
+	manifest := writeFinalizeManifest(t, []string{"dev", "test", "prod"}, map[string]envFixture{
+		"dev":  {sha: fix, version: "v1.4.0-rc.2"},
+		"test": {sha: base, version: "v1.4.0-rc.2"},
+		"prod": {sha: base, version: "v1.4.0-rc.2"},
+	})
+
+	// First run: the state marker lands, then the release API blips.
+	pusher1 := &recordingPusher{}
+	rm1 := &stubReleaseManager{err: errors.New("API error 503: upstream blip")}
+	f1 := newFinalizer(t, manifest,
+		WithReleaseManager(rm1),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(pusher1),
+	)
+	if err := f1.Finalize("test", merge, []string{fix}, base); err == nil {
+		t.Fatal("first Finalize must surface the release failure")
+	}
+	if pusher1.calls != 1 {
+		t.Fatalf("first run state pushes = %d, want 1", pusher1.calls)
+	}
+	if st := loadState(t, manifest, "test"); st.SHA != merge {
+		t.Fatalf("state marker sha = %q, want merge SHA %q recorded before the release step", st.SHA, merge)
+	}
+
+	// Rerun with the API healthy: the idempotency gate must converge the missing
+	// tag/release instead of skipping it.
+	pusher2 := &recordingPusher{}
+	rm2 := &stubReleaseManager{}
+	f2 := newFinalizer(t, manifest,
+		WithReleaseManager(rm2),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(pusher2),
+	)
+	if err := f2.Finalize("test", merge, []string{fix}, base); err != nil {
+		t.Fatalf("rerun Finalize: %v", err)
+	}
+
+	if len(rm2.calls) == 0 {
+		t.Fatal("rerun skipped the release step; the hotfix tag/release stays permanently missing")
+	}
+	got := rm2.calls[0]
+	if got.Action != release.ActionUpdate {
+		t.Errorf("rerun action = %q, want find-or-create update", got.Action)
+	}
+	if got.Tag != "v1.4.0-rc.2.hotfix.1" {
+		t.Errorf("rerun tag = %q, want the recorded v1.4.0-rc.2.hotfix.1, not a re-allocation", got.Tag)
+	}
+	if got.SHA != merge {
+		t.Errorf("rerun release SHA = %q, want merge SHA %q", got.SHA, merge)
+	}
+	if !got.CreateTag {
+		t.Error("rerun must still materialize the git tag")
+	}
+	if !strings.Contains(got.Changelog, "based on v1.4.0-rc.2,") {
+		t.Errorf("rerun body should reference the base version from the Previous ring: %q", got.Changelog)
+	}
+	if !strings.Contains(got.Changelog, short(fix)) {
+		t.Errorf("rerun body should reference the carried trunk commit: %q", got.Changelog)
+	}
+	// test is the prerelease env (second from top), so the converged release is
+	// still promoted to a GitHub prerelease.
+	if len(rm2.calls) != 2 || rm2.calls[1].Action != release.ActionPrerelease {
+		t.Errorf("rerun release actions = %+v, want [update prerelease]", releaseActions(rm2.calls))
+	}
+
+	// The rerun neither re-pushes state nor double-applies it.
+	if pusher2.calls != 0 {
+		t.Errorf("rerun state pushes = %d, want 0", pusher2.calls)
+	}
+	st := loadState(t, manifest, "test")
+	if len(st.Patches) != 1 {
+		t.Errorf("rerun double-applied patches: %v", st.Patches)
+	}
+	if len(st.Previous) != 1 {
+		t.Errorf("rerun double-snapshotted Previous: %d entries", len(st.Previous))
+	}
+	if st.Version != "v1.4.0-rc.2.hotfix.1" {
+		t.Errorf("rerun changed version to %q, want stable v1.4.0-rc.2.hotfix.1", st.Version)
+	}
+}
+
+// TestFinalize_RerunDryRun_TouchesNothing guards the dry-run contract on the
+// idempotency-gate path: a dry-run rerun over already-recorded state must not
+// invoke the release API at all.
+func TestFinalize_RerunDryRun_TouchesNothing(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "b.txt", "two", "fix")
+	runGit(t, "branch", "env/test", base)
+	runGit(t, "checkout", "env/test")
+	merge := commitFile(t, "c.txt", "fixed", "cp")
+	runGit(t, "checkout", "main")
+
+	manifest := writeFinalizeManifest(t, []string{"dev", "test", "prod"}, map[string]envFixture{
+		"dev":  {sha: fix, version: "v1.4.0-rc.2"},
+		"test": {sha: merge, version: "v1.4.0-rc.2.hotfix.1"},
+		"prod": {sha: base, version: "v1.4.0-rc.2"},
+	})
+
+	pusher := &recordingPusher{}
+	rm := &stubReleaseManager{}
+	f := newFinalizer(t, manifest,
+		WithReleaseManager(rm),
+		WithTagLister(stubTagLister{}),
+		WithStatePusher(pusher),
+		WithFinalizeDryRun(true),
+	)
+	if err := f.Finalize("test", merge, []string{fix}, base); err != nil {
+		t.Fatalf("dry-run rerun Finalize: %v", err)
+	}
+	if len(rm.calls) != 0 {
+		t.Errorf("dry-run rerun made %d release calls, want 0", len(rm.calls))
+	}
+	if pusher.calls != 0 {
+		t.Errorf("dry-run rerun made %d state pushes, want 0", pusher.calls)
+	}
+}
+
+// releaseActions projects the Manage options to their actions for messages.
+func releaseActions(calls []release.Options) []release.Action {
+	actions := make([]release.Action, len(calls))
+	for i, c := range calls {
+		actions[i] = c.Action
+	}
+	return actions
 }
 
 // TestFinalize_StateWriteTargetsTrunkBranch guards that the manifest state write

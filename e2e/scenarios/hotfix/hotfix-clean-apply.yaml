@@ -8,6 +8,9 @@ description: |
   - hotfix_apply cherry-picks cleanly onto env/test, opens a cascade-hotfix PR
   - merge_pr squash-merges the PR
   - hotfix_merged records the finalized hotfix state
+  - a second hotfix_merged replay of the same event (a finalize rerun) stays
+    green, converges the release step through the idempotency gate, and does
+    not double-apply state
   - dev and prod state are untouched throughout
 
 config:
@@ -131,6 +134,31 @@ steps:
           ref: "env/test"
           base_sha: commit1
           patches: [commit2]
+          version: "v0.1.0-rc.0.hotfix.1"
+        dev:
+          sha: commit1
+        prod:
+          sha: commit1
+
+  - name: "Re-run finalize for test (rerun converges, does not double-apply)"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      # Replays the identical merged-PR event, so finalize lands on its
+      # idempotency gate: state already records the merge SHA. The rerun must
+      # stay green while converging the release step (a find-or-create update,
+      # which is a synthetic no-op against the gitea backend) and must not
+      # double-apply state: ref, base_sha, patches, and the allocated hotfix
+      # version stay exactly as the first finalize recorded them. The
+      # release-object convergence itself is GitHub-only behavior, exercised by
+      # the real-GitHub validation fleet.
+      state:
+        test:
+          ref: "env/test"
+          base_sha: commit1
+          patches: [commit2]
+          version: "v0.1.0-rc.0.hotfix.1"
         dev:
           sha: commit1
         prod:

@@ -21,6 +21,8 @@ gh workflow run cascade-hotfix.yaml \
 
 The `plan` job fetches env branches and tags and runs `cascade hotfix plan`. The `apply` job then cherry-picks the fix onto a per-environment integration branch and opens a resolution pull request labeled `cascade-hotfix` (or `cascade-hotfix-conflict` if the cherry-pick collides). Merging that pull request runs build, deploy, and finalize, which write the diverged state.
 
+Finalize is rerun-safe. It records the diverged state on trunk, then creates the hotfix tag and release. If the run fails partway (for example the release API errors after the state commit), rerun the finalize job: the rerun completes the missing tag or release with the version already recorded, without double-applying state or allocating a new version.
+
 ## Environment branches and the stale-branch self-heal
 
 When an environment needs to diverge, the fix is staged on `env/<env>` (for example `env/test`), created on demand at the environment's recorded state SHA. The cherry-pick itself lands on `hotfix/<env>/<short-sha>`, based on `env/<env>`.
