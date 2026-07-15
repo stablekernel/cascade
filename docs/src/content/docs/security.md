@@ -119,7 +119,7 @@ Releases are signed with keyless [cosign](https://github.com/sigstore/cosign) vi
 ```bash
 cosign verify-blob \
   --bundle=checksums.txt.bundle \
-  --certificate-identity-regexp='^https://github.com/stablekernel/cascade' \
+  --certificate-identity-regexp='^https://github.com/stablekernel/cascade/' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   checksums.txt
 ```

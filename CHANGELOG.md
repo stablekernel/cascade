@@ -50,6 +50,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **ci:** Lint workflows with actionlint and shellcheck, and cover the
   setup-cli install script with hermetic fixture tests
 - **ci:** Run the e2e harness tests under the race detector
+- **e2e:** Repin act runner image to current upstream digest (#572)
 - **docs:** Publish release verification on the security page, add the code of
   conduct, refresh stale install and pin examples, and add package
   documentation
