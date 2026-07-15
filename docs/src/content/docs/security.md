@@ -147,7 +147,8 @@ Releases also carry SLSA provenance in GitHub's attestation store, verifiable wi
 ```bash
 gh attestation verify cascade_VERSION_linux_amd64.tar.gz \
   --repo stablekernel/cascade \
-  --certificate-identity https://github.com/stablekernel/cascade/.github/workflows/release.yaml@refs/tags/vVERSION
+  --cert-identity https://github.com/stablekernel/cascade/.github/workflows/release.yaml@refs/tags/vVERSION \
+  --cert-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 This proves the artifact was built by the release workflow for that exact tag, not on someone's laptop.
