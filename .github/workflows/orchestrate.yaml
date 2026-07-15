@@ -137,9 +137,12 @@ jobs:
             --head-sha "${{ needs.setup.outputs.head_sha }}" \
             --contributors \
             --repo "${{ github.repository }}")
-          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$RESULT" | jq -r '.changelog' >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          CASCADE_DELIM="$(dd if=/dev/urandom bs=15 count=1 status=none | base64)"
+          {
+            echo "changelog<<${CASCADE_DELIM}"
+            echo "$RESULT" | jq -r '.changelog'
+            echo "${CASCADE_DELIM}"
+          } >> "$GITHUB_OUTPUT"
       - name: Manage Release
         uses: ./.github/actions/manage-release
         with:

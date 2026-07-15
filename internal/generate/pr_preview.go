@@ -209,11 +209,7 @@ func (g *PRPreviewGenerator) writePlanSummaryStep(sb *strings.Builder) {
 	sb.WriteString("          } > cascade-summary.md\n")
 	sb.WriteString("          cat cascade-summary.md >> \"$GITHUB_STEP_SUMMARY\"\n")
 	if g.commentEnabled() {
-		sb.WriteString("          {\n")
-		sb.WriteString("            echo 'body<<CASCADE_EOF'\n")
-		sb.WriteString("            cat cascade-summary.md\n")
-		sb.WriteString("            echo 'CASCADE_EOF'\n")
-		sb.WriteString("          } >> \"$GITHUB_OUTPUT\"\n")
+		writeOutputHeredocLines(sb, "          ", "body", "cat cascade-summary.md")
 	}
 	sb.WriteString("\n")
 }
@@ -224,10 +220,17 @@ func (g *PRPreviewGenerator) writePlanSummaryStep(sb *strings.Builder) {
 func (g *PRPreviewGenerator) writeCommentStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Post plan comment\n")
 	writeActionUses(sb, g.config, "        ", actionGithubScript)
+	// The plan body is derived from the PR head's manifest, which is
+	// fork-controllable on pull_request. GitHub expands ${{ }} into the script
+	// source before Node parses it, so splicing the output into a template
+	// literal lets a backtick or ${ in the body break or extend the script.
+	// Bind it via env: and read it from process.env instead.
+	sb.WriteString("        env:\n")
+	sb.WriteString("          PLAN_BODY: ${{ steps.summary.outputs.body }}\n")
 	sb.WriteString("        with:\n")
 	sb.WriteString("          script: |\n")
 	fmt.Fprintf(sb, "            const marker = '%s';\n", prPreviewMarker)
-	sb.WriteString("            const body = marker + '\\n' + `${{ steps.summary.outputs.body }}`;\n")
+	sb.WriteString("            const body = marker + '\\n' + process.env.PLAN_BODY;\n")
 	sb.WriteString("            const { owner, repo } = context.repo;\n")
 	sb.WriteString("            const issue_number = context.payload.pull_request.number;\n")
 	sb.WriteString("            const comments = await github.paginate(github.rest.issues.listComments, {\n")

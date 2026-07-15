@@ -1172,9 +1172,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 		changelogCmd += " --contributors"
 	}
 	fmt.Fprintf(sb, "          RESULT=$(%s)\n", changelogCmd)
-	sb.WriteString("          echo \"changelog<<EOF\" >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"EOF\" >> \"$GITHUB_OUTPUT\"\n")
+	writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
 
 	// Extract release data from promotion result (for prerelease/publish steps)
 	// This contains the correct SHA and versions for the environment being released,

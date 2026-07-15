@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/ghaoutput"
@@ -32,13 +31,10 @@ func GitHubOutput(key, value string) (err error) {
 		}
 	}()
 
-	// Handle multiline values using heredoc syntax
-	if strings.Contains(value, "\n") {
-		delimiter := "EOF_" + key
-		_, err = fmt.Fprintf(f, "%s<<%s\n%s\n%s\n", key, delimiter, value, delimiter)
-	} else {
-		_, err = fmt.Fprintf(f, "%s=%s\n", key, value)
-	}
+	// Multiline values take the heredoc form with a random per-value
+	// delimiter (see ghaoutput.FormatLine): a deterministic delimiter is
+	// forgeable by a value that carries it as a bare line.
+	_, err = f.WriteString(ghaoutput.FormatLine(key, value))
 
 	return err
 }

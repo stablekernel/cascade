@@ -331,9 +331,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          fi\n")
 	sb.WriteString("          \n")
 	sb.WriteString("          RESULT=$(cascade generate-changelog --base-sha \"$LATEST_SHA\" --head-sha \"$SOURCE_SHA\" --repo \"${{ github.repository }}\")\n")
-	sb.WriteString("          echo \"changelog<<EOF\" >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"EOF\" >> \"$GITHUB_OUTPUT\"\n")
+	writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
 
 	// Create draft release
 	sb.WriteString("      - name: Create Draft Release\n")

@@ -174,9 +174,12 @@ jobs:
           fi
           
           RESULT=$(cascade generate-changelog --base-sha "$TARGET_SHA" --head-sha "$SOURCE_SHA" --repo "${{ github.repository }}" --contributors)
-          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$RESULT" | jq -r '.changelog' >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          CASCADE_DELIM="$(dd if=/dev/urandom bs=15 count=1 status=none | base64)"
+          {
+            echo "changelog<<${CASCADE_DELIM}"
+            echo "$RESULT" | jq -r '.changelog'
+            echo "${CASCADE_DELIM}"
+          } >> "$GITHUB_OUTPUT"
       - name: Extract Release Data
         id: release-data
         env:

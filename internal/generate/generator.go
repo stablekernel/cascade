@@ -1976,9 +1976,7 @@ func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 			sb.WriteString("            --contributors \\\n")
 		}
 		sb.WriteString("            --repo \"${{ github.repository }}\")\n")
-		sb.WriteString("          echo \"changelog<<EOF\" >> \"$GITHUB_OUTPUT\"\n")
-		sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' >> \"$GITHUB_OUTPUT\"\n")
-		sb.WriteString("          echo \"EOF\" >> \"$GITHUB_OUTPUT\"\n")
+		writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
 	}
 }
 
