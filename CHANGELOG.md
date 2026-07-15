@@ -26,10 +26,22 @@ A `Migration` section is added to any release that bumps `schema_version`.
 ### Fixed
 
 - **statewrite:** Read manifest content and the optimistic-lock sha as one
-  snapshot so concurrent finalize writes cannot lose an update
+  snapshot so concurrent finalize writes cannot lose an update, and route the
+  rollback finalize through the same optimistic-lock write path instead of its
+  own unguarded PUT
 - **statewrite:** Fail fast with the real cause when the manifest lookup
   returns 404 (file absent or the token lacks repo access) instead of retrying
   into a misleading empty-manifest error
+- **statewrite:** Retry transient state-write API failures (rate limits, 5xx,
+  transport errors) and fail fast on permanent authorization and not-found
+  errors instead of treating every failure the same way
+- **git:** Apply the same split to push: retry transient transport and
+  rate-limit failures, fail fast on authorization, not-found, and 4xx RPC
+  failures
+- **generate:** Emit a state-write shell that refuses unguarded PUTs, fails
+  fast on permanent API errors, and retries rate-limited writes
+- **generate:** Rebase an absolute manifest path to repo-relative in all
+  emitted output so generated workflows are reproducible across checkouts
 - **generate:** Correct emitted output keys, branch-case resolution, manifest
   routing, and unresolved state-ref handling
 - **generate:** Emit `always()` alone when a forced job has no other conditions
@@ -52,8 +64,8 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **ci:** Run the e2e harness tests under the race detector
 - **e2e:** Repin act runner image to current upstream digest (#572)
 - **docs:** Publish release verification on the security page, add the code of
-  conduct, refresh stale install and pin examples, and add package
-  documentation
+  conduct, refresh stale install and pin examples, add package documentation,
+  and correct the attestation verification flags and manifest anchor links
 - **test:** Cover reset deletion, change detection, git write paths, simulate
   what-ifs, and visualize theming
 
