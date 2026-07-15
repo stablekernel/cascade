@@ -22,7 +22,6 @@ import (
 	"github.com/stablekernel/cascade/internal/graph"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	initcmd "github.com/stablekernel/cascade/internal/initcmd"
-	"github.com/stablekernel/cascade/internal/log"
 	"github.com/stablekernel/cascade/internal/orchestrate"
 	"github.com/stablekernel/cascade/internal/pinreconcile"
 	"github.com/stablekernel/cascade/internal/plan"
@@ -44,14 +43,19 @@ var (
 	date    = "unknown"
 )
 
-// Global flags
-var (
-	flagDryRun bool
-	flagTrace  bool
-	flagJSON   bool
-)
-
 func main() {
+	rootCmd := newRootCommand()
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(exitCodeFor(err))
+	}
+}
+
+// newRootCommand builds the root command with all global flags and
+// subcommands wired. Extracted from main so tests can execute the real
+// command tree in-process.
+func newRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "cascade",
 		Short: "Compile a release manifest into GitHub Actions workflows",
@@ -67,24 +71,18 @@ full lifecycle: generating workflows, orchestrating builds and deploys,
 promoting releases through environments, and the hotfix and rollback
 off-ramps.`,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			// Configure logging based on flags
-			if flagTrace {
-				log.EnableTrace()
-			}
-			// Disable colors when outputting JSON or in non-interactive mode
-			if flagJSON || os.Getenv("NO_COLOR") != "" {
-				log.SetColors(false)
-			}
-			// Set global flags for access by subcommands
-			globals.SetDryRun(flagDryRun)
-			globals.SetJSON(flagJSON)
+			// Apply the global flags (--dry-run, --json, --trace) to
+			// process-wide state. Subcommand trees that define their own
+			// PersistentPreRunE shadow this hook, so they call
+			// globals.ApplyFlags themselves.
+			globals.ApplyFlags(cmd)
 		},
 	}
 
 	// Add persistent (global) flags
-	rootCmd.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "Preview mode - show what would happen without making changes")
-	rootCmd.PersistentFlags().BoolVar(&flagTrace, "trace", false, "Enable TRACE level logging for detailed internals")
-	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "Output structured JSON for workflow consumption")
+	rootCmd.PersistentFlags().Bool("dry-run", false, "Preview mode - show what would happen without making changes")
+	rootCmd.PersistentFlags().Bool("trace", false, "Enable TRACE level logging for detailed internals")
+	rootCmd.PersistentFlags().Bool("json", false, "Output structured JSON for workflow consumption")
 
 	// Add subcommands
 	rootCmd.AddCommand(branchprotection.NewCommand())
@@ -111,10 +109,7 @@ off-ramps.`,
 	rootCmd.AddCommand(versionpkg.NewCommand())
 	rootCmd.AddCommand(newVersionCmd())
 
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(exitCodeFor(err))
-	}
+	return rootCmd
 }
 
 // exitCodeFor maps a command error to a process exit code. A command may opt
