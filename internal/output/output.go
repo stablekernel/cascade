@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
+	"sort"
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/ghaoutput"
@@ -32,21 +32,25 @@ func GitHubOutput(key, value string) (err error) {
 		}
 	}()
 
-	// Handle multiline values using heredoc syntax
-	if strings.Contains(value, "\n") {
-		delimiter := "EOF_" + key
-		_, err = fmt.Fprintf(f, "%s<<%s\n%s\n%s\n", key, delimiter, value, delimiter)
-	} else {
-		_, err = fmt.Fprintf(f, "%s=%s\n", key, value)
-	}
+	// Multiline values take the heredoc form with a random per-value
+	// delimiter (see ghaoutput.FormatLine): a deterministic delimiter is
+	// forgeable by a value that carries it as a bare line.
+	_, err = f.WriteString(ghaoutput.FormatLine(key, value))
 
 	return err
 }
 
-// GitHubOutputMultiple writes multiple key-value pairs to GITHUB_OUTPUT.
+// GitHubOutputMultiple writes multiple key-value pairs to GITHUB_OUTPUT in
+// sorted key order, so repeated runs produce identical output files instead
+// of Go's randomized map-range order.
 func GitHubOutputMultiple(outputs map[string]string) error {
-	for key, value := range outputs {
-		if err := GitHubOutput(key, value); err != nil {
+	keys := make([]string, 0, len(outputs))
+	for key := range outputs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := GitHubOutput(key, outputs[key]); err != nil {
 			return err
 		}
 	}
@@ -78,7 +82,7 @@ func GitHubStepSummary(content string) (err error) {
 
 // JSON outputs structured data as JSON to stdout.
 // This is used with the --json flag for workflow consumption.
-func JSON(data interface{}) error {
+func JSON(data any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(data)
@@ -86,7 +90,7 @@ func JSON(data interface{}) error {
 
 // Result outputs data either as JSON (if --json flag is set) or as human-readable text.
 // The textFn is called to produce human-readable output when not in JSON mode.
-func Result(data interface{}, textFn func()) error {
+func Result(data any, textFn func()) error {
 	if globals.JSON() {
 		return JSON(data)
 	}

@@ -2,6 +2,7 @@ package generate
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -183,7 +184,9 @@ func (g *ReconcileGenerator) writeChangedFilesStep(sb *strings.Builder) {
 
 // writeCheckStep runs the real `cascade reconcile --check` command (never a
 // hand-rolled shell/yq scan) so the detector's relevance decision exactly
-// matches what a subsequent reconcile would adopt.
+// matches what a subsequent reconcile would adopt. The manifest flags keep the
+// detector consistent with the companion's write invocation on a repo with a
+// non-default manifest path or key.
 func (g *ReconcileGenerator) writeCheckStep(sb *strings.Builder) {
 	sb.WriteString("      - name: Check for a governed pin change\n")
 	sb.WriteString("        run: |\n")
@@ -191,7 +194,29 @@ func (g *ReconcileGenerator) writeCheckStep(sb *strings.Builder) {
 	sb.WriteString("          while IFS= read -r f; do\n")
 	sb.WriteString("            [ -n \"$f\" ] && args+=(--changed-file \"$f\")\n")
 	sb.WriteString("          done < changed-files.txt\n")
-	fmt.Fprintf(sb, "          cascade reconcile --check --check-output %s \"${args[@]}\"\n", reconcileCheckArtifactFile)
+	fmt.Fprintf(sb, "          cascade reconcile --check --check-output %s %s \"${args[@]}\"\n", reconcileCheckArtifactFile, g.manifestFlags())
+}
+
+// manifestFlags renders the --config/--manifest-key pair every emitted
+// reconcile invocation carries, so the command operates on the manifest this
+// workflow was generated from rather than the default path and key.
+func (g *ReconcileGenerator) manifestFlags() string {
+	return fmt.Sprintf("--config %q --manifest-key %q", g.getManifestFilePath(), g.config.GetManifestKey())
+}
+
+// getManifestFilePath returns the repo-relative manifest path for use in the
+// generated workflow, matching the sibling generators' resolution.
+func (g *ReconcileGenerator) getManifestFilePath() string {
+	manifestPath := g.config.GetManifestFile()
+	if !filepath.IsAbs(manifestPath) {
+		return manifestPath
+	}
+	if g.baseDir != "" {
+		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
+			return rel
+		}
+	}
+	return ".github/manifest.yaml"
 }
 
 // getStateTokenRef returns the token expression used to push the reconcile
@@ -422,7 +447,7 @@ func (g *ReconcileGenerator) writeCompanionReconcileStep(sb *strings.Builder) {
 	sb.WriteString("          while IFS= read -r f; do\n")
 	sb.WriteString("            [ -n \"$f\" ] && args+=(--changed-file \"$f\")\n")
 	sb.WriteString("          done < changed-files.txt\n")
-	sb.WriteString("          cascade reconcile \"${args[@]}\"\n")
+	fmt.Fprintf(sb, "          cascade reconcile %s \"${args[@]}\"\n", g.manifestFlags())
 	sb.WriteString("\n")
 }
 

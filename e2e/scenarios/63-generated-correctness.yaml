@@ -1,0 +1,75 @@
+name: "Generated correctness hardening"
+description: |
+  Locks in three generated-output correctness properties in one single-env
+  manifest that also enables the drift-check and reconcile lanes:
+
+  1. Release finalize branch resolution: release.yaml is dispatched with
+     --ref <tag> (the repo's own documented dispatch workaround), so the
+     state-push branch must resolve through an explicit case on refs/heads/*.
+     The old prefix-strip left BRANCH=refs/tags/... intact, the :-trunk
+     fallback never fired, and finalize exhausted its retries against a
+     branch that does not exist.
+
+  2. Reconcile manifest identity: every emitted cascade reconcile invocation
+     (detector and companion) names the manifest it was generated from via
+     --config/--manifest-key, so a repo with a non-default manifest path or
+     key reconciles the right file instead of the default.
+
+  3. Drift-check manifest path: the drift lane routes the manifest path
+     through the same repo-relative rebase every sibling generator uses, so
+     an absolute manifest_file on the generating machine is never baked into
+     the emitted workflow.
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  drift_check:
+    enabled: true
+  reconcile:
+    enabled: true
+
+steps:
+  - name: "Commit triggers generation; assert branch-case, reconcile flags, drift path"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        # Single-env repos emit the release workflow at the promote path.
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            # Branch resolution switches on the ref type and falls back to
+            # trunk for any non-branch ref (tag dispatch).
+            - "case \"$GITHUB_REF\" in"
+            - "refs/heads/*) BRANCH=\"${GITHUB_REF#refs/heads/}\" ;;"
+            - "*) BRANCH=\"main\" ;;"
+          not_contains:
+            # The prefix-strip form that leaves refs/tags/* values intact.
+            - "BRANCH=\"${GITHUB_REF##refs/heads/}\""
+        - path: ".github/workflows/cascade-reconcile-check.yaml"
+          contains:
+            - "cascade reconcile --check --check-output pin-reconcile-result.json --config \".github/manifest.yaml\" --manifest-key \"ci\""
+        - path: ".github/workflows/cascade-reconcile-companion.yaml"
+          contains:
+            - "cascade reconcile --config \".github/manifest.yaml\" --manifest-key \"ci\""
+        - path: ".github/workflows/cascade-drift-check.yaml"
+          contains:
+            - "cascade verify --config .github/manifest.yaml"
+            - "cascade generate-workflow --config .github/manifest.yaml"
+
+  - name: "Verify clean against pristine generated output"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

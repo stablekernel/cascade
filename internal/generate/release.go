@@ -331,9 +331,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          fi\n")
 	sb.WriteString("          \n")
 	sb.WriteString("          RESULT=$(cascade generate-changelog --base-sha \"$LATEST_SHA\" --head-sha \"$SOURCE_SHA\" --repo \"${{ github.repository }}\")\n")
-	sb.WriteString("          echo \"changelog<<EOF\" >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' >> \"$GITHUB_OUTPUT\"\n")
-	sb.WriteString("          echo \"EOF\" >> \"$GITHUB_OUTPUT\"\n")
+	writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
 
 	// Create draft release
 	sb.WriteString("      - name: Create Draft Release\n")
@@ -400,9 +398,14 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 	writeGitConfigSteps(sb, g.config, "          ")
 
 	// release.yaml runs on workflow_dispatch (--ref TAG); resolve a real
-	// branch to push to, falling back to trunk_branch.
-	sb.WriteString("          BRANCH=\"${GITHUB_REF##refs/heads/}\"\n")
-	fmt.Fprintf(sb, "          BRANCH=\"${BRANCH:-%s}\"\n", g.config.TrunkBranch)
+	// branch to push to, falling back to trunk_branch. The ref type must be
+	// switched explicitly: a prefix-strip of refs/heads/ leaves a tag ref
+	// intact (BRANCH=refs/tags/...), which is non-empty, so an :-default
+	// fallback never fires and finalize pushes against a bogus branch.
+	sb.WriteString("          case \"$GITHUB_REF\" in\n")
+	sb.WriteString("            refs/heads/*) BRANCH=\"${GITHUB_REF#refs/heads/}\" ;;\n")
+	fmt.Fprintf(sb, "            *) BRANCH=\"%s\" ;;\n", g.config.TrunkBranch)
+	sb.WriteString("          esac\n")
 	sb.WriteString("          \n")
 
 	// Function so the retry loop can re-apply yq edits after each

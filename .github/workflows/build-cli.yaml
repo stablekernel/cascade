@@ -14,7 +14,10 @@ on:
     outputs:
       result:
         description: 'Build result (success/failure)'
-        value: ${{ jobs.build.result }}
+        # Must reference a real job output: in a workflow_call output the jobs
+        # context exposes only outputs, so jobs.build.result resolves empty and
+        # the caller's build_cli_result guard never sees a value.
+        value: ${{ jobs.build.outputs.result }}
 
 permissions:
   contents: read
@@ -23,6 +26,8 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.result.outputs.result }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -53,3 +58,12 @@ jobs:
           path: cascade
           if-no-files-found: error
           retention-days: 1
+
+      # Runs even when a prior step failed so the job output carries the real
+      # success/failure signal; job.status here reflects the steps above.
+      - name: Record result
+        id: result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "result=$JOB_STATUS" >> "$GITHUB_OUTPUT"

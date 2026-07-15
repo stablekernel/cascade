@@ -749,6 +749,41 @@ func TestResolveDependency(t *testing.T) {
 	}
 }
 
+// TestResolveDependency_BuildCannotDependOnDeploy proves the documented
+// constraint ("builds can only depend on other builds or validate") is
+// enforced on both resolution legs. Accepting a build -> deploy edge inverts
+// build-before-deploy ordering: the build job gains needs: deploy-<name> and
+// waits for a deploy that should run after it.
+func TestResolveDependency_BuildCannotDependOnDeploy(t *testing.T) {
+	cfg := &TrunkConfig{
+		Builds:  []BuildConfig{{Name: "app"}},
+		Deploys: []DeployConfig{{Name: "infra"}},
+		External: []ExternalRepoConfig{
+			{Repo: "org/cdk", Deploys: []ExternalDeployConfig{{Name: "cdk"}}},
+		},
+	}
+
+	// Explicit prefix leg.
+	_, err := cfg.ResolveDependency("deploy:infra", CallbackTypeBuild)
+	assert.Error(t, err, "explicit deploy: ref from a build must be rejected")
+
+	_, err = cfg.ResolveDependency("external:cdk", CallbackTypeBuild)
+	assert.Error(t, err, "explicit external: ref from a build must be rejected")
+
+	// Implicit leg: a name that only matches a deploy must not fall through to
+	// the shared resolution tail.
+	_, err = cfg.ResolveDependency("infra", CallbackTypeBuild)
+	assert.Error(t, err, "implicit deploy match from a build must be rejected")
+
+	_, err = cfg.ResolveDependency("cdk", CallbackTypeBuild)
+	assert.Error(t, err, "implicit external match from a build must be rejected")
+
+	// Builds may still depend on builds through both legs.
+	id, err := cfg.ResolveDependency("build:app", CallbackTypeBuild)
+	assert.NoError(t, err)
+	assert.Equal(t, "build-app", id)
+}
+
 func TestResolveDependency_SameNamePrefersBuilds(t *testing.T) {
 	// Same name exists as both build and deploy - deploys prefer builds
 	cfg := &TrunkConfig{

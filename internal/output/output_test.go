@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -54,11 +56,54 @@ func TestGitHubOutputMultiline(t *testing.T) {
 	}
 
 	// Should use heredoc syntax
-	if !strings.Contains(string(content), "changelog<<EOF_changelog") {
+	if !strings.Contains(string(content), "changelog<<") {
 		t.Errorf("expected heredoc syntax, got %s", content)
 	}
 	if !strings.Contains(string(content), "line1\nline2\nline3") {
 		t.Errorf("expected multiline content preserved, got %s", content)
+	}
+}
+
+// TestGitHubOutputMultilineDelimiterNotForgeable proves a value carrying the
+// old deterministic delimiter as one of its own lines cannot terminate the
+// heredoc early and forge additional outputs, and that the delimiter is no
+// longer derivable from the key.
+func TestGitHubOutputMultilineDelimiterNotForgeable(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "output.txt")
+	t.Setenv("GITHUB_OUTPUT", outputFile)
+
+	injected := "line1\nEOF_changelog\nforged=v9.9.9\nline2"
+	if err := GitHubOutput("changelog", injected); err != nil {
+		t.Fatalf("GitHubOutput failed: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	open := strings.SplitN(lines[0], "<<", 2)
+	if len(open) != 2 || open[0] != "changelog" {
+		t.Fatalf("first line must be changelog<<delimiter, got %q", lines[0])
+	}
+	delim := open[1]
+	if delim == "EOF_changelog" {
+		t.Fatalf("delimiter must not be derivable from the key, got %q", delim)
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == delim {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		t.Fatalf("closing delimiter %q not found in %q", delim, content)
+	}
+	if got := strings.Join(lines[1:end], "\n"); got != injected {
+		t.Errorf("value must round-trip intact, got %q want %q", got, injected)
 	}
 }
 
@@ -89,6 +134,45 @@ func TestGitHubOutputMultiple(t *testing.T) {
 	}
 	if !strings.Contains(contentStr, "sha=abc123") {
 		t.Errorf("expected sha output, got %s", contentStr)
+	}
+}
+
+// TestGitHubOutputMultipleSortedOrder proves the entries render in sorted key
+// order rather than Go's randomized map-range order, so repeated runs produce
+// identical output files.
+func TestGitHubOutputMultipleSortedOrder(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "output.txt")
+	t.Setenv("GITHUB_OUTPUT", outputFile)
+
+	outputs := map[string]string{
+		"kilo": "1", "alpha": "2", "hotel": "3", "bravo": "4", "juliet": "5",
+		"delta": "6", "india": "7", "charlie": "8", "golf": "9", "echo": "10",
+	}
+	if err := GitHubOutputMultiple(outputs); err != nil {
+		t.Fatalf("GitHubOutputMultiple failed: %v", err)
+	}
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		key, _, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("unexpected output line %q", line)
+		}
+		got = append(got, key)
+	}
+	want := make([]string, 0, len(outputs))
+	for k := range outputs {
+		want = append(want, k)
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("keys must render sorted: got %v want %v", got, want)
 	}
 }
 

@@ -339,6 +339,16 @@ func (g *Generator) Generate() (string, error) {
 		return "", err
 	}
 
+	// Guard the external-release tag reference before emission. CLI-side
+	// config validation checks the same format, but Generate is exported and
+	// must not panic when called without it.
+	if g.config.HasExternalRelease() {
+		callback, output, ok := strings.Cut(g.config.ReleaseBuild.Tag, ".")
+		if !ok || callback == "" || output == "" {
+			return "", fmt.Errorf("release_build.tag %q invalid format (expected callback.output, e.g., goreleaser.tag)", g.config.ReleaseBuild.Tag)
+		}
+	}
+
 	// Generate workflow YAML
 	var sb strings.Builder
 
@@ -348,7 +358,9 @@ func (g *Generator) Generate() (string, error) {
 	g.writePermissions(&sb)
 	// Note: top-level outputs removed - only valid for workflow_call triggers
 	// Outputs are still available via jobs.finalize.outputs.* if needed
-	g.writeJobs(&sb)
+	if err := g.writeJobs(&sb); err != nil {
+		return "", err
+	}
 
 	return sb.String(), nil
 }
@@ -829,7 +841,7 @@ func (g *Generator) writePermissions(sb *strings.Builder) {
 	writeTopLevelPermissions(sb, base)
 }
 
-func (g *Generator) writeJobs(sb *strings.Builder) {
+func (g *Generator) writeJobs(sb *strings.Builder) error {
 	sb.WriteString("jobs:\n")
 	g.writeSetupJob(sb)
 
@@ -837,23 +849,27 @@ func (g *Generator) writeJobs(sb *strings.Builder) {
 	sorted, _ := g.graph.TopologicalSort()
 	for _, jobID := range sorted {
 		info := g.graph.Nodes[jobID]
+		var err error
 		switch info.Type {
 		case config.CallbackTypeValidate:
-			g.writeCallbackJob(sb, info, g.config.Validate.Workflow)
+			err = g.writeCallbackJob(sb, info, g.config.Validate.Workflow)
 		case config.CallbackTypeBuild:
 			for _, b := range g.config.Builds {
 				if b.Name == info.Name {
-					g.writeCallbackJob(sb, info, b.Workflow)
+					err = g.writeCallbackJob(sb, info, b.Workflow)
 					break
 				}
 			}
 		case config.CallbackTypeDeploy:
 			for _, d := range g.config.Deploys {
 				if d.Name == info.Name {
-					g.writeCallbackJob(sb, info, d.Workflow)
+					err = g.writeCallbackJob(sb, info, d.Workflow)
 					break
 				}
 			}
+		}
+		if err != nil {
+			return err
 		}
 	}
 
@@ -865,6 +881,7 @@ func (g *Generator) writeJobs(sb *strings.Builder) {
 	}
 
 	g.writeFinalizeJob(sb, sorted)
+	return nil
 }
 
 // changelogJobEnabled reports whether a dedicated custom-changelog job should be
@@ -986,7 +1003,7 @@ func writeSecretsBlock(sb *strings.Builder, s *config.SecretsConfig) {
 	sb.WriteString("\n")
 }
 
-func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, workflow string) {
+func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, workflow string) error {
 	// For reusable-workflow callbacks that declare passthrough artifact downloads,
 	// emit a cascade-owned pre-job that fetches the artifacts before the callback
 	// runs. The pre-job depends on the same upstream jobs as the callback itself so
@@ -1054,13 +1071,17 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
 
 	// with: pass outputs from dependencies
-	g.writeWithInputs(sb, info)
+	if err := g.writeWithInputs(sb, info); err != nil {
+		return err
+	}
 
 	writeSecretsBlock(sb, info.Secrets)
 
 	// Generate retry jobs if retries > 0
 	for i := 1; i <= info.Retries; i++ {
-		g.writeRetryJob(sb, info, workflow, i)
+		if err := g.writeRetryJob(sb, info, workflow, i); err != nil {
+			return err
+		}
 	}
 
 	// For reusable-workflow callbacks that declare a passthrough artifact upload,
@@ -1069,6 +1090,7 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	if info.PassthroughArtifact != nil && info.PassthroughArtifact.Upload != "" {
 		g.writePassthroughUploadJob(sb, info)
 	}
+	return nil
 }
 
 // writeStrategyBlock emits the GHA strategy: block for a build matrix.
@@ -1171,6 +1193,12 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 	}
 
 	if info.RunPolicy == config.RunPolicyAlways || info.RunPolicy == config.RunPolicyForce {
+		// With no further conditions, always() must stand alone: a trailing
+		// "&&" with no right operand is rejected by GitHub's expression parser.
+		if len(conditions) == 0 {
+			sb.WriteString("    if: always()\n")
+			return
+		}
 		sb.WriteString("    if: |\n      always() &&\n")
 	} else if len(conditions) > 0 {
 		sb.WriteString("    if: |\n")
@@ -1195,7 +1223,7 @@ func (g *Generator) jobHasInput(jobID, inputName string) bool {
 	return false
 }
 
-func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
+func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) error {
 	deps := g.graph.GetDirectDependencies(info.JobID)
 
 	var inputs []string
@@ -1285,7 +1313,11 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 	//   - literals emit as-is.
 	// Standard inputs (environment, sha, dependency outputs) already handled
 	// above take precedence and are not duplicated here.
-	inputs = append(inputs, g.operatorInputLines(info, seen(inputs))...)
+	operatorLines, err := g.operatorInputLines(info, seen(inputs))
+	if err != nil {
+		return err
+	}
+	inputs = append(inputs, operatorLines...)
 
 	// Only write with: block if there are inputs
 	if len(inputs) > 0 {
@@ -1294,6 +1326,7 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) {
 			sb.WriteString(input + "\n")
 		}
 	}
+	return nil
 }
 
 // seen extracts the set of input keys already present in the given "      key: value"
@@ -1338,10 +1371,14 @@ func (g *Generator) callbackInputs(info CallbackInfo) map[string]interface{} {
 // survive verbatim; ${{ state.* }} references resolve at generation time;
 // literals emit as-is. Keys already present in skip (standard inputs) are
 // omitted. Output is sorted for deterministic generation.
-func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct{}) []string {
+//
+// An unresolved state reference fails generation, per the resolveInputValue
+// contract: state is not a GitHub Actions runtime context, so emitting the
+// dead ref would produce a workflow GitHub rejects at parse time.
+func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct{}) ([]string, error) {
 	declared := g.callbackInputs(info)
 	if len(declared) == 0 {
-		return nil
+		return nil, nil
 	}
 	keys := make([]string, 0, len(declared))
 	for k := range declared {
@@ -1365,16 +1402,14 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 		}
 		val, err := resolveInputValue(s, g.state)
 		if err != nil {
-			// Unresolved state ref: emit verbatim so the failure is visible in
-			// the generated workflow rather than silently dropped.
-			val = s
+			return nil, fmt.Errorf("input %q of %s: %w", k, info.JobID, err)
 		}
 		lines = append(lines, fmt.Sprintf("      %s: %s", k, val))
 	}
-	return lines
+	return lines, nil
 }
 
-func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workflow string, retryNum int) {
+func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workflow string, retryNum int) error {
 	retryJobName := fmt.Sprintf("%s-retry-%d", info.JobID, retryNum)
 	prevJobName := info.JobID
 	if retryNum > 1 {
@@ -1404,8 +1439,11 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	writeCallbackPermissions(sb, "    ", info.Permissions)
 
 	fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(workflow))
-	g.writeWithInputs(sb, info)
+	if err := g.writeWithInputs(sb, info); err != nil {
+		return err
+	}
 	writeSecretsBlock(sb, info.Secrets)
+	return nil
 }
 
 func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
@@ -1447,16 +1485,18 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	}
 	writeJobPermissions(sb, "    ", finalizeScopes)
 
-	// Output all callback outputs (sorted for deterministic output)
-	// g.outputs is keyed by job ID (e.g., "build-app")
+	// Output all callback outputs (sorted for deterministic output).
+	// g.outputs is keyed by job ID (e.g., "build-app"). The emitted key also
+	// derives from the job ID, not the bare callback name: a build and a
+	// deploy may legally share a name, and name-derived keys would emit the
+	// same YAML mapping key twice.
 	var outputLines []string
 	for jobID, outputs := range g.outputs {
-		info, ok := g.graph.Nodes[jobID]
-		if !ok {
+		if _, ok := g.graph.Nodes[jobID]; !ok {
 			continue
 		}
 		for _, out := range outputs {
-			outputLines = append(outputLines, fmt.Sprintf("      %s_%s: ${{ needs.%s.outputs.%s }}\n", info.Name, out, jobID, out))
+			outputLines = append(outputLines, fmt.Sprintf("      %s_%s: ${{ needs.%s.outputs.%s }}\n", config.OutputKey(jobID), out, jobID, out))
 		}
 	}
 	// Only write outputs section if there are actual outputs
@@ -1574,7 +1614,9 @@ func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
 		sb.WriteString("          echo \"### Outputs\" >> \"$GITHUB_STEP_SUMMARY\"\n")
 		sb.WriteString("          HAS_OUTPUTS=false\n")
 
-		// Collect and sort outputs for deterministic order
+		// Collect and sort outputs for deterministic order. Displayed keys
+		// derive from the job ID (matching the finalize outputs: keys) so a
+		// build and a deploy sharing a name render distinct rows.
 		var outputEntries []struct {
 			name  string
 			jobID string
@@ -1582,8 +1624,7 @@ func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
 		}
 		// g.outputs is keyed by job ID
 		for jobID, outputs := range g.outputs {
-			info, ok := g.graph.Nodes[jobID]
-			if !ok {
+			if _, ok := g.graph.Nodes[jobID]; !ok {
 				continue
 			}
 			for _, out := range outputs {
@@ -1591,7 +1632,7 @@ func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
 					name  string
 					jobID string
 					out   string
-				}{info.Name, jobID, out})
+				}{config.OutputKey(jobID), jobID, out})
 			}
 		}
 		sort.Slice(outputEntries, func(i, j int) bool {
@@ -1970,9 +2011,7 @@ func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 			sb.WriteString("            --contributors \\\n")
 		}
 		sb.WriteString("            --repo \"${{ github.repository }}\")\n")
-		sb.WriteString("          echo \"changelog<<EOF\" >> \"$GITHUB_OUTPUT\"\n")
-		sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' >> \"$GITHUB_OUTPUT\"\n")
-		sb.WriteString("          echo \"EOF\" >> \"$GITHUB_OUTPUT\"\n")
+		writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
 	}
 }
 
@@ -2012,10 +2051,9 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 	if g.config.HasExternalRelease() {
 		// External release - update existing
 		sb.WriteString("          action: update\n")
-		// Parse callback.output reference to get the job output
-		parts := strings.SplitN(g.config.ReleaseBuild.Tag, ".", 2)
-		callbackName := parts[0]
-		outputName := parts[1]
+		// Parse the callback.output reference. Generate() already validated
+		// the format, so the cut cannot fail here.
+		callbackName, outputName, _ := strings.Cut(g.config.ReleaseBuild.Tag, ".")
 		// Find the job ID for this callback name. Iterate in declaration order
 		// (Order), not by ranging the Nodes map: a map range is randomized per
 		// process, so when two callbacks share a name across sections the break

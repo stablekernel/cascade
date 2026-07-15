@@ -1205,6 +1205,11 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 			}
 			return "", fmt.Errorf("build '%s' not found", name)
 		case "deploy":
+			// Builds can only depend on other builds or validate: a build ->
+			// deploy edge would invert build-before-deploy ordering.
+			if fromType == CallbackTypeBuild {
+				return "", fmt.Errorf("build cannot depend on deploy '%s': builds may only depend on builds or validate", name)
+			}
 			for _, d := range c.Deploys {
 				if d.Name == name {
 					return JobID(CallbackTypeDeploy, name), nil
@@ -1212,6 +1217,9 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 			}
 			return "", fmt.Errorf("deploy '%s' not found", name)
 		case "external":
+			if fromType == CallbackTypeBuild {
+				return "", fmt.Errorf("build cannot depend on external deploy '%s': builds may only depend on builds or validate", name)
+			}
 			for _, ext := range c.External {
 				for _, d := range ext.Deploys {
 					if d.Name == name {
@@ -1272,9 +1280,15 @@ func (c *TrunkConfig) ResolveDependency(depRef string, fromType string) (string,
 			return JobID(CallbackTypeExternal, depRef), nil
 		}
 	case CallbackTypeBuild:
-		// Builds can only depend on other builds or validate
+		// Builds can only depend on other builds or validate. A deploy or
+		// external match must not fall through to the shared resolution tail
+		// below: resolving it would emit needs: deploy-<name> on a build job
+		// and invert build-before-deploy ordering.
 		if foundInBuilds {
 			return JobID(CallbackTypeBuild, depRef), nil
+		}
+		if foundInDeploys || foundInExternal {
+			return "", fmt.Errorf("build cannot depend on '%s' (a deploy): builds may only depend on builds or validate", depRef)
 		}
 	}
 

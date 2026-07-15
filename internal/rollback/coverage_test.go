@@ -2,12 +2,10 @@ package rollback
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/stablekernel/cascade/internal/config"
-	"github.com/stablekernel/cascade/internal/statewrite"
 )
 
 // stateOnlyManifest writes a manifest that declares no config block at all, only
@@ -325,25 +323,9 @@ func TestTrunkBranchFromEnv(t *testing.T) {
 
 func TestWriteStateViaAPI_RequiresRepository(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "")
-	err := writeStateViaAPI("manifest.yaml", "msg", statewrite.Identity{})
+	err := (&Rollbacker{configPath: "manifest.yaml"}).writeStateViaAPI("msg")
 	if err == nil {
 		t.Fatal("expected error when GITHUB_REPOSITORY is unset")
-	}
-}
-
-func TestCommitAndPush_NoChangesIsNoOp(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	dir := t.TempDir()
-	gitInit(t, dir)
-	gitCommitFile(t, dir, "manifest.yaml", manifestAt("prodsha9999999", "v1.9.0"), "seed")
-
-	t.Chdir(dir)
-	// The committed manifest is unchanged, so commitAndPush observes a clean tree
-	// and returns nil without attempting any push.
-	if err := commitAndPush("manifest.yaml", "prod", statewrite.Identity{}); err != nil {
-		t.Fatalf("commitAndPush no-op: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package generate
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -68,6 +69,23 @@ func (g *DriftCheckGenerator) getCLIRef() string {
 	return cliSetupRef(g.config)
 }
 
+// getManifestFilePath returns the repo-relative manifest path for use in the
+// generated workflow, matching the sibling generators' resolution. An absolute
+// manifest_file would otherwise bake the generating machine's path into the
+// emitted workflow, where it cannot resolve in a checked-out repo.
+func (g *DriftCheckGenerator) getManifestFilePath() string {
+	manifestPath := g.config.GetManifestFile()
+	if !filepath.IsAbs(manifestPath) {
+		return manifestPath
+	}
+	if g.baseDir != "" {
+		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
+			return rel
+		}
+	}
+	return ".github/manifest.yaml"
+}
+
 // Generate creates the pull_request drift-check workflow content.
 func (g *DriftCheckGenerator) Generate() (string, error) {
 	if !g.Enabled() {
@@ -98,7 +116,7 @@ func (g *DriftCheckGenerator) GenerateComment() (string, error) {
 
 func (g *DriftCheckGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString(GeneratedFileMarker + "\n")
-	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.getManifestFilePath())
 }
 
 // writeCheckTrigger emits the pull_request trigger and the read-only top-level
@@ -143,7 +161,7 @@ func (g *DriftCheckGenerator) writeCheckJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Check for workflow drift\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          set +e\n")
-	fmt.Fprintf(sb, "          cascade verify --config %s > drift-report.txt 2>&1\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "          cascade verify --config %s > drift-report.txt 2>&1\n", g.getManifestFilePath())
 	sb.WriteString("          echo $? > drift-exit.txt\n")
 	sb.WriteString("          set -e\n")
 	sb.WriteString("          cat drift-report.txt\n")
@@ -167,7 +185,7 @@ func (g *DriftCheckGenerator) writeCheckJob(sb *strings.Builder) {
 	sb.WriteString("          CODE=$(cat drift-exit.txt)\n")
 	sb.WriteString("          if [ \"$CODE\" != \"0\" ]; then\n")
 	sb.WriteString("            echo \"Workflows are out of sync with the manifest.\"\n")
-	fmt.Fprintf(sb, "            echo \"Run: cascade generate-workflow --config %s --force\"\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "            echo \"Run: cascade generate-workflow --config %s --force\"\n", g.getManifestFilePath())
 	sb.WriteString("            echo \"Then commit the regenerated workflows.\"\n")
 	sb.WriteString("          fi\n")
 	sb.WriteString("          exit \"$CODE\"\n")
@@ -290,7 +308,7 @@ func (g *DriftCheckGenerator) writeCommentScript(sb *strings.Builder) {
 		"    'To fix, run and commit the result:',",
 		"    '',",
 		"    '```',",
-		fmt.Sprintf("    'cascade generate-workflow --config %s --force',", g.config.GetManifestFile()),
+		fmt.Sprintf("    'cascade generate-workflow --config %s --force',", g.getManifestFilePath()),
 		"    '```',",
 		"    '',",
 		"    '<details><summary>cascade verify output</summary>',",

@@ -113,11 +113,13 @@ func runGenerateWorkflow(opts generateOptions) error {
 
 	// Parse the full manifest (including state) so generators can resolve
 	// cascade-owned ${{ state.<env>.<field> }} input references at generation
-	// time. State is optional; absence is not an error.
-	var manifestState map[string]*config.EnvState
-	if full, ferr := config.ParseManifestFile(configPath, opts.manifestKey); ferr == nil {
-		manifestState = full.State
+	// time. State is optional (a manifest without a state: block parses to
+	// nil state), but a parse failure is not absence and must surface.
+	full, ferr := config.ParseManifestFile(configPath, opts.manifestKey)
+	if ferr != nil {
+		return fmt.Errorf("parsing manifest state: %w", ferr)
 	}
+	manifestState := full.State
 
 	// Override action folder if specified on command line
 	if opts.actionFolder != "" && opts.actionFolder != "manage-release" {
