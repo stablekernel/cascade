@@ -1171,6 +1171,12 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 	}
 
 	if info.RunPolicy == config.RunPolicyAlways || info.RunPolicy == config.RunPolicyForce {
+		// With no further conditions, always() must stand alone: a trailing
+		// "&&" with no right operand is rejected by GitHub's expression parser.
+		if len(conditions) == 0 {
+			sb.WriteString("    if: always()\n")
+			return
+		}
 		sb.WriteString("    if: |\n      always() &&\n")
 	} else if len(conditions) > 0 {
 		sb.WriteString("    if: |\n")
