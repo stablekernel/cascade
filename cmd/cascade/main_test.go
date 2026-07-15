@@ -943,7 +943,7 @@ func TestGraphCommand_BlandThemeStylesNodes(t *testing.T) {
 	// color, and grayscale node fills. These tokens are absent from the branded
 	// cascade default, so their presence proves the bland theme reached the
 	// emitter rather than the default palette.
-	for _, want := range []string{`"theme": "neutral"`, "#8c959f", "#f6f8fa"} {
+	for _, want := range []string{`"theme":"neutral"`, "#8c959f", "#f6f8fa"} {
 		if !contains(stdout, want) {
 			t.Errorf("expected bland token %q in output, got:\n%s", want, stdout)
 		}
@@ -983,7 +983,7 @@ func TestGraphCommand_CustomThemeFileStylesNodes(t *testing.T) {
 	if payload.Theme != "midnight" {
 		t.Errorf("expected theme name midnight, got %q", payload.Theme)
 	}
-	for _, want := range []string{`"theme": "dark"`, "#abcdef", "fill:#123456"} {
+	for _, want := range []string{`"theme":"dark"`, "#abcdef", "fill:#123456"} {
 		if !contains(payload.Diagram, want) {
 			t.Errorf("expected custom theme token %q in diagram, got:\n%s", want, payload.Diagram)
 		}

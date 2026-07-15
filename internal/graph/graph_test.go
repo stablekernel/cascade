@@ -189,10 +189,12 @@ func TestRun_CrossRepoGranularity_EmitsLanesAndEdges(t *testing.T) {
 
 	got := out.String()
 	require.Contains(t, got, "flowchart TD")
-	// A lane per repository.
+	// A lane per repository. Slugged lane ids carry a short content-hash
+	// suffix so distinct repos that fold to the same alphanumeric text cannot
+	// merge into one lane.
 	require.Contains(t, got, `subgraph primary["primary"]`)
-	require.Contains(t, got, `subgraph repo_org_cdk_infra["org/cdk-infra"]`)
-	require.Contains(t, got, `subgraph repo_org_platform["org/platform"]`)
+	require.Contains(t, got, `subgraph repo_org_cdk_infra_d8ebfd17["org/cdk-infra"]`)
+	require.Contains(t, got, `subgraph repo_org_platform_e0d10933["org/platform"]`)
 	// Cross-repo edges in both directions: primary coordinates the dependent and
 	// the local pipeline notifies its upstream primary.
 	require.Contains(t, got, "==>|cdk|")
@@ -249,7 +251,7 @@ func TestRun_BlandTheme_StylesOutput(t *testing.T) {
 	got := out.String()
 	require.Contains(t, got, "flowchart TD")
 	// The bland theme sets a neutral Mermaid base and its own line color.
-	require.Contains(t, got, `"theme": "neutral"`)
+	require.Contains(t, got, `"theme":"neutral"`)
 	require.Contains(t, got, "classDef node_validate")
 }
 

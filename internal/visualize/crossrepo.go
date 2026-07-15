@@ -1,6 +1,8 @@
 package visualize
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -94,18 +96,28 @@ func BuildCrossRepoViewModel(cfg *config.TrunkConfig) (ViewModel, error) {
 
 // repoSlug folds a repository reference (for example "org/cdk-infra") into a
 // Mermaid-safe identifier fragment by replacing every rune that is not a letter
-// or digit with an underscore. The human-facing repo string is kept on the node
-// or group label, so only the identity token is slugged.
+// or digit with an underscore. Folding is lossy ("org/api-v2" and "org/api.v2"
+// fold identically), so whenever any rune was folded a short content-hash
+// suffix keeps the slug injective; without it two distinct repos would merge
+// into one lane and one would silently disappear from the diagram. The
+// human-facing repo string is kept on the node or group label, so only the
+// identity token is slugged.
 func repoSlug(repo string) string {
 	var b strings.Builder
 	b.Grow(len(repo))
+	folded := false
 	for _, r := range repo {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 		default:
 			b.WriteByte('_')
+			folded = true
 		}
 	}
-	return b.String()
+	if !folded {
+		return b.String()
+	}
+	sum := sha256.Sum256([]byte(repo))
+	return b.String() + "_" + hex.EncodeToString(sum[:4])
 }
