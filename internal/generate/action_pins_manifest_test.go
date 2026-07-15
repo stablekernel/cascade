@@ -70,6 +70,7 @@ func TestActionPinsManifest_EmitFlags(t *testing.T) {
 		"actions/setup-node":            false,
 		"actions/upload-pages-artifact": false,
 		"actions/deploy-pages":          false,
+		"sigstore/cosign-installer":     false,
 	}
 
 	assert.Len(t, manifest.Actions, len(wantEmit),

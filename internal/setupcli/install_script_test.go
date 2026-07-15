@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,17 @@ case "$*" in
 esac
 echo "Error: verifying blob: no matching signatures" >&2
 exit 1
+`
+
+// cosignAcceptStub models a cosign whose verify-blob accepts the signature.
+// The --help probe answers without the --new-bundle-format flag so the script
+// exercises the plain invocation, and verify-blob exits 0 so a present cosign
+// drives the authenticity path to success rather than the sha256-only fallback.
+const cosignAcceptStub = `#!/usr/bin/env bash
+case "$*" in
+  *--help*) echo "verify-blob usage"; exit 0 ;;
+esac
+exit 0
 `
 
 // installScriptPath locates .github/actions/setup-cli/install.sh from this
@@ -228,5 +240,32 @@ func TestInstallScript_CosignRejectionFailsClosed(t *testing.T) {
 	}
 	if _, statErr := os.Stat(installed); statErr == nil {
 		t.Fatalf("a binary was installed despite the rejected signature\n%s", out)
+	}
+}
+
+func TestInstallScript_CosignAcceptanceVerifiesAndInstalls(t *testing.T) {
+	// The release carries a signature bundle and a present cosign accepts it.
+	// This is the path the setup-cli action now guarantees on stock runners by
+	// installing cosign: verification must actually run (not the sha256-only
+	// fallback) and the install must succeed. The "verified" line proves the
+	// authenticity gate was exercised rather than skipped with a warning.
+	release := makeRelease(t, nil)
+	if err := os.WriteFile(filepath.Join(release, "checksums.txt.bundle"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, installed, err := runInstall(t, release, map[string]string{"cosign": cosignAcceptStub})
+	if err != nil {
+		t.Fatalf("install.sh failed although cosign accepted the signature: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "cosign signature on checksums.txt verified.") {
+		t.Fatalf("expected the signature-verified path to run, got:\n%s", out)
+	}
+	got, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatalf("installed binary missing after a verified install: %v\n%s", err, out)
+	}
+	if string(got) != fakeBinary {
+		t.Fatalf("installed binary does not match the archive payload:\n%q", got)
 	}
 }
