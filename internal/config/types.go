@@ -1660,11 +1660,21 @@ func (e *ExternalRepoConfig) GetRef(trunkBranch string) string {
 	return e.Ref
 }
 
-// GetTriggersForDeploy returns the trigger patterns for a deploy.
-// If deploy has depends_on, returns the first referenced build's triggers.
-// If deploy has own triggers, returns those.
-// Otherwise returns nil (deploy always runs).
-func (c *TrunkConfig) GetTriggersForDeploy(deployName string) []string {
+// GetTriggerSetsForDeploy returns the trigger pattern sets that gate a
+// deploy, one set per gating source. The deploy is considered changed when
+// ANY set matches the changed files (see MatchAnyTriggerSet); the sets are
+// kept separate rather than concatenated because trigger evaluation is
+// order-dependent, so a "!" exclusion in one build's list must not veto a
+// sibling build's positive match.
+//
+// If the deploy's depends_on names builds, one set per referenced build's
+// triggers is returned: the deploy runs when any referenced build runs. A
+// referenced build with no triggers always runs, so its empty set makes the
+// deploy always run. depends_on entries that do not name a build (references
+// to other callbacks) contribute no set; if none of the entries names a
+// build, the deploy falls back to its own triggers. A nil result means the
+// deploy is unconstrained and always runs.
+func (c *TrunkConfig) GetTriggerSetsForDeploy(deployName string) [][]string {
 	// Find the deploy
 	var deploy *DeployConfig
 	for i := range c.Deploys {
@@ -1677,18 +1687,24 @@ func (c *TrunkConfig) GetTriggersForDeploy(deployName string) []string {
 		return nil
 	}
 
-	// If depends_on build, use build's triggers
-	if len(deploy.DependsOn) > 0 {
-		for _, b := range c.Builds {
-			if b.Name == deploy.DependsOn[0] {
-				return b.Triggers
+	// If depends_on names builds, the deploy inherits every referenced
+	// build's triggers.
+	var sets [][]string
+	for _, dep := range deploy.DependsOn {
+		for i := range c.Builds {
+			if c.Builds[i].Name == dep {
+				sets = append(sets, c.Builds[i].Triggers)
+				break
 			}
 		}
+	}
+	if len(sets) > 0 {
+		return sets
 	}
 
 	// Otherwise use deploy's own triggers
 	if len(deploy.Triggers) > 0 {
-		return deploy.Triggers
+		return [][]string{deploy.Triggers}
 	}
 
 	return nil

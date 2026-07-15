@@ -461,10 +461,14 @@ Deploys are classified by their configuration:
 | Type | Configuration | When it runs |
 |------|--------------|--------------|
 | Trigger-based | Has `triggers` | When matching files change. |
-| Build-linked | Has `depends_on` referencing a build | When the referenced build runs. |
+| Build-linked | Has `depends_on` referencing one or more builds | When any referenced build runs. |
 | Unconstrained | No `triggers` or `depends_on` | Always runs. |
 
-Build-linked deploys inherit the build's triggers for change detection during promotions.
+Build-linked deploys inherit the referenced builds' triggers for change detection during
+promotions: the deploy is promoted when any referenced build's triggers match the changes.
+Each build's trigger list is evaluated on its own, so a `!` exclusion in one build's
+triggers never suppresses a match from another. A referenced build with no triggers
+always runs, and so does any deploy linked to it.
 
 ### rollout
 

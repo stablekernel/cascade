@@ -117,6 +117,44 @@ func TestMatchAnyTrigger(t *testing.T) {
 	}
 }
 
+func TestMatchAnyTriggerSet(t *testing.T) {
+	tests := []struct {
+		name         string
+		sets         [][]string
+		changedFiles []string
+		want         bool
+	}{
+		{"no sets always trigger", nil, []string{"anything.go"}, true},
+		{"empty set inside always triggers", [][]string{{"src/**"}, {}}, []string{"README.md"}, true},
+		{"one set matches", [][]string{{"api/**"}, {"web/**"}}, []string{"web/app.js"}, true},
+		{"no set matches", [][]string{{"api/**"}, {"web/**"}}, []string{"docs/guide.md"}, false},
+
+		// Sets are OR-ed independently, never concatenated: MatchTrigger is
+		// order-dependent (last match wins), so a trailing "!" from one set
+		// would veto a sibling set's positive match if the lists were joined.
+		{
+			name:         "sibling exclusion cannot veto a match",
+			sets:         [][]string{{"**/*.md"}, {"docs/**", "!docs/api/**"}},
+			changedFiles: []string{"docs/api/readme.md"},
+			want:         true,
+		},
+		{
+			name:         "exclusion still applies within its own set",
+			sets:         [][]string{{"src/**"}, {"docs/**", "!docs/api/**"}},
+			changedFiles: []string{"docs/api/readme.md"},
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchAnyTriggerSet(tt.sets, tt.changedFiles); got != tt.want {
+				t.Errorf("MatchAnyTriggerSet(%v, %v) = %v, want %v", tt.sets, tt.changedFiles, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsNegationPattern(t *testing.T) {
 	if !IsNegationPattern("!**/*.md") {
 		t.Error("IsNegationPattern(!**/*.md) = false, want true")

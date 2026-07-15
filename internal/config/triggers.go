@@ -82,6 +82,26 @@ func MatchAnyTrigger(patterns []string, changedFiles []string) bool {
 	return false
 }
 
+// MatchAnyTriggerSet reports whether any of the trigger pattern sets matches
+// the changed files. Each set is evaluated independently with MatchAnyTrigger
+// and the results are OR-ed, so a "!" exclusion is scoped to its own set and
+// cannot veto a sibling set's positive match. An empty sets list means
+// "always triggered", as does any empty set within it (MatchAnyTrigger's
+// contract for an unconstrained source).
+func MatchAnyTriggerSet(sets [][]string, changedFiles []string) bool {
+	if len(sets) == 0 {
+		return true
+	}
+
+	for _, set := range sets {
+		if MatchAnyTrigger(set, changedFiles) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // MatchGlobPattern reports whether a single glob pattern matches a path. A
 // leading "!" is stripped before matching, so the helper reports whether the
 // bare glob matches; negation as an exclusion is applied at the pattern-list
