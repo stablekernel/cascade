@@ -132,6 +132,57 @@ func (e *ConflictError) Error() string {
 // Unwrap exposes the wrapped error to errors.Is/As.
 func (e *ConflictError) Unwrap() error { return e.Err }
 
+// TransientError reports a Contents API PUT failure that is transient rather
+// than permanent: a rate limit (HTTP 429, or a 403 whose body names a rate,
+// secondary, or abuse limit; GitHub's secondary limits surface exactly this
+// way, never as auth failures), an HTTP 5xx, or a transport failure carrying
+// no HTTP status. CommitWithRetry treats it like a 409: re-fetch, re-apply,
+// and re-PUT within the bounded backoff loop, because the retry itself is the
+// fix. The transient-vs-permanent taxonomy is shared with the generated
+// state-write shell (internal/generate/state_write.go) and the git push retry
+// (internal/git's retryablePushRejection); keep the three classifiers in sync.
+type TransientError struct {
+	// Err is the underlying API or transport error, surfaced when the retry
+	// bound is exhausted.
+	Err error
+}
+
+func (e *TransientError) Error() string {
+	return fmt.Sprintf("contents API transient failure: %v", e.Err)
+}
+
+// Unwrap exposes the wrapped error to errors.Is/As.
+func (e *TransientError) Unwrap() error { return e.Err }
+
+// IsTransient reports whether err is (or wraps) a transient Contents API
+// failure. It recognizes the typed TransientError plus the raw markers a
+// client forwarding gh output verbatim would carry: a 429 or rate-limit
+// message and an HTTP 5xx status. A raw transport failure with no status is
+// deliberately NOT matched here: only classifyPutError, which sees the actual
+// gh output, may default no-status failures to transient; an arbitrary error
+// with no markers stays permanent so unknown failures never spin the loop.
+func IsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var te *TransientError
+	if errors.As(err, &te) {
+		return true
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"HTTP 429", "Too Many Requests",
+		"rate limit", "secondary rate", "abuse",
+		"Retry-After", "retry-after",
+		"HTTP 5",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsConflict reports whether err is (or wraps) a Contents API 409 conflict. It
 // recognizes the typed ConflictError and both raw gh-CLI 409 bodies, so a client
 // that forwards the gh error verbatim still triggers a retry: the blob If-Match
@@ -206,11 +257,15 @@ type Options struct {
 
 // CommitWithRetry performs an optimistic-locked read-modify-write of the
 // manifest at opts.Ref. It fetches the current manifest and blob SHA, applies
-// opts.Mutate to the current bytes, and PUTs with that SHA. On a 409 conflict it
-// re-fetches, re-applies the mutation on top of the now-current manifest, and
-// re-PUTs, up to maxAttempts with a staggered backoff. It returns the last
-// conflict (or any non-409 error) when the bound is exhausted, so a genuinely
-// stuck write still surfaces.
+// opts.Mutate to the current bytes, and PUTs with that SHA. On a 409 conflict
+// or a transient PUT failure (a rate limit, an HTTP 5xx, a transport blip; see
+// TransientError) it re-fetches, re-applies the mutation on top of the
+// now-current manifest, and re-PUTs, up to maxAttempts with a staggered
+// backoff, so the CAS token is always bound to the freshly fetched base. A
+// permanent PUT failure (401 revoked token, 403 authorization, 404, 422
+// validation) fails fast with its real cause. It returns the last conflict or
+// transient error when the bound is exhausted, so a genuinely stuck write
+// still surfaces.
 //
 // Because Mutate is re-applied against the freshly fetched manifest, two
 // finalize jobs that each set only their own env's ci.state.<env> keys merge:
@@ -277,13 +332,18 @@ func CommitWithRetry(opts Options) error {
 			log.Info("cascade-state-write: ok attempt=%d", attempt)
 			return nil
 		}
-		if !IsConflict(err) {
+		if !IsConflict(err) && !IsTransient(err) {
+			// Permanent (401 revoked token, 403 authorization, 404, 422
+			// validation): surface the real cause immediately instead of
+			// burning the backoff budget on attempts that fail identically.
 			return fmt.Errorf("state write via API failed: %w", err)
 		}
 
-		// Optimistic-lock conflict: another writer committed between our read
-		// and our PUT. Re-fetch, re-apply, and retry so both writers' state
-		// merges rather than one being dropped.
+		// Optimistic-lock conflict (another writer committed between our read
+		// and our PUT) or a transient failure (rate limit, 5xx, transport
+		// blip): re-fetch, re-apply, and retry so concurrent writers' state
+		// merges and a blip heals, with the CAS token staying bound to the
+		// freshly fetched base either way.
 		lastErr = err
 		if attempt < maxAttempts {
 			sleep(backoffForAttempt(retryBaseBackoff, attempt-1))
@@ -293,6 +353,12 @@ func CommitWithRetry(opts Options) error {
 	log.Info("cascade-state-write: exhausted attempts=%d", maxAttempts)
 	if IsConflict(lastErr) {
 		return fmt.Errorf("state write via API still conflicting after %d attempts: %w", maxAttempts, lastErr)
+	}
+	if IsTransient(lastErr) {
+		// A transient failure (for example a secondary rate limit) that
+		// outlived the whole backoff budget: surface the transient cause, not
+		// a misleading conflict or manifest-read error.
+		return fmt.Errorf("state write via API still failing transiently after %d attempts: %w", maxAttempts, lastErr)
 	}
 	// Exhaustion driven by a persistently empty or errored re-fetch: surface a
 	// distinct, non-corrupting error rather than a spurious parse failure.

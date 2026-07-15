@@ -295,6 +295,113 @@ func TestCommitWithRetry_NonConflictErrorIsNotRetried(t *testing.T) {
 	assert.Equal(t, 0, slept, "a non-409 error must not back off")
 }
 
+// TestCommitWithRetry_TransientPutErrorRefetchesAndRetries proves a transient
+// PUT failure (a rate-limited 403/429 or an HTTP 5xx) is retried like a 409:
+// the writer re-fetches the current manifest, re-applies its mutation, backs
+// off once, and re-PUTs so the write converges instead of aborting on a blip.
+// The failing entries are produced by classifyPutError from real gh output
+// shapes, so the production classification drives the loop under test.
+func TestCommitWithRetry_TransientPutErrorRefetchesAndRetries(t *testing.T) {
+	shapes := map[string]string{
+		"403 secondary rate limit": `gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)`,
+		"429 rate limit":           `gh: API rate limit exceeded. (HTTP 429)`,
+		"502 server error":         `gh: Server Error (HTTP 502)`,
+	}
+	for name, out := range shapes {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeContents{
+				content: "ci.state.test: A\n",
+				sha:     "sha-0",
+				putErrs: []error{classifyPutError(out, errors.New("exit 1"))},
+			}
+
+			var slept int
+			err := CommitWithRetry(Options{
+				Client:  fake,
+				Repo:    "owner/name",
+				Path:    ".github/manifest.yaml",
+				Ref:     "main",
+				Message: "chore: record state",
+				Mutate:  appendLine("ci.state.staging: B"),
+				Sleep:   noSleep(&slept),
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, 2, fake.gets, "writer must re-fetch after a transient PUT failure")
+			assert.Equal(t, 2, fake.puts, "writer must re-PUT after a transient PUT failure")
+			assert.Equal(t, 1, slept, "writer must back off once between the two attempts")
+			assert.Contains(t, fake.content, "ci.state.staging: B", "the retried write must land")
+		})
+	}
+}
+
+// TestCommitWithRetry_PermanentPutErrorFailsFast proves the permanent set
+// (401 revoked token, 403 authorization that is not a rate limit, 404, 422
+// validation) surfaces its real cause on the first attempt without burning
+// the retry budget. Only the transient set and 409 conflicts may retry.
+func TestCommitWithRetry_PermanentPutErrorFailsFast(t *testing.T) {
+	shapes := map[string]string{
+		"401 revoked token": `gh: Bad credentials (HTTP 401)`,
+		"403 authorization": `gh: Resource not accessible by integration (HTTP 403)`,
+		"404 gone":          `gh: Not Found (HTTP 404)`,
+		"422 validation":    `gh: Invalid request. (HTTP 422)`,
+	}
+	for name, out := range shapes {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeContents{
+				content: "ci.state.test: A\n",
+				sha:     "sha-0",
+				putErrs: []error{classifyPutError(out, errors.New("exit 1"))},
+			}
+
+			var slept int
+			err := CommitWithRetry(Options{
+				Client:  fake,
+				Repo:    "owner/name",
+				Path:    ".github/manifest.yaml",
+				Ref:     "main",
+				Message: "chore: record state",
+				Mutate:  appendLine("ci.state.staging: B"),
+				Sleep:   noSleep(&slept),
+			})
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), out, "the real cause must surface")
+			assert.Equal(t, 1, fake.puts, "a permanent PUT error must not be retried")
+			assert.Equal(t, 0, slept, "a permanent PUT error must not back off")
+		})
+	}
+}
+
+// TestCommitWithRetry_TransientExhaustionSurfacesCause proves a persistently
+// transient PUT (for example a secondary rate limit that outlives the whole
+// backoff budget) exhausts the bound with the transient cause attached rather
+// than a misleading conflict or manifest-read error.
+func TestCommitWithRetry_TransientExhaustionSurfacesCause(t *testing.T) {
+	errs := make([]error, maxAttempts)
+	for i := range errs {
+		errs[i] = classifyPutError(`gh: You have exceeded a secondary rate limit. (HTTP 403)`, errors.New("exit 1"))
+	}
+	fake := &fakeContents{content: "ci.state.test: A\n", sha: "sha-0", putErrs: errs}
+
+	var slept int
+	err := CommitWithRetry(Options{
+		Client:  fake,
+		Repo:    "owner/name",
+		Path:    ".github/manifest.yaml",
+		Ref:     "main",
+		Message: "chore: record state",
+		Mutate:  appendLine("ci.state.staging: B"),
+		Sleep:   noSleep(&slept),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "secondary rate limit", "the transient cause must surface on exhaustion")
+	assert.True(t, IsTransient(err), "the surfaced error must remain recognizable as transient")
+	assert.Equal(t, maxAttempts, fake.puts, "writer must try exactly the bounded number of times")
+	assert.Equal(t, maxAttempts-1, slept, "writer must back off between attempts but not after the last")
+}
+
 func TestCommitWithRetry_StampsBotAuthorAndCommitter(t *testing.T) {
 	// State commits must be attributed to the bot identity (both author and
 	// committer) so GitHub does not stamp them with the token owner. With no
