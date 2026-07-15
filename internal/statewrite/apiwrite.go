@@ -12,6 +12,7 @@
 package statewrite
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -77,14 +78,42 @@ func (id Identity) OrDefault() Identity {
 // needs. The production implementation shells out to the gh CLI; tests inject a
 // fake that returns a 409 on the first PUT and succeeds on the second.
 //
-// GetContent returns the current file bytes and its blob SHA at ref. A file that
-// does not yet exist returns an empty SHA and a nil error so the first write
-// creates it. PutContent writes content at ref using sha for the optimistic
-// lock (empty sha creates the file); it returns an error satisfying IsConflict
-// when the blob SHA no longer matches.
+// GetContent returns the current file bytes and its blob SHA at ref. A real
+// HTTP 404 returns an error satisfying IsNotFound; a state write only ever
+// targets an already committed manifest, so absence is a hard failure, not a
+// create-on-first-write signal. PutContent writes content at ref guarded by
+// sha as the optimistic-lock token (a non-empty sha is required) and returns
+// an error satisfying IsConflict when the blob SHA no longer matches.
 type ContentsClient interface {
 	GetContent(repo, path, ref string) (content []byte, sha string, err error)
 	PutContent(repo, path, ref, sha, message string, content []byte, author Identity) error
+}
+
+// NotFoundError reports that the Contents API GET for the manifest returned a
+// real HTTP 404. GitHub deliberately answers 404 both for a file that does not
+// exist and for a repository the token cannot read (it never confirms a
+// private repo's existence with a 403), so the two causes are
+// indistinguishable at the API. Either way the state write cannot proceed and
+// retrying cannot help, so CommitWithRetry fails fast on it instead of
+// spending the backoff budget.
+type NotFoundError struct {
+	// Repo, Path, and Ref locate the lookup that 404ed, so the operator can
+	// spot a wrong path or repo slug at a glance.
+	Repo, Path, Ref string
+	// Detail carries the gh CLI's diagnostic text (stderr plus the API's JSON
+	// error body).
+	Detail string
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("manifest not found at %s/%s@%s (file absent or token lacks repo access): %s",
+		e.Repo, e.Path, e.Ref, e.Detail)
+}
+
+// IsNotFound reports whether err is (or wraps) a Contents API 404.
+func IsNotFound(err error) bool {
+	var nf *NotFoundError
+	return errors.As(err, &nf)
 }
 
 // ConflictError reports an optimistic-lock (HTTP 409) failure from the Contents
@@ -203,6 +232,14 @@ func CommitWithRetry(opts Options) error {
 
 		current, sha, err := opts.Client.GetContent(opts.Repo, opts.Path, opts.Ref)
 		if err != nil {
+			if IsNotFound(err) {
+				// A 404 is not transient: the manifest is genuinely absent (deleted,
+				// or the path/repo is wrong) or the token cannot see a private repo
+				// (GitHub answers 404 there, never 403). Retrying would burn the full
+				// backoff budget and end in a generic empty-manifest error with the
+				// real cause discarded, so surface it immediately.
+				return fmt.Errorf("state write via API failed: %w", err)
+			}
 			// A re-fetch failure (a transient non-2xx or transport blip from the
 			// Contents-API GET) is retryable exactly like a 409: retry within the
 			// bounded loop rather than aborting the whole write on a blip. Crucially,

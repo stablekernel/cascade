@@ -21,18 +21,45 @@ echo "gh: API rate limit exceeded for installation (HTTP 403)" >&2
 exit 1
 `
 
-// TestGHContents_GetContent_NotFoundMeansAbsent keeps the create-on-first-write
-// contract: a genuine HTTP 404 reads as file-absent (nil bytes, empty SHA, nil
-// error) so the first state write creates the manifest instead of failing.
-func TestGHContents_GetContent_NotFoundMeansAbsent(t *testing.T) {
+// TestGHContents_GetContent_NotFoundIsTypedNotFoundError requires a real HTTP
+// 404 to surface as a typed NotFoundError instead of file-absent (nil, "", nil)
+// semantics. GitHub answers 404 both for a file that does not exist and for a
+// private repository the token cannot read, so mapping the status to "absent"
+// turns an access failure into blind retries that end in a misleading
+// empty-manifest error with the real cause discarded.
+func TestGHContents_GetContent_NotFoundIsTypedNotFoundError(t *testing.T) {
 	installGHStub(t, ghNotFoundStub)
 
 	content, sha, err := ghContents{}.GetContent("owner/repo", "manifest.yaml", "main")
-	if err != nil {
-		t.Fatalf("GetContent() on a 404 = %v, want nil (create-on-first-write semantics)", err)
+	if err == nil {
+		t.Fatal("GetContent() on a 404 = nil error, want a typed NotFoundError")
+	}
+	if !IsNotFound(err) {
+		t.Fatalf("IsNotFound(%v) = false, want true for an HTTP 404", err)
 	}
 	if content != nil || sha != "" {
 		t.Fatalf("GetContent() on a 404 = (%q, %q), want (nil, \"\")", content, sha)
+	}
+	for _, want := range []string{"owner/repo", "manifest.yaml", "main", "token lacks repo access"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("GetContent() 404 error %q must mention %q so the operator sees where the lookup failed and why", err, want)
+		}
+	}
+}
+
+// TestGHContents_PutContent_RejectsEmptySHA pins the removal of the
+// create-on-first-write contract: a state write only ever targets an already
+// committed manifest, so an empty optimistic-lock SHA is a caller bug that
+// must fail loudly instead of silently creating (or clobbering) the file.
+func TestGHContents_PutContent_RejectsEmptySHA(t *testing.T) {
+	installGHStub(t, "#!/bin/sh\nexit 0\n")
+
+	err := ghContents{}.PutContent("owner/repo", "manifest.yaml", "main", "", "msg", []byte("x"), Identity{})
+	if err == nil {
+		t.Fatal("PutContent() with an empty sha = nil error, want a refusal (create-on-first-write is not supported)")
+	}
+	if !strings.Contains(err.Error(), "optimistic-lock sha") {
+		t.Fatalf("PutContent() empty-sha error %q must name the missing optimistic-lock sha", err)
 	}
 }
 
@@ -51,5 +78,8 @@ func TestGHContents_GetContent_NonNotFoundFailureSurfaces(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rate limit") && !strings.Contains(err.Error(), "403") {
 		t.Fatalf("GetContent() error %q must carry the gh stderr detail", err)
+	}
+	if IsNotFound(err) {
+		t.Fatalf("IsNotFound(%v) = true, want false: a 403 is transient and must stay retryable", err)
 	}
 }

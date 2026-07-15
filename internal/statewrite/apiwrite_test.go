@@ -521,6 +521,39 @@ func TestCommitWithRetry_EmptyRefetchExhaustsWithNonParseError(t *testing.T) {
 	assert.Equal(t, 0, fake.puts, "the writer must never PUT bytes derived from an empty re-fetch")
 }
 
+func TestCommitWithRetry_NotFoundFailsFastWithCause(t *testing.T) {
+	// A token without access to a private repo gets HTTP 404 from GitHub (not
+	// 403), the same status as a genuinely absent file. Neither is transient:
+	// retrying burns the whole backoff budget and ends in a generic
+	// empty-manifest error with the real cause discarded. The write must fail
+	// on the first attempt and surface the 404 detail.
+	nf := &NotFoundError{
+		Repo: "owner/private", Path: "manifest.yaml", Ref: "main",
+		Detail: "gh: Not Found (HTTP 404)",
+	}
+	client := &fakeContents{getErrs: []error{nf, nf, nf, nf, nf, nf, nf, nf, nf, nf}}
+	sleeps := 0
+
+	err := CommitWithRetry(Options{
+		Client:  client,
+		Repo:    "owner/private",
+		Path:    "manifest.yaml",
+		Ref:     "main",
+		Message: "ci: update state",
+		Mutate:  appendLine("env: b"),
+		Sleep:   noSleep(&sleeps),
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, client.gets, "a 404 is not transient and must not be re-fetched")
+	assert.Equal(t, 0, client.puts, "nothing may be written without a current manifest")
+	assert.Equal(t, 0, sleeps, "a 404 must not sit through backoff")
+	assert.True(t, IsNotFound(err), "the typed cause must survive wrapping")
+	assert.Contains(t, err.Error(), "token lacks repo access")
+	assert.Contains(t, err.Error(), "HTTP 404")
+	assert.NotContains(t, err.Error(), "was empty", "the misleading empty-manifest exhaustion error must not appear")
+}
+
 func TestCommitWithRetry_InvalidNonEmptyManifestStillErrors(t *testing.T) {
 	// Guard against masking real invalidity: a genuinely invalid but NON-empty
 	// committed manifest must still error immediately (as today), not be retried
