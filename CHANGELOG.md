@@ -38,6 +38,9 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **git:** Apply the same split to push: retry transient transport and
   rate-limit failures, fail fast on authorization, not-found, and 4xx RPC
   failures
+- **git:** Pin repository discovery to the caller-supplied directory with a
+  `GIT_CEILING_DIRECTORIES` boundary, so state commits and tag reads can never
+  resolve into an enclosing repository
 - **generate:** Emit a state-write shell that refuses unguarded PUTs, fails
   fast on permanent API errors, and retries rate-limited writes
 - **generate:** Rebase an absolute manifest path to repo-relative in all
@@ -45,6 +48,16 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **generate:** Correct emitted output keys, branch-case resolution, manifest
   routing, and unresolved state-ref handling
 - **generate:** Emit `always()` alone when a forced job has no other conditions
+- **generate:** Emit a least-privilege `permissions` block on the
+  single-environment release workflow: read-only at the top level with
+  `contents: write` scoped to the release and finalize jobs, instead of
+  inheriting the repository default
+- **triggers:** Evaluate `!` exclusion patterns through one canonical matcher
+  in orchestrate change detection and promote preflight; exclusions were
+  previously matched as inclusions
+- **promote:** Resolve build-linked deploys through their build's triggers in
+  promotion change detection instead of reading the deploy's own empty trigger
+  list
 - **config:** Reject build dependencies on deploy jobs in both resolution legs
 - **github:** Paginate workflow-job queries and match deploy job names exactly
 - **fleetreconcile:** Fail closed when a run-enumeration page slices short at
