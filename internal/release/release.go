@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 	"github.com/stablekernel/cascade/internal/version"
 )
@@ -1147,6 +1148,15 @@ func (m *Manager) apiRequest(method, endpoint string, payload map[string]interfa
 }
 
 func (m *Manager) newRequest(method, endpoint string, payload map[string]interface{}) (*http.Request, error) {
+	// Dry-run backstop: every release and tag mutation funnels through here, so
+	// refusing non-read methods under --dry-run catches any caller that missed
+	// its explicit gate before the request can leave the process.
+	if method != http.MethodGet && method != http.MethodHead {
+		if err := globals.GuardMutation(fmt.Sprintf("%s %s on %s", method, endpoint, m.repo)); err != nil {
+			return nil, err
+		}
+	}
+
 	url := fmt.Sprintf("%s/repos/%s%s", m.baseURL, m.repo, endpoint)
 
 	var body io.Reader

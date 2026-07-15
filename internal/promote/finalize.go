@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/statewrite"
 )
@@ -451,6 +452,13 @@ func (f *Finalizer) componentStateWrites() []config.StateWrite {
 // so it should already be at the latest state. The finalize job runs after
 // all deploy jobs complete, and they don't modify the manifest.
 func (f *Finalizer) CommitAndPush() error {
+	// Dry-run backstop: the finalize command's explicit gate returns with a
+	// preview before this point, so hitting it under --dry-run means a caller
+	// missed its gate; refuse before any commit or push happens.
+	if err := globals.GuardMutation(fmt.Sprintf("commit and push state for %s", f.targetEnv)); err != nil {
+		return err
+	}
+
 	// Check for changes
 	cmd := exec.Command("git", "status", "--porcelain", f.configPath)
 	status, err := cmd.Output()

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/log"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 )
@@ -465,6 +466,12 @@ func PushWithRebaseRetry(opts ...Option) error {
 // converged (and, on failure, that it exhausted the ceiling rather than erroring
 // for another reason).
 func pushWithRebaseRetry(o pushOptions) error {
+	// Dry-run backstop: commands gate --dry-run before reaching this shared
+	// push loop, so hitting it under --dry-run means a caller missed its gate.
+	if err := globals.GuardMutation("push commits to the remote"); err != nil {
+		return err
+	}
+
 	var lastOut []byte
 	for i := 0; i < pushRetryAttempts; i++ {
 		log.Info("cascade-state-write: attempt=%d/%d", i+1, pushRetryAttempts)
@@ -643,6 +650,11 @@ func CurrentBranch() (string, error) {
 
 // CommitAndPush stages a file, commits with the given message, and pushes to origin.
 func CommitAndPush(filePath, message string) error {
+	// Dry-run backstop: refuse the commit-and-push under --dry-run.
+	if err := globals.GuardMutation(fmt.Sprintf("commit and push %s", filePath)); err != nil {
+		return err
+	}
+
 	// Stage the file
 	cmd := exec.Command("git", "add", filePath)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -757,6 +769,11 @@ func ListRemoteBranches(remote string) ([]string, error) {
 // rejoin cleanup after a partial failure does not error on an already-deleted
 // branch.
 func DeleteRemoteBranch(remote, name string) error {
+	// Dry-run backstop: refuse the remote branch deletion under --dry-run.
+	if err := globals.GuardMutation(fmt.Sprintf("delete remote branch %s on %s", name, remote)); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("git", "push", remote, "--delete", name)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -772,6 +789,11 @@ func DeleteRemoteBranch(remote, name string) error {
 // "git push <remote> --delete refs/tags/<name>". Deleting a tag that does not
 // exist on the remote is treated as success so the operation is idempotent.
 func DeleteRemoteTag(remote, name string) error {
+	// Dry-run backstop: refuse the remote tag deletion under --dry-run.
+	if err := globals.GuardMutation(fmt.Sprintf("delete remote tag %s on %s", name, remote)); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("git", "push", remote, "--delete", "refs/tags/"+name)
 	out, err := cmd.CombinedOutput()
 	if err == nil {

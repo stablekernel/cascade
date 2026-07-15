@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/stablekernel/cascade/internal/config"
+	"github.com/stablekernel/cascade/internal/globals"
 )
 
 // Options configures a branch-protection emit run.
@@ -162,16 +163,27 @@ func Run(o Options, stdout io.Writer) error {
 
 // runApply resolves the apply inputs, PUTs the protection body to GitHub, and
 // prints a one-line confirmation. A missing token or repository is a usage error
-// surfaced before any network call.
+// surfaced before any network call. Under --dry-run the resolved PUT target is
+// printed and no request is issued; a token is deliberately not required to
+// preview.
 func runApply(o Options, branch string, protection Protection, stdout io.Writer) error {
-	token := resolveToken(o.Token)
-	if token == "" {
-		return fmt.Errorf("--apply requires a token: pass --token or set GITHUB_TOKEN")
-	}
-
 	repo := resolveRepo(o.Repo)
 	if repo == "" {
 		return fmt.Errorf("--apply requires a repository: pass --repo owner/repo or set GITHUB_REPOSITORY")
+	}
+
+	if globals.DryRun() {
+		_, err := fmt.Fprintf(stdout, "Dry run - would apply branch protection to %s/branches/%s (PUT %s/repos/%s/branches/%s/protection)\n",
+			repo, branch, resolveAPIURL(o.APIURL), repo, branch)
+		if err != nil {
+			return fmt.Errorf("writing dry-run preview: %w", err)
+		}
+		return nil
+	}
+
+	token := resolveToken(o.Token)
+	if token == "" {
+		return fmt.Errorf("--apply requires a token: pass --token or set GITHUB_TOKEN")
 	}
 
 	apiURL := resolveAPIURL(o.APIURL)

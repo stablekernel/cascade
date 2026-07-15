@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/stablekernel/cascade/internal/github"
+	"github.com/stablekernel/cascade/internal/globals"
 )
 
 var (
@@ -146,8 +147,10 @@ func runFinalize() error {
 		fin.SetHeadSHA(autoSHA)
 	}
 
-	// Run finalization
-	if dryRun {
+	// Run finalization. The mutation gate reads globals.DryRun(), the canonical
+	// process-wide flag state, so it holds even if the promote tree's local
+	// flag binding is ever removed; the local var above only shapes log output.
+	if dryRun || globals.DryRun() {
 		fmt.Println("Dry run - state would be updated but not written to disk")
 		return nil
 	}

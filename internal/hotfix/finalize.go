@@ -9,6 +9,7 @@ import (
 
 	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
+	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/release"
 	"github.com/stablekernel/cascade/internal/statewrite"
 	"github.com/stablekernel/cascade/internal/version"
@@ -186,6 +187,12 @@ func isRealGitHub() bool {
 // branch protection nor commit signatures. The push refspec is explicit so it
 // works from the detached-HEAD checkout of a pull_request event.
 func commitAndPushGit(path, branch, message string) error {
+	// Dry-run backstop: finalize's explicit gate returns before this point, so
+	// hitting it under --dry-run means a caller missed its gate.
+	if err := globals.GuardMutation(fmt.Sprintf("commit and push %s to %s", path, branch)); err != nil {
+		return err
+	}
+
 	if out, err := exec.Command("git", "config", "user.name", "github-actions[bot]").CombinedOutput(); err != nil {
 		return fmt.Errorf("git config user.name failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}

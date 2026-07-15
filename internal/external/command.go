@@ -230,6 +230,12 @@ func runUpdate(sourceRepo, deployName, environment, sha, version, artifactsJSON 
 // applyUpdate must re-read the manifest from disk on each call so it merges onto
 // the freshly-fetched remote state.
 func commitWithApplicationRetry(filePath, commitMsg string, maxAttempts int, applyUpdate func() error) error {
+	// Dry-run backstop: the update command's explicit gate returns with a
+	// preview before this point, so hitting it under --dry-run is a missed gate.
+	if err := globals.GuardMutation(fmt.Sprintf("commit and push %s", filePath)); err != nil {
+		return err
+	}
+
 	var lastPushErr error
 	var lastPushOut []byte
 
