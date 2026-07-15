@@ -99,7 +99,7 @@ ci:
       - name: prod
         gha_environment: production
         environment_url: "https://app.example.com"
-    cli_version: v0.9.1
+    cli_version: v0.16.0
 ```
 
 Each entry is one of two forms:
@@ -195,14 +195,14 @@ These fields pin the cascade CLI and third-party actions the generated workflows
 |-------|----------|
 | `latest` | Most recent stable release (default). |
 | `beta` | Newest prerelease build. |
-| `vX.Y.Z` | A specific version (for example `v0.9.1`). Pin for reproducibility. |
+| `vX.Y.Z` | A specific version (for example `v0.16.0`). Pin for reproducibility. |
 
 ### cli_version_sha
 
 Under `pin_mode: sha`, pair `cli_version` with `cli_version_sha`, the 40-character lowercase-hex commit the `cli_version` tag resolves to. The generated setup-cli ref then pins to that immutable commit, with `cli_version` carried as a trailing comment:
 
 ```yaml
-uses: stablekernel/cascade/.github/actions/setup-cli@9dc69a1f66753a3865c38c34eca5a931f677c803 # v0.9.1
+uses: stablekernel/cascade/.github/actions/setup-cli@17599d2f891ac41996936302b4f7b6d7e1359844 # v0.16.0
 ```
 
 The `with: version:` input the action reads to select the release asset stays the human-readable tag, so only the action source is pinned to a commit. The field is optional and takes effect only under `pin_mode: sha`. Because cascade release tags are annotated, resolve the underlying commit (not the tag object) with `git ls-remote https://github.com/stablekernel/cascade 'refs/tags/<tag>^{}'`.

@@ -17,10 +17,12 @@ This tutorial takes a fresh repository to a running Cascade pipeline. It is the 
 go install github.com/stablekernel/cascade/cmd/cascade@latest
 ```
 
-`@latest` tracks the newest tagged release. To pin an exact version instead:
+`@latest` tracks the newest tagged release. To pin an exact version instead
+(check the [releases page](https://github.com/stablekernel/cascade/releases/latest)
+for the newest tag):
 
 ```bash
-go install github.com/stablekernel/cascade/cmd/cascade@v0.9.1
+go install github.com/stablekernel/cascade/cmd/cascade@v0.16.0
 ```
 
 Verify the install:
@@ -32,7 +34,7 @@ cascade version
 You rarely need to invoke Cascade manually in CI: generated workflows install it for you via the `setup-cli` composite action, pinned to whatever `cli_version` you set in your manifest. If you need to call it directly in a workflow of your own:
 
 ```yaml
-- uses: stablekernel/cascade/.github/actions/setup-cli@v0.9.1
+- uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.0
   with:
     token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -68,7 +70,7 @@ ci:
     schema_version: 1
     trunk_branch: main
     environments: [dev, test, prod]
-    cli_version: v0.9.1
+    cli_version: v0.16.0
 
     validate:
       workflow: .github/workflows/validate.yaml
@@ -111,7 +113,7 @@ ci:
   config:
     schema_version: 1
     trunk_branch: main
-    cli_version: v0.9.1
+    cli_version: v0.16.0
     builds:
       - name: cli
         workflow: .github/workflows/build-cli.yaml
