@@ -798,6 +798,7 @@ func (o *Orchestrator) reapplyStateLeaf() error {
 	message := fmt.Sprintf("chore: update state for %s [skip ci]", o.environment)
 	cmd := exec.Command("git", "commit", "-m", message)
 	cmd.Dir = o.baseDir
+	cmd.Env = git.BoundaryEnv(o.baseDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// The owned leaf is already present on the re-fetched trunk (for example
 		// a same-component racer landed it), so there is nothing to re-commit;
@@ -816,6 +817,7 @@ func (o *Orchestrator) reapplyStateLeaf() error {
 func (o *Orchestrator) gitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = o.baseDir
+	cmd.Env = git.BoundaryEnv(o.baseDir)
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -834,6 +836,7 @@ func (o *Orchestrator) gitRun(args ...string) error {
 	log.Trace("git %s", strings.Join(args, " "))
 	cmd := exec.Command("git", args...)
 	cmd.Dir = o.baseDir
+	cmd.Env = git.BoundaryEnv(o.baseDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
