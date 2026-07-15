@@ -298,25 +298,38 @@ func (g *Generator) getTagCreateTokenRef() string {
 	return g.getReleaseTokenRef()
 }
 
-// getManifestFilePath returns the manifest file path for use in generated scripts.
-// Converts absolute paths to repo-relative paths since workflows run in checked out repos.
-func (g *Generator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
+// relativeManifestPath returns the repo-relative manifest path for embedding
+// in generated output. It is the single resolution every generator routes the
+// manifest path through before it reaches an emitted file: generated workflows
+// are committed and run in checked-out repos, so an absolute manifest path
+// (an absolute --config, or auto-detect resolving through the working
+// directory) must never bake the generating machine's local layout into them.
+// A relative path is returned as-is, an absolute path is relativized against
+// baseDir, and the default relative location is the fallback when neither
+// applies.
+func relativeManifestPath(cfg *config.TrunkConfig, baseDir string) string {
+	manifestPath := cfg.GetManifestFile()
 
 	// If it's already relative, return as-is
 	if !filepath.IsAbs(manifestPath) {
 		return manifestPath
 	}
 
-	// If baseDir is set and manifestPath starts with it, make relative
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
+	// If baseDir is set, make the path relative to it
+	if baseDir != "" {
+		if rel, err := filepath.Rel(baseDir, manifestPath); err == nil {
 			return rel
 		}
 	}
 
 	// Fallback: return default relative path
 	return ".github/manifest.yaml"
+}
+
+// getManifestFilePath returns the manifest file path for use in generated scripts.
+// Converts absolute paths to repo-relative paths since workflows run in checked out repos.
+func (g *Generator) getManifestFilePath() string {
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // getManifestKey returns the manifest key for nested access
@@ -690,7 +703,7 @@ func crossRepoOutputs(callbackType string) []string {
 
 func (g *Generator) writeHeader(sb *strings.Builder) {
 	sb.WriteString(GeneratedFileMarker + "\n")
-	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.getManifestFilePath())
 }
 
 func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {

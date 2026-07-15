@@ -2,7 +2,6 @@ package generate
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -74,16 +73,7 @@ func (g *DriftCheckGenerator) getCLIRef() string {
 // manifest_file would otherwise bake the generating machine's path into the
 // emitted workflow, where it cannot resolve in a checked-out repo.
 func (g *DriftCheckGenerator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
-	if !filepath.IsAbs(manifestPath) {
-		return manifestPath
-	}
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
-			return rel
-		}
-	}
-	return ".github/manifest.yaml"
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // Generate creates the pull_request drift-check workflow content.

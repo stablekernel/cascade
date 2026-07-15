@@ -41,9 +41,10 @@ func (g *ExternalUpdateGenerator) getStateTokenRef() string {
 	return resolveStateTokenRef(g.config)
 }
 
-// getManifestFilePath returns the manifest file path for use in generated scripts.
+// getManifestFilePath returns the repo-relative manifest path for use in
+// generated scripts, matching the sibling generators' resolution.
 func (g *ExternalUpdateGenerator) getManifestFilePath() string {
-	return g.config.GetManifestFile()
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // getManifestKey returns the manifest key for nested access
@@ -170,7 +171,7 @@ func resolveOnUpdateWorkflowPath(workflow, ref string) string {
 
 func (g *ExternalUpdateGenerator) writeHeader(sb *strings.Builder) {
 	sb.WriteString(GeneratedFileMarker + "\n")
-	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.config.GetManifestFile())
+	fmt.Fprintf(sb, "# Regenerate with: cascade generate-workflow --config %s\n\n", g.getManifestFilePath())
 }
 
 func (g *ExternalUpdateGenerator) writeWorkflowTrigger(sb *strings.Builder) {

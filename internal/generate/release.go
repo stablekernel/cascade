@@ -2,7 +2,6 @@ package generate
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -50,22 +49,7 @@ func (g *ReleaseGenerator) getStateTokenRef() string {
 // getManifestFilePath returns the manifest file path for use in generated scripts.
 // Converts absolute paths to repo-relative paths since workflows run in checked out repos.
 func (g *ReleaseGenerator) getManifestFilePath() string {
-	manifestPath := g.config.GetManifestFile()
-
-	// If it's already relative, return as-is
-	if !filepath.IsAbs(manifestPath) {
-		return manifestPath
-	}
-
-	// If baseDir is set and manifestPath starts with it, make relative
-	if g.baseDir != "" {
-		if rel, err := filepath.Rel(g.baseDir, manifestPath); err == nil {
-			return rel
-		}
-	}
-
-	// Fallback: return default relative path
-	return ".github/manifest.yaml"
+	return relativeManifestPath(g.config, g.baseDir)
 }
 
 // getManifestKey returns the manifest key for nested access
