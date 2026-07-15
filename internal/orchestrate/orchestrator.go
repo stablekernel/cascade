@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -423,12 +424,15 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 			currentDevVersion = state.Version
 		}
 
-		// If no state, check for latest RC tag
+		// If no state, check for latest RC tag. A failing lookup must surface: an
+		// established project read as tagless restarts at v0.1.0-rc.0, a
+		// regressive mint that can collide with already-published tags.
 		if currentDevVersion == "" {
 			latestTag, _, err := git.GetLatestTag(o.baseDir, tagPrefix)
 			if err != nil {
-				log.Warn("Failed to get latest tag: %v", err)
-			} else if latestTag != "" {
+				return "", fmt.Errorf("reading latest tag: %w", err)
+			}
+			if latestTag != "" {
 				currentDevVersion = latestTag
 				log.Debug("No state found, using latest git tag: %s", latestTag)
 			}
@@ -438,8 +442,9 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 		// This ensures we continue from v1.0.0 → v1.0.1-rc.0, not restart at v0.1.0-rc.0
 		latestRelease, releaseSHA, err := git.GetLatestReleaseTagSpec(o.baseDir, spec)
 		if err != nil {
-			log.Warn("Failed to get latest release tag: %v", err)
-		} else if latestRelease != "" {
+			return "", fmt.Errorf("reading latest release tag: %w", err)
+		}
+		if latestRelease != "" {
 			nextEnvVersion = latestRelease
 			nextEnvSHA = releaseSHA
 			log.Debug("Using latest published release as base: %s (SHA: %s)", latestRelease, truncateSHA(releaseSHA))
@@ -470,22 +475,27 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 	log.Debug("Current %s version: %s", o.environment, currentDevVersion)
 	log.Debug("Next env version: %s (SHA: %s)", nextEnvVersion, truncateSHA(nextEnvSHA))
 
-	// Get commits between base and head
+	// Get commits between base and head. A failing commit enumeration (a shallow
+	// clone missing the base, a bad SHA) must surface rather than read as "no
+	// commits": an empty range silently under-bumps the calculated version.
 	baseSHA := nextEnvSHA
 	if baseSHA == "" {
-		baseSHA, _ = git.GetInitialCommit()
+		initial, err := git.GetInitialCommit()
+		if err != nil {
+			return "", fmt.Errorf("resolving initial commit for version range: %w", err)
+		}
+		baseSHA = initial
 	}
 
 	var commits []changelog.ConventionalCommit
 	if baseSHA != "" {
 		gitCommits, err := git.GetCommits(baseSHA, "HEAD", nil)
 		if err != nil {
-			log.Warn("Failed to get commits: %v", err)
-		} else {
-			for _, gc := range gitCommits {
-				if cc := changelog.ParseCommit(gc); cc != nil {
-					commits = append(commits, *cc)
-				}
+			return "", fmt.Errorf("reading commits for version calculation: %w", err)
+		}
+		for _, gc := range gitCommits {
+			if cc := changelog.ParseCommit(gc); cc != nil {
+				commits = append(commits, *cc)
 			}
 		}
 	}
@@ -525,16 +535,22 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 	var currentDevVersion, nextEnvVersion, nextEnvSHA string
 
 	// Current version (RC-counter base) from the component's own tag namespace.
-	if latestTag, _, terr := git.GetLatestTagSpec(o.baseDir, spec); terr != nil {
-		log.Warn("Failed to get latest tag for component %s: %v", o.component, terr)
-	} else if latestTag != "" {
+	// A failing lookup must surface: a component read as tagless restarts at its
+	// v0.1.0-rc.0, a regressive mint that can collide with published tags.
+	latestTag, _, err := git.GetLatestTagSpec(o.baseDir, spec)
+	if err != nil {
+		return "", fmt.Errorf("reading latest tag for component %q: %w", o.component, err)
+	}
+	if latestTag != "" {
 		currentDevVersion = latestTag
 	}
 
 	// Base version from the component's latest published (non-prerelease) release.
-	if latestRelease, releaseSHA, rerr := git.GetLatestReleaseTagSpec(o.baseDir, spec); rerr != nil {
-		log.Warn("Failed to get latest release tag for component %s: %v", o.component, rerr)
-	} else if latestRelease != "" {
+	latestRelease, releaseSHA, err := git.GetLatestReleaseTagSpec(o.baseDir, spec)
+	if err != nil {
+		return "", fmt.Errorf("reading latest release tag for component %q: %w", o.component, err)
+	}
+	if latestRelease != "" {
 		nextEnvVersion = latestRelease
 		nextEnvSHA = releaseSHA
 	}
@@ -544,7 +560,11 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 	// sibling component's commits never register a bump here.
 	baseSHA := nextEnvSHA
 	if baseSHA == "" {
-		baseSHA, _ = git.GetInitialCommit()
+		initial, err := git.GetInitialCommit()
+		if err != nil {
+			return "", fmt.Errorf("resolving initial commit for component %q version range: %w", o.component, err)
+		}
+		baseSHA = initial
 	}
 
 	// Scope the commit range to the component's own path plus its effective extra
@@ -553,16 +573,17 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 	// bump. With no extra paths this is just the component path, unchanged.
 	versionPaths := append([]string{resolved.Path}, resolved.ExtraPaths...)
 
+	// A failing enumeration must surface rather than read as "no commits": an
+	// empty range silently under-bumps this component's calculated version.
 	var commits []changelog.ConventionalCommit
 	if baseSHA != "" {
 		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, "HEAD", versionPaths)
 		if cerr != nil {
-			log.Warn("Failed to get commits for component %s: %v", o.component, cerr)
-		} else {
-			for _, gc := range gitCommits {
-				if cc := changelog.ParseCommit(gc); cc != nil {
-					commits = append(commits, *cc)
-				}
+			return "", fmt.Errorf("reading commits for component %q version calculation: %w", o.component, cerr)
+		}
+		for _, gc := range gitCommits {
+			if cc := changelog.ParseCommit(gc); cc != nil {
+				commits = append(commits, *cc)
 			}
 		}
 	}
@@ -705,8 +726,13 @@ func (o *Orchestrator) commitAndPush(version string) error {
 		}
 	}
 
-	// Check if there are changes to commit
-	status, _ := o.gitOutput("status", "--porcelain", o.configPath)
+	// Check if there are changes to commit. A failing status must surface: its
+	// empty output is otherwise indistinguishable from "no changes", and finalize
+	// would report success without ever committing the state write.
+	status, err := o.gitOutput("status", "--porcelain", o.configPath)
+	if err != nil {
+		return fmt.Errorf("checking manifest status before state commit: %w", err)
+	}
 	if strings.TrimSpace(status) == "" {
 		log.Debug("No changes to commit")
 		return nil
@@ -788,13 +814,21 @@ func (o *Orchestrator) reapplyStateLeaf() error {
 	return nil
 }
 
-// gitOutput runs a git command and returns stdout.
+// gitOutput runs a git command and returns stdout. A failure is wrapped with
+// the command line and git's stderr, so a caller propagating it reports what
+// actually went wrong instead of a bare exit status.
 func (o *Orchestrator) gitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = o.baseDir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+				return "", fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), stderr, err)
+			}
+		}
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

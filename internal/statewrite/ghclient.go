@@ -3,6 +3,7 @@ package statewrite
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -25,17 +26,53 @@ func NewGHClient() ContentsClient {
 // window: a concurrent finalize that commits between the two calls yields stale
 // content paired with the fresh SHA, and the subsequent PUT then passes the
 // optimistic lock while silently dropping the racer's committed keys, which is
-// precisely the lost update the retry loop exists to prevent. A file that does
-// not yet exist (the gh call errors, or the SHA is empty) returns nil bytes, an
-// empty SHA, and a nil error so the first write creates it rather than failing.
+// precisely the lost update the retry loop exists to prevent.
+//
+// A file that does not yet exist (a genuine HTTP 404, or an empty SHA in the
+// response) returns nil bytes, an empty SHA, and a nil error so the first write
+// creates it rather than failing. Every other failure (auth, rate limit, 5xx,
+// network) propagates with the gh CLI's stderr attached: mapping an outage to
+// "file absent" would hide the real cause behind blind retries and make the
+// create-on-first-write branch indistinguishable from a failure.
 func (ghContents) GetContent(repo, path, ref string) ([]byte, string, error) {
 	apiPath := fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, path, ref)
 
 	out, err := exec.Command("gh", "api", apiPath).Output()
 	if err != nil {
-		return nil, "", nil
+		detail := ghFailureDetail(err, out)
+		if isNotFound(detail) {
+			return nil, "", nil
+		}
+		return nil, "", fmt.Errorf("gh api %s: %s: %w", apiPath, detail, err)
 	}
 	return decodeContentsSnapshot(out, repo)
+}
+
+// ghFailureDetail collects the diagnostic text a failed gh invocation produced:
+// the stderr captured on the ExitError plus whatever landed on stdout (gh
+// prints the API's JSON error body there). Falls back to the bare error string
+// so the detail is never empty.
+func ghFailureDetail(err error, out []byte) string {
+	var parts []string
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if s := strings.TrimSpace(string(exitErr.Stderr)); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return err.Error()
+	}
+	return strings.Join(parts, "; ")
+}
+
+// isNotFound reports whether a gh failure's diagnostic text is a real HTTP 404,
+// the only failure that legitimately means the file is absent.
+func isNotFound(detail string) bool {
+	return strings.Contains(detail, "HTTP 404") || strings.Contains(detail, "Not Found")
 }
 
 // contentsSnapshot is the subset of a Contents API GET response the state
@@ -64,7 +101,7 @@ func decodeContentsSnapshot(out []byte, repo string) ([]byte, string, error) {
 	if snap.Content == "" && snap.Encoding != "" && snap.Encoding != "base64" {
 		blobOut, err := exec.Command("gh", "api", fmt.Sprintf("repos/%s/git/blobs/%s", repo, snap.SHA)).Output()
 		if err != nil {
-			return nil, "", fmt.Errorf("fetching blob %s: %w", snap.SHA, err)
+			return nil, "", fmt.Errorf("fetching blob %s: %s: %w", snap.SHA, ghFailureDetail(err, blobOut), err)
 		}
 		var blob contentsSnapshot
 		if err := json.Unmarshal(blobOut, &blob); err != nil {

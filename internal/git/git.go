@@ -432,14 +432,26 @@ func PushWithRebaseRetry(opts ...Option) error {
 // converged (and, on failure, that it exhausted the ceiling rather than erroring
 // for another reason).
 func pushWithRebaseRetry(o pushOptions) error {
+	var lastOut []byte
 	for i := 0; i < pushRetryAttempts; i++ {
 		log.Info("cascade-state-write: attempt=%d/%d", i+1, pushRetryAttempts)
 
 		cmd := exec.Command("git", "push")
 		cmd.Dir = o.dir
-		if _, err := cmd.CombinedOutput(); err == nil {
+		out, err := cmd.CombinedOutput()
+		if err == nil {
 			log.Info("cascade-state-write: ok attempt=%d", i+1)
 			return nil
+		}
+		lastOut = out
+
+		// Only a stale-ref rejection can be fixed by rebasing onto the advanced
+		// upstream and pushing again. Anything else (a GH013 workflow-scope
+		// refusal, branch protection, auth, a missing remote) fails identically
+		// on every retry, so surface the real output immediately instead of
+		// hiding it behind no-op rebases and a generic exhaustion summary.
+		if !retryablePushRejection(out) {
+			return fmt.Errorf("git push failed: %s: %w", strings.TrimSpace(string(out)), err)
 		}
 
 		if i == pushRetryAttempts-1 {
@@ -474,7 +486,28 @@ func pushWithRebaseRetry(o pushOptions) error {
 	}
 
 	log.Info("cascade-state-write: exhausted attempts=%d", pushRetryAttempts)
-	return fmt.Errorf("git push failed after %d retries", pushRetryAttempts)
+	return fmt.Errorf("git push failed after %d retries: %s", pushRetryAttempts, strings.TrimSpace(string(lastOut)))
+}
+
+// retryablePushRejection reports whether a failed push is the optimistic kind
+// the retry loop exists for: the remote ref advanced under us (a client-side
+// "! [rejected] ... (fetch first)" / non-fast-forward) or a concurrent writer
+// held the ref lock. A "! [remote rejected]" (pre-receive hook, branch
+// protection, GH013 scope refusal), an auth failure, or a transport error
+// cannot be fixed by rebase-and-retry, so those are not retryable.
+func retryablePushRejection(out []byte) bool {
+	s := string(out)
+	for _, marker := range []string{
+		"non-fast-forward",
+		"fetch first",
+		"cannot lock ref",
+		"! [rejected]",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // CurrentBranch returns the name of the currently checked-out branch.
