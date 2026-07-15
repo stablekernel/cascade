@@ -106,6 +106,65 @@ GitHub Environments are the shipped answer for gating a deploy with required rev
 
 The one structural caveat: GitHub does not allow a job-level `environment:` on a job that calls a reusable workflow. A reusable deploy's gate has to live inside the called workflow, and cascade warns at generation time when a manifest wires a reusable deploy without one. See [Add or change environments](/cascade/guides/environments/) for the full setup walkthrough.
 
+## Verifying cascade releases
+
+The controls above harden the pipelines cascade generates. This section covers the other supply-chain question: proving that the cascade binary you install is the one this repository's release workflow built. Every release ships three independent verification paths, and all three fail closed.
+
+Note the boundary: these guarantees cover cascade's own release artifacts. Provenance for artifacts your generated pipeline builds remains your registry's job (see [What remains future work](#what-remains-future-work)).
+
+### Cosign signatures (recommended)
+
+Releases are signed with keyless [cosign](https://github.com/sigstore/cosign) via Sigstore, so there is no key to distribute or manage. Download `checksums.txt`, `checksums.txt.bundle`, and the archives from the [release page](https://github.com/stablekernel/cascade/releases), then verify the checksums file:
+
+```bash
+cosign verify-blob \
+  --bundle=checksums.txt.bundle \
+  --certificate-identity-regexp='^https://github.com/stablekernel/cascade' \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+The bundle carries the signature and the Sigstore-issued certificate together; cosign checks the chain and confirms the signature was produced by a GitHub Actions run in this repository. Then confirm the archives match:
+
+```bash
+sha256sum -c checksums.txt
+```
+
+### GPG signatures
+
+If you prefer traditional GPG, import the maintainer key shipped at [`docs/cascade-release-public-key.asc`](https://github.com/stablekernel/cascade/blob/main/docs/cascade-release-public-key.asc), then verify the `.asc` signature from the release page:
+
+```bash
+gpg --import docs/cascade-release-public-key.asc
+gpg --verify checksums.txt.asc checksums.txt
+sha256sum -c checksums.txt
+```
+
+### SLSA build provenance
+
+Releases also carry SLSA provenance in GitHub's attestation store, verifiable with the GitHub CLI:
+
+```bash
+gh attestation verify cascade_VERSION_linux_amd64.tar.gz \
+  --repo stablekernel/cascade \
+  --certificate-identity https://github.com/stablekernel/cascade/.github/workflows/release.yaml@refs/tags/vVERSION
+```
+
+This proves the artifact was built by the release workflow for that exact tag, not on someone's laptop.
+
+### Reproducing the build
+
+Builds are bit-for-bit reproducible with GoReleaser. Check out the release tag, use the Go toolchain pinned in `go.mod`, and build with the release flags:
+
+```bash
+git clone https://github.com/stablekernel/cascade.git && cd cascade
+git checkout vVERSION
+goreleaser build --single-target --clean --skip-post-hooks --id cascade
+sha256sum dist/cascade_linux_amd64/cascade
+```
+
+A checksum matching the official `checksums.txt` proves the release binary corresponds to the tagged source.
+
 ## Hardening checklist
 
 Work through this when standing up or reviewing a cascade pipeline. The order moves from the cross-repo trust boundary outward to the surrounding controls.
