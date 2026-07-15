@@ -28,12 +28,7 @@ type Job struct {
 //
 // Returns a map of deploy name to conclusion ("success", "failure", "skipped", etc.)
 func QueryJobResults(repo, runID string, deployNames []string) (map[string]string, error) {
-	// Use gh CLI to query the jobs API
-	// --paginate handles pagination automatically
-	// -q .jobs extracts just the jobs array
-	cmd := exec.Command("gh", "api",
-		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", repo, runID),
-		"--paginate")
+	cmd := exec.Command("gh", jobsAPIArgs(repo, runID)...)
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -43,7 +38,37 @@ func QueryJobResults(repo, runID string, deployNames []string) (map[string]strin
 		return nil, fmt.Errorf("gh api failed: %w", err)
 	}
 
-	return ParseJobResults(out, deployNames)
+	return ParseSlurpedJobResults(out, deployNames)
+}
+
+// jobsAPIArgs builds the gh argv for the jobs API query. The jobs endpoint
+// returns an OBJECT per page, and --paginate alone concatenates those objects
+// into invalid JSON once a run exceeds one page (100 jobs); --slurp wraps the
+// pages in a JSON array so the output stays parseable at any job count.
+func jobsAPIArgs(repo, runID string) []string {
+	return []string{
+		"api",
+		fmt.Sprintf("repos/%s/actions/runs/%s/jobs", repo, runID),
+		"--paginate",
+		"--slurp",
+	}
+}
+
+// ParseSlurpedJobResults parses `gh api --paginate --slurp` output for the
+// jobs endpoint: a JSON array with one page object per element. Jobs from all
+// pages are merged before matching, so deploys whose jobs land beyond the
+// first page are still found.
+func ParseSlurpedJobResults(data []byte, deployNames []string) (map[string]string, error) {
+	var pages []JobsResponse
+	if err := json.Unmarshal(data, &pages); err != nil {
+		return nil, fmt.Errorf("failed to parse slurped jobs response: %w", err)
+	}
+
+	var jobs []Job
+	for _, page := range pages {
+		jobs = append(jobs, page.Jobs...)
+	}
+	return matchJobResults(jobs, deployNames, "")
 }
 
 // ParseJobResults parses the GitHub Actions jobs API response and extracts deploy job conclusions.
@@ -68,7 +93,14 @@ func ParseJobResultsForEnv(data []byte, deployNames []string, targetEnv string) 
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("failed to parse jobs response: %w", err)
 	}
+	return matchJobResults(resp.Jobs, deployNames, targetEnv)
+}
 
+// matchJobResults maps each deploy name to the conclusion of its matching
+// job. A deploy's job is named either "Deploy <name>" (simple) or
+// "Deploy <name> (<env>)" (matrix); the boundary is exact so
+// prefix-overlapping deploy names (app / app-canary) never cross-match.
+func matchJobResults(jobs []Job, deployNames []string, targetEnv string) (map[string]string, error) {
 	// Initialize all results to "skipped" (default for not found)
 	results := make(map[string]string)
 	for _, name := range deployNames {
@@ -76,7 +108,7 @@ func ParseJobResultsForEnv(data []byte, deployNames []string, targetEnv string) 
 	}
 
 	// Match job names to deploy names
-	for _, job := range resp.Jobs {
+	for _, job := range jobs {
 		for _, deployName := range deployNames {
 			// Build the pattern to match
 			// For simple jobs: "Deploy <name>"
@@ -90,8 +122,10 @@ func ParseJobResultsForEnv(data []byte, deployNames []string, targetEnv string) 
 				envPattern := fmt.Sprintf("%s (%s)", pattern, targetEnv)
 				matches = job.Name == envPattern
 			} else {
-				// For standard or first match, just check prefix
-				matches = strings.HasPrefix(job.Name, pattern)
+				// Exact simple name, or the name at a matrix boundary
+				// "Deploy <name> (". A bare prefix would cross-match
+				// prefix-overlapping deploys (app vs app-canary).
+				matches = job.Name == pattern || strings.HasPrefix(job.Name, pattern+" (")
 			}
 
 			if matches {

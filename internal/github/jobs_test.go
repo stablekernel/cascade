@@ -94,6 +94,79 @@ func TestParseJobResults_CascadeWithTargetEnv(t *testing.T) {
 	require.Equal(t, "success", results["app"])
 }
 
+func TestParseSlurpedJobResults_MergesPages(t *testing.T) {
+	// `gh api --paginate --slurp` wraps each page object in a top-level JSON
+	// array. A run with >100 jobs spans multiple pages; a deploy whose job
+	// lands on the second page must still be found.
+	mockResponse := `[
+		{"jobs": [{"name": "Deploy infra", "conclusion": "success"}]},
+		{"jobs": [{"name": "Deploy app", "conclusion": "failure"}]}
+	]`
+
+	results, err := ParseSlurpedJobResults([]byte(mockResponse), []string{"infra", "app"})
+	require.NoError(t, err)
+	require.Equal(t, "success", results["infra"])
+	require.Equal(t, "failure", results["app"])
+}
+
+func TestParseSlurpedJobResults_SinglePage(t *testing.T) {
+	// --slurp wraps even a single page in an array.
+	mockResponse := `[{"jobs": [{"name": "Deploy infra", "conclusion": "success"}]}]`
+
+	results, err := ParseSlurpedJobResults([]byte(mockResponse), []string{"infra"})
+	require.NoError(t, err)
+	require.Equal(t, "success", results["infra"])
+}
+
+func TestParseSlurpedJobResults_InvalidJSON(t *testing.T) {
+	// Bare concatenated page objects (what --paginate emits WITHOUT --slurp)
+	// are not valid JSON and must surface as an error, not a silent default.
+	mockResponse := `{"jobs": []}{"jobs": []}`
+
+	_, err := ParseSlurpedJobResults([]byte(mockResponse), []string{"infra"})
+	require.Error(t, err)
+}
+
+func TestJobsAPIArgs_PaginatesWithSlurp(t *testing.T) {
+	// The jobs endpoint returns an object per page; --paginate alone
+	// concatenates objects into invalid JSON. --slurp must accompany it.
+	args := jobsAPIArgs("owner/repo", "123")
+	require.Contains(t, args, "repos/owner/repo/actions/runs/123/jobs")
+	require.Contains(t, args, "--paginate")
+	require.Contains(t, args, "--slurp")
+}
+
+func TestParseJobResults_PrefixOverlappingDeployNames(t *testing.T) {
+	// Deploy names where one is a prefix of another must not cross-match:
+	// "Deploy app-canary (dev)" belongs to app-canary, never to app.
+	mockResponse := `{
+		"jobs": [
+			{"name": "Deploy app-canary (dev)", "conclusion": "failure"},
+			{"name": "Deploy app (dev)", "conclusion": "success"}
+		]
+	}`
+
+	results, err := ParseJobResults([]byte(mockResponse), []string{"app", "app-canary"})
+	require.NoError(t, err)
+	require.Equal(t, "success", results["app"])
+	require.Equal(t, "failure", results["app-canary"])
+}
+
+func TestParseJobResults_PrefixOverlappingSimpleNames(t *testing.T) {
+	// A simple (non-matrix) job "Deploy app-canary" must not be recorded
+	// under deploy "app"; app is genuinely absent here.
+	mockResponse := `{
+		"jobs": [
+			{"name": "Deploy app-canary", "conclusion": "failure"}
+		]
+	}`
+
+	results, err := ParseJobResults([]byte(mockResponse), []string{"app", "app-canary"})
+	require.NoError(t, err)
+	require.Equal(t, "skipped", results["app"])
+	require.Equal(t, "failure", results["app-canary"])
+}
+
 func TestParseJobResults_NullConclusion(t *testing.T) {
 	// Jobs that are in_progress or queued have null conclusion
 	mockResponse := `{
