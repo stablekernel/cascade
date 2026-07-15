@@ -160,15 +160,24 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("    -f \"author[email]=%s\"", authorEmail)
 	w("    -f \"committer[name]=%s\"", authorName)
 	w("    -f \"committer[email]=%s\")", authorEmail)
-	// Classify the PUT failure the way internal/statewrite's classifyPutError
-	// does rather than retrying every shape as a concurrent run. A 409 is a
-	// genuine optimistic-lock conflict and retries; any other 4xx (401 revoked
-	// token, 403 rate limit or missing bypass, 404 branch or path gone, 422
-	// validation) is permanent, so surface the real cause immediately instead of
-	// burning ten backoff rounds and reporting a generic exhaustion. Anything
-	// else (5xx, transport blips with no HTTP status) stays retryable. gh writes
-	// the response body to stdout and its "gh: ... (HTTP NNN)" summary to
-	// stderr, so capturing stderr keeps the status token for the classifier.
+	// Classify the PUT failure with the write-path taxonomy shared with
+	// internal/statewrite's classifyPutError and internal/git's
+	// retryablePushRejection (keep the three classifiers in sync) rather than
+	// retrying every shape as a concurrent run. A 409 is a genuine
+	// optimistic-lock conflict and retries. A rate limit is transient and
+	// retries with backoff: GitHub's secondary and abuse limits surface as
+	// HTTP 403 (with a rate-limit message) or HTTP 429, not as auth failures,
+	// and are exactly the shape the loop is sized for (a monorepo wave of
+	// components racing PUTs to one file). Any other 4xx (401 revoked token,
+	// 403 authorization such as a missing bypass, 404 branch or path gone, 422
+	// validation) is permanent, so surface the real cause immediately instead
+	// of burning ten backoff rounds and reporting a generic exhaustion.
+	// Anything else (5xx, transport blips with no HTTP status) stays
+	// retryable. Arm order matters: the rate-limit arm must precede the
+	// blanket 4xx arm so a rate-limited 403 or a 429 never reads as permanent.
+	// gh writes the response body to stdout and its "gh: ... (HTTP NNN)"
+	// summary to stderr, so capturing stderr keeps the status token and the
+	// rate-limit message for the classifier.
 	w("  if API_ERR=$(gh api \"${API_ARGS[@]}\" 2>&1 >/dev/null); then")
 	w("    echo \"%s via API on attempt $attempt\"", params.successLabel)
 	w("    echo \"cascade-state-write: ok attempt=$attempt\"")
@@ -178,6 +187,9 @@ func writeStateCommitPush(sb *strings.Builder, indent string, params stateWriteP
 	w("  case \"$API_ERR\" in")
 	w("    *\"HTTP 409\"*|*Conflict*)")
 	w("      echo \"State write attempt $attempt hit an optimistic-lock conflict (concurrent run); retrying...\" >&2")
+	w("      ;;")
+	w("    *\"HTTP 429\"*|*\"Too Many Requests\"*|*\"rate limit\"*|*\"secondary rate\"*|*\"abuse\"*|*\"Retry-After\"*|*\"retry-after\"*)")
+	w("      echo \"State write attempt $attempt was rate limited; retrying with backoff...\" >&2")
 	w("      ;;")
 	w("    *\"HTTP 4\"*)")
 	w("      echo \"cascade-state-write: permanent-error attempt=$attempt\" >&2")

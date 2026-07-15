@@ -126,8 +126,13 @@ re-applies its own leaf mutation on top of whatever the other writer already
 committed, and retries. The retry ceiling is 10 attempts with exponential,
 jittered backoff, sized to survive a realistic wave (every component of a
 monorepo racing to write into the same file) rather than only a handful of
-parallel environments. Only contention and transient failures retry: a
-permanent API failure (a revoked token, a missing branch or manifest path)
+parallel environments. Only contention and transient failures retry: an
+optimistic-lock 409, a rate-limited response (HTTP 429, or a 403 carrying a
+rate, secondary, or abuse limit message, which is how GitHub surfaces
+secondary limits under exactly this kind of write wave), a 5xx, and transport
+blips (on the API write and on the git push alike) all retry within the same
+bounded loop, while a permanent API failure (a revoked token, a 403
+authorization refusal, a missing branch or manifest path, a validation error)
 fails immediately with its real cause instead of being relabeled as
 contention, and the Contents API write always carries its optimistic-lock
 `sha`, refusing to write at all when the manifest has no blob at the fetched

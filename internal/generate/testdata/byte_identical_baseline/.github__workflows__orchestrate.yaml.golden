@@ -331,6 +331,9 @@ jobs:
               *"HTTP 409"*|*Conflict*)
                 echo "State write attempt $attempt hit an optimistic-lock conflict (concurrent run); retrying..." >&2
                 ;;
+              *"HTTP 429"*|*"Too Many Requests"*|*"rate limit"*|*"secondary rate"*|*"abuse"*|*"Retry-After"*|*"retry-after"*)
+                echo "State write attempt $attempt was rate limited; retrying with backoff..." >&2
+                ;;
               *"HTTP 4"*)
                 echo "cascade-state-write: permanent-error attempt=$attempt" >&2
                 echo "::error::State write failed with a permanent API error (see log above); not retrying" >&2

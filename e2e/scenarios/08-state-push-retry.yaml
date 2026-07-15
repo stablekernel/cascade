@@ -16,8 +16,10 @@ description: |
   execute under act/gitea) is asserted on the emitted workflow instead: the PUT
   always carries the CAS sha and refuses to write when the manifest has no blob
   at the fetched tip, and the retry loop classifies failures, retrying a 409
-  conflict but failing fast on any other 4xx instead of relabeling revoked
-  tokens or missing branches as "likely concurrent run" for ten attempts.
+  conflict or a rate-limited response (HTTP 429, or a 403 carrying a rate,
+  secondary, or abuse limit message) but failing fast on any other 4xx instead
+  of relabeling revoked tokens or missing branches as "likely concurrent run"
+  for ten attempts.
 
 config:
   trunk_branch: main
@@ -47,8 +49,14 @@ steps:
             - "refusing an unguarded state write"
             # The CAS sha rides in the argument list unconditionally.
             - '-f "sha=$BASE_SHA"'
-            # PUT failures are classified: 409 retries, other 4xx fail fast.
+            # PUT failures are classified: 409 and rate limits retry, other
+            # 4xx fail fast. The rate-limit arm must recognize both the 429
+            # status and the message shapes GitHub uses for secondary and
+            # abuse limits on a 403.
             - '*"HTTP 409"*'
+            - '*"HTTP 429"*'
+            - '*"secondary rate"*'
+            - "State write attempt $attempt was rate limited"
             - "cascade-state-write: permanent-error attempt=$attempt"
           not_contains:
             # The old branch that omitted the CAS sha on an empty base.

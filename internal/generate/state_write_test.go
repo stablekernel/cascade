@@ -394,12 +394,14 @@ func TestStateWriteRefusesUnguardedPutOnMissingBaseBlob(t *testing.T) {
 // TestStateWriteFailsFastOnPermanentAPIError asserts the Contents-API retry
 // loop classifies PUT failures instead of retrying every shape ten times as
 // "likely concurrent run". A 409 is a genuine optimistic-lock conflict and
-// stays retryable; any other 4xx (401 revoked token, 403 rate limit or missing
-// bypass, 404 branch or path gone, 422 validation) is permanent, so the loop
-// must surface the real cause immediately rather than burning the backoff
-// budget and reporting a generic exhaustion. Unclassified failures (5xx,
-// transport blips carrying no HTTP status) stay retryable, mirroring the
-// transient tolerance of the internal/statewrite client.
+// stays retryable, and rate limits retry (see
+// TestStateWriteRetriesRateLimitedAPIError); any other 4xx (401 revoked
+// token, 403 authorization such as a missing bypass, 404 branch or path gone,
+// 422 validation) is permanent, so the loop must surface the real cause
+// immediately rather than burning the backoff budget and reporting a generic
+// exhaustion. Unclassified failures (5xx, transport blips carrying no HTTP
+// status) stay retryable, mirroring the transient tolerance of the
+// internal/statewrite client.
 func TestStateWriteFailsFastOnPermanentAPIError(t *testing.T) {
 	cfg, tmpDir := stateWriteTestConfig(t)
 
@@ -423,6 +425,47 @@ func TestStateWriteFailsFastOnPermanentAPIError(t *testing.T) {
 		// The old blanket mislabel is gone from the API branch.
 		assert.NotContains(t, content, "State write attempt $attempt failed (likely concurrent run)",
 			"%s must not label every PUT failure as a concurrent run", name)
+	}
+}
+
+// TestStateWriteRetriesRateLimitedAPIError asserts the Contents-API retry
+// loop carves rate-limited responses out of the permanent 4xx arm. GitHub's
+// secondary and abuse limits surface as HTTP 403 (with a rate-limit message)
+// or HTTP 429, not as auth failures, and are exactly the transient shape the
+// bounded backoff loop was sized for (a monorepo wave of components racing
+// PUTs to one file). Case arm order matters: the rate-limit arm must sit
+// between the 409 arm and the blanket 4xx arm so a rate-limited 403 retries
+// while a genuine 401/403-authorization/404/422 still fails fast.
+func TestStateWriteRetriesRateLimitedAPIError(t *testing.T) {
+	cfg, tmpDir := stateWriteTestConfig(t)
+
+	orch, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+	rel, err := NewReleaseGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	for name, content := range map[string]string{"orchestrate": orch, "release": rel} {
+		idxConflict := strings.Index(content, `*"HTTP 409"*|*Conflict*)`)
+		idxRate := strings.Index(content, `*"HTTP 429"*`)
+		idxPermanent := strings.Index(content, `*"HTTP 4"*)`)
+		require.GreaterOrEqual(t, idxConflict, 0,
+			"%s must keep the 409 optimistic-lock retry arm", name)
+		require.GreaterOrEqual(t, idxRate, 0,
+			"%s must carry a rate-limit retry arm", name)
+		require.GreaterOrEqual(t, idxPermanent, 0,
+			"%s must keep the permanent 4xx arm", name)
+		assert.Less(t, idxConflict, idxRate,
+			"%s must classify the 409 conflict before the rate-limit arm", name)
+		assert.Less(t, idxRate, idxPermanent,
+			"%s must match rate limits before the blanket 4xx arm so a rate-limited 403 retries", name)
+		// The rate-limit arm recognizes every shape GitHub uses for a
+		// rate/secondary/abuse limit, not only the 429 status.
+		for _, marker := range []string{`*"rate limit"*`, `*"secondary rate"*`, `*"abuse"*`, `*"Retry-After"*`} {
+			assert.Contains(t, content, marker,
+				"%s rate-limit arm must recognize the %s marker", name, marker)
+		}
+		assert.Contains(t, content, "rate limited",
+			"%s must say the retry is due to a rate limit", name)
 	}
 }
 
