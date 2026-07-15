@@ -134,25 +134,48 @@ func ghFetcher(repo, windowStart string, pageSize int) fleetreconcile.PageFetche
 		if err := json.Unmarshal(out, &all); err != nil {
 			return nil, fmt.Errorf("parsing gh run list JSON: %w", err)
 		}
-		// Newest-first by (createdAt, id) so the cursor slice is well defined.
-		sort.SliceStable(all, func(i, j int) bool {
-			if all[i].CreatedAt != all[j].CreatedAt {
-				return all[i].CreatedAt > all[j].CreatedAt
-			}
-			return all[i].DatabaseID > all[j].DatabaseID
-		})
-		page := make([]fleetreconcile.Run, 0, pageSize)
-		for _, r := range all {
-			if !cursor.IsZero() && !runOlderThanCursor(r, cursor) {
-				continue
-			}
-			page = append(page, r)
-			if len(page) == pageSize {
-				break
-			}
-		}
-		return page, nil
+		return slicePage(all, cursor, pageSize)
 	}
+}
+
+// slicePage orders a gh run-list response newest-first by (createdAt, id) and
+// drops everything at or newer than the cursor, yielding the strictly-older
+// page EnumerateRuns expects.
+//
+// Fail-closed guarantee: when the server response is FULL (gh hit --limit)
+// but the cursor slice comes back short, gh may have truncated older
+// in-window runs beyond the limit - every returned run was already-consumed
+// boundary data from a same-second run cluster at least a page wide. A short
+// page would read to EnumerateRuns as "source exhausted" and silently
+// truncate the window, so that ambiguity is an error, never a quiet partial
+// page.
+func slicePage(all []fleetreconcile.Run, cursor fleetreconcile.PageCursor, pageSize int) ([]fleetreconcile.Run, error) {
+	// Newest-first by (createdAt, id) so the cursor slice is well defined.
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].CreatedAt != all[j].CreatedAt {
+			return all[i].CreatedAt > all[j].CreatedAt
+		}
+		return all[i].DatabaseID > all[j].DatabaseID
+	})
+	page := make([]fleetreconcile.Run, 0, pageSize)
+	for _, r := range all {
+		if !cursor.IsZero() && !runOlderThanCursor(r, cursor) {
+			continue
+		}
+		page = append(page, r)
+		if len(page) == pageSize {
+			break
+		}
+	}
+	if len(all) == pageSize && len(page) < pageSize {
+		return nil, fmt.Errorf(
+			"gh run list page is ambiguous: the server returned a full page of %d runs "+
+				"but only %d were strictly older than the cursor, so runs beyond the "+
+				"--limit boundary may have been truncated (a same-timestamp run cluster "+
+				"at least %d runs wide; raise --page-size to page through it)",
+			pageSize, len(page), pageSize)
+	}
+	return page, nil
 }
 
 // runOlderThanCursor reports whether r sorts strictly older than the cursor in
