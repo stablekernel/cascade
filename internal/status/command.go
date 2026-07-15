@@ -1,3 +1,7 @@
+// Package status implements the cascade status command group: it reads
+// the deployed state recorded in the manifest for environments, builds,
+// and deploys, and includes a consistency check that compares recorded
+// state against the repository's remote branches.
 package status
 
 import (

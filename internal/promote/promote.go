@@ -1,3 +1,8 @@
+// Package promote implements environment promotion: moving an already
+// built artifact from one environment to the next in the chain. The
+// generated promotion workflow drives it in phases, a preflight that
+// runs the eligibility guards and a finalize that records the new
+// deployment state in the manifest.
 package promote
 
 import (

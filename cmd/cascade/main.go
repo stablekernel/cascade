@@ -1,3 +1,7 @@
+// Command cascade compiles a declarative manifest (.github/manifest.yaml)
+// into GitHub Actions workflows for trunk-based, multi-environment release
+// pipelines, and provides the lifecycle subcommands the generated workflows
+// invoke, such as orchestrate, promote, release, hotfix, and rollback.
 package main
 
 import (

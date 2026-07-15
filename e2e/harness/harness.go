@@ -1,3 +1,7 @@
+// Package harness provides the infrastructure for cascade's end-to-end
+// tests: it starts gitea in a container, creates repositories, localizes
+// and commits generated workflows, executes them with act, and exposes
+// scenario primitives and assertions for multi-step pipeline runs.
 package harness
 
 import (

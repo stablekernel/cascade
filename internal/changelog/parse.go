@@ -1,3 +1,6 @@
+// Package changelog generates release changelogs from conventional
+// commit history, parsing commits into typed entries and enriching
+// authors with GitHub usernames for release notes.
 package changelog
 
 import (

@@ -1,3 +1,7 @@
+// Package git wraps the git CLI for the repository operations cascade
+// needs: listing changed files and commits between SHAs, reading and
+// validating version tags, querying branches, and committing and
+// pushing state updates with rebase and retry handling.
 package git
 
 import (

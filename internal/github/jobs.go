@@ -1,3 +1,5 @@
+// Package github queries the GitHub Actions jobs API through the gh CLI
+// and maps workflow job names to their conclusions.
 package github
 
 import (

@@ -1,3 +1,9 @@
+// Package config defines the cascade manifest schema and its parsing,
+// validation, and state handling. The manifest (.github/manifest.yaml)
+// carries both pipeline configuration (environments, builds, deploys,
+// and release policy) and the live deployment state for every
+// environment; this package loads and validates it against schema
+// version 1 and merges state updates back into the file.
 package config
 
 import (

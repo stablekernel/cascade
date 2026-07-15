@@ -1,6 +1,7 @@
 package changelog
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -421,4 +422,14 @@ func TestEscapeBranchMentions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ExampleParseCommit() {
+	cc := ParseCommit(git.Commit{
+		Hash:    "1234567890abcdef",
+		Subject: "feat(api): add retry support (#42)",
+		Author:  "Ada Lovelace",
+	})
+	fmt.Printf("%s(%s): %s [PR %s]\n", cc.Type, cc.Scope, cc.Description, cc.PRNumber)
+	// Output: feat(api): add retry support [PR 42]
 }

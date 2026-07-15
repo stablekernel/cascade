@@ -1,3 +1,7 @@
+// Package ghaoutput writes step outputs to the file named by
+// $GITHUB_OUTPUT, using plain key=value lines for single-line values and
+// randomized heredoc delimiters for multiline values so untrusted
+// content cannot forge additional outputs.
 package ghaoutput
 
 import (

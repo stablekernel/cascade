@@ -1,3 +1,8 @@
+// Package generate is the compiler core: it renders a parsed manifest
+// into the GitHub Actions workflow files that run the pipeline. This
+// covers the orchestration, promotion, hotfix, rollback, and reconcile
+// companion workflows, plus the plan and PR preview jobs, with
+// third-party actions pinned to fixed SHAs from the embedded pin list.
 package generate
 
 import (

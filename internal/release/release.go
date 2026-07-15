@@ -1,3 +1,6 @@
+// Package release manages GitHub releases over the GitHub REST API:
+// creating and updating the draft release that accumulates changes and
+// publishing it when a version is released.
 package release
 
 import (
