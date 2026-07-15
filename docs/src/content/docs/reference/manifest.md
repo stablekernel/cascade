@@ -973,8 +973,17 @@ Triggers use glob patterns:
 | `**/*.yaml` | YAML files anywhere in the repo. |
 | `Dockerfile` | Exact file match. |
 | `cdk/*.ts` | TypeScript files directly in `cdk/` (not recursive). |
+| `!src/vendor/**` | Exclusion: subtracts matching files from the trigger set. |
 
 `*` matches any characters except `/`, `**` matches any path segments, and `?` matches a single character.
+
+A leading `!` marks a pattern as an exclusion, mirroring the `!` semantics of the
+GitHub Actions `paths:` filter that cascade generates from the same list: a file
+triggers when it matches at least one positive pattern and no exclusion. A list
+containing only exclusions behaves like `paths-ignore`: any changed file that is
+not excluded triggers. CLI-side change detection (orchestrate setup and promotion
+preflight) evaluates trigger lists with these same rules, so it always predicts
+what the emitted workflow filter will do.
 
 ### Input inheritance
 

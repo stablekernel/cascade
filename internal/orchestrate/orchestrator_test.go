@@ -168,9 +168,9 @@ func TestMatchGlob(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := matchGlob(tt.path, tt.pattern)
+			result := config.MatchGlobPattern(tt.pattern, tt.path)
 			if result != tt.match {
-				t.Errorf("matchGlob(%q, %q) = %v, want %v", tt.path, tt.pattern, result, tt.match)
+				t.Errorf("MatchGlobPattern(%q, %q) = %v, want %v", tt.pattern, tt.path, result, tt.match)
 			}
 		})
 	}

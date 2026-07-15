@@ -337,24 +337,20 @@ func (o *Orchestrator) detectChanges(baseSHA, headSHA string, triggers []string)
 		return true
 	}
 
-	files := strings.Split(changedFiles, "\n")
-	log.Trace("Changed files: %v", files)
-
-	// Check if any changed file matches triggers
-	for _, file := range files {
-		file = strings.TrimSpace(file)
-		if file == "" {
-			continue
-		}
-		for _, trigger := range triggers {
-			if matchGlob(file, trigger) {
-				log.Trace("File %s matches trigger %s", file, trigger)
-				return true
-			}
+	var files []string
+	for _, file := range strings.Split(changedFiles, "\n") {
+		if file = strings.TrimSpace(file); file != "" {
+			files = append(files, file)
 		}
 	}
+	log.Trace("Changed files: %v", files)
 
-	return false
+	// Delegate to the shared negation-aware evaluator so change detection
+	// agrees with the emitted GitHub Actions paths filter, including "!"
+	// exclusion patterns.
+	matched := config.MatchAnyTrigger(triggers, files)
+	log.Trace("Trigger match for %v: %v", triggers, matched)
+	return matched
 }
 
 // componentExtraPaths returns the effective extra path set for the scoped
@@ -870,15 +866,3 @@ func indexOf(slice []string, item string) int {
 	return -1
 }
 
-// matchGlob reports whether path matches the glob pattern. It delegates to the
-// shared config.MatchGlobPattern evaluator so CLI-side change detection agrees
-// with the emitted GitHub Actions paths filter, which is generated verbatim from
-// the same pattern list. That evaluator anchors single "*" within one segment
-// (it does not cross "/") and expands "**" across any number of segments, so a
-// recursive glob such as "**/*.go" or "pkg/**/*.ts" matches files at any depth.
-func matchGlob(path, pattern string) bool {
-	if pattern == "" {
-		return false
-	}
-	return config.MatchGlobPattern(pattern, path)
-}
