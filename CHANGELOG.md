@@ -14,7 +14,49 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ## [Unreleased]
 
-## [0.16.0] - 2026-07-12
+### Security
+
+- **setup-cli:** Verify the release archive checksum and the cosign signature
+  on checksums.txt before installing the CLI, failing closed on any mismatch
+- **setup-cli:** Resolve version `latest` to stable releases only, excluding
+  pre-releases and drafts
+- **generate:** Randomize heredoc delimiters in generated output writes and
+  bind the PR preview comment body through the step environment
+
+### Fixed
+
+- **statewrite:** Read manifest content and the optimistic-lock sha as one
+  snapshot so concurrent finalize writes cannot lose an update
+- **statewrite:** Fail fast with the real cause when the manifest lookup
+  returns 404 (file absent or the token lacks repo access) instead of retrying
+  into a misleading empty-manifest error
+- **generate:** Correct emitted output keys, branch-case resolution, manifest
+  routing, and unresolved state-ref handling
+- **generate:** Emit `always()` alone when a forced job has no other conditions
+- **config:** Reject build dependencies on deploy jobs in both resolution legs
+- **github:** Paginate workflow-job queries and match deploy job names exactly
+- **fleetreconcile:** Fail closed when a run-enumeration page slices short at
+  the cursor
+- **output:** Surface flush close errors and render outputs in sorted order
+- **visualize:** Escape graph labels, keep repo slugs injective, and encode
+  theme values
+- **ci:** Wire the build-cli workflow_call result to a real job output
+- **cli:** Align the root help text with the compiler positioning
+- Surface git and API errors on state and version paths instead of swallowing
+  them
+
+### Maintenance
+
+- **ci:** Lint workflows with actionlint and shellcheck, and cover the
+  setup-cli install script with hermetic fixture tests
+- **ci:** Run the e2e harness tests under the race detector
+- **docs:** Publish release verification on the security page, add the code of
+  conduct, refresh stale install and pin examples, and add package
+  documentation
+- **test:** Cover reset deletion, change detection, git write paths, simulate
+  what-ifs, and visualize theming
+
+## [0.16.0] - 2026-07-13
 
 ### Added
 
@@ -64,7 +106,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 - **e2e:** Assert runtime outcomes instead of emitted script text (#552)
 
-## [0.14.0] - 2026-07-10
+## [0.14.0] - 2026-07-11
 
 ### Added
 
@@ -139,7 +181,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 - **fleet:** Only fan out the fleet for rc and dryrun tags (#501)
 
-## [0.10.0] - 2026-07-06
+## [0.10.0] - 2026-07-07
 
 ### Added
 
@@ -154,7 +196,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 - **e2e:** Repin act runner image to current upstream digest (#480)
 
-## [0.9.3] - 2026-07-06
+## [0.9.3] - 2026-07-07
 
 ### Fixed
 
@@ -259,7 +301,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **cli-reference:** Document status, rollback, and graph command families (#421)
 - **release:** Sweep accumulated dry-run prerelease tags (#419)
 
-## [0.7.0] - 2026-06-29
+## [0.7.0] - 2026-06-30
 
 ### Added
 
@@ -367,7 +409,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **fleet:** Download ledger artifacts per-subdir so multi-job ledgers do not clobber (#276)
 - **fleet:** Correct the register-run upload-artifact pin to the real v4.6.2 sha (#275)
 
-## [0.3.0] - 2026-06-23
+## [0.3.0] - 2026-06-24
 
 ### Added
 
@@ -484,7 +526,7 @@ stricter callback validation).
   `actions/upload-artifact` v7, `goreleaser/goreleaser-action` v7,
   `github.com/spf13/cobra` v1.10.2. (#48, #49, #52, #53, #54)
 
-## [0.1.0] - 2026-06-09
+## [0.1.0] - 2026-06-10
 
 Initial release of cascade: a trunk-based CI/CD orchestrator for GitHub Actions.
 
