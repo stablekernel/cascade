@@ -455,8 +455,11 @@ func (p *Preflighter) detectDeployChanges(sourceSHA, targetEnv string) ([]string
 			continue
 		}
 
-		// Check for changes in triggers
-		if p.hasChanges(targetSHA, sourceSHA, d.Triggers) {
+		// Check for changes in triggers. Build-linked deploys inherit their
+		// build's triggers for promotion change detection (see the deploy
+		// types table in the manifest reference), so resolve through
+		// GetTriggersForDeploy rather than reading d.Triggers directly.
+		if p.hasChanges(targetSHA, sourceSHA, p.cicdFile.Config.GetTriggersForDeploy(d.Name)) {
 			localDeploys = append(localDeploys, d.Name)
 		}
 	}
