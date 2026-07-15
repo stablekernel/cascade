@@ -71,7 +71,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      cli_result: ${{ needs.build-cli.outputs.result }}
+      build_cli_result: ${{ needs.build-cli.outputs.result }}
       validate_result: ${{ needs.validate.outputs.result }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -95,7 +95,7 @@ jobs:
               echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
               HAS_OUTPUTS=true
             fi
-            echo "| cli_result | ${{ needs.build-cli.outputs.result }} |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| build_cli_result | ${{ needs.build-cli.outputs.result }} |" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -n "${{ needs.validate.outputs.result }}" ]]; then
             if [[ "$HAS_OUTPUTS" == "false" ]]; then

@@ -73,11 +73,14 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 
 	// Parse the full manifest (including state) so generators can resolve
 	// cascade-owned ${{ state.<env>.<field> }} input references. State is
-	// optional; absence is not an error.
-	var manifestState map[string]*config.EnvState
-	if full, ferr := config.ParseManifestFile(configPath, opts.ManifestKey); ferr == nil {
-		manifestState = full.State
+	// optional (a manifest without a state: block parses to nil state), but a
+	// parse failure is not absence: swallowing it would read a malformed
+	// state: block as "no state" and emit dead ${{ state.* }} refs.
+	full, ferr := config.ParseManifestFile(configPath, opts.ManifestKey)
+	if ferr != nil {
+		return nil, fmt.Errorf("parsing manifest state: %w", ferr)
 	}
+	manifestState := full.State
 
 	// Override action folder if specified on command line.
 	if opts.ActionFolder != "" && opts.ActionFolder != "manage-release" {

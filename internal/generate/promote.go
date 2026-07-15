@@ -447,11 +447,16 @@ func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[stri
 	}
 	for env := range envNames {
 		merged := make(map[string]interface{})
-		// Default-level state refs resolve per env.
+		// Default-level state refs resolve per env. An unresolved ref keeps
+		// the raw expression (matching resolveDeployInputs): the deploy must
+		// not silently run without its configured input, and the surviving
+		// ${{ state.* }} text fails loudly at workflow parse.
 		for k, v := range deploy.Inputs {
 			if s, ok := v.(string); ok && classifyInputValue(s) == inputStateRef {
 				if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {
 					merged[k] = resolved
+				} else {
+					merged[k] = s
 				}
 			}
 		}
@@ -463,6 +468,10 @@ func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[stri
 				case inputStateRef:
 					if resolved, rerr := resolveInputValue(s, g.state); rerr == nil {
 						merged[k] = resolved
+					} else {
+						// Keep the unresolved expression visible rather than
+						// silently dropping the input.
+						merged[k] = s
 					}
 					continue
 				}

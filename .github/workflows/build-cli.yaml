@@ -16,7 +16,7 @@ on:
         description: 'Build result (success/failure)'
         # Must reference a real job output: in a workflow_call output the jobs
         # context exposes only outputs, so jobs.build.result resolves empty and
-        # the caller's cli_result guard never sees a value.
+        # the caller's build_cli_result guard never sees a value.
         value: ${{ jobs.build.outputs.result }}
 
 permissions:

@@ -193,9 +193,11 @@ func TestReconcileGenerator_Companion_LoopGuards(t *testing.T) {
 	content, err := NewReconcileGenerator(reconcileConfig(), t.TempDir()).GenerateCompanion()
 	require.NoError(t, err)
 
-	// (a) idempotent typed-command write: the real command, not raw yq/sed.
-	assert.Contains(t, content, "cascade reconcile \"${args[@]}\"",
-		"must invoke the real idempotent reconcile command")
+	// (a) idempotent typed-command write: the real command, not raw yq/sed,
+	// carrying the manifest flags so it reconciles the manifest this workflow
+	// was generated from.
+	assert.Contains(t, content, "cascade reconcile --config \".github/manifest.yaml\" --manifest-key \"ci\" \"${args[@]}\"",
+		"must invoke the real idempotent reconcile command against the generated-from manifest")
 	assert.NotContains(t, content, "yq eval", "must not hand-edit the manifest with yq")
 
 	// (b) push-only-if-git-diff-nonempty.

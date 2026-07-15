@@ -142,9 +142,9 @@ jobs:
     permissions:
       contents: write
     outputs:
-      bundle_bundle: ${{ needs.build-bundle.outputs.bundle }}
-      docs_bundle: ${{ needs.build-docs.outputs.bundle }}
-      image_image: ${{ needs.build-image.outputs.image }}
+      build_bundle_bundle: ${{ needs.build-bundle.outputs.bundle }}
+      build_docs_bundle: ${{ needs.build-docs.outputs.bundle }}
+      build_image_image: ${{ needs.build-image.outputs.image }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -170,7 +170,7 @@ jobs:
               echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
               HAS_OUTPUTS=true
             fi
-            echo "| bundle_bundle | ${{ needs.build-bundle.outputs.bundle }} |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| build_bundle_bundle | ${{ needs.build-bundle.outputs.bundle }} |" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -n "${{ needs.build-docs.outputs.bundle }}" ]]; then
             if [[ "$HAS_OUTPUTS" == "false" ]]; then
@@ -178,7 +178,7 @@ jobs:
               echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
               HAS_OUTPUTS=true
             fi
-            echo "| docs_bundle | ${{ needs.build-docs.outputs.bundle }} |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| build_docs_bundle | ${{ needs.build-docs.outputs.bundle }} |" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ -n "${{ needs.build-image.outputs.image }}" ]]; then
             if [[ "$HAS_OUTPUTS" == "false" ]]; then
@@ -186,7 +186,7 @@ jobs:
               echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
               HAS_OUTPUTS=true
             fi
-            echo "| image_image | ${{ needs.build-image.outputs.image }} |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| build_image_image | ${{ needs.build-image.outputs.image }} |" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [[ "$HAS_OUTPUTS" == "false" ]]; then
             echo "_No outputs produced_" >> "$GITHUB_STEP_SUMMARY"
