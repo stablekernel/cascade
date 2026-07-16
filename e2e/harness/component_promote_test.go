@@ -324,16 +324,16 @@ func TestAssertState_PreviousContains(t *testing.T) {
 	ctx.RecordState(key, "apiprodsha2", "api-0.2.0")
 	ctx.RecordStatePreviousVersions(key, []string{"api-0.1.0"})
 
-	errs := AssertState(ctx, key, &StateExpect{PreviousContains: []string{"api-0.1.0"}})
+	errs := AssertState(ctx, ctx, key, &StateExpect{PreviousContains: []string{"api-0.1.0"}})
 	assert.Empty(t, errs, "a ring carrying the listed version must pass")
 
-	errs = AssertState(ctx, key, &StateExpect{PreviousContains: []string{"api-0.0.1"}})
+	errs = AssertState(ctx, ctx, key, &StateExpect{PreviousContains: []string{"api-0.0.1"}})
 	require.Len(t, errs, 1, "a ring missing the listed version must fail")
 	assert.Contains(t, errs[0].Error(), "api-0.0.1")
 
 	// An empty ring (the rebuilt-from-empty leaf) fails the expectation.
 	bare := componentStateKey("web", "prod")
 	ctx.RecordState(bare, "webprodsha", "web-0.1.0")
-	errs = AssertState(ctx, bare, &StateExpect{PreviousContains: []string{"web-0.0.1"}})
+	errs = AssertState(ctx, ctx, bare, &StateExpect{PreviousContains: []string{"web-0.0.1"}})
 	require.Len(t, errs, 1, "an empty ring must fail previous_contains")
 }

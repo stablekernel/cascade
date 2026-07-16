@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -576,6 +577,73 @@ func ParseMultiStepScenario(data []byte) (*MultiStepScenario, error) {
 	return &s, nil
 }
 
+// statePseudoEnvs are the state keys that name a release row rather than a
+// declared environment. The runner records them from ci.latest_release, so they
+// are as real a subject for an expectation as any env in the ladder.
+var statePseudoEnvs = []string{"release", "prerelease"}
+
+// scenarioEnvNames returns every environment name a scenario may legitimately
+// assert state on: the top-level ladder, every environment any component
+// declares, and the release pseudo-envs. A component that declares no ladder of
+// its own inherits the top-level one, which the union already covers.
+func scenarioEnvNames(s *MultiStepScenario) map[string]bool {
+	valid := make(map[string]bool)
+	for _, name := range s.Config.EnvironmentNames() {
+		valid[name] = true
+	}
+	for _, comp := range s.Config.Components {
+		for _, e := range comp.Environments {
+			valid[e.Name] = true
+		}
+	}
+	for _, name := range statePseudoEnvs {
+		valid[name] = true
+	}
+	return valid
+}
+
+// validateStateEnvNames checks that every state expectation names an environment
+// the scenario actually declares.
+//
+// This is what keeps an expectation falsifiable. An env the scenario never
+// deployed to reads back as a zero EnvState, which is correct and useful:
+// "deploy dev, prove prod was untouched" is a real assertion, and it goes red if
+// the step wrongly writes prod. But a typo'd env name produces that same absence
+// no matter how the code behaves, so the expectation can never fail. The two are
+// indistinguishable at runtime, since both are simply an env with no state. The
+// name is therefore checked against the scenario's own config, where a typo is
+// decidable without running anything.
+func validateStateEnvNames(s *MultiStepScenario) error {
+	valid := scenarioEnvNames(s)
+
+	for _, step := range s.Steps {
+		if step.Expect == nil {
+			continue
+		}
+		for key, expect := range step.Expect.State {
+			// The map key names the env, except when the expectation selects a
+			// component and overrides the env explicitly. Then the key is only a
+			// label distinguishing two components asserted at the same env in one
+			// step, and Env is the name that must be real.
+			name := key
+			if expect.Component != "" && expect.Env != "" {
+				name = expect.Env
+			}
+			if valid[name] {
+				continue
+			}
+			known := make([]string, 0, len(valid))
+			for n := range valid {
+				known = append(known, n)
+			}
+			sort.Strings(known)
+			return fmt.Errorf("step %q expects state on %q, which is not an environment this scenario declares (known: %s). An env name that does not exist has no state no matter what the code does, so the expectation can never fail",
+				step.Name, name, strings.Join(known, ", "))
+		}
+	}
+	return nil
+}
+
 // DiscoverMultiStepScenarios finds and parses all multi-step scenario YAML files
 func DiscoverMultiStepScenarios(dir string) ([]*MultiStepScenario, error) {
 	var scenarios []*MultiStepScenario
@@ -611,6 +679,10 @@ func DiscoverMultiStepScenarios(dir string) ([]*MultiStepScenario, error) {
 		// this on its own: steps can go missing with every remaining key valid.
 		if len(scenario.Steps) == 0 {
 			return fmt.Errorf("%s: scenario %q declares no steps, so it asserts nothing", path, scenario.Name)
+		}
+
+		if err := validateStateEnvNames(scenario); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
 		}
 
 		// Store relative path for test naming

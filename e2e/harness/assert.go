@@ -225,8 +225,13 @@ func (expect *StateExpect) assertsSomething() bool {
 }
 
 // AssertState validates environment state against expectations (used internally)
-// Returns errors instead of failing test directly for more flexible error handling
-func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error {
+// Returns errors instead of failing test directly for more flexible error handling.
+//
+// preState carries the state as it stood before the step ran, which only the
+// Unchanged comparison reads. Every state expectation flows through here so the
+// guards below apply to all of them; routing Unchanged around this function left
+// its branch of assertsSomething unreachable.
+func AssertState(ctx *ExecutionContext, preState *ExecutionContext, env string, expect *StateExpect) []error {
 	var errs []error
 
 	// An expectation with no populated assertion field compares nothing against
@@ -237,6 +242,22 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 	}
 
 	actual := ctx.GetState(env)
+
+	// Check that the step left the env alone. This runs before the HasState guard
+	// below because absence is a legitimate subject here: an env the scenario
+	// never deployed to has no recorded state, and "still nothing" is exactly what
+	// unchanged claims. It stays falsifiable because a step that wrongly writes
+	// the env gives it state and breaks the comparison. What makes the env name
+	// itself meaningful is the discovery-time check in validateStateEnvNames,
+	// which no runtime rule here can substitute for.
+	if expect.Unchanged {
+		before := preState.GetState(env)
+		if before.SHA != actual.SHA || before.Version != actual.Version {
+			errs = append(errs, fmt.Errorf("state[%s] expected unchanged but changed from %s/%s to %s/%s",
+				env, before.SHA, before.Version, actual.SHA, actual.Version))
+		}
+		return errs
+	}
 
 	// Check if state should be wiped
 	if expect.Wiped {
@@ -250,8 +271,8 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 	// Every remaining expectation is positive: it describes something the state
 	// must hold. Reading an env the scenario never recorded yields a zero
 	// EnvState, so a typo'd env name would be compared field by field against
-	// empty values and quietly report on state nobody wrote. Absence is only a
-	// valid subject for Wiped, which returned above.
+	// empty values and quietly report on state nobody wrote. Absence is a valid
+	// subject only for Wiped and Unchanged, both of which returned above.
 	if !ctx.HasState(env) {
 		return []error{fmt.Errorf("state[%s] has no recorded state, so this expectation cannot hold: check the env name, or use wiped to assert absence", env)}
 	}

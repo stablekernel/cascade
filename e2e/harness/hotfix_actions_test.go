@@ -285,7 +285,8 @@ func TestAssertStateDivergence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := AssertState(newCtx(), "prod", tt.expect)
+			ctx := newCtx()
+			errs := AssertState(ctx, ctx, "prod", tt.expect)
 			if tt.wantErr == "" {
 				assert.Empty(t, errs)
 				return
