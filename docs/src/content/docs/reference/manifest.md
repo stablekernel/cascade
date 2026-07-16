@@ -46,6 +46,23 @@ The wrapper key is set by `manifest_key` and the file path by `manifest_file`.
 
 Every field below lives under `ci.config` unless stated otherwise. The `ci.state` block is covered in [State section](#state-section-managed).
 
+### Value validation
+
+Every manifest value that cascade splices into generated output (a YAML key or scalar, a shell string, a github-script literal, a cron entry, a git invocation, or a `${{ secrets.* }}` expression) is shape-validated by `cascade lint` and at generation time, so a value the emitted context cannot carry safely is rejected up front instead of producing a broken or silently altered workflow. The notable shapes:
+
+- Names that key job IDs (environments, builds, deploys, components, dispatch inputs) allow letters, digits, hyphens, and underscores.
+- Cron entries must be five-field expressions in the GitHub Actions cron grammar (digits, names like `MON` or `JAN`, `*`, `,`, `-`, `/`).
+- `repository_dispatch` and `workflow_run` event types allow letters, digits, dots, hyphens, and underscores.
+- Workflow display names, trigger globs, and operator input values are single-quote-escaped at emit, so apostrophes are fine; only line breaks are rejected.
+- Values spliced into double-quoted shell strings (`git.user_name`, `git.user_email`, `manifest_file`) reject `"`, `$`, backticks, and backslashes; apostrophes stay allowed.
+- Secret references (`gpg_key_id`, `gpg_key_secret`, per-callback `secrets:` map entries, environment `secrets`/`variables`) must be valid GitHub Actions secret names.
+- `tag_grammar` components are restricted to letters, digits, `.`, `_`, and `-`, and a prefix may not begin with a hyphen (it reaches `git tag` lookups where a leading hyphen parses as a flag). This applies to component prefixes too.
+- `environment_url` must be an http(s) URL without quotes or whitespace; `$` in a query string is fine (the emitted shell single-quotes it).
+- Token fields (`release_token`, `state_token`, `notify.token`) and `concurrency.group` are emitted as unquoted YAML scalars and reject line breaks, `:`, and `#`.
+- `trunk_branch` and `external[].ref` are restricted to git-ref-safe characters (letters, digits, `.`, `/`, `_`, `-`, no leading hyphen).
+
+The same rules apply to every component's resolved configuration, so a per-component override cannot bypass them.
+
 ### Editor support
 
 cascade ships a hand-authored JSON Schema. Registering it gives autocomplete, type checking, enum hints, and hover docs while you author the manifest. The schema covers structure, types, and enums; `cascade lint` remains the authority for semantic and cross-field rules.
@@ -295,6 +312,8 @@ ci:
 | `gpg_key_secret` | emitted | string | - | Secret name holding the GPG private key. |
 
 `default` uses the `github-actions[bot]` identity, `custom` uses your supplied name and email, and `external` skips git config entirely (the runner is assumed pre-configured). When both `gpg_key_id` and `gpg_key_secret` are set, cascade imports the key, enables `commit.gpgsign`, and signs state commits.
+
+`user_name` and `user_email` are spliced into double-quoted shell strings in the emitted workflows, so they reject `"`, `$`, backticks, and backslashes (apostrophes are fine). `gpg_key_id` and `gpg_key_secret` are secret NAMES spliced into `${{ secrets.<name> }}` expressions and must match the GitHub secret-name grammar.
 
 ## validate
 
@@ -666,7 +685,7 @@ ci:
 | `name` | emitted | The environment name (required on an object entry). Defines this entry's rung on the ladder. |
 | `role` | emitted | Optional explicit promotion stage (`prerelease` or `release`), overriding the positional default. |
 | `gha_environment` | emitted | Maps the cascade environment to a real GitHub Environment (native deployments, `environment_url`). |
-| `environment_url` | emitted | URL reported on the Deployment status for that environment. |
+| `environment_url` | emitted | URL reported on the Deployment status for that environment. Must be an http(s) URL without quotes or whitespace; the emitted shell single-quotes it, so a `$` in a query string stays literal. |
 | `required_reviewers` | emitted (via `environments` command) | Reviewers the `environments` command applies to the GitHub Environment. |
 | `wait_timer` | emitted (via `environments` command) | Wait timer the `environments` command applies. |
 | `branch_policy` | emitted (via `environments` command) | Branch policy the `environments` command applies (with `branch_patterns` and `tag_patterns` when `custom`). |
@@ -723,9 +742,9 @@ ci:
 
 | Sub-field | Status | Description |
 |-----------|--------|-------------|
-| `schedule` | emitted | List of cron schedule entries. Each entry has one required key, `cron`. |
-| `repository_dispatch` | emitted | Wires the `repository_dispatch` trigger; `types` lists the event types. |
-| `workflow_run` | emitted | Wires the `workflow_run` trigger. |
+| `schedule` | emitted | List of cron schedule entries. Each entry has one required key, `cron`, validated as a five-field GitHub Actions cron expression. |
+| `repository_dispatch` | emitted | Wires the `repository_dispatch` trigger; `types` lists the event types (letters, digits, dots, hyphens, underscores). |
+| `workflow_run` | emitted | Wires the `workflow_run` trigger. `types` obey the event-type grammar; `workflows` entries are single-quote-escaped at emit (apostrophes are fine, line breaks are rejected). |
 | `merge_group` | rejected | Not allowed. `extra_triggers` attaches to the side-effecting orchestrate workflow, which cuts release tags, publishes releases, and runs deploys while writing state, so a speculative merge-queue build could publish a real release from a candidate commit. cascade rejects `extra_triggers.merge_group` at validate. To gate pull requests inside a merge queue, set [`merge_queue.enabled`](#merge_queue), which emits a read-only validation lane. |
 
 Migrating from a manifest that set `extra_triggers.merge_group`: remove that entry and set `merge_queue.enabled: true` instead. The read-only merge-queue lane runs `cascade lint` and a dry-run `cascade orchestrate setup` against the queued candidate without cutting tags, publishing releases, or writing state.
