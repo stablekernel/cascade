@@ -37,7 +37,7 @@ ci:
   config:
     schema_version: 1
     trunk_branch: main
-    cli_version: v0.16.0
+    cli_version: v0.16.1
 
     environments: [dev, staging, prod]
 

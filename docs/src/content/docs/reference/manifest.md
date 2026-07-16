@@ -99,7 +99,7 @@ ci:
       - name: prod
         gha_environment: production
         environment_url: "https://app.example.com"
-    cli_version: v0.16.0
+    cli_version: v0.16.1
 ```
 
 Each entry is one of two forms:
@@ -195,7 +195,7 @@ These fields pin the cascade CLI and third-party actions the generated workflows
 |-------|----------|
 | `latest` | Most recent stable release (default). |
 | `beta` | Newest prerelease build. |
-| `vX.Y.Z` | A specific version (for example `v0.16.0`). Pin for reproducibility. |
+| `vX.Y.Z` | A specific version (for example `v0.16.1`). Pin for reproducibility. |
 
 ### cli_version_sha
 
