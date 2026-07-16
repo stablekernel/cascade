@@ -16,6 +16,15 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **rollback:** Refuse an environment-scoped rollback of a hotfix-diverged
+  environment. The rollback overwrote the divergence record (`ref: env/<env>`,
+  `base_sha`, `patches`) that authorizes the rejoin teardown, so the hotfix's
+  integration branch, tags, and release objects leaked forever and the stale
+  patches misled the re-promotion containment gate. Rollback now fails fast at
+  preflight and directs the operator to rejoin the environment first; a
+  rollback-diverged environment can still be rolled back again, and stale
+  patches never survive onto a rolled-back version
+
 - **version:** `next-version --component` now derives its commit scope through
   the same helper as `orchestrate`, so the preview includes the component's
   `extra_paths`/`shared_paths`. Previously a commit touching only a declared

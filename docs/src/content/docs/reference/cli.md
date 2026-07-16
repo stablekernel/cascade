@@ -793,6 +793,19 @@ revert merge to the trunk branch, not a rollback. The guard is inert when no par
 is available to identify the first environment, so a state-only manifest still resolves
 through the normal path.
 
+#### Hotfix-divergence guard
+
+An environment diverged by a hotfix carries a divergence record (`ref: env/<env>`,
+`base_sha`, `patches`) that is the sole authorization for the rejoin teardown of its
+integration branch, hotfix tags, and release objects. An env-scoped rollback would
+overwrite that record, so rollback refuses a hotfix-diverged environment and directs the
+operator to rejoin it first: promote a trunk commit that contains every recorded patch, and
+the rejoin tears the hotfix artifacts down. When the patches never merged to trunk (an
+abandoned hotfix), promote with `--force` instead: the containment check is skipped with a
+recorded warning and the rejoin teardown still runs. An environment diverged by a previous rollback
+(`ref: rollback/<env>`) may be rolled back again, and a `--deployable`-scoped rollback is
+unaffected since it never touches the env-level divergence record.
+
 #### Flags
 
 | Flag | Type | Default | Description |
