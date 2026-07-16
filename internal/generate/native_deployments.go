@@ -108,7 +108,11 @@ func writeEnvironmentURLCase(sb *strings.Builder, cfg *config.TrunkConfig, body 
 	sort.Strings(names)
 	sb.WriteString(body + "  case \"$ENV_NAME\" in\n")
 	for _, name := range names {
-		fmt.Fprintf(sb, "%s    %s) environment_url=\"%s\" ;;\n", body, name, urls[name])
+		// The URL sits inside single quotes so shell-live characters a URL can
+		// legitimately carry ($ in a query string, backticks after an encoding
+		// lapse) stay literal instead of expanding; validation rejects the
+		// single quote itself, the one character this quoting cannot hold.
+		fmt.Fprintf(sb, "%s    %s) environment_url='%s' ;;\n", body, name, urls[name])
 	}
 	sb.WriteString(body + "  esac\n")
 }

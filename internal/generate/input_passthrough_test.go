@@ -53,10 +53,11 @@ on:
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	// The vars expression survives verbatim into the deploy callback with:.
-	assert.Contains(t, result, "bucket: ${{ vars.DEPLOY_BUCKET }}")
-	// Literal survives unchanged.
-	assert.Contains(t, result, "region: us-east-1")
+	// The vars expression survives into the deploy callback with:, wrapped in
+	// single quotes (transparent to GHA expression evaluation).
+	assert.Contains(t, result, "bucket: '${{ vars.DEPLOY_BUCKET }}'")
+	// Literal survives unchanged, single-quoted.
+	assert.Contains(t, result, "region: 'us-east-1'")
 }
 
 // TestOrchestrateStateReferenceResolves verifies a ${{ state.<env>.<field> }}
@@ -101,7 +102,7 @@ on:
 	require.NoError(t, err)
 
 	// State ref resolved to the literal prior SHA, not passed through.
-	assert.Contains(t, result, "previous_sha: abc123def")
+	assert.Contains(t, result, "previous_sha: 'abc123def'")
 	assert.NotContains(t, result, "state.prod.sha")
 }
 

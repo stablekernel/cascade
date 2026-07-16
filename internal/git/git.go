@@ -228,7 +228,7 @@ func GetLatestTag(dir, prefix string) (string, string, error) {
 func GetLatestTagSpec(dir string, spec taggrammar.Spec) (string, string, error) {
 	// Get all tags matching the prefix glob, sorted by version descending.
 	// --sort=-v:refname sorts by version in descending order.
-	cmd := exec.Command("git", "tag", "-l", spec.Prefix+"*", "--sort=-v:refname")
+	cmd := exec.Command("git", "tag", "-l", "--sort=-v:refname", "--", spec.Prefix+"*")
 	cmd.Dir = dir
 	cmd.Env = BoundaryEnv(dir)
 	output, err := cmd.Output()
@@ -742,7 +742,7 @@ func GetLatestReleaseTag(dir, prefix string) (string, string, error) {
 // release, so a custom pre-release token is classified correctly rather than
 // slipping through a hard-wired "-rc." check.
 func GetLatestReleaseTagSpec(dir string, spec taggrammar.Spec) (string, string, error) {
-	cmd := exec.Command("git", "tag", "-l", spec.Prefix+"*", "--sort=-v:refname")
+	cmd := exec.Command("git", "tag", "-l", "--sort=-v:refname", "--", spec.Prefix+"*")
 	cmd.Dir = dir
 	cmd.Env = BoundaryEnv(dir)
 	output, err := cmd.Output()
