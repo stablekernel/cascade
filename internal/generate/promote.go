@@ -237,6 +237,19 @@ func (g *PromoteGenerator) writeMatrixBuildingStep(sb *strings.Builder) {
 	sb.WriteString("        id: build-matrices\n")
 	sb.WriteString("        env:\n")
 	sb.WriteString("          PROMOTION_RESULT: ${{ steps.preflight.outputs.promotion_result }}\n")
+	// Route each deploy's serialized input JSON through env: indirection so
+	// operator-authored values never appear inside a shell quote literal in
+	// the run script (same pattern as the dispatch-input handling in the
+	// external update workflow).
+	for _, d := range g.config.Deploys {
+		if len(d.Inputs) == 0 {
+			continue
+		}
+		upper := strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_"))
+		defaultInputsJSON, envInputsJSON := g.matrixInputsJSON(&d)
+		fmt.Fprintf(sb, "          DEFAULT_INPUTS_%s: %s\n", upper, yamlSingleQuote(defaultInputsJSON))
+		fmt.Fprintf(sb, "          ENV_INPUTS_%s: %s\n", upper, yamlSingleQuote(envInputsJSON))
+	}
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          # Extract promotions array from promotion result\n")
 	sb.WriteString("          PROMOTIONS=$(echo \"$PROMOTION_RESULT\" | jq -c '.promotions // []')\n")
@@ -252,8 +265,8 @@ func (g *PromoteGenerator) writeMatrixBuildingStep(sb *strings.Builder) {
 		fmt.Fprintf(sb, "          # Build matrix for deploy: %s\n", d.Name)
 		fmt.Fprintf(sb, "          MATRIX_%s='['\n", strings.ToUpper(outputName))
 
-		// Serialize default inputs and env-specific inputs as JSON for bash
-		g.writeMatrixBuildingLogic(sb, &d, outputName)
+		// The input JSON is env-routed on the step; the logic reads it back.
+		g.writeMatrixBuildingLogic(sb, outputName)
 
 		fmt.Fprintf(sb, "          MATRIX_%s=\"${MATRIX_%s}]\"\n", strings.ToUpper(outputName), strings.ToUpper(outputName))
 		fmt.Fprintf(sb, "          echo \"deploy_%s_matrix=$MATRIX_%s\" >> \"$GITHUB_OUTPUT\"\n", outputName, strings.ToUpper(outputName))
@@ -385,24 +398,32 @@ func (g *PromoteGenerator) matrixEnvInputs(deploy *config.DeployConfig) map[stri
 	return out
 }
 
-// writeMatrixBuildingLogic generates the bash logic to build a matrix for a single deploy.
-// It iterates through promotions and builds matrix entries with resolved inputs.
-func (g *PromoteGenerator) writeMatrixBuildingLogic(sb *strings.Builder, deploy *config.DeployConfig, outputName string) {
-	// Serialize default inputs (passthrough expressions excluded; state.*
-	// refs resolved per-env into env_inputs below).
+// matrixInputsJSON serializes a deploy's default inputs and env_inputs as
+// compact JSON (passthrough expressions excluded; state.* refs resolved
+// per-env into env_inputs).
+func (g *PromoteGenerator) matrixInputsJSON(deploy *config.DeployConfig) (string, string) {
 	defaultInputsJSON, err := json.Marshal(g.matrixDefaultInputs(deploy))
 	if err != nil {
 		defaultInputsJSON = []byte("{}")
 	}
-
-	// Serialize env_inputs (passthrough excluded, state.* resolved).
 	envInputsJSON, err := json.Marshal(g.matrixEnvInputs(deploy))
 	if err != nil {
 		envInputsJSON = []byte("{}")
 	}
+	return string(defaultInputsJSON), string(envInputsJSON)
+}
 
-	fmt.Fprintf(sb, "          DEFAULT_INPUTS='%s'\n", string(defaultInputsJSON))
-	fmt.Fprintf(sb, "          ENV_INPUTS='%s'\n", string(envInputsJSON))
+// writeMatrixBuildingLogic generates the bash logic to build a matrix for a single deploy.
+// It iterates through promotions and builds matrix entries with resolved inputs.
+func (g *PromoteGenerator) writeMatrixBuildingLogic(sb *strings.Builder, outputName string) {
+	// The serialized input JSON carries operator-authored values verbatim, so
+	// it must never sit inside a shell quote literal in the script (a single
+	// quote in an ordinary value would break parsing; a crafted value would
+	// execute). The step env: map carries the JSON and the script reads it
+	// back through quoted variable references.
+	upper := strings.ToUpper(outputName)
+	fmt.Fprintf(sb, "          DEFAULT_INPUTS=\"$DEFAULT_INPUTS_%s\"\n", upper)
+	fmt.Fprintf(sb, "          ENV_INPUTS=\"$ENV_INPUTS_%s\"\n", upper)
 	sb.WriteString("          \n")
 	sb.WriteString("          # Iterate through promotions\n")
 	sb.WriteString("          FIRST=true\n")

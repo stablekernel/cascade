@@ -196,7 +196,7 @@ func TestPromoteLiteralInputsUnchanged(t *testing.T) {
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, result, `DEFAULT_INPUTS='{"cluster":"dev-eks"}'`)
+	assert.Contains(t, result, `DEFAULT_INPUTS_APP: '{"cluster":"dev-eks"}'`)
 	assert.Contains(t, result, `"prod":{"cluster":"prod-eks"}`)
 	assert.Contains(t, result, "cluster: ${{ matrix.cluster }}")
 }

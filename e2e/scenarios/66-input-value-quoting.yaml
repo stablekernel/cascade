@@ -1,0 +1,97 @@
+name: "Input Value Quoting"
+description: |
+  Operator-authored input values are ordinary human text and may carry
+  apostrophes. The generated workflows must stay well-formed anyway:
+
+  1. Promote matrix inputs: the serialized DEFAULT_INPUTS / ENV_INPUTS JSON is
+     routed through the Build Deploy Matrices step env: map (YAML single-quoted,
+     embedded quotes doubled) and read back via quoted shell variables. The JSON
+     must never sit inside a shell single-quote literal in the run script, where
+     an apostrophe breaks parsing and a crafted value would execute.
+
+  2. Dispatch input defaults: a default containing an apostrophe must be
+     emitted as a valid YAML single-quoted scalar (embedded quote doubled) in
+     the workflow_dispatch inputs block.
+
+  Generator-output verification only. The harness localizes and parses every
+  generated workflow, so a malformed document fails the run outright.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+      inputs:
+        message: "it's live"
+      env_inputs:
+        prod:
+          message: "don't stop"
+  dispatch_inputs:
+    notice:
+      type: string
+      default: "it's enabled"
+      description: "Operator note"
+
+# The deploy callback declares the message input the generated promote
+# workflow threads through the matrix, keeping the reusable-workflow call
+# valid.
+setup_workflows:
+  ".github/workflows/deploy.yaml": |
+    name: deploy
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: false
+            type: string
+          sha:
+            required: false
+            type: string
+          message:
+            required: false
+            type: string
+    jobs:
+      deploy:
+        runs-on: ubuntu-latest
+        steps:
+          - run: echo "deploy"
+
+steps:
+  - name: "Seed source; assert apostrophe-bearing values emit well-formed workflows"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            # Input JSON is env-routed on the step, YAML-quoted with the
+            # embedded apostrophe doubled.
+            - "DEFAULT_INPUTS_APP: '{\"message\":\"it''s live\"}'"
+            - "ENV_INPUTS_APP: '{\"prod\":{\"message\":\"don''t stop\"}}'"
+            # The script reads the JSON back through quoted variables.
+            - "DEFAULT_INPUTS=\"$DEFAULT_INPUTS_APP\""
+            - "ENV_INPUTS=\"$ENV_INPUTS_APP\""
+          not_contains:
+            # The broken form: JSON inside a shell single-quote literal.
+            - "DEFAULT_INPUTS='{"
+            - "ENV_INPUTS='{"
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "      notice:"
+            # Valid YAML single-quoted scalar: embedded apostrophe doubled.
+            - "        default: 'it''s enabled'"
+          not_contains:
+            # The broken form: raw apostrophe terminating the scalar early.
+            - "default: 'it's enabled'"

@@ -995,8 +995,10 @@ func TestPreflightDeployMatrixOutputs(t *testing.T) {
 	// Should have matrix building logic for app deploy
 	assert.Contains(t, content, "# Build matrix for deploy: app")
 	assert.Contains(t, content, "MATRIX_APP='['")
-	assert.Contains(t, content, `DEFAULT_INPUTS='{"cluster":"dev-eks","environment":"${{ matrix.environment }}","sha":"${{ matrix.sha }}"}'`)
-	assert.Contains(t, content, `ENV_INPUTS='{"prod":{"cluster":"prod-eks"}}'`)
+	assert.Contains(t, content, `DEFAULT_INPUTS_APP: '{"cluster":"dev-eks","environment":"${{ matrix.environment }}","sha":"${{ matrix.sha }}"}'`)
+	assert.Contains(t, content, `ENV_INPUTS_APP: '{"prod":{"cluster":"prod-eks"}}'`)
+	assert.Contains(t, content, `DEFAULT_INPUTS="$DEFAULT_INPUTS_APP"`)
+	assert.Contains(t, content, `ENV_INPUTS="$ENV_INPUTS_APP"`)
 
 	// Should have matrix building logic for infra deploy
 	assert.Contains(t, content, "# Build matrix for deploy: infra")

@@ -22,6 +22,14 @@ A `Migration` section is added to any release that bumps `schema_version`.
   published instead of failing. Release-artifact names and paths are now also
   validated against the character set the emitted upload shell can carry
   safely, since the path is spliced unquoted so its glob can expand
+- **generate:** Route the promote matrix input JSON (`DEFAULT_INPUTS` /
+  `ENV_INPUTS`) through the Build Deploy Matrices step `env:` map instead of
+  embedding it in a shell single-quote literal, and emit dispatch-input
+  defaults as properly escaped YAML single-quoted scalars. An apostrophe in an
+  ordinary input value (for example `message: "it's live"`) previously
+  generated a promote script that failed shell parsing on every promotion, and
+  a crafted value could have executed in the promote job; an apostrophe in a
+  `dispatch_inputs` default produced an invalid workflow document
 
 - **promote:** Record only the publishing component's own release marker
   (`version`, `sha`, `released_on`) under `latest_release.components.<name>`.
