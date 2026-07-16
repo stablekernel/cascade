@@ -86,8 +86,13 @@ const (
 // t. Slices of structs append "[]", maps of structs append ".*" (and register
 // a synthetic "<path>[key]" entry for the map key itself). Fields tagged
 // yaml:"-"/json:"-" or captured by inline catch-all maps are skipped: they are
-// rejected by the strictness walk, never emitted.
-func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out map[string]bool) {
+// rejected by the strictness walk, never emitted. An exported field with no
+// yaml/json tag at all is recorded in untagged (keyed "Struct.Field"):
+// yaml.v3 decodes such a field via its implicit lowercased name, in
+// preference to any inline catch-all, so it is manifest-reachable yet
+// invisible to both this census and the strictness walk; the census fails on
+// it rather than assuming it unreachable.
+func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out, untagged map[string]bool) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -106,7 +111,10 @@ func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out m
 		if !f.IsExported() {
 			continue
 		}
-		name, inline, skip := fieldTagName(f)
+		name, inline, skip, noTag := fieldTagName(f)
+		if noTag {
+			untagged[t.Name()+"."+f.Name] = true
+		}
 		if skip {
 			continue
 		}
@@ -120,7 +128,7 @@ func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out m
 		}
 		if inline {
 			if ft.Kind() == reflect.Struct {
-				walkStringFields(ft, prefix, stack, out)
+				walkStringFields(ft, prefix, stack, out, untagged)
 			}
 			// Inline maps are the unknown-key catch-alls; the strictness walk
 			// rejects any content, so they carry no emitted values.
@@ -132,7 +140,7 @@ func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out m
 		case reflect.Interface:
 			out[path] = true
 		case reflect.Struct:
-			walkStringFields(ft, path, stack, out)
+			walkStringFields(ft, path, stack, out, untagged)
 		case reflect.Slice:
 			et := ft.Elem()
 			for et.Kind() == reflect.Pointer {
@@ -142,7 +150,7 @@ func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out m
 			case reflect.String, reflect.Interface:
 				out[path+"[]"] = true
 			case reflect.Struct:
-				walkStringFields(et, path+"[]", stack, out)
+				walkStringFields(et, path+"[]", stack, out, untagged)
 			}
 		case reflect.Map:
 			out[path+"[key]"] = true
@@ -154,7 +162,7 @@ func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out m
 			case reflect.String, reflect.Interface:
 				out[path+".*"] = true
 			case reflect.Struct:
-				walkStringFields(vt, path+".*", stack, out)
+				walkStringFields(vt, path+".*", stack, out, untagged)
 			case reflect.Map, reflect.Slice:
 				// map of maps / map of slices of scalars (env_inputs): the
 				// values are data payloads; record the path once.
@@ -166,27 +174,33 @@ func walkStringFields(t reflect.Type, prefix string, stack []reflect.Type, out m
 
 // fieldTagName resolves the manifest-facing name of a struct field from its
 // yaml tag, falling back to the json tag for union types whose custom
-// UnmarshalYAML decodes json-tagged fields (SecretsConfig, RunsOn).
-func fieldTagName(f reflect.StructField) (name string, inline, skip bool) {
+// UnmarshalYAML decodes json-tagged fields (SecretsConfig, RunsOn). An
+// exported field with no tag at all is flagged untagged rather than skipped:
+// yaml.v3 still decodes it via its implicit lowercased name, so treating it
+// as unreachable would let it escape the census (see
+// TestYAMLV3_UntaggedExportedFieldDecodes).
+func fieldTagName(f reflect.StructField) (name string, inline, skip, untagged bool) {
 	tag := f.Tag.Get("yaml")
 	if tag == "" {
 		tag = f.Tag.Get("json")
 	}
 	if tag == "" {
-		// Untagged exported field: not manifest-reachable.
-		return "", false, true
+		return "", false, true, true
 	}
 	parts := strings.Split(tag, ",")
 	name = parts[0]
 	for _, p := range parts[1:] {
 		if p == "inline" {
-			return "", true, false
+			return "", true, false, false
 		}
 	}
 	if name == "-" || name == "" {
-		return "", false, true
+		// Explicitly ignored (yaml:"-"): genuinely not decodable; an
+		// unknown key with this name lands in the inline catch-all and is
+		// rejected by the strictness walk.
+		return "", false, true, false
 	}
-	return name, false, false
+	return name, false, false, false
 }
 
 // classifiedPath resolves a walked field path to its registry/allowlist key.
@@ -206,9 +220,76 @@ func classifiedPath(path string) string {
 	return path
 }
 
+// untaggedGuardFixture carries one field of each tag classification so the
+// walk's handling of all three is pinned: tagged (walked into the census),
+// yaml:"-" (skipped: yaml.v3 never decodes it, the key lands in the inline
+// catch-all and strictness rejects it), and untagged exported (must be
+// reported as a census failure: yaml.v3 decodes it via the implicit
+// lowercased field name, ahead of the inline catch-all, so it is
+// manifest-reachable yet invisible to strictness and shape validation).
+type untaggedGuardFixture struct {
+	Nested untaggedGuardNested `yaml:"nested"`
+}
+
+type untaggedGuardNested struct {
+	Tagged   string `yaml:"tagged"`
+	Ignored  string `yaml:"-"`
+	Untagged string
+}
+
+// TestYAMLV3_UntaggedExportedFieldDecodes pins the yaml.v3 semantics the
+// untagged-field census failure exists for. If a yaml.v3 upgrade ever changes
+// this behavior, this test flags that the census rule can be revisited.
+func TestYAMLV3_UntaggedExportedFieldDecodes(t *testing.T) {
+	type probe struct {
+		Tagged   string                 `yaml:"tagged"`
+		Untagged string
+		Ignored  string                 `yaml:"-"`
+		Extra    map[string]interface{} `yaml:",inline"`
+	}
+	var v probe
+	require.NoError(t, yaml.Unmarshal([]byte("tagged: a\nuntagged: b\nignored: c\n"), &v))
+	require.Equal(t, "a", v.Tagged)
+	require.Equal(t, "b", v.Untagged,
+		"yaml.v3 must decode an untagged exported field via its implicit lowercased name")
+	require.NotContains(t, v.Extra, "untagged",
+		"the untagged field must win over the inline catch-all, which is why strictness cannot reject it")
+	require.Empty(t, v.Ignored, "a yaml:\"-\" field must never decode")
+	require.Equal(t, "c", v.Extra["ignored"],
+		"a yaml:\"-\" key must land in the inline catch-all, where strictness rejects it")
+}
+
+// TestWalkStringFields_ReportsUntaggedExportedFields proves the census walk
+// reports an untagged exported field as a failure instead of silently
+// skipping it, while still walking tagged fields and skipping yaml:"-" ones.
+func TestWalkStringFields_ReportsUntaggedExportedFields(t *testing.T) {
+	found := map[string]bool{}
+	untaggedFields := map[string]bool{}
+	walkStringFields(reflect.TypeOf(untaggedGuardFixture{}), "", nil, found, untaggedFields)
+
+	require.Equal(t, map[string]bool{"nested.tagged": true}, found,
+		"only the tagged field belongs in the census walk")
+	require.Equal(t, map[string]bool{"untaggedGuardNested.Untagged": true}, untaggedFields,
+		"the untagged exported field must be reported, and the yaml:\"-\" field must not be")
+}
+
 func TestEmittedFieldRegistry_EveryFieldClassified(t *testing.T) {
 	found := map[string]bool{}
-	walkStringFields(reflect.TypeOf(config.TrunkConfig{}), "", nil, found)
+	untaggedFields := map[string]bool{}
+	walkStringFields(reflect.TypeOf(config.TrunkConfig{}), "", nil, found, untaggedFields)
+
+	if len(untaggedFields) > 0 {
+		var list []string
+		for f := range untaggedFields {
+			list = append(list, f)
+		}
+		sort.Strings(list)
+		t.Errorf("exported manifest-struct fields with no yaml/json tag (yaml.v3 decodes these via the "+
+			"implicit lowercased field name, ahead of the inline catch-all, so they bypass both this census "+
+			"and manifest strictness): add a yaml tag and classify the field in emittedFieldRegistry or "+
+			"notEmittedAllowlist, or mark it yaml:\"-\" if it must never decode from a manifest:\n  %s",
+			strings.Join(list, "\n  "))
+	}
 
 	classified := map[string]bool{}
 	var unclassified, stale, both []string
