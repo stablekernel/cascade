@@ -16,6 +16,18 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **release:** Release notes that exceed GitHub's 125,000-character limit are
+  now truncated instead of failing the release. GitHub rejects an oversized
+  release body outright rather than shortening it, so creating the release
+  failed and the run stopped before recording state. The limit is reachable
+  whenever the changelog spans a repository's whole history, which is the case
+  for a first release in a repository that already has history, and after a
+  state reset. Notes that do not fit are now cut on a whole-entry boundary, so
+  no retained entry is severed mid-sentence, and the release carries a marker
+  naming the truncation alongside a link to the changes it omits: a comparison
+  against the previous tag where one is known, and the tag's commit history
+  where it is not. Notes within the limit are published unchanged
+
 - **orchestrate:** A component-scoped orchestration now plans against the
   component's fully resolved config instead of the root config. The generator
   emits a component's orchestrate workflow from the resolved config, so its jobs
