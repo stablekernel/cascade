@@ -32,6 +32,13 @@ A `Migration` section is added to any release that bumps `schema_version`.
 - **orchestrate:** Overlay recorded component state into the working state
   map so the base-SHA ladder and finalize read each component's recorded
   rungs instead of rebuilding them from empty for component manifests
+- **orchestrate:** Anchor a component-scoped run's changelog base on the
+  component's own dimension: the release marker recorded under
+  `latest_release.components.<name>`, the component's `environments` override
+  when it narrows the shared ladder, and the component's own release tags.
+  Previously only the top-level `latest_release` was read, which is always
+  empty for component-scoped manifests, so after a component's first publish
+  its release notes spanned the repository's full history
 - **config:** Reject build, deploy, and environment names whose emitted
   output keys collide because they differ only by hyphen versus underscore,
   at validation time instead of at first workflow run

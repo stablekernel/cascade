@@ -630,6 +630,15 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 //  3. Initial commit: only when nothing has been released yet (truly the
 //     first release). The changelog is then the full repo introduction.
 func (o *Orchestrator) calculateChangelogRefs() (string, string) {
+	// A component-scoped orchestration answers each tier from the component's
+	// own dimension: its (possibly overridden) env ladder, its release marker
+	// under latest_release.components.<component>, and its strict tag
+	// namespace. The single-component path (component == "") is untouched
+	// below.
+	if o.component != "" {
+		return o.calculateComponentChangelogRefs()
+	}
+
 	envs := o.cicdFile.Config.EnvironmentNames()
 	envIndex := indexOf(envs, o.environment)
 
@@ -652,6 +661,80 @@ func (o *Orchestrator) calculateChangelogRefs() (string, string) {
 	// 3. Nothing released yet: fall back to the repo's initial commit.
 	initialCommit, _ := o.gitOutput("rev-list", "--max-parents=0", "HEAD")
 	return initialCommit, ""
+}
+
+// calculateComponentChangelogRefs is calculateChangelogRefs for a
+// component-scoped orchestration. The same three tiers apply, each read from
+// the component's own dimension:
+//
+//  1. The next env on the COMPONENT's effective ladder (its environments
+//     override when declared, else the shared list), probed against the
+//     working state map the component overlay populated. Walking the global
+//     ladder here would index an env outside an overridden component's ladder
+//     and collapse the base to the initial commit.
+//  2. The component's recorded release marker, read from the parsed
+//     latest_release.components.<component> subtree. The flat top-level
+//     latest_release fields are structurally empty for a component-scoped
+//     manifest (componentStateWrites only ever writes the component leaf, and
+//     OverlayComponentState deliberately lifts state rows only, so a lifted
+//     marker can never leak back through a flat write), which is why the
+//     flat probes in calculateChangelogRefs can never answer for a component
+//     and, unfixed, every post-publish component orchestrate re-manifested
+//     the full-history changelog of issue #80.
+//  3. The component's latest published release tag under its strict grammar,
+//     the same base calculateComponentVersion resolves, so a component whose
+//     marker was never recorded still anchors on its last release. Only when
+//     the component has never released anything does the base fall to the
+//     repo's initial commit.
+func (o *Orchestrator) calculateComponentChangelogRefs() (string, string) {
+	// 1. Intermediate env on the component's own ladder: compare against the
+	// component's next-env row (overlaid into the working state map).
+	envs := o.componentEnvironmentNames()
+	envIndex := indexOf(envs, o.environment)
+	if envIndex >= 0 && envIndex < len(envs)-1 {
+		nextEnv := envs[envIndex+1]
+		if nextState := o.cicdFile.State[nextEnv]; nextState != nil && nextState.SHA != "" {
+			return nextState.SHA, nextState.Version
+		}
+	}
+
+	// 2. The component's recorded release marker.
+	if o.cicdFile.LatestRelease != nil {
+		if rel := o.cicdFile.LatestRelease.Components[o.component]; rel != nil && rel.SHA != "" {
+			return rel.SHA, rel.Version
+		}
+	}
+
+	// 2b. No recorded marker: the component's latest published release tag.
+	// Failures fall through to the initial-commit tier rather than erroring,
+	// matching this function's best-effort contract; the version calculation
+	// path surfaces the same lookup's errors loudly.
+	if resolved, err := o.cicdFile.Config.ResolveComponent(o.component); err == nil {
+		if tag, sha, tagErr := git.GetLatestReleaseTagSpec(o.baseDir, resolved.TagGrammarSpec()); tagErr == nil && sha != "" {
+			return sha, tag
+		}
+	}
+
+	// 3. Nothing released yet: fall back to the repo's initial commit.
+	initialCommit, _ := o.gitOutput("rev-list", "--max-parents=0", "HEAD")
+	return initialCommit, ""
+}
+
+// componentEnvironmentNames returns the scoped component's effective env
+// ladder: its environments override when the config declares the component,
+// else the shared global list. A component recorded only under
+// state.components (state-seeded, undeclared) carries no override, so the
+// global ladder applies and resolving the undeclared name is not attempted.
+func (o *Orchestrator) componentEnvironmentNames() []string {
+	if _, declared := o.cicdFile.Config.Components[o.component]; !declared {
+		return o.cicdFile.Config.EnvironmentNames()
+	}
+	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
+	if err != nil {
+		log.Warn("Failed to resolve component %s for changelog refs: %v", o.component, err)
+		return o.cicdFile.Config.EnvironmentNames()
+	}
+	return resolved.Config.EnvironmentNames()
 }
 
 // writeConfig writes the updated manifest back to disk. It rewrites only the
