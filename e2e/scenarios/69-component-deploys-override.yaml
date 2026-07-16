@@ -40,7 +40,7 @@ config:
         prerelease_token: beta
       deploys:
         - name: api-svc
-          workflow: deploy.yaml
+          workflow: deploy-api.yaml
           triggers: ["services/**"]
     web:
       path: services/web
