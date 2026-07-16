@@ -94,6 +94,18 @@ func NewFinalizerWithKey(configPath, targetEnv, manifestKey string, opts ...Fina
 	for _, opt := range opts {
 		opt(f)
 	}
+
+	// A component-scoped finalize reads the component's recorded env state from
+	// state.components.<component>.<env>, which the flat parse above cannot see.
+	// Overlay those rows into the working flat state map so updateState mutates
+	// the recorded leaf: the deploy-history ring is pushed rather than lost, the
+	// deploy rows this promotion did not touch survive, and a recorded divergence
+	// is seen so the rejoin lifecycle schedules its cleanup. The write path stays
+	// component-scoped, so an overlaid row never leaks back as flat state. A
+	// no-op for the single-component (empty component) path.
+	if err := overlayComponentState(f.cicdFile, configPath, manifestKey, f.component); err != nil {
+		return nil, err
+	}
 	return f, nil
 }
 
@@ -134,27 +146,31 @@ func (f *Finalizer) SetHeadSHA(sha string) {
 //
 // Note: This updates the in-memory state and writes to disk.
 // Call this only when you want to persist changes.
+//
+// Run deliberately does NOT perform the divergence-end lifecycle cleanup: the
+// remote artifacts a rejoin removes (integration branch, hotfix tags, drafts)
+// must outlive the state write that authorizes their removal, and when the
+// caller commits state back to trunk that durable write happens after Run.
+// Callers invoke runLifecycleCleanup once the state is durably recorded.
 func (f *Finalizer) Run() error {
 	f.updateState()
-	if err := f.WriteConfig(); err != nil {
-		return err
-	}
-	return f.runLifecycleCleanup()
+	return f.WriteConfig()
 }
 
 // runLifecycleCleanup performs the divergence-end side effects for every env
-// that rejoined trunk during this finalization. It runs only after the manifest
-// is persisted, so the source of truth is updated before any branch, tag, or
-// release object is removed.
+// that rejoined trunk during this finalization. Callers invoke it only after
+// the state recording the rejoin is durably persisted (the trunk commit when
+// state is committed back, the local manifest write otherwise), so the source
+// of truth is updated before any branch, tag, or release object is removed.
 //
 // Cleanup is best-effort and never aborts the finalize: the objects it removes
 // (integration branch, hotfix tags and release objects) are disposable
 // superseded artifacts, and every individual delete is idempotent, so a transient
 // failure on one env must not strand the others or wedge an already-persisted
 // state write. A failure on one env is logged loudly and cleanup continues with
-// the rest; hard-fail is reserved for the state write, which Run performs before
-// reaching here. When no env rejoined (the common, non-diverged case) this is a
-// no-op and the injected cleaner is never called.
+// the rest; hard-fail is reserved for the state write, which the caller
+// completes before reaching here. When no env rejoined (the common,
+// non-diverged case) this is a no-op and the injected cleaner is never called.
 func (f *Finalizer) runLifecycleCleanup() error {
 	for _, ev := range f.pendingRejoins {
 		if ev.rollbackOrigin {

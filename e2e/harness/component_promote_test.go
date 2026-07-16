@@ -291,3 +291,49 @@ func TestParseComponentStates_Divergence(t *testing.T) {
 	assert.Empty(t, components["web"]["prod"].Ref)
 	assert.Empty(t, components["web"]["prod"].Patches)
 }
+
+// TestParseComponentStates_PreviousRing parses a component leaf carrying a
+// deploy-history ring and asserts the ring versions are read back newest first,
+// so previous_contains assertions can observe them.
+func TestParseComponentStates_PreviousRing(t *testing.T) {
+	manifest := `ci:
+  state:
+    components:
+      api:
+        prod:
+          sha: apiprodsha2
+          version: api-0.2.0
+          previous:
+            - sha: apiprodsha1
+              version: api-0.1.0
+`
+	states, err := parseComponentStates(manifest, "ci")
+	require.NoError(t, err)
+	prod := states["api"]["prod"]
+	require.Len(t, prod.Previous, 1)
+	assert.Equal(t, "api-0.1.0", prod.Previous[0].Version)
+}
+
+// TestAssertState_PreviousContains verifies the previous_contains expectation:
+// it passes when every listed version is in the recorded ring and fails with a
+// named version when the ring is missing one (the empty-ring case is exactly
+// what a finalize that rebuilds the env leaf from empty would produce).
+func TestAssertState_PreviousContains(t *testing.T) {
+	ctx := NewExecutionContext()
+	key := componentStateKey("api", "prod")
+	ctx.RecordState(key, "apiprodsha2", "api-0.2.0")
+	ctx.RecordStatePreviousVersions(key, []string{"api-0.1.0"})
+
+	errs := AssertState(ctx, key, &StateExpect{PreviousContains: []string{"api-0.1.0"}})
+	assert.Empty(t, errs, "a ring carrying the listed version must pass")
+
+	errs = AssertState(ctx, key, &StateExpect{PreviousContains: []string{"api-0.0.1"}})
+	require.Len(t, errs, 1, "a ring missing the listed version must fail")
+	assert.Contains(t, errs[0].Error(), "api-0.0.1")
+
+	// An empty ring (the rebuilt-from-empty leaf) fails the expectation.
+	bare := componentStateKey("web", "prod")
+	ctx.RecordState(bare, "webprodsha", "web-0.1.0")
+	errs = AssertState(ctx, bare, &StateExpect{PreviousContains: []string{"web-0.0.1"}})
+	require.Len(t, errs, 1, "an empty ring must fail previous_contains")
+}

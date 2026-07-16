@@ -284,6 +284,15 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 			env, expect.PreviousVersion, actual.PreviousVersion))
 	}
 
+	// Check previous_contains: each listed version must appear in the recorded
+	// deploy-history ring, proving a later promotion carried the ring forward.
+	for _, want := range expect.PreviousContains {
+		if !containsString(actual.PreviousVersions, want) {
+			errs = append(errs, fmt.Errorf("state[%s].previous has no entry with version %q, got %v",
+				env, want, actual.PreviousVersions))
+		}
+	}
+
 	// Check cleared divergence fields: each named field must read back empty.
 	// Expresses the rejoin contract, which an empty expectation value alone
 	// cannot assert (empty Ref/BaseSHA/Patches expectations are skipped above).

@@ -77,6 +77,7 @@ func TestRejoin_Component_DeletesComponentNamespacedBranch(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Equal(t, []string{"env/api/test"}, cleaner.deletedBranches,
 		"the rejoining component's branch must be deleted in its own namespace, not env/test")
@@ -102,6 +103,7 @@ func TestRejoin_Component_NeverCrossDeletesSibling(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Equal(t, []string{"env/api/test"}, cleaner.deletedBranches,
 		"only the rejoining component's branch is deleted")
@@ -129,6 +131,7 @@ func TestRejoin_Component_TagCollectionScopedToComponent(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Len(t, cleaner.cleanedReleases, 1)
 	req := cleaner.cleanedReleases[0]
@@ -173,6 +176,7 @@ func TestRejoin_SingleComponent_ByteIdentical(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Equal(t, []string{"env/test"}, cleaner.deletedBranches,
 		"a single-component rejoin deletes env/<env> exactly as before")

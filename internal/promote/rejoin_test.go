@@ -82,6 +82,7 @@ func TestRejoin_ClearsDivergenceFields(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	cicd, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
 	require.NoError(t, err)
@@ -113,6 +114,7 @@ func TestRejoin_DeletesEnvBranch(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Equal(t, []string{"env/test"}, cleaner.deletedBranches,
 		"the rejoined env's integration branch must be deleted exactly once")
@@ -135,6 +137,7 @@ func TestRejoin_CleansHotfixTagsAndDrafts(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Len(t, cleaner.cleanedReleases, 1)
 	req := cleaner.cleanedReleases[0]
@@ -161,6 +164,7 @@ func TestRejoin_PreservesOtherEnvsDivergence(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	cicd, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
 	require.NoError(t, err)
@@ -208,6 +212,7 @@ func TestNormalPromotion_NonDiverged_TouchesNoLifecycle(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	require.Empty(t, cleaner.deletedBranches, "non-diverged promotion must delete no branch")
 	require.Empty(t, cleaner.cleanedReleases, "non-diverged promotion must clean no releases")

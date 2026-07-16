@@ -16,6 +16,11 @@ description: |
   under only its own subtree: neither promotion rebuilds, moves, or drops the
   other's state.components.<name> subtree.
 
+  A second api cycle then promotes api-0.2.0 onto the already-recorded prod leaf
+  and asserts the deploy-history ring carried api-0.1.0 forward: a component
+  finalize that rebuilds the env leaf from empty instead of lifting the recorded
+  state would drop the ring (and every other recorded row) on this promotion.
+
 config:
   trunk_branch: main
   environments: [dev, prod]
@@ -116,5 +121,43 @@ steps:
           version: "web-0.1.0"
         api-prod:
           component: api
+          env: prod
+          unchanged: true
+
+  # Second api cycle: advance api's source and cut its next dev prerelease.
+  - name: "Advance api sources for a second version line"
+    action: commit
+    commit:
+      message: "feat: advance api"
+      files:
+        services/api/feature.go: |
+          package main
+
+          func feature() {}
+
+  - name: "Orchestrate api to cut its second dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+
+  # Promote api's second version onto its already-recorded prod leaf. The
+  # finalize must lift the recorded component state before mutating it, so the
+  # outgoing api-0.1.0 state lands on the deploy-history ring instead of the
+  # whole leaf being rebuilt from empty. web's subtree again survives untouched.
+  - name: "Promote api's second version from dev to prod"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: api
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          version: "api-0.2.0"
+          previous_contains: ["api-0.1.0"]
+        web-prod:
+          component: web
           env: prod
           unchanged: true

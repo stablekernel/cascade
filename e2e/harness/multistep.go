@@ -508,6 +508,11 @@ type StateExpect struct {
 	// prior versions in a separate "previous" ring), so it is only populated by
 	// setup staging or by an explicit divergence record.
 	PreviousVersion string `yaml:"previous_version,omitempty"`
+	// PreviousContains lists versions that must each appear in the recorded
+	// deploy-history ring (state.<env>.previous, or the component leaf's ring
+	// when Component is set). It asserts a later promotion carried the recorded
+	// ring forward rather than rebuilding the env leaf from empty.
+	PreviousContains []string `yaml:"previous_contains,omitempty"`
 	// Cleared names divergence fields that must now be empty on the recorded
 	// state. Supported members: "ref", "base_sha", "patches". This expresses the
 	// rejoin contract (divergence fields are cleared once an env rejoins trunk),

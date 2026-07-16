@@ -28,6 +28,11 @@ type EnvState struct {
 	// PreviousVersion is the version held before the latest divergence update.
 	// Harness-side only; not read back from the product manifest.
 	PreviousVersion string
+	// PreviousVersions lists the versions recorded in the environment's
+	// deploy-history ring (state.<env>.previous, newest first), synced from the
+	// manifest. It lets a scenario assert a later promotion carried the recorded
+	// ring forward instead of rebuilding the env leaf from empty.
+	PreviousVersions []string
 }
 
 // DeployState tracks per-deploy state
@@ -188,6 +193,19 @@ func (c *ExecutionContext) RecordStateDivergence(env, ref, baseSHA string, patch
 	c.state[env].PreviousVersion = previousVersion
 }
 
+// RecordStatePreviousVersions records the versions in an environment's
+// deploy-history ring (state.<env>.previous, newest first) without disturbing
+// the recorded SHA/Version. Used by manifest sync so previous_contains
+// assertions can observe that a promotion carried the recorded ring forward.
+func (c *ExecutionContext) RecordStatePreviousVersions(env string, versions []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state[env] == nil {
+		c.state[env] = &EnvState{Deploys: make(map[string]*DeployState)}
+	}
+	c.state[env].PreviousVersions = append([]string(nil), versions...)
+}
+
 // ClearState removes all env state. Used by sync routines that need to
 // rebuild ctx from an authoritative source (the manifest), so deletions in
 // that source (e.g. finalize wiping state[prerelease] on publish) are
@@ -275,13 +293,14 @@ func (c *ExecutionContext) Clone() *ExecutionContext {
 	clone.commitSeq = append([]string{}, c.commitSeq...)
 	for k, v := range c.state {
 		clone.state[k] = &EnvState{
-			SHA:             v.SHA,
-			Version:         v.Version,
-			Deploys:         make(map[string]*DeployState),
-			Ref:             v.Ref,
-			BaseSHA:         v.BaseSHA,
-			Patches:         append([]string(nil), v.Patches...),
-			PreviousVersion: v.PreviousVersion,
+			SHA:              v.SHA,
+			Version:          v.Version,
+			Deploys:          make(map[string]*DeployState),
+			Ref:              v.Ref,
+			BaseSHA:          v.BaseSHA,
+			Patches:          append([]string(nil), v.Patches...),
+			PreviousVersion:  v.PreviousVersion,
+			PreviousVersions: append([]string(nil), v.PreviousVersions...),
 		}
 		for dk, dv := range v.Deploys {
 			clone.state[k].Deploys[dk] = &DeployState{SHA: dv.SHA}
