@@ -114,6 +114,169 @@ steps:
 	assert.False(t, scenario.Steps[2].Orchestrate.ExpectNoRun)
 }
 
+// TestParseMultiStepScenario_UnknownKeyIsError proves an unrecognized scenario
+// key is a hard parse error rather than silently dropped field. A typo'd or
+// stale key used to decode into nothing, leaving a scenario that ran fewer
+// assertions than its author wrote and still reported green.
+func TestParseMultiStepScenario_UnknownKeyIsError(t *testing.T) {
+	yaml := `
+name: "Typo'd key"
+config:
+  environments: [dev]
+stepz:
+  - name: "Never runs because the key is misspelled"
+    action: orchestrate
+`
+
+	_, err := ParseMultiStepScenario([]byte(yaml))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stepz")
+}
+
+// TestParseMultiStepScenario_EmptyDocumentIsNotEOF proves an empty scenario file
+// decodes into an empty scenario rather than surfacing yaml.v3's raw io.EOF,
+// which reads as an I/O fault instead of an empty-scenario problem. The steps
+// check in DiscoverMultiStepScenarios is what rejects it, with the file path.
+func TestParseMultiStepScenario_EmptyDocumentIsNotEOF(t *testing.T) {
+	scenario, err := ParseMultiStepScenario([]byte("\n"))
+	require.NoError(t, err)
+	assert.Empty(t, scenario.Steps)
+}
+
+// TestDiscoverMultiStepScenarios_NoStepsIsError proves a scenario that declares
+// no steps is rejected, naming the offending file. A step-less scenario runs
+// nothing and asserts nothing, so it passes for the wrong reason. Strict
+// decoding alone does not catch it: the steps can go missing without any
+// unknown key being present.
+func TestDiscoverMultiStepScenarios_NoStepsIsError(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+name: "Asserts nothing"
+description: "Declares no steps"
+config:
+  environments: [dev]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "no-steps.yaml"), []byte(body), 0644))
+
+	_, err := DiscoverMultiStepScenarios(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no-steps.yaml")
+	assert.Contains(t, err.Error(), "no steps")
+}
+
+// TestDiscoverMultiStepScenarios_UnknownStateEnvIsError proves a state
+// expectation naming an env the scenario never declares is rejected at
+// discovery. This is what keeps `unchanged` honest. A typo'd env is absent no
+// matter how the code behaves, so `unchanged: true` on it compares nothing
+// against nothing and can never go red. Nothing at runtime can tell that apart
+// from a legitimate absence, so the name is checked against the config instead.
+func TestDiscoverMultiStepScenarios_UnknownStateEnvIsError(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+name: "Typo'd env"
+description: "Asserts unchanged against an env that does not exist"
+config:
+  environments: [dev, prod]
+steps:
+  - name: "Deploy dev"
+    action: commit
+    commit:
+      message: "test"
+      files:
+        test.txt: "content"
+    expect:
+      state:
+        prodd:
+          unchanged: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "typo-env.yaml"), []byte(body), 0644))
+
+	_, err := DiscoverMultiStepScenarios(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "typo-env.yaml")
+	assert.Contains(t, err.Error(), "prodd")
+	assert.Contains(t, err.Error(), "dev")
+	assert.Contains(t, err.Error(), "prod")
+}
+
+// TestDiscoverMultiStepScenarios_AcceptsDeclaredPseudoAndComponentEnvs proves
+// the env-name check accepts every name a scenario can legitimately assert on:
+// a top-level env, the release/prerelease pseudo-envs the runner records from
+// ci.latest_release, and an env declared only inside a component.
+func TestDiscoverMultiStepScenarios_AcceptsDeclaredPseudoAndComponentEnvs(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+name: "Declared envs"
+description: "Asserts on top-level, pseudo, and component-scoped envs"
+config:
+  environments: [dev]
+  components:
+    api:
+      path: api
+      environments: [staging]
+steps:
+  - name: "Deploy dev"
+    action: commit
+    commit:
+      message: "test"
+      files:
+        test.txt: "content"
+    expect:
+      state:
+        dev:
+          unchanged: true
+        release:
+          unchanged: true
+        prerelease:
+          unchanged: true
+        staging:
+          component: api
+          unchanged: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "declared.yaml"), []byte(body), 0644))
+
+	scenarios, err := DiscoverMultiStepScenarios(dir)
+	require.NoError(t, err)
+	assert.Len(t, scenarios, 1)
+}
+
+// TestDiscoverMultiStepScenarios_ComponentEnvOverrideIsValidated proves that
+// when a component expectation sets an explicit Env, that name is the one
+// checked, not the map key which only disambiguates two components asserted at
+// the same env in one step.
+func TestDiscoverMultiStepScenarios_ComponentEnvOverrideIsValidated(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+name: "Component env override"
+description: "Explicit env on a component expectation is the validated name"
+config:
+  environments: [dev]
+  components:
+    api:
+      path: api
+      environments: [staging]
+steps:
+  - name: "Deploy dev"
+    action: commit
+    commit:
+      message: "test"
+      files:
+        test.txt: "content"
+    expect:
+      state:
+        api-row:
+          component: api
+          env: stagingg
+          unchanged: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "override.yaml"), []byte(body), 0644))
+
+	_, err := DiscoverMultiStepScenarios(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "override.yaml")
+	assert.Contains(t, err.Error(), "stagingg")
+}
+
 func TestDiscoverMultiStepScenarios(t *testing.T) {
 	// Create temp directory with test scenarios
 	dir := t.TempDir()

@@ -205,11 +205,59 @@ func AssertPreflight(t testingT, runResult *WorkflowRunResult, expected *Preflig
 	}
 }
 
+// assertsSomething reports whether expect carries at least one real assertion.
+// Component and Env are selectors: they choose which state leaf to read, and say
+// nothing about what it must contain. Every other populated field constrains the
+// state, including Wiped and Unchanged, whose truth is itself the assertion.
+func (expect *StateExpect) assertsSomething() bool {
+	return expect.SHA != "" ||
+		expect.Version != "" ||
+		expect.Wiped ||
+		expect.Unchanged ||
+		expect.Ref != "" ||
+		expect.BaseSHA != "" ||
+		expect.PreviousVersion != "" ||
+		len(expect.Deploys) > 0 ||
+		len(expect.Patches) > 0 ||
+		len(expect.PatchesContain) > 0 ||
+		len(expect.PreviousContains) > 0 ||
+		len(expect.Cleared) > 0
+}
+
 // AssertState validates environment state against expectations (used internally)
-// Returns errors instead of failing test directly for more flexible error handling
-func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error {
+// Returns errors instead of failing test directly for more flexible error handling.
+//
+// preState carries the state as it stood before the step ran, which only the
+// Unchanged comparison reads. Every state expectation flows through here so the
+// guards below apply to all of them; routing Unchanged around this function left
+// its branch of assertsSomething unreachable.
+func AssertState(ctx *ExecutionContext, preState *ExecutionContext, env string, expect *StateExpect) []error {
 	var errs []error
+
+	// An expectation with no populated assertion field compares nothing against
+	// nothing and always passes, so the step it belongs to is a no-op wearing the
+	// shape of a check. Reject it rather than let it report green.
+	if !expect.assertsSomething() {
+		return []error{fmt.Errorf("state[%s] expectation asserts nothing: set at least one of sha, version, wiped, unchanged, deploys, ref, base_sha, patches, patches_contain, previous_version, previous_contains, cleared (component and env only select which state to read)", env)}
+	}
+
 	actual := ctx.GetState(env)
+
+	// Check that the step left the env alone. This runs before the HasState guard
+	// below because absence is a legitimate subject here: an env the scenario
+	// never deployed to has no recorded state, and "still nothing" is exactly what
+	// unchanged claims. It stays falsifiable because a step that wrongly writes
+	// the env gives it state and breaks the comparison. What makes the env name
+	// itself meaningful is the discovery-time check in validateStateEnvNames,
+	// which no runtime rule here can substitute for.
+	if expect.Unchanged {
+		before := preState.GetState(env)
+		if before.SHA != actual.SHA || before.Version != actual.Version {
+			errs = append(errs, fmt.Errorf("state[%s] expected unchanged but changed from %s/%s to %s/%s",
+				env, before.SHA, before.Version, actual.SHA, actual.Version))
+		}
+		return errs
+	}
 
 	// Check if state should be wiped
 	if expect.Wiped {
@@ -218,6 +266,15 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 				env, actual.SHA, actual.Version))
 		}
 		return errs
+	}
+
+	// Every remaining expectation is positive: it describes something the state
+	// must hold. Reading an env the scenario never recorded yields a zero
+	// EnvState, so a typo'd env name would be compared field by field against
+	// empty values and quietly report on state nobody wrote. Absence is a valid
+	// subject only for Wiped and Unchanged, both of which returned above.
+	if !ctx.HasState(env) {
+		return []error{fmt.Errorf("state[%s] has no recorded state, so this expectation cannot hold: check the env name, or use wiped to assert absence", env)}
 	}
 
 	// Check SHA (resolve commit references)

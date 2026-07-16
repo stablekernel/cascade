@@ -2487,3 +2487,81 @@ func TestGenerator_DispatchInputs_SortedDeterministic(t *testing.T) {
 	assert.Less(t, idxFirst, idxMid, "aaa_first must appear before mmm_mid")
 	assert.Less(t, idxMid, idxLast, "mmm_mid must appear before zzz_last")
 }
+
+// TestGenerator_Generate_MissingCallbackWorkflow_IsError covers the contract the
+// dead missing-workflow-file e2e scenario claimed but never exercised: a build,
+// deploy, or validate callback naming a workflow file that is not on disk stops
+// generation with an error naming the unresolved reference, rather than emitting
+// a workflow whose uses: points at nothing. The rule lives here because
+// generation is the layer that reads the referenced workflow to discover its
+// inputs and outputs; by the time a run starts, the reference is already baked in.
+func TestGenerator_Generate_MissingCallbackWorkflow_IsError(t *testing.T) {
+	presentWorkflow := `
+name: Present
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+`
+
+	tests := []struct {
+		name    string
+		cfg     func() *config.TrunkConfig
+		wantRef string
+	}{
+		{
+			name: "build references a missing workflow",
+			cfg: func() *config.TrunkConfig {
+				return &config.TrunkConfig{
+					Environments: config.EnvNames("dev"),
+					Builds: []config.BuildConfig{
+						{Name: "app", Workflow: "nonexistent-build.yaml", Triggers: []string{"src/**"}},
+					},
+				}
+			},
+			wantRef: "nonexistent-build.yaml",
+		},
+		{
+			name: "deploy references a missing workflow",
+			cfg: func() *config.TrunkConfig {
+				return &config.TrunkConfig{
+					Environments: config.EnvNames("dev"),
+					Builds: []config.BuildConfig{
+						{Name: "app", Workflow: "present.yaml", Triggers: []string{"src/**"}},
+					},
+					Deploys: []config.DeployConfig{
+						{Name: "services", Workflow: "nonexistent-deploy.yaml"},
+					},
+				}
+			},
+			wantRef: "nonexistent-deploy.yaml",
+		},
+		{
+			name: "validate references a missing workflow",
+			cfg: func() *config.TrunkConfig {
+				return &config.TrunkConfig{
+					Environments: config.EnvNames("dev"),
+					Builds: []config.BuildConfig{
+						{Name: "app", Workflow: "present.yaml", Triggers: []string{"src/**"}},
+					},
+					Validate: &config.ValidateConfig{Workflow: "nonexistent-validate.yaml"},
+				}
+			},
+			wantRef: "nonexistent-validate.yaml",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".github/workflows"), 0755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(tmpDir, ".github/workflows/present.yaml"), []byte(presentWorkflow), 0644))
+
+			_, err := NewGenerator(tt.cfg(), tmpDir).Generate()
+			require.Error(t, err, "generation must fail on an unresolvable workflow reference")
+			assert.Contains(t, err.Error(), tt.wantRef)
+		})
+	}
+}

@@ -1628,17 +1628,7 @@ func (r *Runner) assertStep(ctx context.Context, step *Step, preState *Execution
 			lookupKey = componentStateKey(stateExpect.Component, env)
 		}
 
-		// Handle "unchanged" expectation
-		if stateExpect.Unchanged {
-			preEnvState := preState.GetState(lookupKey)
-			currentState := r.ctx.GetState(lookupKey)
-			if preEnvState.SHA != currentState.SHA || preEnvState.Version != currentState.Version {
-				allErrs = append(allErrs, fmt.Errorf("state[%s] expected unchanged but changed from %s/%s to %s/%s",
-					lookupKey, preEnvState.SHA, preEnvState.Version, currentState.SHA, currentState.Version))
-			}
-			continue
-		}
-		errs := AssertState(r.ctx, lookupKey, stateExpect)
+		errs := AssertState(r.ctx, preState, lookupKey, stateExpect)
 		allErrs = append(allErrs, errs...)
 	}
 

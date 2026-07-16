@@ -511,3 +511,21 @@ func TestMultiRepoRunner_ConcurrentExternalUpdatesPreserveBothSlots(t *testing.T
 	require.NoError(t, h.RunSatelliteOrchestrateAndAssertNotify(ctx, "cdk-infra"))
 	require.NoError(t, h.RunSatelliteOrchestrateAndAssertNotify(ctx, "lambda-service"))
 }
+
+// TestParseMultiRepoScenario_UnknownKeyIsError proves an unrecognized key in a
+// multi-repo scenario is a hard parse error rather than a silently dropped
+// field, so a typo cannot quietly remove an assertion.
+func TestParseMultiRepoScenario_UnknownKeyIsError(t *testing.T) {
+	body := `
+name: typo
+description: Has a key the schema does not define
+repoz:
+  primary:
+    config:
+      trunk_branch: main
+`
+
+	_, err := ParseMultiRepoScenario([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoz")
+}
