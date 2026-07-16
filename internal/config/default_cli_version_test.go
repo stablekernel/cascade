@@ -30,9 +30,9 @@ func TestDefaultCLIVersion_IsStableReleaseTag(t *testing.T) {
 //
 // The expectation is derived from the repository's own stable tags, so there
 // is no network dependency: each release must bump DefaultCLIVersion in the
-// same body of work that cuts the tag (see CONTRIBUTING.md). Shallow CI
-// checkouts without tags skip; any full clone (every local inner loop and
-// fetch-depth: 0 workflow) enforces the match.
+// same body of work that cuts the tag (see CONTRIBUTING.md). Checkouts
+// without tags skip; local full clones and the CI test jobs (whose checkout
+// steps set fetch-tags: true) enforce the match.
 func TestDefaultCLIVersion_MatchesLatestReleaseTag(t *testing.T) {
 	out, err := exec.Command("git", "tag", "--list", "v*").Output()
 	if err != nil {
