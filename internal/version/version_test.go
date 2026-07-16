@@ -311,140 +311,6 @@ func TestCalculator_CalculateNext(t *testing.T) {
 	}
 }
 
-func TestGetLatestRelease(t *testing.T) {
-	tests := []struct {
-		name    string
-		tags    []string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:    "single release",
-			tags:    []string{"v1.0.0"},
-			want:    "v1.0.0",
-			wantErr: false,
-		},
-		{
-			name:    "multiple releases",
-			tags:    []string{"v1.0.0", "v2.0.0", "v1.5.0"},
-			want:    "v2.0.0",
-			wantErr: false,
-		},
-		{
-			name:    "skip pre-releases",
-			tags:    []string{"v1.0.0", "v2.0.0-rc.0", "v1.5.0-rc.3"},
-			want:    "v1.0.0",
-			wantErr: false,
-		},
-		{
-			name:    "only pre-releases",
-			tags:    []string{"v2.0.0-rc.0", "v1.5.0-rc.3"},
-			wantErr: true,
-		},
-		{
-			name:    "empty list",
-			tags:    []string{},
-			wantErr: true,
-		},
-		{
-			name:    "mixed valid and invalid",
-			tags:    []string{"v1.0.0", "not-a-version", "v2.0.0"},
-			want:    "v2.0.0",
-			wantErr: false,
-		},
-		{
-			name:    "tolerate build metadata on a release",
-			tags:    []string{"v1.2.3+build.5"},
-			want:    "v1.2.3",
-			wantErr: false,
-		},
-		{
-			name:    "release with build metadata beats a lower release",
-			tags:    []string{"v1.0.0", "v1.2.3+build.5"},
-			want:    "v1.2.3",
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetLatestRelease(tt.tags)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got.String())
-		})
-	}
-}
-
-// TestParseTolerant covers the read-side tolerance for foreign pre-releases and
-// build metadata. These shapes may exist in a repo's history; discovery must see
-// them without cascade ever emitting them.
-func TestParseTolerant(t *testing.T) {
-	// Build metadata is discarded: the parsed core matches v1.2.3 and renders
-	// without the +build segment.
-	t.Run("build metadata discarded to same core", func(t *testing.T) {
-		v, err := ParseTolerant("v1.2.3+build.5")
-		require.NoError(t, err)
-		assert.Equal(t, 1, v.Major)
-		assert.Equal(t, 2, v.Minor)
-		assert.Equal(t, 3, v.Patch)
-		assert.Equal(t, -1, v.PreRelease, "build metadata is not a pre-release")
-		assert.Equal(t, "v1.2.3", v.String(), "build metadata is never emitted")
-	})
-
-	// Any recognized pre-release sorts below its release.
-	t.Run("foreign pre-release sorts below release", func(t *testing.T) {
-		pre, err := ParseTolerant("v1.2.3-beta.1")
-		require.NoError(t, err)
-		rel, err := ParseTolerant("v1.2.3")
-		require.NoError(t, err)
-		assert.True(t, pre.PreRelease >= 0, "beta.1 must be recognized as a pre-release")
-		assert.Equal(t, -1, pre.Compare(rel), "v1.2.3-beta.1 must sort below v1.2.3")
-		assert.Equal(t, 1, rel.Compare(pre))
-	})
-
-	// A separator-less foreign token still reads as a pre-release.
-	t.Run("separatorless foreign token is a pre-release", func(t *testing.T) {
-		v, err := ParseTolerant("v1.2.3-rc1")
-		require.NoError(t, err)
-		assert.True(t, v.PreRelease >= 0)
-	})
-
-	// A tag without a numeric core is not a version.
-	t.Run("non-version rejected", func(t *testing.T) {
-		_, err := ParseTolerant("not-a-version")
-		assert.Error(t, err)
-	})
-}
-
-func TestStripRC(t *testing.T) {
-	tests := []struct {
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{"v1.2.3-rc.4", "v1.2.3", false},
-		{"v1.2.3-rc.0", "v1.2.3", false},
-		{"v1.2.3", "v1.2.3", false},
-		{"invalid", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := StripRC(tt.input)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestVersion_WithRC(t *testing.T) {
 	base := &Version{Major: 1, Minor: 2, Patch: 3, PreRelease: -1, Prefix: "v"}
 
@@ -612,7 +478,7 @@ func TestCalculateNext_NextEnvHoldsHotfixVersion(t *testing.T) {
 	assert.Equal(t, -1, got.Hotfix)
 }
 
-func TestParseBase(t *testing.T) {
+func TestParseBaseWithGrammar(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -632,7 +498,7 @@ func TestParseBase(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseBase(tt.input)
+			got, err := ParseBaseWithGrammar(defaultSpec, tt.input)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -740,12 +606,6 @@ func TestCalculateNext_CurrentDevHoldsForeignSuffix(t *testing.T) {
 			assert.Equal(t, -1, got.Hotfix)
 		})
 	}
-}
-
-func TestStripRC_HotfixVersion(t *testing.T) {
-	got, err := StripRC("v1.4.0-rc.2.hotfix.1")
-	require.NoError(t, err)
-	assert.Equal(t, "v1.4.0", got)
 }
 
 func TestVersion_WithHotfix(t *testing.T) {

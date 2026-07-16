@@ -235,26 +235,6 @@ func (g *DependencyGraph) TopologicalSort() ([]string, error) {
 	return result, nil
 }
 
-// GetAllDependencies returns all transitive dependencies for a node
-func (g *DependencyGraph) GetAllDependencies(node string) []string {
-	visited := make(map[string]bool)
-	var deps []string
-
-	var collect func(n string)
-	collect = func(n string) {
-		for _, dep := range g.Edges[n] {
-			if !visited[dep] {
-				visited[dep] = true
-				deps = append(deps, dep)
-				collect(dep)
-			}
-		}
-	}
-
-	collect(node)
-	return deps
-}
-
 // GetDirectDependencies returns only direct (hard) dependencies for a node
 func (g *DependencyGraph) GetDirectDependencies(node string) []string {
 	return g.Edges[node]

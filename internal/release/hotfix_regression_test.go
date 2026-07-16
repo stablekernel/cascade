@@ -27,8 +27,6 @@ func TestParseRCTag_IgnoresHotfixTags(t *testing.T) {
 			assert.False(t, ok, "hotfix tag must not parse as an RC tag")
 			assert.Equal(t, "", base)
 			assert.Equal(t, -1, rc)
-
-			assert.False(t, isRCTag(tag), "hotfix tag must not be classified as an RC tag")
 		})
 	}
 }

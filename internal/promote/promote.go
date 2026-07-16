@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/stablekernel/cascade/internal/config"
-	"github.com/stablekernel/cascade/internal/git"
 	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
@@ -779,13 +778,6 @@ func (p *Promoter) cascadePromotion(target string) (*PromotionResult, error) {
 	return result, nil
 }
 
-// CommitAndPush commits the state change and pushes to remote. It delegates to
-// the shared git rebase-retry helper so promote and hotfix finalize write
-// manifest state identically.
-func (p *Promoter) CommitAndPush(message string) error {
-	return git.CommitAndPushWithRetry(p.configPath, message)
-}
-
 // saveConfig writes the in-memory manifest back to disk. It rewrites only the
 // mutable state subtree of the on-disk manifest, so any configuration this binary
 // does not model is preserved rather than dropped on the round-trip. saveConfig
@@ -853,13 +845,6 @@ func resolveTagGrammar(f *config.CICDFile) taggrammar.Spec {
 // just as the historical "rc" is, instead of publishing the pre-release shape.
 func (p *Promoter) stripPreRelease(version string) string {
 	return resolveTagGrammar(p.cicdFile).StripPreRelease(version)
-}
-
-// stripRCSuffix strips the default-grammar pre-release segment. It is retained
-// for callers with no manifest in scope; grammar-aware promotion uses
-// stripPreRelease so a custom token is honored.
-func stripRCSuffix(version string) string {
-	return taggrammar.Default().StripPreRelease(version)
 }
 
 func indexOf(slice []string, item string) int {

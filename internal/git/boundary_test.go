@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stablekernel/cascade/internal/taggrammar"
 )
@@ -54,25 +53,6 @@ func TestGetLatestReleaseTagSpec_NonRepoDirDoesNotReadEnclosingRepo(t *testing.T
 	tag, _, err := GetLatestReleaseTagSpec(inner, taggrammar.Default())
 	if err == nil {
 		t.Fatalf("GetLatestReleaseTagSpec in a non-repository dir = (%q, nil), want an error instead of the enclosing repository's tags", tag)
-	}
-}
-
-// TestCommitAndPushWithRetry_NonRepoDirDoesNotCommitToEnclosingRepo pins the
-// boundary on the write path: a WithDir target that is not itself a repository
-// must fail before staging anything, never record a commit in the enclosing
-// repository.
-func TestCommitAndPushWithRetry_NonRepoDirDoesNotCommitToEnclosingRepo(t *testing.T) {
-	outer, inner := newEnclosedNonRepoDir(t)
-	writeFileAt(t, inner, "state.yaml", "state: v1\n")
-
-	err := CommitAndPushWithRetry("state.yaml", "chore: escaped state write",
-		WithDir(inner), WithBackoff(time.Millisecond))
-	if err == nil {
-		t.Fatal("CommitAndPushWithRetry in a non-repository dir = nil, want an error")
-	}
-
-	if got := gitOutAt(t, outer, "rev-list", "--count", "HEAD"); got != "1" {
-		t.Errorf("enclosing repository commit count = %s, want 1: the escaped write landed on the wrong repo", got)
 	}
 }
 

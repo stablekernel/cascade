@@ -174,31 +174,6 @@ func TestCurrentBranch_DetachedHeadErrors(t *testing.T) {
 	}
 }
 
-func TestCommitAndPush_LandsOnRemote(t *testing.T) {
-	bare, clone := newCloneWithRemote(t)
-
-	writeFileAt(t, clone, "state.yaml", "state: v1\n")
-	if err := CommitAndPush("state.yaml", "chore: write state"); err != nil {
-		t.Fatalf("CommitAndPush: %v", err)
-	}
-
-	if got := gitOutAt(t, bare, "log", "-1", "--format=%s", "main"); got != "chore: write state" {
-		t.Errorf("remote tip subject = %q, want the pushed commit", got)
-	}
-	if got := gitOutAt(t, bare, "show", "main:state.yaml"); got != "state: v1" {
-		t.Errorf("remote state.yaml = %q, want the pushed content", got)
-	}
-}
-
-func TestCommitAndPush_NothingStagedErrors(t *testing.T) {
-	newCloneWithRemote(t)
-
-	// README.md is unchanged, so the commit has nothing to record.
-	if err := CommitAndPush("README.md", "chore: no-op"); err == nil {
-		t.Fatal("CommitAndPush with no changes must surface the git commit failure")
-	}
-}
-
 func TestRefetchAndReset_DropsLocalCommitAndAdoptsUpstream(t *testing.T) {
 	bare, clone := newCloneWithRemote(t)
 

@@ -1,3 +1,6 @@
+// Package pinreconcile implements the pin-reconciliation engine: adopting an
+// external action-pin change back into the manifest and regenerating so every
+// owned file agrees with it again.
 package pinreconcile
 
 // Input is the source-agnostic reconcile input: the governed action set and,

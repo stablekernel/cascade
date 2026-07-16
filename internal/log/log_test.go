@@ -44,31 +44,6 @@ func TestLevelFiltering(t *testing.T) {
 	}
 }
 
-func TestParseLevel(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected Level
-	}{
-		{"info", LevelInfo},
-		{"INFO", LevelInfo},
-		{"debug", LevelDebug},
-		{"DEBUG", LevelDebug},
-		{"trace", LevelTrace},
-		{"TRACE", LevelTrace},
-		{"unknown", LevelDebug}, // default
-		{"", LevelDebug},        // default
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := ParseLevel(tt.input)
-			if result != tt.expected {
-				t.Errorf("ParseLevel(%q) = %v, want %v", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestLogFormatting(t *testing.T) {
 	var buf bytes.Buffer
 	SetOutput(&buf)

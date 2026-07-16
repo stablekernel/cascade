@@ -191,13 +191,6 @@ func New(opts Options) (*Rollbacker, error) {
 	}, nil
 }
 
-// ConfigPath returns the resolved manifest path the Rollbacker reads and writes.
-// The finalize subcommand uses it to commit the post-rollback state back to the
-// trunk branch.
-func (r *Rollbacker) ConfigPath() string {
-	return r.configPath
-}
-
 // GitIdentity returns the commit identity for the post-rollback state write,
 // taken from the manifest git config so an automated rollback commit is
 // attributed to the configured bot rather than the token owner. An absent or

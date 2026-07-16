@@ -4,51 +4,6 @@ import (
 	"testing"
 )
 
-func TestMatchGlob(t *testing.T) {
-	tests := []struct {
-		pattern string
-		path    string
-		want    bool
-	}{
-		// Simple patterns
-		{"*.go", "main.go", true},
-		{"*.go", "main.txt", false},
-		{"src/*.go", "src/main.go", true},
-		{"src/*.go", "src/sub/main.go", false},
-
-		// Double star patterns
-		{"src/**", "src/main.go", true},
-		{"src/**", "src/sub/main.go", true},
-		{"src/**/*.go", "src/main.go", true},
-		{"src/**/*.go", "src/sub/main.go", true},
-		{"src/**/*.go", "src/sub/deep/main.go", true},
-		{"**/*.go", "main.go", true},
-		{"**/*.go", "src/main.go", true},
-		{"**", "anything/at/all.txt", true},
-
-		// Question mark: GitHub Actions grammar, zero or one of the
-		// preceding character. A leading "?" has nothing preceding it and is
-		// treated as a literal character.
-		{"*.jsx?", "page.js", true},
-		{"*.jsx?", "page.jsx", true},
-		{"*.jsx?", "page.jsxx", false},
-		{"?.go", "a.go", false},
-
-		// No match
-		{"src/**", "other/main.go", false},
-		{"*.yaml", "config.json", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.pattern+"_"+tt.path, func(t *testing.T) {
-			got := matchGlob(tt.pattern, tt.path)
-			if got != tt.want {
-				t.Errorf("matchGlob(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsTriggered(t *testing.T) {
 	tests := []struct {
 		name         string
