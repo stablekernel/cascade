@@ -146,6 +146,7 @@ func TestRejoin_Integration_FullLifecycle(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	// Manifest: test rejoined trunk, fields cleared; uat divergence preserved.
 	cicd, err := config.ParseManifestFile("manifest.yaml", config.DefaultManifestKey)

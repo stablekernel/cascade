@@ -731,6 +731,11 @@ type componentEnvStateYAML struct {
 	Ref     string   `yaml:"ref"`
 	BaseSHA string   `yaml:"base_sha"`
 	Patches []string `yaml:"patches"`
+	// Previous is the deploy-history ring (previous, newest first) recorded in
+	// the component's env leaf; only the versions are read back for assertions.
+	Previous []struct {
+		Version string `yaml:"version"`
+	} `yaml:"previous"`
 }
 
 // parseComponentStates extracts ci.state.components.<name>.<env> rows from a
@@ -1420,6 +1425,11 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 			Ref     string   `yaml:"ref"`
 			BaseSHA string   `yaml:"base_sha"`
 			Patches []string `yaml:"patches"`
+			// Previous is the deploy-history ring (state.<env>.previous,
+			// newest first); only the versions are read back for assertions.
+			Previous []struct {
+				Version string `yaml:"version"`
+			} `yaml:"previous"`
 		} `yaml:"state"`
 		// LatestRelease is the single-environment Release workflow's published
 		// pointer (ci.latest_release). Single-env repos publish via the Release
@@ -1456,6 +1466,17 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 		}
 		r.ctx.RecordState(env, state.SHA, state.Version)
 		r.t.Logf("  Synced state[%s] = %s @ %s", env, truncateSHA(state.SHA), state.Version)
+
+		// Record the deploy-history ring versions so previous_contains
+		// assertions can observe that a promotion carried the ring forward.
+		if len(state.Previous) > 0 {
+			ring := make([]string, 0, len(state.Previous))
+			for _, p := range state.Previous {
+				ring = append(ring, p.Version)
+			}
+			r.ctx.RecordStatePreviousVersions(env, ring)
+			r.t.Logf("  Synced state[%s].previous versions = %v", env, ring)
+		}
 
 		// Record integration-branch divergence so divergence assertions can see
 		// a hotfixed environment. PreviousVersion has no manifest key (the
@@ -1501,6 +1522,17 @@ func (r *Runner) syncStateFromGitea(ctx context.Context, config Config) error {
 			r.ctx.RecordState(key, st.SHA, st.Version)
 			r.t.Logf("  Synced state.components[%s][%s] = %s @ %s",
 				comp, env, truncateSHA(st.SHA), st.Version)
+			// Record the component leaf's deploy-history ring versions so
+			// previous_contains assertions can observe that a component
+			// promotion carried the recorded ring forward.
+			if len(st.Previous) > 0 {
+				ring := make([]string, 0, len(st.Previous))
+				for _, p := range st.Previous {
+					ring = append(ring, p.Version)
+				}
+				r.ctx.RecordStatePreviousVersions(key, ring)
+				r.t.Logf("  Synced state.components[%s][%s].previous versions = %v", comp, env, ring)
+			}
 			// Record component-scoped divergence so a per-component hotfix or
 			// rollback assertion (ref/base_sha/patches under the composite key) can
 			// observe the diverged component while a sibling's subtree stays

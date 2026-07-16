@@ -52,6 +52,7 @@ func TestFinalize_RollbackRejoin_SkipsBranchDeletion(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	// A rollback-origin rejoin must not touch any integration branch or
 	// hotfix release objects (none exist for a manual rollback).
@@ -85,6 +86,7 @@ func TestFinalize_HotfixRejoin_DeletesBranch(t *testing.T) {
 	})
 
 	require.NoError(t, fin.Run())
+	require.NoError(t, fin.runLifecycleCleanup())
 
 	// A hotfix-origin rejoin still deletes the integration branch and cleans
 	// its hotfix releases exactly as before.

@@ -64,7 +64,7 @@ func runPreflight(cmd *cobra.Command, args []string) error {
 	// state.components.<component>.<env>; overlay those rows into the working flat
 	// state map so the source-env deployment check and version comparison resolve
 	// the component's seed. A no-op for a single-component (empty) preflight.
-	if err := overlayComponentState(cicdFile, configPath, componentName); err != nil {
+	if err := overlayComponentState(cicdFile, configPath, config.DefaultManifestKey, componentName); err != nil {
 		return err
 	}
 

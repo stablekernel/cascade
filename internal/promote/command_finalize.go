@@ -155,21 +155,38 @@ func runFinalize() error {
 		return nil
 	}
 
-	if err := fin.Run(); err != nil {
+	if err := persistAndCleanup(fin, commitPush); err != nil {
 		return err
 	}
 
-	// Commit and push if requested
 	if commitPush {
-		if err := fin.CommitAndPush(); err != nil {
-			return fmt.Errorf("failed to commit and push: %w", err)
-		}
 		fmt.Printf("State updated and committed for %s\n", targetEnv)
 	} else {
 		fmt.Printf("State updated for %s (not committed)\n", targetEnv)
 	}
 
 	return nil
+}
+
+// persistAndCleanup runs the finalizer's state update and local manifest write,
+// commits the state back to trunk when requested, and only then performs the
+// divergence-end lifecycle cleanup. The ordering is load-bearing: cleanup
+// deletes the rejoined env's integration branch, hotfix tags, and drafts, and
+// the state write that authorizes those deletions must be durable first. If the
+// trunk commit fails, no artifact is removed, so trunk never records an env as
+// diverged while pointing at an already-deleted integration branch; a later
+// successful rerun performs the cleanup. Without commitPush the local write is
+// the caller's durable record and cleanup follows it, as before.
+func persistAndCleanup(fin *Finalizer, commitPush bool) error {
+	if err := fin.Run(); err != nil {
+		return err
+	}
+	if commitPush {
+		if err := fin.CommitAndPush(); err != nil {
+			return fmt.Errorf("failed to commit and push: %w", err)
+		}
+	}
+	return fin.runLifecycleCleanup()
 }
 
 // readDeployResultsFromEnv reads DEPLOY_RESULT_<NAME> env vars and returns a
