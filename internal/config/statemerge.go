@@ -413,6 +413,36 @@ func ReadComponentState(current []byte, manifestKey, component string) (map[stri
 	return section.State.Components[component], nil
 }
 
+// OverlayComponentState lifts the named component's recorded per-env rows,
+// read from current under state.components.<component>.<env>, into the working
+// flat state map of cicdFile. Every State[env] lookup in a consumer that works
+// against the flat map (promotion, orchestration) then transparently sees that
+// component's rows without teaching each lookup about the components subtree.
+// It is the read counterpart to the component-scoped WriteScopedState writes:
+// those keep the persisted form component-scoped, so an overlaid row is never
+// round-tripped back to the manifest as a flat state.<env> node.
+//
+// It is a no-op when component is empty, keeping the single-component path
+// byte-identical. Envs with no recorded rows for the component keep whatever
+// the flat map already holds. manifestKey defaults to DefaultManifestKey when
+// empty.
+func OverlayComponentState(cicdFile *CICDFile, current []byte, manifestKey, component string) error {
+	if component == "" {
+		return nil
+	}
+	compState, err := ReadComponentState(current, manifestKey, component)
+	if err != nil {
+		return err
+	}
+	if cicdFile.State == nil {
+		cicdFile.State = make(map[string]*EnvState)
+	}
+	for env, st := range compState {
+		cicdFile.State[env] = st
+	}
+	return nil
+}
+
 // valueNode marshals v through YAML and returns the resulting value node, so a
 // typed value can be spliced into the document tree.
 func valueNode(v any) (*yaml.Node, error) {

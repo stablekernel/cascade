@@ -85,6 +85,25 @@ func NewOrchestrator(configPath, manifestKey, environment string, opts ...Option
 	for _, opt := range opts {
 		opt(o)
 	}
+
+	// A component-scoped run persists its state under
+	// state.components.<component>.<env>, so the flat state map parsed above
+	// holds nothing for it. Lift the component's recorded rows into the working
+	// map (the same overlay the promote and hotfix paths perform) so the Setup
+	// base-SHA ladder anchors on the recorded state instead of the HEAD~1
+	// first-run fallback, and Finalize mutates the recorded leaf in place
+	// instead of rebuilding it from empty and dropping prior rows. The write
+	// path stays component-scoped, so overlaid rows never leak back into the
+	// manifest as flat state.
+	if o.component != "" {
+		raw, err := os.ReadFile(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read config for component state: %w", err)
+		}
+		if err := config.OverlayComponentState(cicdFile, raw, manifestKey, o.component); err != nil {
+			return nil, fmt.Errorf("failed to overlay component state: %w", err)
+		}
+	}
 	return o, nil
 }
 
