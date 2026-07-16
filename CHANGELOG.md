@@ -14,6 +14,17 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **config:** Validate `run_policy`, `on_failure`, and `retries` on the
+  `validate` block the same way as builds and deploys: `run_policy` and
+  `on_failure` must be one of their documented values and `retries` must stay
+  between 0 and 3, instead of out-of-range settings being silently accepted
+- **config:** Bump the default `cli_version` pin for generated workflows to
+  v0.16.1, and guard the default against lagging the latest stable release
+- **hotfix:** Converge the missing tag and release when the hotfix finalize
+  job reruns after a partial failure, instead of skipping release creation
+
 ## [0.16.1] - 2026-07-15
 
 ### Security
