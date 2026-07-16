@@ -140,20 +140,34 @@ func New(opts Options) (*Rollbacker, error) {
 		history = newGitHistoryReader(configPath, key, opts.Component)
 	}
 
-	// Resolve the effective environment ladder the eligibility and first-env guards
-	// judge against. For a component it is the component's own subset (its override
-	// or the inherited default); for the single-component path it is the global
-	// ladder, so the guards behave byte-identically to before.
+	// Swap the working config for the component's resolved config so every
+	// derivation below reads exactly what the generator emitted this component's
+	// rollback workflow from: its environment subset, its deploys, and every other
+	// override. The generator builds the component's rollback deploy jobs and the
+	// finalize gate that reads their results from this same resolved config, so a
+	// runtime that keeps any root field disagrees with the workflow it is driving.
+	// Copying only selected fields is what left the deploy gate reading root
+	// deploy names the component workflow never emits, so the assignment is
+	// wholesale, never per-field. It is a no-op for the single-component (empty)
+	// path, which stays byte-identical.
+	//
+	// Unlike the promote path, an undeclared component is refused rather than
+	// silently falling back to the root config: rollback plans against a
+	// component's resolved deploys and ladder, and a component with no
+	// declaration has neither.
+	if cicdFile.Config != nil && opts.Component != "" {
+		resolved, err := cicdFile.Config.ResolveComponent(opts.Component)
+		if err != nil {
+			return nil, fmt.Errorf("resolving component %q: %w", opts.Component, err)
+		}
+		cicdFile.Config = resolved.Config
+	}
+
+	// The effective environment ladder the eligibility and first-env guards judge
+	// against, now already component-scoped by the swap above.
 	var environments []string
 	if cicdFile.Config != nil {
 		environments = cicdFile.Config.EnvironmentNames()
-		if opts.Component != "" {
-			resolved, err := cicdFile.Config.ResolveComponent(opts.Component)
-			if err != nil {
-				return nil, fmt.Errorf("resolving component %q: %w", opts.Component, err)
-			}
-			environments = resolved.Config.EnvironmentNames()
-		}
 	}
 
 	// Overlay the component's recorded per-env rows, read from

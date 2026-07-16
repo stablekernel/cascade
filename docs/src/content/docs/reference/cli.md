@@ -794,6 +794,14 @@ cascade rollback --env prod --to 111aaa --dry-run
 cascade rollback --env prod --to v1.2.2 --deployable services
 ```
 
+With `--component`, rollback operates on that component's resolved configuration: its
+environment ladder, its `deploys`, and every other value it overrides or inherits. The
+generated per-component rollback workflow is emitted from the same resolved configuration,
+so `--deployable` accepts the component's own deploy names, and finalize gates the state
+write on those deploy jobs' results rather than on the repo-global `deploys` block. A
+component that is recorded only under `state.components` without a matching
+`config.components` declaration has no configuration to resolve, and rollback refuses it.
+
 #### First-environment guard
 
 The first environment in the chain (the build target) tracks trunk and is never promoted
