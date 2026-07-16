@@ -114,7 +114,7 @@ before.
 :::note[Environment names are yours; roles default to position]
 The `environments` list is fully configurable. cascade attaches no meaning to specific labels: `dev`, `test`, `staging`, and `prod` are illustrative, not reserved. By default roles are decided by position, not by name: the last environment is the release stage, the second-to-last is the prerelease environment, and the publish boundary is the final crossing into the last environment. Set `role: release` or `role: prerelease` on an entry to declare that stage explicitly and override the positional default (see [`role`](#per-environment-settings)). The count is structural too: zero environments is release-only, one environment generates a single-environment Release workflow, and two or more enable the full promote cascade.
 
-**Naming.** Environment, build, and deploy names become GitHub Actions job IDs and output keys, so keep them identifier-safe: letters, digits, and underscores (hyphens read as subtraction in GitHub Actions expressions). The generator-owned names `environment` and `dry_run` cannot be used as `dispatch_inputs`.
+**Naming.** Environment, build, and deploy names become GitHub Actions job IDs and output keys, so keep them identifier-safe: letters, digits, and underscores (hyphens read as subtraction in GitHub Actions expressions). Hyphens in a name become underscores in the emitted output keys, so two names in the same section that differ only by `-` versus `_` would collide; validation rejects such pairs. The generator-owned names `environment` and `dry_run` cannot be used as `dispatch_inputs`.
 :::
 
 ### Trigger configuration
@@ -1098,7 +1098,7 @@ The implicit `release` slot tracks the most recently published (non-draft) GitHu
 `cascade lint` enforces the semantic rules the schema alone cannot:
 
 - `schema_version` should be `1`. Omitting it emits a warning.
-- Environment, build, and deploy names must be identifier-safe (letters, digits, underscores). The generator-owned names `environment` and `dry_run` are reserved and cannot be used as `dispatch_inputs`.
+- Environment, build, and deploy names must be identifier-safe (letters, digits, underscores). Within a section, two names that differ only by hyphen versus underscore are rejected: hyphens become underscores in job IDs and output keys, so those names would emit colliding outputs. The generator-owned names `environment` and `dry_run` are reserved and cannot be used as `dispatch_inputs`.
 - `pin_mode` must be `tag` or `sha`; `run_policy` must be `default`, `always`, or `force`; `on_failure` must be `abort` or `continue`; `retries` must be 0-3.
 - A repository cannot set both `external` (primary) and `notify` (satellite).
 - A per-callback `permissions` block is the complete permission set for that caller job and replaces the workflow default rather than merging.

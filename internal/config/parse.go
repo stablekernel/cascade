@@ -187,9 +187,18 @@ func Validate(cfg *TrunkConfig) []string {
 	// must be non-empty and unique, and any declared role must be a known value.
 	errors = append(errors, validateEnvironments(cfg)...)
 
-	// Build name sets for each section (builds and deploys can share names)
+	// Raw-name uniqueness is not enough: output keys collapse hyphens to
+	// underscores (see OutputKey), so names distinguished only by "-" versus
+	// "_" would emit colliding outputs. Checked per section below.
+	errors = append(errors, validateOutputKeyCollisions("environments", envNames)...)
+
+	// Build name sets for each section (builds and deploys can share names).
+	// Ordered slices are kept alongside for the output-key collision check so
+	// its error messages are deterministic.
 	buildNames := make(map[string]bool)
 	deployNames := make(map[string]bool)
+	buildNameList := make([]string, 0, len(cfg.Builds))
+	deployNameList := make([]string, 0, len(cfg.Deploys))
 
 	// Known-field sets for callback strictness, derived once from the struct tags.
 	buildFields := knownYAMLFields(reflect.TypeOf(BuildConfig{}))
@@ -204,6 +213,7 @@ func Validate(cfg *TrunkConfig) []string {
 			errors = append(errors, fmt.Sprintf("duplicate build name: %s", b.Name))
 		} else {
 			buildNames[b.Name] = true
+			buildNameList = append(buildNameList, b.Name)
 		}
 		// The name becomes part of the job ID (build-<name>); enforce the job-ID
 		// grammar so generation cannot emit invalid YAML.
@@ -253,6 +263,7 @@ func Validate(cfg *TrunkConfig) []string {
 			errors = append(errors, fmt.Sprintf("duplicate deploy name: %s", d.Name))
 		} else {
 			deployNames[d.Name] = true
+			deployNameList = append(deployNameList, d.Name)
 		}
 		// The name becomes part of the job ID (deploy-<name>); enforce the job-ID
 		// grammar so generation cannot emit invalid YAML.
@@ -295,6 +306,13 @@ func Validate(cfg *TrunkConfig) []string {
 			}
 		}
 	}
+
+	// Reject names within a section whose output keys collide after the
+	// hyphen-to-underscore collapse (see OutputKey). Raw-name uniqueness above
+	// does not catch a "-"/"_" twin, which would silently shadow one entry's
+	// generated outputs.
+	errors = append(errors, validateOutputKeyCollisions("builds", buildNameList)...)
+	errors = append(errors, validateOutputKeyCollisions("deploys", deployNameList)...)
 
 	// Validate the validate callback structural rules.
 	if cfg.Validate != nil {

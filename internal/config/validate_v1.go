@@ -111,6 +111,38 @@ func validateJobIDSafeName(prefix, name string) []string {
 		"%s %q must contain only letters, digits, hyphens, and underscores", prefix, name)}
 }
 
+// validateOutputKeyCollisions rejects two names in the same section whose
+// derived output keys collide. Job IDs and the ${{ }} references built from
+// them replace every hyphen with an underscore (see OutputKey), so two names
+// that differ only by "-" versus "_" pass the raw-name uniqueness check yet
+// emit the same output key, and one silently shadows the other in the
+// generated workflow. Collisions are rejected rather than remapped for the
+// same reason validateJobIDSafeName rejects rather than sanitizes: collapsing
+// distinct names would silently merge two entries. Empty names and exact
+// duplicates are skipped here; both are reported separately by the caller.
+func validateOutputKeyCollisions(section string, names []string) []string {
+	var errs []string
+	seen := make(map[string]string, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		key := OutputKey(name)
+		prev, ok := seen[key]
+		if !ok {
+			seen[key] = name
+			continue
+		}
+		if prev == name {
+			continue
+		}
+		errs = append(errs, fmt.Sprintf(
+			"%s %q and %q collide: both derive output key %q because hyphens become underscores in job IDs and outputs; rename one",
+			section, prev, name, key))
+	}
+	return errs
+}
+
 // validateWorkflowRunXOR enforces that callbacks are reusable-workflow only.
 // Inline run: and shell: are no longer supported, so each is rejected with an
 // actionable error, and workflow: is required.
