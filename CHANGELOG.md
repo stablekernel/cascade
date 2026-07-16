@@ -16,6 +16,12 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **config:** Bump `DefaultCLIVersion` to v0.16.2 and remove the test that
+  required the const to equal the repository's latest stable tag. The tag is
+  cut before the commit that bumps the const can land, so the guard failed on
+  main, on every PR, and inside the release's own test job, blocking the very
+  release that would have satisfied it. The shape guard (stable `vX.Y.Z` only)
+  and the docs-examples sync check remain
 - **generate:** Treat a release artifact that omits `required:` as required,
   matching the documented default. Previously the unset value silently made
   the artifact optional, so a release with a missing asset warned and

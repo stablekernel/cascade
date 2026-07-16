@@ -22,7 +22,7 @@ go install github.com/stablekernel/cascade/cmd/cascade@latest
 for the newest tag):
 
 ```bash
-go install github.com/stablekernel/cascade/cmd/cascade@v0.16.1
+go install github.com/stablekernel/cascade/cmd/cascade@v0.16.2
 ```
 
 Verify the install:
@@ -34,7 +34,7 @@ cascade version
 You rarely need to invoke Cascade manually in CI: generated workflows install it for you via the `setup-cli` composite action, pinned to whatever `cli_version` you set in your manifest. If you need to call it directly in a workflow of your own:
 
 ```yaml
-- uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.1
+- uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.2
   with:
     token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -70,7 +70,7 @@ ci:
     schema_version: 1
     trunk_branch: main
     environments: [dev, test, prod]
-    cli_version: v0.16.1
+    cli_version: v0.16.2
 
     validate:
       workflow: .github/workflows/validate.yaml
@@ -113,7 +113,7 @@ ci:
   config:
     schema_version: 1
     trunk_branch: main
-    cli_version: v0.16.1
+    cli_version: v0.16.2
     builds:
       - name: cli
         workflow: .github/workflows/build-cli.yaml

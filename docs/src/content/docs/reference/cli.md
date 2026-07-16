@@ -60,7 +60,7 @@ cascade version
 Output:
 
 ```text
-cascade v0.16.1
+cascade v0.16.2
   commit: abc123d
   built:  2026-01-15T10:30:00Z
 ```
