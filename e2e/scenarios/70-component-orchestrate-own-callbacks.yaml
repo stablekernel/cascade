@@ -1,0 +1,146 @@
+name: "Per-Component Orchestrate Runs the Component's Own Builds and Deploys"
+description: |
+  Proves a component-scoped orchestration actually RUNS the build and deploy jobs
+  named by that component's own callbacks. The manifest is the shape the
+  components guide documents as canonical: no top-level builds or deploys at all,
+  each component declaring its own.
+
+  The generated orchestrate-api workflow names its jobs from the resolved
+  component config (build-api-app, deploy-api-svc) and gates each on
+  needs.setup.outputs.run_build_api-app / run_deploy_api-svc. The orchestrate
+  runtime must plan against that same resolved config. A runtime that enumerates
+  the ROOT config emits its run_build_* / run_deploy_* outputs under root names;
+  under this manifest the root blocks are EMPTY, so setup emits no run_ output at
+  all, every gate reads an absent output and evaluates false, and every build and
+  deploy of every component skips deterministically while the orchestrate run
+  still reports success. The jobs assertions below fail loudly in that world
+  (build-api-app and deploy-api-svc report skipped), so this scenario pins the fix
+  live. Asserting state alone would NOT catch it: the state write advances either
+  way, which is exactly how this went unnoticed.
+
+  The sibling component "web" carries divergent callback names (web-app/web-svc)
+  and each callback gets its own workflow file: a stub carries a single inner job
+  id, so two names sharing one path would leave the loser unreported. web is the
+  differential control proving the plan is scoped to the component that declared
+  it, and that api's recorded state survives web's cycle.
+
+  Sequencing matters, and it mirrors what really happens on GitHub. Each
+  component's orchestrate follows a commit that touches THAT component's own
+  trigger paths, because real life fires orchestrate-web from a push matching
+  services/web/**. The harness has no such trigger and drives every orchestrate at
+  current HEAD, so the scenario stages the pushes itself: api runs while the seed
+  commit is HEAD, then a web-only commit lands, then web runs. Skipping that
+  second commit would leave web with no recorded state and no touched paths, so
+  its base would fall back to HEAD~1 (the state commit api's finalize just wrote),
+  whose diff names no web file. web's builds and deploys would then skip
+  CORRECTLY, and the scenario would be asserting a situation that cannot arise.
+  Anyone tempted to drop the web commit should read that as change detection
+  working, not as a regression.
+
+config:
+  trunk_branch: main
+  environments: [dev]
+  components:
+    api:
+      path: services/api
+      tag_grammar:
+        prefix: api-
+      builds:
+        - name: api-app
+          workflow: build-api.yaml
+          triggers: ["services/api/**"]
+      deploys:
+        - name: api-svc
+          workflow: deploy-api.yaml
+          triggers: ["services/api/**"]
+    web:
+      path: services/web
+      tag_grammar:
+        prefix: web-
+      builds:
+        - name: web-app
+          workflow: build-web.yaml
+          triggers: ["services/web/**"]
+      deploys:
+        - name: web-svc
+          workflow: deploy-web.yaml
+          triggers: ["services/web/**"]
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so
+  # the per-component workflows executed below are the pristine generated output.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  # The load-bearing step: api's own build and deploy must RUN. Under a runtime
+  # planning from the (empty) root config both would report skipped.
+  - name: "Orchestrate api and run its own build and deploy"
+    action: orchestrate
+    orchestrate:
+      component: api
+    expect:
+      jobs:
+        build-api-app: success
+        deploy-api-svc: success
+      state:
+        api-dev:
+          component: api
+          env: dev
+          version: "api-0.1.0-rc.0"
+          deploys:
+            api-svc:
+              sha: commit1
+
+  # web's own cycle has to follow a push touching web's own trigger paths, the way
+  # a real orchestrate-web run always does. Without this commit web's base falls
+  # back to HEAD~1 (api's state commit), nothing under services/web/** shows in the
+  # diff, and web's callbacks skip for entirely correct reasons.
+  - name: "Land a web-only change ahead of web's own cycle"
+    action: commit
+    commit:
+      message: "feat: web change"
+      files:
+        services/web/main.go: |
+          package main
+
+          func main() { _ = "web" }
+
+  # Differential control: web's own callbacks run on its own cycle, under its own
+  # version line, and api's recorded dev state survives untouched.
+  - name: "Orchestrate web and run its own build and deploy"
+    action: orchestrate
+    orchestrate:
+      component: web
+    expect:
+      jobs:
+        build-web-app: success
+        deploy-web-svc: success
+      state:
+        web-dev:
+          component: web
+          env: dev
+          version: "web-0.1.0-rc.0"
+          deploys:
+            web-svc:
+              sha: commit2
+        api-dev:
+          component: api
+          env: dev
+          unchanged: true

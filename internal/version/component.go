@@ -52,6 +52,18 @@ func ResolveComponentVersionInputs(cfg *config.TrunkConfig, component, baseDir, 
 	if err != nil {
 		return nil, fmt.Errorf("resolving component %q: %w", component, err)
 	}
+	return ResolveComponentVersionInputsFor(resolved, baseDir, baseSHA, headSHA)
+}
+
+// ResolveComponentVersionInputsFor is ResolveComponentVersionInputs for a
+// component whose config the caller has ALREADY resolved. It is the entry point
+// for a runtime that plans against the component's resolved config: such a
+// config declares no nested components of its own, so the component can no
+// longer be resolved out of it and the root-config entry point above cannot be
+// used. Both entry points share this one derivation, so the CLI preview and the
+// production pipeline cannot drift.
+func ResolveComponentVersionInputsFor(resolved *config.ResolvedComponent, baseDir, baseSHA, headSHA string) (*ComponentVersionInputs, error) {
+	component := resolved.Name
 	spec := resolved.TagGrammarSpec()
 
 	inputs := &ComponentVersionInputs{
