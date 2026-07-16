@@ -60,10 +60,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: v0.1.0
+          version: v0.16.1
       - name: Run Setup
         id: setup
         env:
@@ -192,10 +192,10 @@ jobs:
             echo "_No outputs produced_" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.1.0
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: v0.1.0
+          version: v0.16.1
       - name: Generate Changelog
         id: changelog
         env:
