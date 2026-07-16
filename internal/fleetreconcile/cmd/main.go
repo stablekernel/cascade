@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -22,13 +23,18 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
+	code, err := run(os.Args[1:], os.Stdout)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "fleet-reconcile: %v\n", err)
-		os.Exit(2) // 2 = tool error (bad input); 1 = gate failed; 0 = gate passed
 	}
+	os.Exit(code)
 }
 
-func run(args []string, out *os.File) error {
+// run executes the reconcile gate and returns the process exit code:
+// 0 = gate passed, 1 = gate failed, 2 = tool error (bad input). os.Exit
+// lives only in main so tests can assert the code and capture the report
+// through any io.Writer.
+func run(args []string, out io.Writer) (int, error) {
 	fs := flag.NewFlagSet("fleet-reconcile", flag.ContinueOnError)
 	ledgerPath := fs.String("ledger", "", "path to the run-ledger JSONL file (empty = no registered runs)")
 	runsPath := fs.String("runs", "", "path to a pre-fetched gh-run-list JSON array (mutually exclusive with --window-start)")
@@ -39,19 +45,19 @@ func run(args []string, out *os.File) error {
 	selfRunID := fs.Int64("self-run-id", 0, "this reconcile run's own id, excluded from reconciliation")
 	allow := fs.String("allow-workflows", "", "comma-separated workflow names to reconcile; empty = all")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return 2, err
 	}
 	if (*runsPath == "") == (*windowStart == "") {
-		return fmt.Errorf("exactly one of --runs or --window-start is required")
+		return 2, fmt.Errorf("exactly one of --runs or --window-start is required")
 	}
 
 	runs, err := loadRuns(*runsPath, *windowStart, *repo, *pageSize, *maxPages)
 	if err != nil {
-		return fmt.Errorf("loading runs: %w", err)
+		return 2, fmt.Errorf("loading runs: %w", err)
 	}
 	ledger, err := readLedger(*ledgerPath)
 	if err != nil {
-		return fmt.Errorf("reading ledger: %w", err)
+		return 2, fmt.Errorf("reading ledger: %w", err)
 	}
 
 	opts := fleetreconcile.Options{SelfRunID: *selfRunID}
@@ -64,12 +70,12 @@ func run(args []string, out *os.File) error {
 
 	rep := fleetreconcile.Reconcile(runs, ledger, opts)
 	if _, err := fmt.Fprint(out, fleetreconcile.FormatReport(rep)); err != nil {
-		return fmt.Errorf("writing report: %w", err)
+		return 2, fmt.Errorf("writing report: %w", err)
 	}
 	if !rep.Passed() {
-		os.Exit(1)
+		return 1, nil
 	}
-	return nil
+	return 0, nil
 }
 
 // loadRuns returns the runs to reconcile: either a pre-fetched JSON array
@@ -202,9 +208,14 @@ func readLedger(path string) ([]fleetreconcile.LedgerEntry, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
+	return parseLedger(f)
+}
 
+// parseLedger decodes JSONL ledger content: one JSON LedgerEntry per non-blank
+// line. Malformed lines error with their physical (1-based) line number.
+func parseLedger(r io.Reader) ([]fleetreconcile.LedgerEntry, error) {
 	var entries []fleetreconcile.LedgerEntry
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	line := 0
 	for sc.Scan() {
