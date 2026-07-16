@@ -242,6 +242,12 @@ func (r *Rollbacker) Plan(env, to, deployable string) (*Plan, error) {
 		return nil, err
 	}
 
+	if deployable == "" {
+		if err := r.hotfixDivergenceErr(env); err != nil {
+			return nil, err
+		}
+	}
+
 	current := r.cicdFile.State[env]
 	plan := &Plan{
 		Environment: env,
@@ -437,6 +443,28 @@ func (r *Rollbacker) resolveDefaultTarget(env, deployable string) (*Target, erro
 	return nil, fmt.Errorf("no prior version to roll back to for deployable %q in environment %q (deploy-history ring and manifest history are empty)", deployable, env)
 }
 
+// hotfixDivergenceErr refuses an environment-scoped rollback when env's
+// recorded divergence did not originate from a rollback. A hotfix divergence
+// record (ref env/<env> or env/<component>/<env>, plus base_sha and patches) is
+// the only authorization for the rejoin teardown that deletes the integration
+// branch and removes the hotfix tags and release objects; overwriting the ref
+// with rollback/<env> makes the next rejoin skip that teardown as
+// rollback-origin, stranding those artifacts with no later cleanup path. The
+// rollback verb has no lifecycle cleaner of its own (Apply is a state-only
+// write), so it cannot perform the teardown itself; the safe move is to refuse
+// and direct the operator to rejoin first. An env already diverged BY a
+// rollback carries no such record and may be rolled back again; a
+// deployable-scoped rollback never touches the env-level divergence fields, so
+// the guard does not apply to it.
+func (r *Rollbacker) hotfixDivergenceErr(env string) error {
+	state := r.cicdFile.State[env]
+	if state == nil || !state.IsDiverged() || promote.IsRollbackRef(state.Ref) {
+		return nil
+	}
+	return fmt.Errorf("environment %q is diverged from trunk by a hotfix (ref %q, %d recorded patch(es)); rolling it back would overwrite the divergence record that authorizes the hotfix teardown, stranding its integration branch, tags, and release objects. Rejoin the environment first by promoting a trunk commit that contains every recorded patch (the rejoin tears the hotfix artifacts down), then roll back if still needed. If the patches never merged to trunk (an abandoned hotfix), promote with --force instead: containment is skipped with a recorded warning and the rejoin teardown still runs",
+		env, state.Ref, len(state.Patches))
+}
+
 // shaMatches reports whether candidate matches the requested value exactly or
 // as a SHA prefix (min 7 chars, the conventional short-SHA length).
 func shaMatches(candidate, requested string) bool {
@@ -499,6 +527,15 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 		// SHA onto every recorded deployable so change-detection compares
 		// against the rolled-back base.
 		//
+		// Re-check the hotfix-divergence guard at the mutation site: Plan is the
+		// normal gate, but Apply is the only writer, so a hand-built or stale
+		// Plan (for example one resolved before a concurrent hotfix finalize
+		// recorded the divergence) must not overwrite a hotfix divergence record
+		// either.
+		if err := r.hotfixDivergenceErr(plan.Environment); err != nil {
+			return err
+		}
+
 		// Capture the outgoing (pre-rollback) SHA before any field is mutated;
 		// it becomes the divergence base recorded below.
 		prevSHA := env.SHA
@@ -524,13 +561,19 @@ func (r *Rollbacker) Apply(plan *Plan) error {
 		// Mark the environment diverged so forward-promotion guards treat it as
 		// off-trunk until a promotion rejoins it. The rollback ref distinguishes
 		// this from a hotfix divergence (no integration branch, tags, or drafts),
-		// so the rejoin cleanup can skip the hotfix-specific teardown. No patches
-		// are recorded: a rollback re-points at a prior SHA, it does not stack
-		// commits on a base. The ref is namespaced to the component when one is
-		// selected (rollback/<component>/<env>), mirroring the hotfix env-branch
-		// namespacing, and is byte-identical (rollback/<env>) otherwise.
+		// so the rejoin cleanup can skip the hotfix-specific teardown. Patches
+		// are cleared, not merely left unset: they assert fix commits deployed
+		// in the env, and the rollback just re-pointed the env at a prior SHA
+		// where no such assertion holds. The guard above means a legal caller
+		// never reaches here with patches set (a hotfix divergence is refused),
+		// so the clear is a self-healing invariant for irregular state rather
+		// than a lifecycle-record overwrite. The ref is namespaced to the
+		// component when one is selected (rollback/<component>/<env>), mirroring
+		// the hotfix env-branch namespacing, and is byte-identical
+		// (rollback/<env>) otherwise.
 		env.Ref = promote.RollbackRef(r.component, plan.Environment)
 		env.BaseSHA = prevSHA
+		env.Patches = nil
 	}
 
 	return r.writeConfig()

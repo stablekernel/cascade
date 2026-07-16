@@ -1,0 +1,129 @@
+name: "Rollback refuses a hotfix-diverged env; rejoin teardown still fires"
+description: |
+  A hotfix-diverged environment's divergence record (ref env/<env>, base_sha,
+  patches) is the only authorization for the rejoin teardown of its integration
+  branch and hotfix tags. An env-scoped rollback would overwrite that record
+  with ref rollback/<env>, making the eventual rejoin skip the teardown and
+  stranding the artifacts forever, so the rollback preflight refuses it.
+
+  test is baselined, then hotfixed onto env/test. A rollback of test is
+  dispatched and must conclude in failure with the divergence-guard message,
+  leaving the divergence record byte-intact (ref env/test, patch recorded).
+  Trunk then advances past the patch and a containing promote rejoins test:
+  the divergence fields clear and env/test is deleted on the remote, proving
+  the preserved record still authorized the full teardown.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Initial commit"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate trunk into dev"
+    action: orchestrate
+
+  - name: "Promote to establish a test baseline"
+    action: promote
+    promote:
+      mode: default
+
+  - name: "Commit a trunk fix to hotfix into test"
+    action: commit
+    commit:
+      message: "fix: patch for test env"
+      files:
+        src/fix.go: |
+          package main
+          func patch() {}
+
+  - name: "Plan hotfix for test"
+    action: hotfix_plan
+    hotfix_plan:
+      target_env: test
+      commit_ref: commit2
+      # Plan only: the harness's hotfix_apply step performs the real cherry-pick
+      # and PR via the gitea API, mirroring hotfix-rejoin.yaml.
+      dry_run: true
+
+  - name: "Apply hotfix onto env/test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+
+  - name: "Merge the hotfix pull request"
+    action: merge_pr
+    merge_pr:
+      label: cascade-hotfix
+
+  - name: "Finalize hotfix; test diverges onto env/test"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2]
+
+  # The guarded step: an env-scoped rollback of the hotfix-diverged test env
+  # must fail at preflight with the divergence-guard message, and the state
+  # write must never happen: ref stays env/test and the patch stays recorded.
+  - name: "Rollback of the hotfix-diverged test env is refused"
+    action: rollback
+    rollback:
+      environment: test
+      expect_failure: true
+      expect_log: "diverged from trunk by a hotfix"
+    expect:
+      state:
+        test:
+          ref: "env/test"
+          patches: [commit2]
+
+  # Land a normal trunk commit so trunk contains commit2 (the recorded patch)
+  # as an ancestor; a promotion of a later trunk SHA into test then satisfies
+  # patch containment and triggers the rejoin.
+  - name: "Advance trunk normally past the patch"
+    action: commit
+    commit:
+      message: "chore: trunk advance"
+      files:
+        src/advance.go: |
+          package main
+          func advance() {}
+
+  - name: "Orchestrate so dev carries the patch's trunk ancestor"
+    action: orchestrate
+
+  # Rejoin proof: because the refused rollback preserved the divergence record,
+  # the rejoin still clears the fields AND deletes env/test on the remote. Had
+  # the rollback overwritten ref with rollback/test, this teardown would have
+  # been skipped as rollback-origin and env/test would leak forever.
+  - name: "Promote a containing SHA into test triggers the full teardown"
+    action: promote
+    promote:
+      mode: cascade
+      target: test
+    expect:
+      state:
+        test:
+          cleared: [ref, base_sha, patches]
+      branches:
+        deleted: ["env/test"]

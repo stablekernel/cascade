@@ -9,6 +9,10 @@ Rollback re-deploys a prior version or SHA to a promoted environment, defaulting
 
 Rollback covers promoted environments only. The first environment tracks trunk directly and is never promoted into, so it has no deploy history to roll back to. The workflow's environment dropdown offers only the promoted environments; targeting the first environment fails fast with that guidance. Roll it forward instead, by reverting the offending change on trunk.
 
+## The hotfix-divergence guard
+
+A hotfix-diverged environment (state `ref: env/<env>` with recorded `patches`) cannot be rolled back at the environment scope. Its divergence record is what authorizes the cleanup that runs when the environment rejoins trunk: deleting the `env/<env>` integration branch and removing the hotfix tags and release objects. A rollback would overwrite that record, so those artifacts would never be cleaned up. Rejoin the environment first by promoting a trunk commit that contains every recorded patch; the rejoin performs the teardown, and the environment can then be rolled back if still needed. If the patches never merged to trunk (an abandoned hotfix), containment is unsatisfiable; promote with the `force` input instead, which skips the containment check with a recorded warning and still runs the rejoin teardown. An environment diverged by a previous rollback can be rolled back again, and a rollback scoped to a single deployable is unaffected.
+
 ## Trigger a rollback
 
 Dispatch `cascade-rollback.yaml`:

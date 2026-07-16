@@ -232,8 +232,15 @@ func TestApply_MarksEnvDivergedWithRollbackRef(t *testing.T) {
 	if prod.BaseSHA != "currentsha12345" {
 		t.Errorf("base_sha = %q, want currentsha12345 (pre-rollback SHA)", prod.BaseSHA)
 	}
+	// This fixture is NOT diverged, so "patches empty after rollback" is
+	// trivially true here and proves nothing about patch handling: this exact
+	// assertion previously certified "rollback sets no patches" while the code
+	// let a hotfix-diverged env's stale patches survive a rollback untouched.
+	// The real invariant, patches never survive onto a rolled-back version and a
+	// hotfix divergence record is never overwritten, is asserted from diverged
+	// fixtures in divergence_guard_test.go; this remains the clean-fixture case.
 	if len(prod.Patches) != 0 {
-		t.Errorf("patches = %v, want empty (rollback sets no patches)", prod.Patches)
+		t.Errorf("patches = %v, want empty (rollback records no patches)", prod.Patches)
 	}
 }
 
