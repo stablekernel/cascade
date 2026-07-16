@@ -42,6 +42,7 @@ go run ./cmd/cascade generate-workflow --config .github/manifest.yaml -f
 5. If a change alters which operations are valid on which environments (for example, which environments are eligible for rollback or promotion), update the fleet example-repo suites that exercise those operations in the same change. A generator or CLI eligibility rule and the fleet suite that asserts against it are one coupled unit; letting them drift hides the mismatch until a later fleet run exercises the now invalid path.
 6. Run `go test ./...` and `golangci-lint run ./...` before pushing.
 7. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages (`feat:`, `fix:`, `docs:`, `chore:`, ...). cascade derives changelogs and version bumps from them.
+8. Update the `[Unreleased]` section of `CHANGELOG.md` in the same pull request as any user-facing change: every `feat`, `fix`, or `perf` commit, and any breaking change, gets an entry whose bold scope label matches the commit scope (`fix(promote)` gets a `**promote:**` bullet; a `fix(config,simulate)` commit may use one `**config/simulate:**` bullet or one bullet per scope). `TestChangelog_UnreleasedCoversUserFacingCommits` fails any full clone where a user-facing commit since the last stable release tag has no `[Unreleased]` entry carrying its scope.
 
 ## API design
 

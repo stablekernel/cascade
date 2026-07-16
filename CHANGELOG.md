@@ -24,6 +24,19 @@ A `Migration` section is added to any release that bumps `schema_version`.
   v0.16.1, and guard the default against lagging the latest stable release
 - **hotfix:** Converge the missing tag and release when the hotfix finalize
   job reruns after a partial failure, instead of skipping release creation
+- **promote:** Carry recorded component state (previous ring, sibling
+  deploys, ref, base SHA, patches, divergence) through component finalize
+  instead of overwriting it, and defer rejoin cleanup until the state write
+  is durable, so a component promotion cannot drop a sibling component's
+  recorded state
+- **orchestrate:** Overlay recorded component state into the working state
+  map so the base-SHA ladder and finalize read each component's recorded
+  rungs instead of rebuilding them from empty for component manifests
+- **config:** Reject build, deploy, and environment names whose emitted
+  output keys collide because they differ only by hyphen versus underscore,
+  at validation time instead of at first workflow run
+- **simulate:** Apply the deploy-result gate to the simulated rollback
+  preview so it matches the eligibility rules a real rollback enforces
 
 ## [0.16.1] - 2026-07-15
 
