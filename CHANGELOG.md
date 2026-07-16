@@ -16,6 +16,15 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **rollback:** Drive a component-scoped rollback from the component's resolved
+  configuration. The runtime narrowed only the environment ladder onto the root
+  config, so a component overriding `deploys` had its rollback planned against
+  the repo-global deploy set: finalize gated the state write on root deploy
+  names the component's workflow never runs, and `--deployable` accepted a root
+  deployable while rejecting the component's own. The resolved component config
+  is now swapped in whole, so every value the generator emitted the component's
+  rollback workflow from is the value the runtime plans and gates against
+
 - **rollback:** Refuse an environment-scoped rollback of a hotfix-diverged
   environment. The rollback overwrote the divergence record (`ref: env/<env>`,
   `base_sha`, `patches`) that authorizes the rejoin teardown, so the hotfix's
