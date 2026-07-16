@@ -1,0 +1,70 @@
+name: "Release artifacts download/upload steps"
+description: |
+  Verifies the emitted shape of the builds[].artifacts release-assets feature.
+  A build declaring release artifacts must give the orchestrate finalize job:
+
+  1. A Download Release Artifacts step before the release is managed, merging
+     every release-* artifact into release-artifacts/ (pattern: release-*,
+     merge-multiple: true), matching the documented upload naming convention
+     release-{build-name}-{artifact-name}.
+
+  2. An Upload Release Artifacts step after the release exists, running
+     gh release upload against the candidate tag for each artifact path with
+     --clobber.
+
+  3. Per-artifact gating: an artifact that omits required: defaults to
+     required, so a missing artifact fails the job (::error + exit 1), while
+     required: false downgrades the miss to a ::warning with no failure gate.
+
+  Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments: [staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+      artifacts:
+        # required: omitted - must default to required and gate the release.
+        - name: binaries
+          path: dist/*.tar.gz
+        # Explicitly optional - a miss warns instead of failing.
+        - name: checksums
+          path: dist/checksums.txt
+          required: false
+  deploys: []
+
+steps:
+  - name: "Commit triggers generation; assert artifact download/upload steps and gating"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # Download step merges release-* artifacts before the release step.
+            - "- name: Download Release Artifacts"
+            - "pattern: release-*"
+            - "path: release-artifacts"
+            - "merge-multiple: true"
+            # Upload step targets the candidate tag and uploads each path.
+            - "- name: Upload Release Artifacts"
+            - "TAG=\"${{ needs.setup.outputs.version }}\""
+            - "if ls release-artifacts/dist/*.tar.gz 2>/dev/null; then"
+            - "gh release upload \"$TAG\" release-artifacts/dist/*.tar.gz --clobber"
+            - "gh release upload \"$TAG\" release-artifacts/dist/checksums.txt --clobber"
+            # Omitted required: defaults to required and fails the release.
+            - "echo \"::error::Required artifact 'release-app-binaries' not found\""
+            # required: false downgrades a missing artifact to a warning.
+            - "echo \"::warning::Optional artifact 'release-app-checksums' not found\""
+          not_contains:
+            # The required artifact must never take the optional warning path.
+            - "::warning::Optional artifact 'release-app-binaries' not found"
+            # The optional artifact must never take the required error path.
+            - "::error::Required artifact 'release-app-checksums' not found"

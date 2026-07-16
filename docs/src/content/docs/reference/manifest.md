@@ -378,6 +378,7 @@ ci:
 | `on_failure` | emitted | string | No | Failure handling. See [Policy fields](#policy-fields). |
 | `retries` | emitted | int | No | Retry attempts (0-3). |
 | `artifact_upload` | emitted | object | No | GitHub Actions artifact passthrough between jobs in one orchestrate run: `upload` is a path glob uploaded via `actions/upload-artifact` (named `build-{name}`), and `downloads` names upstream builds whose artifacts to fetch first. Distinct from the release `artifacts` list, which attaches assets to a published release. |
+| `artifacts` | emitted | list | No | Release assets attached to the GitHub release the orchestrate run manages. See [artifacts](#artifacts). |
 | `runs_on` | validated-only | object | No | Parsed and validated, never emitted. See [Validated-only fields](#validated-only-fields). |
 | `concurrency` | validated-only | object | No | Parsed and validated, never emitted. See [Validated-only fields](#validated-only-fields). |
 | `timeout_minutes` | validated-only | int | No | Parsed and validated, never emitted. See [Validated-only fields](#validated-only-fields). |
@@ -395,6 +396,28 @@ The build's `artifact_id` output (if declared) is captured into state automatica
 | `dimensions` | emitted | map | The cross-product axes (for example `os: [linux, darwin]`, `arch: [amd64, arm64]`). |
 | `max_parallel` | emitted | int | Caps concurrent matrix legs (0 uses the GitHub Actions default). |
 | `fail_fast` | emitted | bool | Whether a failing leg cancels the rest. Unset applies the GitHub Actions default (true for matrix builds). |
+
+### artifacts
+
+`artifacts` (builds only) lists release assets to attach to the GitHub release the orchestrate run manages. The build workflow uploads each asset as a GitHub Actions artifact named `release-{build-name}-{artifact-name}`; the finalize job downloads every `release-*` artifact into `release-artifacts/` and uploads each configured path to the release with `gh release upload`.
+
+```yaml
+builds:
+  - name: app
+    workflow: .github/workflows/build.yaml
+    artifacts:
+      - name: binaries
+        path: dist/*.tar.gz
+      - name: checksums
+        path: dist/checksums.txt
+        required: false
+```
+
+| Sub-field | Status | Type | Description |
+|-----------|--------|------|-------------|
+| `name` | emitted | string | Artifact identifier, combined with the build name into the `release-{build-name}-{artifact-name}` upload name. Letters, digits, dots, hyphens, and underscores only. |
+| `path` | emitted | string | Glob pattern for the files to upload (for example `dist/*.tar.gz`), resolved under `release-artifacts/`. Letters, digits, dots, slashes, hyphens, underscores, and the glob characters `*`, `?`, `[`, `]`; a leading hyphen is rejected. |
+| `required` | emitted | bool | Whether a missing artifact fails the release. Defaults to `true`; set `required: false` to downgrade a missing asset to a warning. |
 
 ### Permissions
 

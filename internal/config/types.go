@@ -646,9 +646,19 @@ type BuildConfig struct {
 // ArtifactConfig defines a release artifact produced by a build
 // Build workflows should upload artifacts with name: release-{build-name}-{artifact-name}
 type ArtifactConfig struct {
-	Name     string `yaml:"name" json:"name"`                             // Artifact identifier (e.g., "linux-amd64", "checksums")
-	Path     string `yaml:"path" json:"path"`                             // Glob pattern for files to include (e.g., "dist/*.tar.gz")
-	Required bool   `yaml:"required,omitempty" json:"required,omitempty"` // Fail release if artifact missing (default: true)
+	Name string `yaml:"name" json:"name"` // Artifact identifier (e.g., "linux-amd64", "checksums")
+	Path string `yaml:"path" json:"path"` // Glob pattern for files to include (e.g., "dist/*.tar.gz")
+	// Required fails the release when the artifact is missing. A pointer so an
+	// omitted required: keeps the documented default (true) instead of the
+	// bool zero value silently downgrading the artifact to optional.
+	Required *bool `yaml:"required,omitempty" json:"required,omitempty"`
+}
+
+// IsRequired reports whether a missing artifact fails the release. Nil-safe;
+// an omitted required: defaults to true, matching the schema's documented
+// default. Only an explicit required: false makes the artifact optional.
+func (a ArtifactConfig) IsRequired() bool {
+	return a.Required == nil || *a.Required
 }
 
 // PassthroughArtifact declares GHA artifacts passed between jobs within a single

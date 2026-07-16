@@ -229,6 +229,10 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validatePermissions(fmt.Sprintf("builds[%d]", i), b.Permissions)...)
 		errors = append(errors, validateSecrets(fmt.Sprintf("builds[%d]", i), b.Secrets)...)
 
+		// Release-artifact names and paths are spliced into the emitted upload
+		// shell; keep them inside the grammar that shell can carry safely.
+		errors = append(errors, validateArtifacts(fmt.Sprintf("builds[%d]", i), b.Artifacts)...)
+
 		// Validate run_policy, on_failure, and retries
 		errors = append(errors, validateCallbackPolicy(fmt.Sprintf("builds[%d]", i), b.RunPolicy, b.OnFailure, b.Retries)...)
 
