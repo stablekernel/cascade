@@ -172,6 +172,28 @@ func (h *Harness) StageRepoFromConfig(ctx context.Context, config Config, setupW
 				}
 			}
 		}
+		// A component overriding builds: or deploys: names callbacks the root
+		// block never lists, and its promotion runs those jobs. Stub them on the
+		// same terms as the root ones so the generator resolves the referenced
+		// workflow and act reports the component's own job id. Each callback
+		// needs its own workflow file: a stub carries a single inner job id, so
+		// two names sharing one path would leave the loser unreported.
+		for _, component := range config.Components {
+			for _, build := range component.Builds {
+				if build.Workflow != "" {
+					if p := normalizeCallbackStubPath(build.Workflow); p != "" {
+						files[p] = generateStubWorkflow(build.Name, scenarioTag)
+					}
+				}
+			}
+			for _, deploy := range component.Deploys {
+				if deploy.Workflow != "" {
+					if p := normalizeCallbackStubPath(deploy.Workflow); p != "" {
+						files[p] = generateStubWorkflow(deploy.Name, scenarioTag)
+					}
+				}
+			}
+		}
 		if config.Publish != nil && config.Publish.Workflow != "" {
 			if p := normalizeCallbackStubPath(config.Publish.Workflow); p != "" {
 				files[p] = generatePublishStubWorkflow(scenarioTag)

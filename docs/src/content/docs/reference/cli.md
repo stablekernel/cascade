@@ -622,6 +622,17 @@ cascade promote finalize \
 | `--run-id` | string | No | Workflow run id for job query |
 | `--commit-push` | bool | No | Commit and push state changes |
 
+Deploy outcomes are read from the `DEPLOY_RESULT_<NAME>` environment variables the
+generated finalize step sets from each deploy job's conclusion (falling back to a
+`--repo`/`--run-id` job query for workflows generated before those variables
+existed). The generated step also forwards preflight's planned deploy set as
+`DEPLOYS_TO_RUN`; when that plan is non-empty but every planned deploy reports
+`skipped` (or no result at all), nothing was actually deployed and finalize
+refuses the state write instead of recording the promotion as successful. A
+promotion whose trigger filters matched no changes plans no deploys and is
+unaffected, as are reported deploy failures, which stay on the
+`rollback_on_failure` path.
+
 ### hotfix
 
 Apply one or more trunk commits onto an environment pinned to an older base. A hotfix

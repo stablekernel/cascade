@@ -140,7 +140,7 @@ func TestNewPromoter_ComponentSubset_SiblingKeepsFullLadder(t *testing.T) {
 }
 
 // TestApplyComponentLadder_EmptyComponentUnchanged proves the single-component
-// (empty component) path leaves the global ladder byte-identical: applyComponentLadder
+// (empty component) path leaves the global ladder byte-identical: applyResolvedComponentConfig
 // is a no-op and the working config still carries the full global ladder.
 func TestApplyComponentLadder_EmptyComponentUnchanged(t *testing.T) {
 	path := writeSubsetManifest(t)
@@ -148,7 +148,7 @@ func TestApplyComponentLadder_EmptyComponentUnchanged(t *testing.T) {
 	require.NoError(t, err)
 
 	before := append([]string(nil), cicdFile.Config.EnvironmentNames()...)
-	require.NoError(t, applyComponentLadder(cicdFile, ""))
+	require.NoError(t, applyResolvedComponentConfig(cicdFile, ""))
 	require.Equal(t, before, cicdFile.Config.EnvironmentNames(), "empty component must not narrow the ladder")
 	require.Equal(t, []string{"dev", "staging", "prod"}, cicdFile.Config.EnvironmentNames())
 }
@@ -160,6 +160,6 @@ func TestApplyComponentLadder_NarrowsToComponentSubset(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(path, config.DefaultManifestKey)
 	require.NoError(t, err)
 
-	require.NoError(t, applyComponentLadder(cicdFile, "api"))
+	require.NoError(t, applyResolvedComponentConfig(cicdFile, "api"))
 	require.Equal(t, []string{"dev", "staging"}, cicdFile.Config.EnvironmentNames())
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stablekernel/cascade/internal/globals"
 	"github.com/stablekernel/cascade/internal/hotfix"
 	"github.com/stablekernel/cascade/internal/statewrite"
+	"github.com/stablekernel/cascade/internal/taggrammar"
 )
 
 // getEnv returns the value of an environment variable or a default value.
@@ -93,6 +94,16 @@ func NewFinalizerWithKey(configPath, targetEnv, manifestKey string, opts ...Fina
 	}
 	for _, opt := range opts {
 		opt(f)
+	}
+
+	// A component-scoped finalize must operate on the component's resolved
+	// config, exactly like the preflight and promotion paths: the generated
+	// workflow sets DEPLOY_RESULT_<NAME> from the resolved deploy names, so a
+	// finalizer keeping the root config would look up the wrong keys, find no
+	// results, and advance env state with no deploy gate at all. A no-op for
+	// the single-component (empty component) path.
+	if err := applyResolvedComponentConfig(f.cicdFile, f.component); err != nil {
+		return nil, err
 	}
 
 	// A component-scoped finalize reads the component's recorded env state from
@@ -187,7 +198,7 @@ func (f *Finalizer) runLifecycleCleanup() error {
 		// example a ref naming a component the manifest no longer declares) skips
 		// only the tag cleanup for this env rather than cross-matching a sibling's
 		// tags under the default grammar; the branch delete above already ran.
-		spec, err := resolveRejoinCleanupSpec(f.cicdFile, ev.component)
+		spec, err := f.rejoinCleanupSpec(ev.component)
 		if err != nil {
 			fmt.Printf("Warning: rejoin cleanup for %s: resolving component tag grammar: %v\n", ev.env, err)
 			continue
@@ -202,6 +213,22 @@ func (f *Finalizer) runLifecycleCleanup() error {
 		}
 	}
 	return nil
+}
+
+// rejoinCleanupSpec resolves the tag grammar the divergence-end release cleanup
+// collects hotfix tags under for a rejoining branch's component. A
+// component-scoped finalizer already carries that component's resolved config
+// (applyResolvedComponentConfig swapped it in at construction), so when the
+// rejoining branch belongs to this finalizer's own component the working
+// grammar IS the component's grammar; re-resolving through Config.Components
+// would fail because a resolved component config declares no nested components.
+// Every other shape (the single-component finalizer, or a branch recorded for a
+// different component) delegates to resolveRejoinCleanupSpec unchanged.
+func (f *Finalizer) rejoinCleanupSpec(component string) (taggrammar.Spec, error) {
+	if component != "" && component == f.component {
+		return resolveTagGrammar(f.cicdFile), nil
+	}
+	return resolveRejoinCleanupSpec(f.cicdFile, component)
 }
 
 // updateState performs the in-memory state updates.

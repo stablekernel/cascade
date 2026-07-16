@@ -471,6 +471,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}
+          DEPLOYS_TO_RUN: ${{ needs.preflight.outputs.deploys_to_run }}
           DEPLOY_RESULT_APP: ${{ needs.deploy-app.result }}
           DEPLOY_RESULT_SIDECAR: ${{ needs.deploy-sidecar.result }}
         run: |

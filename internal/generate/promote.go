@@ -1285,8 +1285,13 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          PROMOTION_RESULT: ${{ needs.preflight.outputs.promotion_result }}\n")
 	// Deploy result env vars reference deploy jobs, which only exist when there
 	// is at least one environment. Skip them otherwise so finalize does not
-	// dereference a job that was never emitted.
+	// dereference a job that was never emitted. DEPLOYS_TO_RUN forwards
+	// preflight's planned deploy set verbatim so finalize can refuse the state
+	// write when planned deploys all skipped (nothing actually deployed);
+	// it rides the same condition because the plan is only meaningful when
+	// deploy jobs exist.
 	if len(g.config.Environments) > 0 {
+		sb.WriteString("          DEPLOYS_TO_RUN: ${{ needs.preflight.outputs.deploys_to_run }}\n")
 		for _, d := range g.config.Deploys {
 			envKey := "DEPLOY_RESULT_" + strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_"))
 			fmt.Fprintf(sb, "          %s: ${{ needs.deploy-%s.result }}\n", envKey, d.Name)
