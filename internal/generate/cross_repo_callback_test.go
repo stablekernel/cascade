@@ -83,6 +83,6 @@ func TestCrossRepoCallback_OperatorInputsPassThrough(t *testing.T) {
 
 	job := extractJobBlock(content, "build-sharedlib")
 	require.NotEmpty(t, job, "build-sharedlib job not found")
-	assert.Contains(t, job, "version: v1.2.3",
+	assert.Contains(t, job, "version: 'v1.2.3'",
 		"operator-declared manifest input must be passed to the cross-repo caller")
 }

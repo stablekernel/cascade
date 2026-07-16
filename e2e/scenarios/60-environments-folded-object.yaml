@@ -45,7 +45,7 @@ steps:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
-            - "environment_url=\"https://app.example.com\""
+            - "environment_url='https://app.example.com'"
 
   - name: "Regenerate and confirm no drift"
     action: verify

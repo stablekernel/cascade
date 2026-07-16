@@ -242,6 +242,17 @@ func Validate(cfg *TrunkConfig) []string {
 		// that fails at the first run.
 		errors = append(errors, validateMatrix(fmt.Sprintf("builds[%d]", i), b.Matrix)...)
 
+		// Trigger globs are emitted as single-quoted paths-filter entries; only
+		// a line break (or a blank entry) cannot be carried.
+		errors = append(errors, validatePathPatterns(fmt.Sprintf("builds[%d].triggers", i), b.Triggers)...)
+
+		// Operator input keys/values reach with: lines in the orchestrate workflow.
+		errors = append(errors, validateCallbackInputShapes(fmt.Sprintf("builds[%d]", i), b.Inputs)...)
+
+		// artifact_upload globs and download names reach with: path lines and
+		// derived job IDs.
+		errors = append(errors, validatePassthroughArtifact(fmt.Sprintf("builds[%d]", i), b.PassthroughArtifact)...)
+
 		// Validate depends_on references using ResolveDependency
 		for _, dep := range b.DependsOn {
 			if _, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err != nil {
@@ -294,6 +305,13 @@ func Validate(cfg *TrunkConfig) []string {
 		// Validate run_policy, on_failure, and retries
 		errors = append(errors, validateCallbackPolicy(fmt.Sprintf("deploys[%d]", i), d.RunPolicy, d.OnFailure, d.Retries)...)
 
+		// Trigger globs are emitted as single-quoted paths-filter entries.
+		errors = append(errors, validatePathPatterns(fmt.Sprintf("deploys[%d].triggers", i), d.Triggers)...)
+
+		// Operator input keys/values reach with: lines in the orchestrate workflow.
+		errors = append(errors, validateCallbackInputShapes(fmt.Sprintf("deploys[%d]", i), d.Inputs)...)
+		errors = append(errors, validatePassthroughArtifact(fmt.Sprintf("deploys[%d]", i), d.PassthroughArtifact)...)
+
 		// Validate depends_on references using ResolveDependency
 		// Deploys can depend on builds (preferred) or other deploys
 		for _, dep := range d.DependsOn {
@@ -337,6 +355,8 @@ func Validate(cfg *TrunkConfig) []string {
 		// deploys. Retries is a pointer here (inheritance deep-merge contract);
 		// RetryCount folds nil to 0, which is inside the bound.
 		errors = append(errors, validateCallbackPolicy("validate", v.RunPolicy, v.OnFailure, v.RetryCount())...)
+		errors = append(errors, validatePathPatterns("validate.triggers", v.Triggers)...)
+		errors = append(errors, validateCallbackInputShapes("validate", v.Inputs)...)
 	}
 
 	// Unknown/misspelled top-level keys are hard errors (front-1 strictness),
@@ -359,6 +379,12 @@ func Validate(cfg *TrunkConfig) []string {
 			errors = append(errors, "release_build.tag invalid format (expected callback.output, e.g., goreleaser.tag)")
 		} else {
 			callbackName := parts[0]
+			// The output segment is dereferenced inside a
+			// ${{ needs.<job>.outputs.<output> }} expression.
+			if !ghaIdentifierRe.MatchString(parts[1]) {
+				errors = append(errors, fmt.Sprintf(
+					"release_build.tag output %q must start with a letter or underscore and contain only letters, digits, hyphens, and underscores", parts[1]))
+			}
 			// Check where callback exists
 			inBuilds := buildNames[callbackName]
 			inDeploys := deployNames[callbackName]
@@ -443,6 +469,33 @@ func Validate(cfg *TrunkConfig) []string {
 	// Check for circular dependencies
 	if cycleErr := detectCycles(cfg); cycleErr != "" {
 		errors = append(errors, cycleErr)
+	}
+
+	// Component-scope closure: every rule above runs against the top-level
+	// manifest, but the generator consumes each component's RESOLVED
+	// (shared-defaults-plus-overrides) configuration, so a per-component
+	// override would otherwise bypass every check. Validate each resolved
+	// component with the same rules. Errors whose message already surfaced at
+	// the top level are inherited values reported once there and skipped here;
+	// everything else is attributed to its component.
+	if len(cfg.Components) > 0 {
+		topSeen := make(map[string]bool, len(errors))
+		for _, e := range errors {
+			topSeen[e] = true
+		}
+		for _, name := range sortedComponentKeys(cfg.Components) {
+			resolved, err := cfg.ResolveComponent(name)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("components.%s: %v", name, err))
+				continue
+			}
+			for _, e := range Validate(resolved.Config) {
+				if topSeen[e] {
+					continue
+				}
+				errors = append(errors, fmt.Sprintf("components.%s: %s", name, e))
+			}
+		}
 	}
 
 	return errors

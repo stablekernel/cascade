@@ -726,7 +726,10 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 				sb.WriteString("    paths:\n")
 			}
 			for _, pattern := range filter.Patterns {
-				fmt.Fprintf(sb, "      - '%s'\n", pattern)
+				// yamlSingleQuote keeps an apostrophe-carrying glob from
+				// terminating the emitted single-quoted scalar; validation
+				// rejects the one thing quoting cannot carry (a line break).
+				fmt.Fprintf(sb, "      - %s\n", yamlSingleQuote(pattern))
 			}
 		}
 	}
@@ -816,7 +819,10 @@ func (g *Generator) writeExtraTriggers(sb *strings.Builder, et *config.ExtraTrig
 		if len(wr.Workflows) > 0 {
 			sb.WriteString("    workflows:\n")
 			for _, w := range wr.Workflows {
-				fmt.Fprintf(sb, "      - '%s'\n", w)
+				// Workflow display names are arbitrary prose (an apostrophe is
+				// entirely plausible), so escape rather than splice raw;
+				// validation rejects line breaks, the one unquotable shape.
+				fmt.Fprintf(sb, "      - %s\n", yamlSingleQuote(w))
 			}
 		}
 		if len(wr.Types) > 0 {
@@ -1420,7 +1426,12 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 		if err != nil {
 			return nil, fmt.Errorf("input %q of %s: %w", k, info.JobID, err)
 		}
-		lines = append(lines, fmt.Sprintf("      %s: %s", k, val))
+		// Single-quote string values so freeform content (apostrophes, colons,
+		// JSON snippets) cannot restructure the with: mapping. Quoting is
+		// transparent to ${{ }} expressions, which GitHub evaluates inside
+		// quoted scalars; validation rejects line breaks, the one shape this
+		// quoting cannot carry.
+		lines = append(lines, fmt.Sprintf("      %s: %s", k, yamlSingleQuote(val)))
 	}
 	return lines, nil
 }

@@ -1,0 +1,87 @@
+name: "Emitted value shapes"
+description: |
+  Exercises the manifest fields whose values are spliced into emitted GitHub
+  Actions contexts, using legitimate values that historically broke or
+  corrupted the generated output, and asserts each one survives generation
+  intact:
+
+  - a workflow_run workflow name containing an apostrophe (single-quote
+    escaped at emit, previously an unparseable document)
+  - schedule cron and repository_dispatch/workflow_run event types (now
+    grammar-validated at the manifest boundary)
+  - a custom git identity plus GPG signing block (user.name with an
+    apostrophe stays safe inside the emitted double quotes; the key id and
+    secret name are validated against the GitHub secret-name grammar)
+  - an environment_url carrying a `$` in its query string (single-quoted at
+    emit so the shell never expands it; previously silently eaten inside
+    double quotes)
+
+  The regenerate step proves the emitted workflows are drift-stable and
+  parse cleanly end to end. Generator-output verification only.
+
+config:
+  trunk_branch: main
+  environments:
+    - dev
+    - name: production
+      environment_url: "https://app.example.com/?$top=1"
+  deployments:
+    enabled: true
+  git:
+    mode: custom
+    user_name: "O'Brien Release Bot"
+    user_email: "release-bot@example.com"
+    gpg_key_id: GPG_KEY_ID
+    gpg_key_secret: GPG_PRIVATE_KEY
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+  extra_triggers:
+    schedule:
+      - cron: "30 5 * * 1-5"
+    repository_dispatch:
+      types:
+        - external-update
+    workflow_run:
+      workflows:
+        - Bob's CI
+      types:
+        - completed
+
+steps:
+  - name: "Initial commit; assert every spliced value is emitted in its safe shape"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            # The apostrophe-carrying workflow name is single-quote escaped.
+            - "  workflow_run:\n"
+            - "      - 'Bob''s CI'\n"
+            # Validated cron and event types are emitted verbatim.
+            - "    - cron: '30 5 * * 1-5'\n"
+            - "      - external-update\n"
+            - "      - completed\n"
+            # Custom git identity: the apostrophe is safe inside double quotes.
+            - "git config user.name \"O'Brien Release Bot\"\n"
+            - "git config user.email \"release-bot@example.com\"\n"
+            # GPG block: secret-name-validated splices.
+            - "echo \"${{ secrets.GPG_PRIVATE_KEY }}\" | gpg --batch --import\n"
+            - "git config commit.gpgsign true\n"
+            - "git config user.signingkey \"${{ secrets.GPG_KEY_ID }}\"\n"
+            # environment_url is single-quoted so $top stays literal.
+            - "production) environment_url='https://app.example.com/?$top=1' ;;"
+
+  - name: "Regenerate and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0

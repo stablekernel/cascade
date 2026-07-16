@@ -407,7 +407,10 @@ func validatePermissions(prefix string, perms map[string]string) []string {
 }
 
 // validateSecrets checks the secrets union. Form A (inherit) and form B (map)
-// are both valid; an empty/unset value is fine.
+// are both valid; an empty/unset value is fine. Explicit map entries are
+// emitted as `<called>: ${{ secrets.<caller> }}` lines (a raw YAML key and a
+// secrets-expression splice), so both sides must be valid GitHub Actions
+// secret names.
 func validateSecrets(prefix string, s *SecretsConfig) []string {
 	if s == nil {
 		return nil
@@ -415,7 +418,18 @@ func validateSecrets(prefix string, s *SecretsConfig) []string {
 	if !s.Inherit && s.Map == nil {
 		return []string{fmt.Sprintf("%s.secrets: must be \"inherit\" or a mapping of secret names", prefix)}
 	}
-	return nil
+	var errs []string
+	for _, k := range sortedKeys(s.Map) {
+		if k == "" || !safeSecretName(k) {
+			errs = append(errs, fmt.Sprintf(
+				"%s.secrets key %q must be a valid GitHub Actions secret name (letters, digits, underscores; not starting with a digit)", prefix, k))
+		}
+		if v := s.Map[k]; v == "" || !safeSecretName(v) {
+			errs = append(errs, fmt.Sprintf(
+				"%s.secrets[%q] value %q must be a valid GitHub Actions secret name (letters, digits, underscores; not starting with a digit)", prefix, k, v))
+		}
+	}
+	return errs
 }
 
 // validateRollout checks rollout.type and the canary/blue_green env gating.
@@ -530,6 +544,13 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 		default:
 			errs = append(errs, fmt.Sprintf("dispatch_inputs.%s.type must be one of: string, boolean, choice, environment, number", name))
 		}
+		// The default is emitted through yamlSingleQuote, whose one unquotable
+		// shape is a line break: a multiline default either folds silently or
+		// breaks the document, so it is rejected here.
+		if di.Default != nil {
+			errs = append(errs, validateSingleLine(
+				fmt.Sprintf("dispatch_inputs.%s.default", name), fmt.Sprintf("%v", di.Default))...)
+		}
 	}
 
 	// Folding per-environment settings onto each environments entry makes the
@@ -545,6 +566,7 @@ func validateConfigLevel(cfg *TrunkConfig) []string {
 	errs = append(errs, validateReconcile(cfg.Reconcile)...)
 	errs = append(errs, validateTagGrammar(cfg)...)
 	errs = append(errs, validateExtraTriggers("extra_triggers", cfg.ExtraTriggers)...)
+	errs = append(errs, validateEmittedScalars(cfg)...)
 
 	return errs
 }
@@ -595,9 +617,8 @@ func validateTagGrammar(cfg *TrunkConfig) []string {
 				"tag_grammar.prerelease_token %q must contain only letters, digits, '.', '_', and '-'", *g.PreReleaseToken))
 		}
 	}
-	if g.Prefix != nil && tagGrammarUnsafeChar(*g.Prefix) {
-		errs = append(errs, fmt.Sprintf(
-			"tag_grammar.prefix %q must contain only letters, digits, '.', '_', and '-'", *g.Prefix))
+	if g.Prefix != nil {
+		errs = append(errs, validateTagPrefixShape("tag_grammar.prefix", *g.Prefix)...)
 	}
 	if g.PreReleaseSeparator != nil && tagGrammarUnsafeChar(*g.PreReleaseSeparator) {
 		errs = append(errs, fmt.Sprintf(
@@ -681,39 +702,61 @@ func validateRepositoryDispatchTypes(prefix string, rd *RepositoryDispatchTrigge
 		errs = append(errs, fmt.Sprintf("%s.types must list at least one event type", prefix))
 		return errs
 	}
-	for _, t := range rd.Types {
-		if strings.TrimSpace(t) == "" {
-			errs = append(errs, fmt.Sprintf("%s.types must not contain a blank event type", prefix))
-			continue
-		}
-		if !repositoryDispatchTypeRe.MatchString(t) {
-			errs = append(errs, fmt.Sprintf(
-				"%s.types entry %q must contain only letters, digits, dots, hyphens, and underscores", prefix, t))
-		}
-	}
-	return errs
+	return append(errs, validateEventTypeNames(prefix+".types", rd.Types)...)
 }
 
-// validateExtraTriggers checks an extra_triggers block. The only rule is on
-// merge_group: extra_triggers attaches its events to the orchestrate workflow,
-// which cuts release tags, publishes releases, and runs deploys while writing
-// state. A raw merge_group trigger there lets a speculative merge-queue build on
-// a candidate branch that may never land publish a real release and write real
-// state, because orchestrate derives its target branch from the run ref with no
-// gh-readonly-queue guard. The supported way to gate pull requests inside a
-// merge queue is the read-only merge_queue.enabled lane, so merge_group under
-// extra_triggers is rejected and the user is pointed at it. The prefix carries
-// the component scope (or the top-level path) for an actionable message.
+// validateExtraTriggers checks an extra_triggers block. Every value inside it
+// is spliced into the generated orchestrate workflow's on: block, so each kind
+// is grammar-checked at the boundary: cron entries must be well-formed GHA
+// cron expressions, repository_dispatch and workflow_run event types must obey
+// the unquoted-YAML event-type charset, and workflow_run workflow names must
+// be non-blank single lines (the emitter single-quote-escapes the rest).
+//
+// merge_group is rejected outright: extra_triggers attaches its events to the
+// orchestrate workflow, which cuts release tags, publishes releases, and runs
+// deploys while writing state. A raw merge_group trigger there lets a
+// speculative merge-queue build on a candidate branch that may never land
+// publish a real release and write real state, because orchestrate derives its
+// target branch from the run ref with no gh-readonly-queue guard. The
+// supported way to gate pull requests inside a merge queue is the read-only
+// merge_queue.enabled lane, so merge_group under extra_triggers is rejected
+// and the user is pointed at it. The prefix carries the component scope (or
+// the top-level path) for an actionable message.
 func validateExtraTriggers(prefix string, et *ExtraTriggers) []string {
-	if et == nil || et.MergeGroup == nil {
+	if et == nil {
 		return nil
 	}
-	return []string{fmt.Sprintf(
-		"%s.merge_group is not allowed: extra_triggers attaches to the orchestrate workflow, "+
-			"which cuts release tags, publishes releases, and runs deploys while writing state, so a "+
-			"speculative merge-queue build could publish a real release from a candidate commit. To gate "+
-			"pull requests inside a merge queue, set merge_queue.enabled, which emits a read-only validation lane.",
-		prefix)}
+	var errs []string
+
+	for i, s := range et.Schedule {
+		errs = append(errs, validateCronExpr(fmt.Sprintf("%s.schedule[%d].cron", prefix, i), s.Cron)...)
+	}
+
+	if rd := et.RepositoryDispatch; rd != nil {
+		errs = append(errs, validateEventTypeNames(prefix+".repository_dispatch.types", rd.Types)...)
+	}
+
+	if wr := et.WorkflowRun; wr != nil {
+		for i, w := range wr.Workflows {
+			field := fmt.Sprintf("%s.workflow_run.workflows[%d]", prefix, i)
+			if strings.TrimSpace(w) == "" {
+				errs = append(errs, field+" must not be blank")
+				continue
+			}
+			errs = append(errs, validateSingleLine(field, w)...)
+		}
+		errs = append(errs, validateEventTypeNames(prefix+".workflow_run.types", wr.Types)...)
+	}
+
+	if et.MergeGroup != nil {
+		errs = append(errs, fmt.Sprintf(
+			"%s.merge_group is not allowed: extra_triggers attaches to the orchestrate workflow, "+
+				"which cuts release tags, publishes releases, and runs deploys while writing state, so a "+
+				"speculative merge-queue build could publish a real release from a candidate commit. To gate "+
+				"pull requests inside a merge queue, set merge_queue.enabled, which emits a read-only validation lane.",
+			prefix))
+	}
+	return errs
 }
 
 // validateRollback checks the opt-in rollback configuration. A nil block is the
@@ -831,6 +874,13 @@ func validateEnvironmentConfig(cfg *TrunkConfig) []string {
 			if !safeSecretName(v) {
 				errs = append(errs, fmt.Sprintf("%s.variables[%d] %q must be a valid GitHub Actions variable name (letters, digits, underscores; not starting with a digit)", prefix, i, v))
 			}
+		}
+
+		// environment_url is spliced into a single-quoted shell assignment in
+		// the native-deployments status step; enforce the URL shape that sink
+		// can carry safely.
+		if ec.EnvironmentURL != "" {
+			errs = append(errs, validateEnvironmentURL(prefix+".environment_url", ec.EnvironmentURL)...)
 		}
 	}
 	return errs
@@ -988,10 +1038,15 @@ func validateComponents(cfg *TrunkConfig) []string {
 			errs = append(errs, fmt.Sprintf("components.%s.path must be a relative path, not absolute", name))
 		} else if strings.Contains(comp.Path, "..") {
 			errs = append(errs, fmt.Sprintf("components.%s.path must not contain '..' segments", name))
+		} else {
+			// The path is expanded into single-quoted paths-filter globs.
+			errs = append(errs, validateSingleLine(fmt.Sprintf("components.%s.path", name), comp.Path)...)
 		}
 
 		if comp.TagGrammar == nil || comp.TagGrammar.Prefix == nil || *comp.TagGrammar.Prefix == "" {
 			errs = append(errs, fmt.Sprintf("components.%s.tag_grammar.prefix is required so each component has its own tag namespace", name))
+		} else if shapeErrs := validateTagPrefixShape(fmt.Sprintf("components.%s.tag_grammar.prefix", name), *comp.TagGrammar.Prefix); len(shapeErrs) > 0 {
+			errs = append(errs, shapeErrs...)
 		} else if prior, seen := tagPrefixOwner[*comp.TagGrammar.Prefix]; seen {
 			errs = append(errs, fmt.Sprintf(
 				"components.%s.tag_grammar.prefix %q collides with component %q; each component needs a distinct tag namespace",
@@ -1006,6 +1061,7 @@ func validateComponents(cfg *TrunkConfig) []string {
 		}
 
 		errs = append(errs, validateExtraTriggers(fmt.Sprintf("components.%s.extra_triggers", name), comp.ExtraTriggers)...)
+		errs = append(errs, validatePathPatterns(fmt.Sprintf("components.%s.extra_paths", name), comp.ExtraPaths)...)
 
 		for _, key := range sortedKeys(toAnyKeyed(comp.Extra)) {
 			if _, global := globalOnlyComponentFields[key]; global {
