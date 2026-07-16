@@ -79,3 +79,32 @@ func TestReadComponentState_RoundTripsWriteScopedState(t *testing.T) {
 	require.Equal(t, "s1", got["dev"].SHA)
 	require.Equal(t, "api-0.1.0-rc.0", got["dev"].Version)
 }
+
+// TestOverlayComponentState_LiftsRowsIntoFlatMap proves the overlay copies the
+// named component's env rows into the working flat state map, leaves envs the
+// component does not record untouched, and is a strict no-op for the empty
+// (single-component) name.
+func TestOverlayComponentState_LiftsRowsIntoFlatMap(t *testing.T) {
+	cicd := &CICDFile{State: map[string]*EnvState{
+		"staging": {SHA: "flatstagingsha"},
+	}}
+	require.NoError(t, OverlayComponentState(cicd, []byte(twoComponentStateManifest), "ci", "api"))
+	require.Equal(t, "apidevsha", cicd.State["dev"].SHA)
+	require.Equal(t, "apiprodsha", cicd.State["prod"].SHA)
+	require.Equal(t, "flatstagingsha", cicd.State["staging"].SHA, "envs the component does not record stay untouched")
+	_, hasWebLeak := cicd.State["web"]
+	require.False(t, hasWebLeak, "overlay must not pull in a sibling component's rows")
+}
+
+// TestOverlayComponentState_EmptyComponentAndNilMap covers the no-op and
+// nil-map initialization edges: an empty component name changes nothing, and a
+// nil working map is allocated before rows are lifted into it.
+func TestOverlayComponentState_EmptyComponentAndNilMap(t *testing.T) {
+	cicd := &CICDFile{}
+	require.NoError(t, OverlayComponentState(cicd, []byte(twoComponentStateManifest), "ci", ""))
+	require.Nil(t, cicd.State, "empty component name must be a strict no-op")
+
+	require.NoError(t, OverlayComponentState(cicd, []byte(twoComponentStateManifest), "ci", "web"))
+	require.NotNil(t, cicd.State)
+	require.Equal(t, "webdevsha", cicd.State["dev"].SHA)
+}
