@@ -16,6 +16,13 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** Treat a release artifact that omits `required:` as required,
+  matching the documented default. Previously the unset value silently made
+  the artifact optional, so a release with a missing asset warned and
+  published instead of failing. Release-artifact names and paths are now also
+  validated against the character set the emitted upload shell can carry
+  safely, since the path is spliced unquoted so its glob can expand
+
 - **promote:** Record only the publishing component's own release marker
   (`version`, `sha`, `released_on`) under `latest_release.components.<name>`.
   Previously a component publish wrote the entire shared release record under

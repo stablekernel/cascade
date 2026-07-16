@@ -95,6 +95,48 @@ var actionPinValueRe = regexp.MustCompile(`^[A-Za-z0-9._+/-]+(?: # [A-Za-z0-9._+
 // Dots are allowed so version-like options (v1.2.3) remain expressible.
 var dispatchInputOptionRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
+// artifactNameRe bounds a release-artifact name. The name is spliced into the
+// emitted upload shell inside double-quoted strings ('release-{build}-{name}'
+// in echo diagnostics), where $, backticks, quotes, or backslashes would break
+// or extend the script. Dots are allowed so file-like names (checksums.txt)
+// remain expressible.
+var artifactNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// artifactPathRe bounds a release-artifact path. The path is spliced unquoted
+// into the emitted `ls` probe and `gh release upload` command so the shell can
+// expand the documented glob, which means every character outside a
+// conservative path-plus-glob set (letters, digits, dot, slash, hyphen,
+// underscore, *, ?, [, ]) could split words or inject commands.
+var artifactPathRe = regexp.MustCompile(`^[A-Za-z0-9._/*?\[\]-]+$`)
+
+// validateArtifacts rejects release-artifact entries whose name or path falls
+// outside the grammar the emitted upload shell can carry safely. Values are
+// rejected (not quoted or escaped) because the path is deliberately left
+// unquoted for glob expansion, so escaping cannot make an arbitrary value safe.
+func validateArtifacts(prefix string, artifacts []ArtifactConfig) []string {
+	var errs []string
+	for i, a := range artifacts {
+		p := fmt.Sprintf("%s.artifacts[%d]", prefix, i)
+		if a.Name == "" {
+			errs = append(errs, p+".name is required")
+		} else if !artifactNameRe.MatchString(a.Name) {
+			errs = append(errs, fmt.Sprintf(
+				"%s.name %q must contain only letters, digits, dots, hyphens, and underscores", p, a.Name))
+		}
+		switch {
+		case a.Path == "":
+			errs = append(errs, p+".path is required")
+		case !artifactPathRe.MatchString(a.Path):
+			errs = append(errs, fmt.Sprintf(
+				"%s.path %q must contain only letters, digits, dots, slashes, hyphens, underscores, and glob characters", p, a.Path))
+		case strings.HasPrefix(a.Path, "-"):
+			// A leading hyphen would be parsed as a flag by gh release upload.
+			errs = append(errs, fmt.Sprintf("%s.path %q must not start with a hyphen", p, a.Path))
+		}
+	}
+	return errs
+}
+
 // validateJobIDSafeName rejects a name that would produce an invalid GitHub
 // Actions job ID or break the expression references derived from it. Names are
 // rejected (not sanitized) on purpose: sanitizing distinct names could collapse

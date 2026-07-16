@@ -2180,10 +2180,7 @@ func (g *Generator) writeArtifactUploadStep(sb *strings.Builder) {
 	for _, b := range g.config.Builds {
 		for _, a := range b.Artifacts {
 			artifactName := fmt.Sprintf("release-%s-%s", b.Name, a.Name)
-			required := true
-			if !a.Required {
-				required = false
-			}
+			required := a.IsRequired()
 
 			fmt.Fprintf(sb, "          # Upload %s artifacts\n", artifactName)
 			fmt.Fprintf(sb, "          if ls release-artifacts/%s 2>/dev/null; then\n", a.Path)
