@@ -24,6 +24,19 @@ description: |
   differential control proving the plan is scoped to the component that declared
   it, and that api's recorded state survives web's cycle.
 
+  Sequencing matters, and it mirrors what really happens on GitHub. Each
+  component's orchestrate follows a commit that touches THAT component's own
+  trigger paths, because real life fires orchestrate-web from a push matching
+  services/web/**. The harness has no such trigger and drives every orchestrate at
+  current HEAD, so the scenario stages the pushes itself: api runs while the seed
+  commit is HEAD, then a web-only commit lands, then web runs. Skipping that
+  second commit would leave web with no recorded state and no touched paths, so
+  its base would fall back to HEAD~1 (the state commit api's finalize just wrote),
+  whose diff names no web file. web's builds and deploys would then skip
+  CORRECTLY, and the scenario would be asserting a situation that cannot arise.
+  Anyone tempted to drop the web commit should read that as change detection
+  working, not as a regression.
+
 config:
   trunk_branch: main
   environments: [dev]
@@ -94,9 +107,20 @@ steps:
           deploys:
             api-svc:
               sha: commit1
-          builds:
-            api-app:
-              sha: commit1
+
+  # web's own cycle has to follow a push touching web's own trigger paths, the way
+  # a real orchestrate-web run always does. Without this commit web's base falls
+  # back to HEAD~1 (api's state commit), nothing under services/web/** shows in the
+  # diff, and web's callbacks skip for entirely correct reasons.
+  - name: "Land a web-only change ahead of web's own cycle"
+    action: commit
+    commit:
+      message: "feat: web change"
+      files:
+        services/web/main.go: |
+          package main
+
+          func main() { _ = "web" }
 
   # Differential control: web's own callbacks run on its own cycle, under its own
   # version line, and api's recorded dev state survives untouched.
@@ -115,7 +139,7 @@ steps:
           version: "web-0.1.0-rc.0"
           deploys:
             web-svc:
-              sha: commit1
+              sha: commit2
         api-dev:
           component: api
           env: dev
