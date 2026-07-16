@@ -38,6 +38,12 @@ A `Migration` section is added to any release that bumps `schema_version`.
   and a component promotion save could synthesize a phantom marker for a
   component that had never released
 
+- **config:** Validate matrix dimension keys and axes at validation time: each
+  `matrix.dimensions` key must be a valid GitHub Actions matrix identifier
+  (start with a letter or underscore; letters, digits, hyphens, and
+  underscores only) and each axis must list at least one value, instead of an
+  invalid key or empty axis passing validation and failing at the first
+  workflow run; the manifest JSON Schema enforces the same constraints
 - **config:** Validate `run_policy`, `on_failure`, and `retries` on the
   `validate` block the same way as builds and deploys: `run_policy` and
   `on_failure` must be one of their documented values and `retries` must stay

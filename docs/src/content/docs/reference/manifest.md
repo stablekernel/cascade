@@ -393,7 +393,7 @@ The build's `artifact_id` output (if declared) is captured into state automatica
 
 | Sub-field | Status | Type | Description |
 |-----------|--------|------|-------------|
-| `dimensions` | emitted | map | The cross-product axes (for example `os: [linux, darwin]`, `arch: [amd64, arm64]`). |
+| `dimensions` | emitted | map | The cross-product axes (for example `os: [linux, darwin]`, `arch: [amd64, arm64]`). Each key must start with a letter or underscore and contain only letters, digits, hyphens, and underscores (the identifier set GitHub Actions accepts for matrix keys and `matrix.<key>` references), and each axis must list at least one value; validation rejects anything else. |
 | `max_parallel` | emitted | int | Caps concurrent matrix legs (0 uses the GitHub Actions default). |
 | `fail_fast` | emitted | bool | Whether a failing leg cancels the rest. Unset applies the GitHub Actions default (true for matrix builds). |
 
