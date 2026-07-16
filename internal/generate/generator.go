@@ -776,7 +776,7 @@ func (g *Generator) writeWorkflowTriggers(sb *strings.Builder) {
 				}
 			}
 			if di.Default != nil {
-				fmt.Fprintf(sb, "        default: '%v'\n", di.Default)
+				fmt.Fprintf(sb, "        default: %s\n", yamlSingleQuote(fmt.Sprintf("%v", di.Default)))
 			}
 			if di.IsRequired() {
 				sb.WriteString("        required: true\n")

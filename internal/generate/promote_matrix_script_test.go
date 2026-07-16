@@ -15,9 +15,11 @@ import (
 	"github.com/stablekernel/cascade/internal/config"
 )
 
-// extractStepRun parses a generated workflow and returns the run script of the
-// step with the given id, failing the test if no such step exists.
-func extractStepRun(t *testing.T, workflowYAML, stepID string) string {
+// extractStepRun parses a generated workflow and returns the run script of
+// the step with the given id plus its env: entries verbatim (the caller
+// overrides expression-valued ones like PROMOTION_RESULT), failing the test
+// if no such step exists.
+func extractStepRun(t *testing.T, workflowYAML, stepID string) (string, map[string]string) {
 	t.Helper()
 
 	var wf map[string]interface{}
@@ -43,12 +45,20 @@ func extractStepRun(t *testing.T, workflowYAML, stepID string) string {
 			if step["id"] == stepID {
 				run, ok := step["run"].(string)
 				require.True(t, ok && run != "", "step %q has no run script", stepID)
-				return run
+				env := make(map[string]string)
+				if rawEnv, ok := step["env"].(map[string]interface{}); ok {
+					for k, v := range rawEnv {
+						if val, ok := v.(string); ok {
+							env[k] = val
+						}
+					}
+				}
+				return run, env
 			}
 		}
 	}
 	t.Fatalf("step %q not found in generated workflow", stepID)
-	return ""
+	return "", nil
 }
 
 // TestGeneratedMatrixScript_ResolvesDeployInputsAtRuntime executes the emitted
@@ -93,7 +103,7 @@ func TestGeneratedMatrixScript_ResolvesDeployInputsAtRuntime(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	script := extractStepRun(t, content, "build-matrices")
+	script, stepEnv := extractStepRun(t, content, "build-matrices")
 
 	// runScript executes the emitted step exactly as GitHub Actions would
 	// (bash -e), feeding the preflight promotion result through the same env
@@ -105,7 +115,14 @@ func TestGeneratedMatrixScript_ResolvesDeployInputsAtRuntime(t *testing.T) {
 		require.NoError(t, os.WriteFile(outFile, nil, 0o600))
 
 		cmd := exec.Command("bash", "-e", "-c", script)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = os.Environ()
+		// Wire the step's env: entries (the env-routed input JSON) exactly as
+		// GitHub Actions would; test-controlled values are appended last so
+		// they override the expression-valued entries.
+		for k, v := range stepEnv {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		cmd.Env = append(cmd.Env,
 			"PROMOTION_RESULT="+promotionResult,
 			"GITHUB_OUTPUT="+outFile,
 		)
