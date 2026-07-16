@@ -137,6 +137,110 @@ func TestRollbackAction_LeavesOriginalUntouched(t *testing.T) {
 	assert.Equal(t, before, after, "the original manifest bytes must be unchanged")
 }
 
+// seedRollbackManifestWithDeploys writes the seeded prod manifest with the
+// given deploy callbacks configured, so the deploy-result gate is in play.
+func seedRollbackManifestWithDeploys(t *testing.T, deployNames ...string) string {
+	t.Helper()
+
+	deploys := make([]config.DeployConfig, 0, len(deployNames))
+	for _, name := range deployNames {
+		deploys = append(deploys, config.DeployConfig{
+			Name:     name,
+			Workflow: ".github/workflows/deploy.yaml",
+		})
+	}
+
+	return writeManifest(t, &config.CICDFile{
+		Config: &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: config.EnvNames("dev", "uat", "prod"),
+			Deploys:      deploys,
+		},
+		State: map[string]*config.EnvState{
+			"prod": {
+				SHA:         "newsha0000000",
+				Version:     "v2.0.0",
+				CommittedAt: "2026-02-01T10:00:00Z",
+				CommittedBy: "seed-user",
+				Previous: []config.EnvStateSnapshot{
+					{SHA: "oldsha0000000", Version: "v1.0.0", CommittedAt: "2026-01-01T10:00:00Z", CommittedBy: "seed-user"},
+				},
+			},
+		},
+	})
+}
+
+// TestRollbackAction_GatesOnFailedDeployResult proves the simulated rollback
+// applies the same deploy-result gate the real rollback finalize enforces
+// (gateOnDeployResults): a deploy that did not succeed must hold back the
+// state write, leaving the environment unchanged, rather than modeling a
+// clean revert the real system would refuse.
+func TestRollbackAction_GatesOnFailedDeployResult(t *testing.T) {
+	t.Parallel()
+
+	path := seedRollbackManifestWithDeploys(t, "svc")
+
+	engine, err := NewEngine(path,
+		WithActor("tester"),
+		WithDeployResults(map[string]DeployOutcome{"svc": OutcomeFailure}))
+	require.NoError(t, err)
+
+	result, err := engine.Simulate(NewRollbackAction("prod", "", ""))
+	require.NoError(t, err)
+
+	assert.False(t, result.Diff.Changed(),
+		"a gated rollback must not revert state; the real finalize aborts before Apply")
+
+	require.NotEmpty(t, result.Effects)
+	last := result.Effects[len(result.Effects)-1]
+	assert.Equal(t, DispositionGate, last.Disposition,
+		"the write-state effect must be gated when a deploy failed")
+	assert.Equal(t, "write state", last.Action)
+	assert.Contains(t, last.Detail, "svc")
+}
+
+// TestRollbackAction_GatesWhenNoDeploySucceeded mirrors the real gate's
+// all-skipped rule: deploys are configured but none succeeded, so nothing was
+// actually deployed and the state write is held back.
+func TestRollbackAction_GatesWhenNoDeploySucceeded(t *testing.T) {
+	t.Parallel()
+
+	path := seedRollbackManifestWithDeploys(t, "svc")
+
+	engine, err := NewEngine(path,
+		WithActor("tester"),
+		WithDeployResults(map[string]DeployOutcome{"svc": OutcomeSkipped}))
+	require.NoError(t, err)
+
+	result, err := engine.Simulate(NewRollbackAction("prod", "", ""))
+	require.NoError(t, err)
+
+	assert.False(t, result.Diff.Changed())
+	require.NotEmpty(t, result.Effects)
+	last := result.Effects[len(result.Effects)-1]
+	assert.Equal(t, DispositionGate, last.Disposition)
+}
+
+// TestRollbackAction_ProceedsWhenDeploysSucceed pins the default: with all
+// deploys succeeding (the injected default), the rollback reverts as before.
+func TestRollbackAction_ProceedsWhenDeploysSucceed(t *testing.T) {
+	t.Parallel()
+
+	path := seedRollbackManifestWithDeploys(t, "svc")
+
+	engine, err := NewEngine(path, WithActor("tester"))
+	require.NoError(t, err)
+
+	result, err := engine.Simulate(NewRollbackAction("prod", "", ""))
+	require.NoError(t, err)
+
+	assert.True(t, result.Diff.Changed())
+	require.NotEmpty(t, result.Effects)
+	last := result.Effects[len(result.Effects)-1]
+	assert.Equal(t, DispositionRun, last.Disposition)
+	assert.Equal(t, "write state", last.Action)
+}
+
 func TestRollbackAction_UnknownEnvErrors(t *testing.T) {
 	t.Parallel()
 

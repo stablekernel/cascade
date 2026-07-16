@@ -85,6 +85,39 @@ func TestDeployStub_OneSucceedsOneSkipped_Proceeds(t *testing.T) {
 	assert.Empty(t, stub.gate(), "one succeeding deploy is enough to advance finalize")
 }
 
+// TestDeployStub_ScopedGate mirrors the real rollback gate's --deployable
+// scoping (gateOnDeployResults): with a deployable set, only that deploy's
+// outcome is in scope, so an out-of-scope failure neither gates nor counts.
+func TestDeployStub_ScopedGate(t *testing.T) {
+	t.Parallel()
+
+	stub := newDeployStub(nil, []string{"svc", "web"}, map[string]DeployOutcome{
+		"web": OutcomeFailure,
+	})
+
+	assert.Empty(t, stub.gateScoped("svc"),
+		"an out-of-scope failure must not gate a scoped rollback")
+
+	reason := stub.gateScoped("web")
+	require.NotEmpty(t, reason, "the scoped deploy failed, so the write must gate")
+	assert.Contains(t, reason, "web")
+}
+
+// TestDeployStub_ScopedGate_SkippedInScope mirrors the all-skipped rule under
+// scoping: the in-scope deploy was skipped, so nothing was deployed and the
+// write gates even though an out-of-scope deploy succeeded.
+func TestDeployStub_ScopedGate_SkippedInScope(t *testing.T) {
+	t.Parallel()
+
+	stub := newDeployStub(nil, []string{"svc", "web"}, map[string]DeployOutcome{
+		"svc": OutcomeSkipped,
+	})
+
+	reason := stub.gateScoped("svc")
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "no simulated deploy succeeded")
+}
+
 func TestDeployStub_DoesNotAliasInputs(t *testing.T) {
 	t.Parallel()
 

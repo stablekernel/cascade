@@ -138,11 +138,22 @@ func (s *DeployStub) callbackEffect(kind, name string) Effect {
 //   - Otherwise at least one deploy succeeded and none failed, so finalize
 //     proceeds.
 func (s *DeployStub) gate() (blockedReason string) {
+	return s.gateScoped("")
+}
+
+// gateScoped applies the same rules as gate but honors the deployable scope
+// the real rollback finalize applies (gateOnDeployResults): when deployable is
+// non-empty, only that deploy's outcome is in scope, and a deploy excluded by
+// the scope neither gates nor counts as a success.
+func (s *DeployStub) gateScoped(deployable string) (blockedReason string) {
 	if s == nil || len(s.deploys) == 0 {
 		return ""
 	}
 	anySucceeded := false
 	for _, name := range s.deploys {
+		if deployable != "" && name != deployable {
+			continue // Out of scope: excluded by the deployable filter.
+		}
 		switch s.outcomeFor(name) {
 		case OutcomeFailure:
 			return fmt.Sprintf("deploy %q simulated failure; trunk state left unchanged", name)
