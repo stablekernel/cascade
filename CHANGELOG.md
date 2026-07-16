@@ -22,6 +22,52 @@ A `Migration` section is added to any release that bumps `schema_version`.
   main, on every PR, and inside the release's own test job, blocking the very
   release that would have satisfied it. The shape guard (stable `vX.Y.Z` only)
   and the docs-examples sync check remain
+- **config:** Shape-validate every manifest value that is spliced into
+  emitted GitHub Actions contexts, closing the class of one-off holes found
+  field by field in earlier audits. New checks at `cascade lint` and
+  generation time: schedule cron expressions (five-field GHA grammar),
+  `extra_triggers` repository_dispatch and workflow_run event types,
+  tag_grammar prefixes may not begin with a hyphen (top-level AND
+  per-component; a leading hyphen reached `git tag -l` argv and failed every
+  tag lookup with exit 129), `git.user_name`/`user_email` (double-quoted
+  shell splice), `gpg_key_id`/`gpg_key_secret` (GitHub secret-name grammar),
+  `environment_url` (http(s), no quotes or whitespace), `notify.*`,
+  `trunk_branch` and `external[].ref` (git-ref charset), `manifest_file` and
+  `manifest_key`, token expressions, `concurrency.group`, callback workflow
+  references (`changelog`, `publish`, `release_build`, external deploys and
+  `on_update`), per-callback `secrets:` map names, operator input keys and
+  values, `artifact_upload` globs and download names, trigger globs and
+  `shared_paths`/`extra_paths`, `cli_version`, `release_build.tag` output
+  names, and multiline dispatch-input defaults (previously folded silently or
+  broke the document). Shared shape helpers live in
+  `internal/config/validate_shapes.go`.
+- **config:** Validate every component's resolved configuration with the same
+  rules as the top level. Previously a per-component override (a build name,
+  an environment, a notify block) bypassed validation entirely and reached
+  the generator unchecked; inherited values are still reported once.
+- **generate:** Escape emitted free-form scalars instead of splicing them
+  raw: `workflow_run` workflow names and paths-filter globs go through YAML
+  single-quote escaping (an apostrophe in a workflow display name previously
+  emitted an unparseable document), operator input values in orchestrate
+  `with:` blocks are single-quoted (a colon or JSON snippet previously
+  restructured the mapping), and `environment_url` is emitted in shell single
+  quotes so a `$` in a URL query string is no longer silently expanded to an
+  empty string on every deploy.
+- **git:** Pass `--` before the tag pattern in prefix-scoped `git tag -l`
+  lookups as defense in depth beneath the new prefix validation.
+
+### Added
+
+- **test:** A durable emitted-field guard: a reflection walk over the
+  manifest schema forces every string-carrying field to be classified as
+  either emitted (with its validated shape, exercised by an adversarial
+  hostile-value battery plus a generate-and-reparse round trip) or explicitly
+  not emitted with the reason. A new manifest field fails CI until it is
+  classified, so an unvalidated splice can no longer ship unnoticed. A new
+  e2e scenario (68-emitted-value-shapes) exercises apostrophe workflow names,
+  cron and dispatch types, a custom git identity with GPG signing, and a
+  `$`-carrying environment_url end to end.
+
 - **generate:** Treat a release artifact that omits `required:` as required,
   matching the documented default. Previously the unset value silently made
   the artifact optional, so a release with a missing asset warned and
