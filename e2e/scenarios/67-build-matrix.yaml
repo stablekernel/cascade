@@ -1,0 +1,72 @@
+name: "Build Matrix Fan-Out"
+description: |
+  A build that declares matrix dimensions must render a strategy block in the
+  generated orchestrate workflow: each axis as a YAML mapping key with its
+  value list, max-parallel and fail-fast from the manifest knobs, and the
+  dimension value threaded to the callback via with: as ${{ matrix.<key> }}
+  when the callback declares a matching input. The hyphenated go-version axis
+  proves the full identifier set GitHub Actions accepts for matrix keys
+  (letters, digits, hyphens, underscores, starting with a letter or
+  underscore) round-trips through generation; validation rejects anything
+  outside that set up front.
+
+  Generation-only. The runtime fan-out behavior (one job per matrix leg,
+  fail-fast cancellation, max-parallel throttling) is not reliably observable
+  in act, so this cell asserts the generated strategy block and the matrix
+  input threading, labeled as a ceiling rather than runtime coverage.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+      matrix:
+        dimensions:
+          goarch: ["amd64", "arm64"]
+          go-version: ["1.22"]
+        max_parallel: 2
+        fail_fast: false
+
+# The build callback declares the goarch input so the generated orchestrate
+# workflow threads the current matrix value through with:, keeping the
+# generated reusable-workflow call valid. The go-version axis is deliberately
+# left undeclared to pin the silent-skip behavior for unknown inputs.
+setup_workflows:
+  ".github/workflows/build.yaml": |
+    name: build
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: false
+            type: string
+          goarch:
+            required: false
+            type: string
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - run: echo "build ${{ inputs.goarch }}"
+
+steps:
+  - name: "Seed a minimal source tree; assert the orchestrate strategy block"
+    action: commit
+    commit:
+      message: "seed source"
+      files:
+        src/main.go: |
+          package main
+
+          func main() {}
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - 'goarch: ["amd64", "arm64"]'
+            - 'go-version: ["1.22"]'
+            - "max-parallel: 2"
+            - "fail-fast: false"
+            - "goarch: ${{ matrix.goarch }}"

@@ -185,6 +185,49 @@ func validateOutputKeyCollisions(section string, names []string) []string {
 	return errs
 }
 
+// matrixDimensionKeyRe matches a matrix dimension key GitHub Actions accepts
+// both as a matrix axis name and as a ${{ matrix.<key> }} context dereference:
+// it must start with a letter or underscore and contain only letters, digits,
+// hyphens, and underscores. The generator emits the key raw as a YAML mapping
+// key under strategy.matrix, as a with: input key, and inside a
+// ${{ matrix.<key> }} expression, so a key outside this set either fails
+// GitHub's workflow parse (a space, a leading digit) or silently restructures
+// the emitted YAML (a colon, a "#", a newline). Hyphens stay allowed because
+// GitHub permits them in axis names and dot dereferences (matrix.node-version).
+var matrixDimensionKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
+// validateMatrix checks a build's matrix block: every dimension key must be a
+// valid GitHub Actions matrix identifier and every axis must list at least one
+// value. Both failures otherwise validate clean and surface only at the first
+// workflow run (parse rejection for a bad key, "matrix vector does not contain
+// any values" for an empty axis), so they are rejected at validation time like
+// every other emitted identifier. Keys are rejected, not sanitized, for the
+// same reason validateJobIDSafeName rejects: rewriting could collapse two
+// distinct axes. A nil matrix or an empty dimensions map is valid (no fan-out).
+func validateMatrix(prefix string, m *MatrixConfig) []string {
+	if m == nil {
+		return nil
+	}
+	var errs []string
+	keys := make([]string, 0, len(m.Dimensions))
+	for k := range m.Dimensions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !matrixDimensionKeyRe.MatchString(k) {
+			errs = append(errs, fmt.Sprintf(
+				"%s.matrix.dimensions key %q must start with a letter or underscore and contain only letters, digits, hyphens, and underscores",
+				prefix, k))
+		}
+		if len(m.Dimensions[k]) == 0 {
+			errs = append(errs, fmt.Sprintf(
+				"%s.matrix.dimensions[%q] must list at least one value", prefix, k))
+		}
+	}
+	return errs
+}
+
 // validateWorkflowRunXOR enforces that callbacks are reusable-workflow only.
 // Inline run: and shell: are no longer supported, so each is rejected with an
 // actionable error, and workflow: is required.

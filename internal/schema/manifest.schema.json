@@ -403,11 +403,13 @@
       "properties": {
         "dimensions": {
           "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
           "additionalProperties": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": { "type": "string" },
+            "minItems": 1
           },
-          "description": "Cross-product axes (for example os, arch)."
+          "description": "Cross-product axes (for example os, arch). Each key must start with a letter or underscore and contain only letters, digits, hyphens, and underscores; each axis must list at least one value."
         },
         "max_parallel": { "type": "integer", "description": "Cap on concurrent matrix legs (0 means the platform default)." },
         "fail_fast": { "type": "boolean" }

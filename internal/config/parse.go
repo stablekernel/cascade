@@ -236,6 +236,12 @@ func Validate(cfg *TrunkConfig) []string {
 		// Validate run_policy, on_failure, and retries
 		errors = append(errors, validateCallbackPolicy(fmt.Sprintf("builds[%d]", i), b.RunPolicy, b.OnFailure, b.Retries)...)
 
+		// Matrix dimension keys are emitted raw as YAML mapping keys and inside
+		// ${{ matrix.<key> }} expressions; enforce the GHA matrix identifier
+		// grammar and non-empty axes here so generation cannot emit a workflow
+		// that fails at the first run.
+		errors = append(errors, validateMatrix(fmt.Sprintf("builds[%d]", i), b.Matrix)...)
+
 		// Validate depends_on references using ResolveDependency
 		for _, dep := range b.DependsOn {
 			if _, err := cfg.ResolveDependency(dep, CallbackTypeBuild); err != nil {
