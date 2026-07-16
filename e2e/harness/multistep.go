@@ -1,6 +1,10 @@
 package harness
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -550,11 +554,24 @@ type PreflightExpect struct {
 	TargetEnv   string `yaml:"target_env,omitempty"`
 }
 
-// ParseMultiStepScenario parses YAML bytes into a MultiStepScenario
+// ParseMultiStepScenario parses YAML bytes into a MultiStepScenario. Decoding is
+// strict: a key the schema does not define is an error rather than a silently
+// dropped field. A scenario is only as good as the assertions it actually runs,
+// and a permissive decode let a typo'd or stale key erase an expectation while
+// the scenario still reported green.
+//
+// An empty document is not an error here: yaml.v3 reports io.EOF for one, which
+// says nothing useful about the scenario. It decodes to a zero scenario, and the
+// steps check in DiscoverMultiStepScenarios rejects it with the file path.
 func ParseMultiStepScenario(data []byte) (*MultiStepScenario, error) {
 	var s MultiStepScenario
-	if err := yaml.Unmarshal(data, &s); err != nil {
-		return nil, err
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&s); err != nil {
+		if errors.Is(err, io.EOF) {
+			return &s, nil
+		}
+		return nil, fmt.Errorf("parse multi-step scenario: %w", err)
 	}
 	return &s, nil
 }
@@ -586,7 +603,14 @@ func DiscoverMultiStepScenarios(dir string) ([]*MultiStepScenario, error) {
 
 		scenario, err := ParseMultiStepScenario(data)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", path, err)
+		}
+
+		// A scenario with no steps runs nothing and therefore asserts nothing, so
+		// it reports green for the wrong reason. Strict decoding does not cover
+		// this on its own: steps can go missing with every remaining key valid.
+		if len(scenario.Steps) == 0 {
+			return fmt.Errorf("%s: scenario %q declares no steps, so it asserts nothing", path, scenario.Name)
 		}
 
 		// Store relative path for test naming

@@ -205,10 +205,37 @@ func AssertPreflight(t testingT, runResult *WorkflowRunResult, expected *Preflig
 	}
 }
 
+// assertsSomething reports whether expect carries at least one real assertion.
+// Component and Env are selectors: they choose which state leaf to read, and say
+// nothing about what it must contain. Every other populated field constrains the
+// state, including Wiped and Unchanged, whose truth is itself the assertion.
+func (expect *StateExpect) assertsSomething() bool {
+	return expect.SHA != "" ||
+		expect.Version != "" ||
+		expect.Wiped ||
+		expect.Unchanged ||
+		expect.Ref != "" ||
+		expect.BaseSHA != "" ||
+		expect.PreviousVersion != "" ||
+		len(expect.Deploys) > 0 ||
+		len(expect.Patches) > 0 ||
+		len(expect.PatchesContain) > 0 ||
+		len(expect.PreviousContains) > 0 ||
+		len(expect.Cleared) > 0
+}
+
 // AssertState validates environment state against expectations (used internally)
 // Returns errors instead of failing test directly for more flexible error handling
 func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error {
 	var errs []error
+
+	// An expectation with no populated assertion field compares nothing against
+	// nothing and always passes, so the step it belongs to is a no-op wearing the
+	// shape of a check. Reject it rather than let it report green.
+	if !expect.assertsSomething() {
+		return []error{fmt.Errorf("state[%s] expectation asserts nothing: set at least one of sha, version, wiped, unchanged, deploys, ref, base_sha, patches, patches_contain, previous_version, previous_contains, cleared (component and env only select which state to read)", env)}
+	}
+
 	actual := ctx.GetState(env)
 
 	// Check if state should be wiped
@@ -218,6 +245,15 @@ func AssertState(ctx *ExecutionContext, env string, expect *StateExpect) []error
 				env, actual.SHA, actual.Version))
 		}
 		return errs
+	}
+
+	// Every remaining expectation is positive: it describes something the state
+	// must hold. Reading an env the scenario never recorded yields a zero
+	// EnvState, so a typo'd env name would be compared field by field against
+	// empty values and quietly report on state nobody wrote. Absence is only a
+	// valid subject for Wiped, which returned above.
+	if !ctx.HasState(env) {
+		return []error{fmt.Errorf("state[%s] has no recorded state, so this expectation cannot hold: check the env name, or use wiped to assert absence", env)}
 	}
 
 	// Check SHA (resolve commit references)

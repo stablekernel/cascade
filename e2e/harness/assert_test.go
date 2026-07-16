@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAssertStateMatches(t *testing.T) {
@@ -449,4 +450,71 @@ func TestAssertRollbackSource(t *testing.T) {
 		assert.True(t, mt.failed)
 		assert.Contains(t, mt.errors[0], "state")
 	})
+}
+
+// TestAssertState_ZeroExpectationIsError proves a StateExpect that asserts
+// nothing is rejected. component and env only select which state leaf to read,
+// so a block carrying nothing else compared a zero value against a zero value
+// and always passed. wiped and unchanged are real assertions and must still be
+// accepted.
+func TestAssertState_ZeroExpectationIsError(t *testing.T) {
+	tests := []struct {
+		name    string
+		expect  *StateExpect
+		wantErr bool
+	}{
+		{"wholly empty", &StateExpect{}, true},
+		{"selectors only", &StateExpect{Component: "web", Env: "dev"}, true},
+		{"component selector only", &StateExpect{Component: "web"}, true},
+		{"env selector only", &StateExpect{Env: "dev"}, true},
+		{"empty deploys map", &StateExpect{Deploys: map[string]*DeployExpect{}}, true},
+		{"empty patches slice", &StateExpect{Patches: []string{}}, true},
+		{"version asserts", &StateExpect{Version: "v1.0.0"}, false},
+		{"wiped asserts", &StateExpect{Wiped: true}, false},
+		{"unchanged asserts", &StateExpect{Unchanged: true}, false},
+		{"cleared asserts", &StateExpect{Cleared: []string{"ref"}}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := NewExecutionContext()
+			ctx.RecordState("dev", "abc123", "v1.0.0")
+			ctx.RecordState(componentStateKey("web", "dev"), "abc123", "v1.0.0")
+
+			errs := AssertState(ctx, "dev", tt.expect)
+			if tt.wantErr {
+				require.NotEmpty(t, errs, "expected a zero-assertion error")
+				assert.Contains(t, errs[0].Error(), "asserts nothing")
+				return
+			}
+			for _, err := range errs {
+				assert.NotContains(t, err.Error(), "asserts nothing")
+			}
+		})
+	}
+}
+
+// TestAssertState_UnknownEnvIsError proves a positive expectation against an env
+// the scenario never produced fails loudly. A typo'd env name used to read back
+// a zero EnvState, so only an expectation of "" could match it, and the step
+// quietly asserted nothing about the env the author meant.
+func TestAssertState_UnknownEnvIsError(t *testing.T) {
+	ctx := NewExecutionContext()
+	ctx.RecordState("dev", "abc123", "v1.0.0")
+
+	errs := AssertState(ctx, "prd", &StateExpect{Version: "v1.0.0"})
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "prd")
+	assert.Contains(t, errs[0].Error(), "no recorded state")
+}
+
+// TestAssertState_WipedToleratesAbsentEnv proves wiped does not require the env
+// to exist: an env that was never created, or was wiped away entirely, is the
+// exact condition wiped describes.
+func TestAssertState_WipedToleratesAbsentEnv(t *testing.T) {
+	ctx := NewExecutionContext()
+	ctx.RecordState("dev", "abc123", "v1.0.0")
+
+	errs := AssertState(ctx, "prerelease", &StateExpect{Wiped: true})
+	assert.Empty(t, errs)
 }

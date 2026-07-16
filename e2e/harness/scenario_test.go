@@ -144,3 +144,20 @@ expect:
 	require.NoError(t, err)
 	assert.Len(t, scenarios, 2)
 }
+
+// TestParseScenario_UnknownKeyIsError proves an unrecognized key in a
+// single-step scenario is a hard parse error rather than a silently dropped
+// field, so a typo cannot quietly remove an assertion.
+func TestParseScenario_UnknownKeyIsError(t *testing.T) {
+	body := `
+name: "Typo'd key"
+description: "Has a key the schema does not define"
+expekt:
+  workflow:
+    conclusion: failure
+`
+
+	_, err := ParseScenario([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expekt")
+}

@@ -226,6 +226,18 @@ func (c *ExecutionContext) GetState(env string) *EnvState {
 	return &EnvState{}
 }
 
+// HasState reports whether the context has a recorded state entry for env.
+// GetState cannot answer this: it returns a zero EnvState for an unknown env so
+// callers that legitimately probe for absence stay simple, which also means a
+// typo'd env name reads back as an empty state instead of an error. Assertions
+// use HasState to tell "the env holds nothing" apart from "the env does not
+// exist".
+func (c *ExecutionContext) HasState(env string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.state[env] != nil
+}
+
 // RecordDeployState records per-deploy state
 func (c *ExecutionContext) RecordDeployState(env, deploy, sha string) {
 	c.mu.Lock()

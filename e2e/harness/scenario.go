@@ -1,6 +1,10 @@
 package harness
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,11 +95,20 @@ type ReleaseExpect struct {
 	Prerelease bool   `yaml:"prerelease"`
 }
 
-// ParseScenario parses YAML bytes into a Scenario
+// ParseScenario parses YAML bytes into a Scenario. Decoding is strict: a key the
+// schema does not define is an error rather than a silently dropped field, so a
+// typo cannot quietly erase an expectation and leave the scenario green. An
+// empty document decodes to a zero scenario rather than surfacing yaml.v3's raw
+// io.EOF, which would read as an I/O fault.
 func ParseScenario(data []byte) (*Scenario, error) {
 	var s Scenario
-	if err := yaml.Unmarshal(data, &s); err != nil {
-		return nil, err
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&s); err != nil {
+		if errors.Is(err, io.EOF) {
+			return &s, nil
+		}
+		return nil, fmt.Errorf("parse scenario: %w", err)
 	}
 	return &s, nil
 }
