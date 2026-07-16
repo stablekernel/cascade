@@ -16,7 +16,7 @@ func TestPreflighter_ComponentSubset_TreatsLastSubsetEnvAsFinal(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(path, config.DefaultManifestKey)
 	require.NoError(t, err)
 	require.NoError(t, overlayComponentState(cicdFile, path, config.DefaultManifestKey, "api"))
-	require.NoError(t, applyComponentLadder(cicdFile, "api"))
+	require.NoError(t, applyResolvedComponentConfig(cicdFile, "api"))
 
 	pf := NewPreflighter(PreflighterOptions{
 		Config: cicdFile,
@@ -42,7 +42,7 @@ func TestPreflighter_ComponentSubset_SiblingReachesProd(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(path, config.DefaultManifestKey)
 	require.NoError(t, err)
 	require.NoError(t, overlayComponentState(cicdFile, path, config.DefaultManifestKey, "web"))
-	require.NoError(t, applyComponentLadder(cicdFile, "web"))
+	require.NoError(t, applyResolvedComponentConfig(cicdFile, "web"))
 
 	pf := NewPreflighter(PreflighterOptions{
 		Config: cicdFile,

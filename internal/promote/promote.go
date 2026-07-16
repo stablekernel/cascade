@@ -106,11 +106,12 @@ func NewPromoter(opts PromoterOptions, options ...Option) (*Promoter, error) {
 		return nil, err
 	}
 
-	// Narrow the working ladder to the component's resolved environment subset. A
-	// component may declare a shorter `environments` list than the repo-global
-	// ladder; the promotion runtime must advance and gate along that subset, not
-	// the global ladder. A no-op for the single-component (empty) path.
-	if err := applyComponentLadder(cicdFile, opts.Component); err != nil {
+	// Swap the working config for the component's resolved config so the
+	// promotion advances, gates, versions, and publishes against exactly what
+	// the generator emitted the component's workflow from (its environments
+	// subset, deploys, tag grammar, and every other override). A no-op for the
+	// single-component (empty) path.
+	if err := applyResolvedComponentConfig(cicdFile, opts.Component); err != nil {
 		return nil, err
 	}
 
@@ -162,24 +163,29 @@ func overlayComponentState(cicdFile *config.CICDFile, configPath, manifestKey, c
 	return nil
 }
 
-// applyComponentLadder narrows the working config's environment ladder to the
-// named component's resolved subset, read via config.TrunkConfig.ResolveComponent.
-// A component may override the repo-global `environments` list with a shorter
-// subset; the promotion runtime derives the next-env, is-last-env, and gating
-// decisions from cicdFile.Config.Environments, so narrowing it here makes every
-// such derivation honor the component's ladder without teaching each call site
-// about components. It is a no-op when component is empty (the single-component
-// path is byte-identical) or when the manifest carries no config. This mirrors
-// how internal/rollback.New resolves the component's ladder for its guards.
-func applyComponentLadder(cicdFile *config.CICDFile, component string) error {
+// applyResolvedComponentConfig swaps the working config for the named
+// component's fully resolved config, read via
+// config.TrunkConfig.ResolveComponent. The generator emits the component's
+// promote workflow from that same resolved config (deploy job names and their
+// deploys_to_run gates, tag grammar, environments, publish shape), so the
+// promote runtime must plan, gate, and finalize against it too: a runtime that
+// keeps any root field disagrees with the workflow it is driving. Copying only
+// selected fields is exactly how the component deploy gate went silently dead
+// (only Environments was carried over, so preflight emitted root deploy names
+// the generated gates never matched, the downgrade gate failed open on
+// prefixed versions, and publish never stripped a component pre-release
+// token). The assignment is therefore wholesale, never per-field. It is a
+// no-op when component is empty (the single-component path is byte-identical)
+// or when the manifest carries no config.
+func applyResolvedComponentConfig(cicdFile *config.CICDFile, component string) error {
 	if component == "" || cicdFile.Config == nil {
 		return nil
 	}
 	// A component may be recorded only under state.components (per-component state
 	// seeding) without a config.components declaration. Such a component carries no
-	// `environments` override, so the repo-global ladder already applies; there is
-	// nothing to narrow and resolving would fail on the undeclared name. Narrow the
-	// ladder only for a component the config actually declares.
+	// overrides, so the repo-global config already applies; there is nothing to
+	// resolve and resolving would fail on the undeclared name. Swap the config only
+	// for a component the config actually declares.
 	if _, declared := cicdFile.Config.Components[component]; !declared {
 		return nil
 	}
@@ -187,7 +193,17 @@ func applyComponentLadder(cicdFile *config.CICDFile, component string) error {
 	if err != nil {
 		return fmt.Errorf("resolving component %q: %w", component, err)
 	}
-	cicdFile.Config.Environments = resolved.Config.Environments
+	// Carry the component namespace boundary into the working grammar. A
+	// component reads and emits its versions under its resolved grammar with
+	// StrictPrefix forced true (ResolvedComponent.TagGrammarSpec's isolation
+	// invariant), and the permissive read-side prefix pattern cannot even parse
+	// a prefixed version like api-1.2.0. Without this flip the downgrade gate
+	// would keep failing open on component versions despite the config swap.
+	if resolved.Config.TagGrammar == nil {
+		resolved.Config.TagGrammar = &config.TagGrammarConfig{}
+	}
+	resolved.Config.TagGrammar.StrictPrefix = true
+	cicdFile.Config = resolved.Config
 	return nil
 }
 

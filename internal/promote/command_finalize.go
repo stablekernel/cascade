@@ -105,10 +105,12 @@ func runFinalize() error {
 		}
 	}
 
+	deployResults := make(map[string]string)
 	if len(deployNames) > 0 {
 		envResults := readDeployResultsFromEnv(deployNames)
 		switch {
 		case len(envResults) > 0:
+			deployResults = envResults
 			for name, conclusion := range envResults {
 				fin.SetDeployResult(name, conclusion)
 				if !dryRun && jsonOutput {
@@ -124,8 +126,10 @@ func runFinalize() error {
 				}
 				for _, name := range deployNames {
 					fin.SetDeployResult(name, "skipped")
+					deployResults[name] = "skipped"
 				}
 			} else {
+				deployResults = jobResults
 				for name, conclusion := range jobResults {
 					fin.SetDeployResult(name, conclusion)
 					if !dryRun && jsonOutput {
@@ -153,6 +157,21 @@ func runFinalize() error {
 	if dryRun || globals.DryRun() {
 		fmt.Println("Dry run - state would be updated but not written to disk")
 		return nil
+	}
+
+	// Fail-safe: refuse the state write when preflight planned deploys but none
+	// of them reported any result. That shape means every planned deploy job's
+	// gate skipped, so nothing was deployed; recording the promotion anyway would
+	// advance env state over a silent no-op. The expected set is the
+	// deploys_to_run preflight emitted, forwarded verbatim by the generated
+	// finalize step as DEPLOYS_TO_RUN; workflows generated before that variable
+	// existed do not set it and keep their historical behavior.
+	expected, err := parseExpectedDeploys(os.Getenv("DEPLOYS_TO_RUN"))
+	if err != nil {
+		return err
+	}
+	if err := gateOnExpectedDeploys(expected, deployResults); err != nil {
+		return err
 	}
 
 	if err := persistAndCleanup(fin, commitPush); err != nil {
@@ -187,6 +206,54 @@ func persistAndCleanup(fin *Finalizer, commitPush bool) error {
 		}
 	}
 	return fin.runLifecycleCleanup()
+}
+
+// parseExpectedDeploys parses the DEPLOYS_TO_RUN value the generated finalize
+// step forwards from preflight's deploys_to_run output: a JSON array of the
+// deploy names preflight planned to run. An empty or null value means no
+// expected deploys (older generated workflows do not set the variable at all,
+// and a release-marker advance plans none); anything else must parse, since a
+// malformed value means the workflow wiring is broken.
+func parseExpectedDeploys(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return nil, nil
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err != nil {
+		return nil, fmt.Errorf("failed to parse DEPLOYS_TO_RUN %q: %w", raw, err)
+	}
+	return names, nil
+}
+
+// gateOnExpectedDeploys is the promote-side counterpart of the rollback
+// finalize's "no in-scope deploy succeeded" gate, scoped to the silent-skip
+// failure class. When preflight planned deploys (expected is non-empty) and
+// every one of them reports skipped or no result at all, none of the planned
+// deploy jobs actually ran: the generated job gates and the runtime plan
+// disagree (or the result wiring is absent), so recording the promotion would
+// advance env state over a no-op. That state write is refused.
+//
+// A reported failure or cancellation proceeds: the deploy ran and lost, the run
+// is already red, and rollback_on_failure owns that path; this gate must not
+// change failure semantics. An empty expected set also proceeds: a promotion
+// whose trigger filters matched no changes legitimately deploys nothing while
+// still advancing the env pointer.
+func gateOnExpectedDeploys(expected []string, results map[string]string) error {
+	if len(expected) == 0 {
+		return nil
+	}
+	for _, name := range expected {
+		switch results[name] {
+		case "success", "failure", "cancelled":
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"promotion aborted: preflight planned deploys [%s] but none reported a result (all skipped or unreported); "+
+			"no deploy ran, so environment state is left unchanged",
+		strings.Join(expected, ", "),
+	)
 }
 
 // readDeployResultsFromEnv reads DEPLOY_RESULT_<NAME> env vars and returns a

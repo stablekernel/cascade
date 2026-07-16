@@ -1,0 +1,162 @@
+name: "Per-Component Deploys Override Runs the Component's Deploy"
+description: |
+  Proves a component that overrides `deploys:` with its own deploy names actually
+  RUNS that deploy during a component-scoped promotion, and that its own
+  `prerelease_token` is stripped when it publishes. The manifest declares a root
+  deploy (root-svc) and a component "api" overriding deploys with [api-svc] plus a
+  tag grammar carrying a strict prefix and a "beta" pre-release token.
+
+  The generated promote-api workflow names its deploy job from the resolved
+  component config (deploy-api-svc) and gates it on preflight's deploys_to_run
+  containing 'api-svc'. The promote runtime must plan against that same resolved
+  config: a runtime that keeps the root config emits deploys_to_run=["root-svc"],
+  the gate never matches, the deploy job skips deterministically on every
+  promotion, and the run still finalizes green while nothing was deployed. The
+  jobs assertions below fail loudly in that world (deploy-api-svc reports skipped,
+  and the finalize fail-safe refuses the state write), so this scenario pins the
+  fix live. The terminal promotion also proves the component's beta token is
+  stripped at publish: prod records api-0.1.0, not the beta-suffixed candidate.
+
+  The sibling component "web" inherits the root deploys, so its promotion runs
+  deploy-root-svc: the differential control proving the override is scoped to the
+  component that declared it, and that api's recorded state survives web's cycle.
+
+config:
+  trunk_branch: main
+  environments: [dev, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: root-svc
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_grammar:
+        prefix: api-
+        prerelease_token: beta
+      deploys:
+        - name: api-svc
+          workflow: deploy.yaml
+          triggers: ["services/**"]
+    web:
+      path: services/web
+      tag_grammar:
+        prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so
+  # the per-component workflows executed below are the pristine generated output.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  # Cut api's dev prerelease on its own version line. The candidate carries the
+  # component's beta token, not the default rc.
+  - name: "Orchestrate api to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+    expect:
+      state:
+        api-dev:
+          component: api
+          env: dev
+          version: "api-0.1.0-beta.0"
+
+  # Promote api from dev to staging. The resolved plan must include api-svc, so
+  # the deploy job named from the component's own override actually runs; its
+  # per-deploy state records the deployed commit. A runtime planning from the
+  # root config would emit ["root-svc"], skip deploy-api-svc, and fail these
+  # assertions.
+  - name: "Promote api from dev to staging and run its own deploy"
+    action: promote
+    promote:
+      mode: cascade
+      target: staging
+      component: api
+    expect:
+      jobs:
+        deploy-api-svc: success
+      state:
+        api-staging:
+          component: api
+          env: staging
+          version: "api-0.1.0-beta.0"
+          deploys:
+            api-svc:
+              sha: commit1
+
+  # Promote api from staging to prod, the publish crossing. The deploy runs again
+  # and prod records the stripped release version: the component's beta token is
+  # cut by its own grammar, where the root grammar (token rc) would have published
+  # api-0.1.0-beta.0 verbatim.
+  - name: "Promote api to prod and publish with the beta token stripped"
+    action: promote
+    promote:
+      mode: cascade
+      source: staging
+      target: prod
+      component: api
+    expect:
+      jobs:
+        deploy-api-svc: success
+      state:
+        api-prod:
+          component: api
+          env: prod
+          version: "api-0.1.0"
+          deploys:
+            api-svc:
+              sha: commit1
+
+  # Differential control: web inherits the root deploys, so its promotion runs
+  # deploy-root-svc, and api's recorded prod state survives web's cycle intact.
+  - name: "Orchestrate web to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: web
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true
+
+  - name: "Promote web from dev to staging with the inherited root deploy"
+    action: promote
+    promote:
+      mode: cascade
+      target: staging
+      component: web
+    expect:
+      jobs:
+        deploy-root-svc: success
+      state:
+        web-staging:
+          component: web
+          env: staging
+          version: "web-0.1.0-rc.0"
+        api-prod:
+          component: api
+          env: prod
+          unchanged: true

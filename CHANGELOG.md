@@ -25,6 +25,22 @@ A `Migration` section is added to any release that bumps `schema_version`.
   rollback-diverged environment can still be rolled back again, and stale
   patches never survive onto a rolled-back version
 
+- **promote:** The promote runtime (preflight, promotion, and finalize) now
+  operates on a component's fully resolved config instead of copying only its
+  `environments` subset from the root config. Previously a component that
+  overrode `deploys:` had its generated deploy jobs gated on deploy names the
+  runtime never emitted, so every deploy skipped deterministically while the
+  promotion still recorded success; the downgrade gate failed open on
+  prefix-tagged component versions (the root grammar cannot parse them); a
+  component `prerelease_token` was never stripped at publish; and a
+  component-scoped finalize looked up root deploy names in the
+  `DEPLOY_RESULT_*` variables the workflow sets from the component's own
+  deploys, advancing environment state with no deploy gate at all. As a
+  fail-safe, the generated finalize step now forwards preflight's planned
+  deploy set (`DEPLOYS_TO_RUN`) and `promote finalize` refuses the state write
+  when planned deploys all report skipped or unreported, so a promotion whose
+  deploys silently did not run can never record success
+
 - **version:** `next-version --component` now derives its commit scope through
   the same helper as `orchestrate`, so the preview includes the component's
   `extra_paths`/`shared_paths`. Previously a commit touching only a declared

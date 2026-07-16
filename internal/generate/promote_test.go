@@ -1464,11 +1464,36 @@ func TestPromoteGenerator_NoRollbackWhenNoEnvironments(t *testing.T) {
 		"no needs: reference to a nonexistent prod deploy job")
 	assert.NotContains(t, content, "DEPLOY_RESULT_APP",
 		"no deploy-result env var dereferencing a nonexistent deploy job")
+	assert.NotContains(t, content, "DEPLOYS_TO_RUN",
+		"no planned-deploy env var when no deploy jobs exist to gate on")
 
 	// The emitted workflow must remain structurally valid YAML.
 	var parsed map[string]any
 	require.NoError(t, yaml.Unmarshal([]byte(content), &parsed),
 		"emitted promote workflow must be valid YAML")
+}
+
+// TestPromoteGenerator_FinalizeForwardsDeploysToRun asserts the finalize step
+// forwards preflight's planned deploy set as DEPLOYS_TO_RUN alongside the
+// per-deploy result vars. The CLI's finalize fail-safe compares the two: when
+// every planned deploy reports skipped (or nothing at all), no deploy actually
+// ran and the state write is refused instead of recording a no-op promotion
+// as success.
+func TestPromoteGenerator_FinalizeForwardsDeploysToRun(t *testing.T) {
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("dev", "prod"),
+		Deploys: []config.DeployConfig{
+			{Name: "app", Workflow: ".github/workflows/deploy-app.yaml"},
+		},
+	}
+
+	gen := NewPromoteGenerator(cfg, "")
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	assert.Contains(t, content, "DEPLOYS_TO_RUN: ${{ needs.preflight.outputs.deploys_to_run }}")
+	assert.Contains(t, content, "DEPLOY_RESULT_APP: ${{ needs.deploy-app.result }}")
 }
 
 func TestPromoteGenerator_RollbackOnFailureInput(t *testing.T) {

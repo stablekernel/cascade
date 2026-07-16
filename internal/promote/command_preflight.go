@@ -68,10 +68,13 @@ func runPreflight(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Narrow the working ladder to the component's resolved environment subset so
-	// the plan advances and gates only along that component's own environments,
-	// never the global-only tail. A no-op for a single-component (empty) preflight.
-	if err := applyComponentLadder(cicdFile, componentName); err != nil {
+	// Swap the working config for the component's resolved config so the plan
+	// advances only along the component's own environments and emits the
+	// component's own deploy names, tag grammar, and publish shape: the same
+	// resolved config the generator emitted this component's workflow (and its
+	// deploys_to_run job gates) from. A no-op for a single-component (empty)
+	// preflight.
+	if err := applyResolvedComponentConfig(cicdFile, componentName); err != nil {
 		return err
 	}
 
