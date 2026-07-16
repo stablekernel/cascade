@@ -326,9 +326,10 @@ type RollbackStep struct {
 // manifest would generate. Regenerate, when set, runs `cascade generate-workflow
 // -f` first so verify checks pristine generated output rather than the harness's
 // localized copies. Mutate optionally overwrites one generated file with the
-// given content before verifying, so a scenario can drive the drift path.
+// given content before verifying, so a scenario can drive the drift path
+// (mutating the manifest itself drives the operational-failure path instead).
 // ExpectExit is the exit code `cascade verify` must return (0 = no drift,
-// non-zero = drift).
+// 1 = drift, 2 = operational failure such as an unreadable manifest).
 type VerifyStep struct {
 	Regenerate   bool   `yaml:"regenerate,omitempty"`
 	MutatePath   string `yaml:"mutate_path,omitempty"`

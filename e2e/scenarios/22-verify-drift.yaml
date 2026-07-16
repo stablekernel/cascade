@@ -3,8 +3,10 @@ description: |
   Exercises the read-only `cascade verify` command end to end. After generating
   workflows from a two-environment manifest, verify against pristine generated
   output reports no drift (exit 0). Mutating a committed workflow makes verify
-  report drift (exit non-zero). Regenerating restores the workflows and verify
-  is clean again (exit 0).
+  report drift (exit 1). Corrupting the manifest itself makes verify fail
+  operationally (exit 2), proving the third row of the documented exit-code
+  table through the shipped binary. Regenerating restores the workflows and
+  verify is clean again (exit 0).
 
 config:
   trunk_branch: main
@@ -41,6 +43,13 @@ steps:
       mutate_path: ".github/workflows/orchestrate.yaml"
       mutate_append: "\n# drift\n"
       expect_exit: 1
+
+  - name: "Corrupt the manifest; verify fails operationally with exit 2"
+    action: verify
+    verify:
+      mutate_path: ".github/manifest.yaml"
+      mutate_append: "\nci: ["
+      expect_exit: 2
 
   - name: "Regenerate restores workflows; verify is clean again"
     action: verify
