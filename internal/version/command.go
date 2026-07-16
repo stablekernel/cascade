@@ -60,9 +60,11 @@ Examples:
 
 			if component != "" && cfg.HasComponents() {
 				// Component-scoped derivation: the version comes only from the
-				// component's path-scoped commits and its strict tag namespace, so
-				// a sibling component's tags and commits are invisible. This mirrors
-				// orchestrate.calculateComponentVersion so the two paths agree.
+				// component's path-scoped commits (its path plus effective extra
+				// paths) and its strict tag namespace, so a sibling component's
+				// tags and commits are invisible. It shares
+				// ResolveComponentVersionInputs with orchestrate's component
+				// version calculation, so the two paths agree by construction.
 				currentDevVersion, nextEnvVersion, commits, calc, err =
 					componentVersionInputs(cfg, component, baseSHA, headSHA)
 				if err != nil {
@@ -173,46 +175,19 @@ func singleComponentVersionInputs(cfg *config.TrunkConfig, configPath, environme
 	return currentDevVersion, nextEnvVersion, commits, NewCalculatorWithGrammar(cfg.ResolveTagGrammar()), nil
 }
 
-// componentVersionInputs derives the version inputs for a named component: its
-// current version and release base come from its own strict tag namespace, and the
-// commit range is scoped to the component's path. It mirrors
-// orchestrate.calculateComponentVersion so the CLI and production paths agree on a
-// component's next version. baseSHA, when set, overrides the tag-derived base.
+// componentVersionInputs derives the version inputs for a named component
+// through ResolveComponentVersionInputs, the scope derivation shared with
+// orchestrate's component version calculation, so the CLI and production paths
+// agree on a component's next version by construction: the commit range covers
+// the component's path plus its effective extra paths, tag reads stay in the
+// component's strict namespace, and failing lookups surface instead of reading
+// as "no tags". baseSHA, when set, overrides the tag-derived base.
 func componentVersionInputs(cfg *config.TrunkConfig, component, baseSHA, headSHA string) (currentDevVersion, nextEnvVersion string, commits []changelog.ConventionalCommit, calc *Calculator, err error) {
-	resolved, rerr := cfg.ResolveComponent(component)
-	if rerr != nil {
-		return "", "", nil, nil, fmt.Errorf("resolving component %q: %w", component, rerr)
+	inputs, err := ResolveComponentVersionInputs(cfg, component, "", baseSHA, headSHA)
+	if err != nil {
+		return "", "", nil, nil, err
 	}
-	spec := resolved.TagGrammarSpec()
-
-	if latestTag, _, terr := git.GetLatestTagSpec("", spec); terr == nil && latestTag != "" {
-		currentDevVersion = latestTag
-	}
-	var baseTagSHA string
-	if latestRelease, releaseSHA, lerr := git.GetLatestReleaseTagSpec("", spec); lerr == nil && latestRelease != "" {
-		nextEnvVersion = latestRelease
-		baseTagSHA = releaseSHA
-	}
-
-	if baseSHA == "" {
-		baseSHA = baseTagSHA
-	}
-	if baseSHA == "" {
-		baseSHA, _ = git.GetInitialCommit()
-	}
-	if baseSHA != "" {
-		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, headSHA, []string{resolved.Path})
-		if cerr != nil {
-			return "", "", nil, nil, fmt.Errorf("getting commits for component %q: %w", component, cerr)
-		}
-		for _, gc := range gitCommits {
-			if cc := changelog.ParseCommit(gc); cc != nil {
-				commits = append(commits, *cc)
-			}
-		}
-	}
-
-	return currentDevVersion, nextEnvVersion, commits, NewCalculatorWithGrammar(spec), nil
+	return inputs.CurrentDevVersion, inputs.NextEnvVersion, inputs.Commits, inputs.Calc, nil
 }
 
 func bumpTypeString(b BumpType) string {
