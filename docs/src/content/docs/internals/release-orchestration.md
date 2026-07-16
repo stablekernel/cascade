@@ -113,13 +113,17 @@ This limit is reachable in normal use. When the previous tag is empty, the chang
 the repository's whole history: that is the state after a state reset, and it is the state
 for the first cascade release in a repository that already has a long commit history.
 
-When the notes do not fit, cascade keeps as many whole changelog entries as the limit
+When the notes do not fit, cascade keeps as many whole changelog entries as the budget
 allows and appends a marker naming the truncation and linking to the changes it dropped.
-The cut lands on a line boundary, so a retained entry is never severed mid-sentence, and
-the marker's own length is reserved from the budget, so the body that ships stays under the
-limit rather than exactly at it. The link is a compare view (`previous...current`) when a
-previous tag is known, and the tag's commit history when one is not. Nothing is lost
-silently: the release always points at the full set of changes.
+The cut lands on a line boundary, so a retained entry is never severed mid-sentence. The
+link is a compare view (`previous...current`) when a previous tag is known, and the tag's
+commit history when one is not. Nothing is lost silently: the release always points at the
+full set of changes.
+
+The budget reserves room for the marker and sits a little below 125,000 rather than at it,
+so a body is never sent at the exact boundary. The API's error text reads as an inclusive
+limit, but a release that fails at the boundary would stop the run before it records state,
+which is a poor trade against the few hundred characters the reserve costs.
 
 ## Running a single lane with the repos selector
 

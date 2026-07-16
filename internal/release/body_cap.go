@@ -15,6 +15,20 @@ import (
 // GitHub counts characters, not bytes, so the cap is measured in runes.
 const maxReleaseBodyChars = 125000
 
+// releaseBodySafeMax is the length cascade actually allows itself to send. It
+// sits below maxReleaseBodyChars so that no body is ever sent at the exact
+// boundary.
+//
+// The reserve is deliberate. The API's own error text ("maximum is 125000
+// characters") reads as an inclusive limit, and a body measured at 125,002 was
+// rejected while one at 123,164 was accepted, so 125,000 itself is very likely
+// accepted. But that conclusion is inferred from an error string rather than
+// from a documented guarantee, and this is release-path code: a body rejected
+// at the boundary fails the release and stops the run before it records state.
+// Trading a small amount of changelog text for a result that holds whether the
+// limit is inclusive or exclusive is the cheaper side of that bet.
+const releaseBodySafeMax = 124900
+
 // truncationNotice is the human-readable explanation embedded in a body that had
 // to be shortened. It is a stable substring so the marker is greppable.
 const truncationNotice = "Release notes truncated: this changelog exceeded GitHub's release body limit of 125,000 characters."
@@ -105,23 +119,25 @@ func keepWholeLines(body string, budget int) string {
 }
 
 // capReleaseBody shortens body so the value sent to GitHub stays within the
-// Releases API limit. A body already within the cap is returned untouched.
+// Releases API limit. A body already within releaseBodySafeMax is returned
+// untouched.
 //
 // An oversized body is cut on a whole-line boundary and gets a marker naming the
 // truncation and linking to the omitted changes, so nothing is lost silently.
-// The line budget reserves room for that marker, leaving the final body under
-// the cap rather than exactly at it.
+// The line budget reserves room for that marker, and the whole result is sized
+// against releaseBodySafeMax, so the body that ships is strictly under the API
+// limit rather than at it.
 func capReleaseBody(body, repo, previousTag, tag string) string {
-	if utf8.RuneCountInString(body) <= maxReleaseBodyChars {
+	if utf8.RuneCountInString(body) <= releaseBodySafeMax {
 		return body
 	}
 
 	marker := truncationMarker(repo, previousTag, tag)
-	budget := maxReleaseBodyChars - utf8.RuneCountInString(marker)
+	budget := releaseBodySafeMax - utf8.RuneCountInString(marker)
 	if budget <= 0 {
-		// Pathological: the marker alone fills the cap. Keep the marker's
+		// Pathological: the marker alone fills the budget. Keep the marker's
 		// meaning over the notes and stay within the limit regardless.
-		return truncateRunes(marker, maxReleaseBodyChars)
+		return truncateRunes(marker, releaseBodySafeMax)
 	}
 
 	return keepWholeLines(body, budget) + marker

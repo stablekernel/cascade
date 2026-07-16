@@ -181,8 +181,31 @@ func TestCapReleaseBody(t *testing.T) {
 
 	t.Run("a single over-cap line still yields a valid capped body", func(t *testing.T) {
 		got := capReleaseBody(strings.Repeat("x", maxReleaseBodyChars+500), "owner/repo", "", "v1.0.0")
-		assert.LessOrEqual(t, utf8.RuneCountInString(got), maxReleaseBodyChars)
+		assert.LessOrEqual(t, utf8.RuneCountInString(got), releaseBodySafeMax)
 		assert.Contains(t, got, truncationNotice)
 		assert.True(t, utf8.ValidString(got))
+	})
+
+	// The API limit reads as inclusive, but nothing cascade sends should depend
+	// on that: a body must never land on the boundary, whatever path produced it.
+	t.Run("no composed body is ever sent at the exact API boundary", func(t *testing.T) {
+		require.Less(t, releaseBodySafeMax, maxReleaseBodyChars,
+			"the send target must reserve slack below the API limit")
+
+		for _, tc := range []struct {
+			name string
+			body string
+		}{
+			{"a body of exactly the API limit", strings.Repeat("x", maxReleaseBodyChars)},
+			{"a single line over the API limit", strings.Repeat("x", maxReleaseBodyChars+500)},
+			{"line-structured notes over the limit", oversizeChangelog()},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := capReleaseBody(tc.body, "owner/repo", "", "v1.0.0")
+				assert.Less(t, utf8.RuneCountInString(got), maxReleaseBodyChars,
+					"body must be strictly under the API limit, never at it")
+				assert.LessOrEqual(t, utf8.RuneCountInString(got), releaseBodySafeMax)
+			})
+		}
 	})
 }
