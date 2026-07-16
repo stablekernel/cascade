@@ -378,6 +378,32 @@ func TestPlan_ProdTargetAllowed(t *testing.T) {
 	}
 }
 
+// TestPlan_ProdTarget_CandidateIsPatchBump proves a plan against an env whose
+// recorded version is a published base (no pre-release segment) reports the
+// patch bump finalize will allocate, not the already-published version. The
+// plan's Version line, its --json hotfix_version_candidate field, and the GHA
+// output all read this one PlanResult field.
+func TestPlan_ProdTarget_CandidateIsPatchBump(t *testing.T) {
+	newScratchRepo(t)
+	base := commitFile(t, "a.txt", "one", "first")
+	fix := commitFile(t, "c.txt", "three", "fix")
+
+	manifest := writeManifestFull(t, []string{"dev", "test", "prod"}, map[string]envSpec{
+		"dev":  {sha: fix},
+		"test": {sha: fix},
+		"prod": {sha: base, version: "v1.3.0"},
+	})
+
+	p := newPlanner(t, manifest)
+	res, err := p.Plan(fix, "prod")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if res.HotfixVersionCandidate != "v1.3.1" {
+		t.Errorf("version candidate = %q, want v1.3.1 (finalize patch-bumps a published base)", res.HotfixVersionCandidate)
+	}
+}
+
 func TestPlan_VersionCandidateAndProtectionSuggestions(t *testing.T) {
 	newScratchRepo(t)
 	base := commitFile(t, "a.txt", "one", "first")

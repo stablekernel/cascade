@@ -699,6 +699,11 @@ With `--json`:
 }
 ```
 
+`hotfix_version_candidate` is the version finalize will allocate: the next nested
+`hotfix.M` segment for an rc-based version, or the next patch bump for a published base
+(for example `v1.3.0` -> `v1.3.1`). See
+[Hotfix version grammar](/cascade/reference/versioning/#hotfix-version-grammar).
+
 The GHA output writes `target_env`, `fix_sha`, `branch`, `base_sha`, `no_op`,
 `branch_created`, `hotfix_version_candidate`, `conflict_expected`, `dry_run`, and the
 `protection_suggestions` commands (as JSON and as multiline text). On the `--commits` path
