@@ -817,9 +817,12 @@ func (p *Promoter) serializeState(current []byte, key string) ([]byte, error) {
 	for env, st := range p.cicdFile.State {
 		writes = append(writes, config.StateWrite{Component: p.component, Env: env, State: st})
 	}
-	if p.cicdFile.LatestRelease != nil {
-		writes = append(writes, config.StateWrite{Component: p.component, Latest: p.cicdFile.LatestRelease})
-	}
+	// No latest_release directive: promotion never mutates the release record,
+	// and the component form node-patches only addressed leaves, so omitting the
+	// directive preserves the component's recorded marker and every sibling
+	// verbatim. Re-emitting the parsed record here previously rewrote (or, for a
+	// component that had never released, synthesized) the component's marker
+	// from the shared top-level record on every save.
 	return config.WriteScopedState(current, key, writes...)
 }
 
