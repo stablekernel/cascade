@@ -101,7 +101,7 @@ When the manifest has a `publish:` callback, promote adds a publish step that ru
 
 ## Hotfix and rollback workflows
 
-Both carry two triggers in one file and both mirror the promote deploy shape. Full operational detail lives in the [hotfix](/cascade/guides/hotfix/) and [rollback](/cascade/guides/rollback/) guides; this is the job-level anatomy.
+Both carry two triggers in one file. Rollback re-runs the same deploy callbacks promote drives; the hotfix deploy jobs are placeholders (see the caution below). Full operational detail lives in the [hotfix](/cascade/guides/hotfix/) and [rollback](/cascade/guides/rollback/) guides; this is the job-level anatomy.
 
 ### `cascade-hotfix.yaml`
 
@@ -111,10 +111,14 @@ Both carry two triggers in one file and both mirror the promote deploy shape. Fu
 | apply | `workflow_dispatch` (not dry-run) | Cherry-pick onto each environment bottom-up; opens a resolution pull request. |
 | check | `pull_request` opened against `env/*` | Validate the manifest while the hotfix pull request is open. |
 | build | merged hotfix pull request | Build the merge SHA (a cherry-pick has no prebuilt artifact). |
-| deploy | merged hotfix pull request | Deploy to the target environment, paired with a rollback job mirroring promote. |
-| finalize | all deploys succeed | Run `cascade hotfix finalize`: write the diverged state, tag, and release. |
+| deploy | merged hotfix pull request | Placeholder: holds the target's GitHub `environment:` gate and prints the configured deploy, but does not invoke it. Paired with an equally placeholder rollback job. |
+| finalize | deploy jobs succeed | Run `cascade hotfix finalize`: write the diverged state, tag, and release. |
 
 Dispatch inputs: `commit` (one or more trunk fix SHAs), `target_env` (every configured environment except the first), `pr_number` (optional, to replay an existing resolution pull request), `dry_run`. The second trigger is `pull_request` on `types: [closed]` against `branches: ['env/*']`, gated on the pull request having merged with the `cascade-hotfix` label.
+
+:::caution[Known limitation: hotfix deploy and rollback jobs do not deploy]
+The `deploy-<name>` and `rollback-<name>` jobs in `cascade-hotfix.yaml` print the deploy they stand in for and succeed, even when the manifest configures a deploy `workflow:`. A green hotfix run cherry-picks, builds, writes the diverged state, tags, and creates the release, but never invokes the configured deploy workflow; run it yourself against the hotfix merge SHA to ship the fix. The `cascade-rollback.yaml` deploy jobs are real reusable-workflow calls and are not affected.
+:::
 
 ### `cascade-rollback.yaml`
 
