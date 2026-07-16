@@ -532,82 +532,25 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 // namespace. The base version and its SHA come from the component's latest
 // published release tag (read under the component's strict prefix), the RC counter
 // base from the component's latest tag, and the commit range from
-// GetCommitsForPaths scoped to the component's path. Both tag lookups scope to the
-// component namespace, so component A's release tags and commits never influence
-// component B's computed version (HLD Section 4 row 3, Section 5). This mirrors the
-// no-environment (tag-derived) single-component path; per-component recorded-state
-// promotion coupling is a later stage.
+// GetCommitsForPaths scoped to the component's path plus its effective extra
+// paths (its extra_paths unioned with top-level shared_paths). Both tag lookups
+// scope to the component namespace, so component A's release tags and commits
+// never influence component B's computed version (HLD Section 4 row 3, Section
+// 5). The scope derivation lives in version.ResolveComponentVersionInputs,
+// shared with `cascade next-version --component`, so the CLI preview and this
+// production path agree by construction. This mirrors the no-environment
+// (tag-derived) single-component path; per-component recorded-state promotion
+// coupling is a later stage.
 func (o *Orchestrator) calculateComponentVersion() (string, error) {
-	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
+	inputs, err := version.ResolveComponentVersionInputs(o.cicdFile.Config, o.component, o.baseDir, "", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("resolving component %q: %w", o.component, err)
-	}
-
-	// Strict per-component grammar: the component reads and emits under its own
-	// prefix only, so a sibling's tags are invisible to it.
-	spec := resolved.TagGrammarSpec()
-
-	var currentDevVersion, nextEnvVersion, nextEnvSHA string
-
-	// Current version (RC-counter base) from the component's own tag namespace.
-	// A failing lookup must surface: a component read as tagless restarts at its
-	// v0.1.0-rc.0, a regressive mint that can collide with published tags.
-	latestTag, _, err := git.GetLatestTagSpec(o.baseDir, spec)
-	if err != nil {
-		return "", fmt.Errorf("reading latest tag for component %q: %w", o.component, err)
-	}
-	if latestTag != "" {
-		currentDevVersion = latestTag
-	}
-
-	// Base version from the component's latest published (non-prerelease) release.
-	latestRelease, releaseSHA, err := git.GetLatestReleaseTagSpec(o.baseDir, spec)
-	if err != nil {
-		return "", fmt.Errorf("reading latest release tag for component %q: %w", o.component, err)
-	}
-	if latestRelease != "" {
-		nextEnvVersion = latestRelease
-		nextEnvSHA = releaseSHA
-	}
-
-	// Commit range: from the component's release base (or the repo's initial
-	// commit on a fresh component) to HEAD, scoped to the component's path so a
-	// sibling component's commits never register a bump here.
-	baseSHA := nextEnvSHA
-	if baseSHA == "" {
-		initial, err := git.GetInitialCommit()
-		if err != nil {
-			return "", fmt.Errorf("resolving initial commit for component %q version range: %w", o.component, err)
-		}
-		baseSHA = initial
-	}
-
-	// Scope the commit range to the component's own path plus its effective extra
-	// paths (its extra_paths unioned with top-level shared_paths), so a commit that
-	// touches only a shared dependency this component declares still registers a
-	// bump. With no extra paths this is just the component path, unchanged.
-	versionPaths := append([]string{resolved.Path}, resolved.ExtraPaths...)
-
-	// A failing enumeration must surface rather than read as "no commits": an
-	// empty range silently under-bumps this component's calculated version.
-	var commits []changelog.ConventionalCommit
-	if baseSHA != "" {
-		gitCommits, cerr := git.GetCommitsForPaths(baseSHA, "HEAD", versionPaths)
-		if cerr != nil {
-			return "", fmt.Errorf("reading commits for component %q version calculation: %w", o.component, cerr)
-		}
-		for _, gc := range gitCommits {
-			if cc := changelog.ParseCommit(gc); cc != nil {
-				commits = append(commits, *cc)
-			}
-		}
+		return "", err
 	}
 
 	log.Debug("Component %s: current=%s base=%s (%d commits under %s)",
-		o.component, currentDevVersion, nextEnvVersion, len(commits), resolved.Path)
+		o.component, inputs.CurrentDevVersion, inputs.NextEnvVersion, len(inputs.Commits), strings.Join(inputs.Paths, ", "))
 
-	calc := version.NewCalculatorWithGrammar(spec)
-	nextVersion, err := calc.CalculateNext(currentDevVersion, nextEnvVersion, commits)
+	nextVersion, err := inputs.Calc.CalculateNext(inputs.CurrentDevVersion, inputs.NextEnvVersion, inputs.Commits)
 	if err != nil {
 		return "", fmt.Errorf("calculating version for component %q: %w", o.component, err)
 	}

@@ -875,6 +875,12 @@ cascade next-version \
 | `--json` | bool | No | Output as JSON |
 | `--component` | string | No | Declared component to scope the version to (multi-component manifests) |
 
+With `--component`, the version is derived from the component's own strict tag
+namespace and a commit range scoped to the component's `path` plus its effective
+extra paths (its `extra_paths` unioned with top-level `shared_paths`). This is
+the same derivation `orchestrate` runs, so the preview matches the version the
+pipeline mints, including for commits that touch only a declared shared path.
+
 Bump rules:
 
 - Breaking change (`feat!`, `BREAKING CHANGE:`) triggers a major bump.

@@ -16,6 +16,13 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **version:** `next-version --component` now derives its commit scope through
+  the same helper as `orchestrate`, so the preview includes the component's
+  `extra_paths`/`shared_paths`. Previously a commit touching only a declared
+  shared path was invisible to the preview, which reported a lower version
+  than the pipeline actually mints. Component tag-lookup failures now surface
+  as errors instead of silently previewing from an empty tag namespace
+
 - **config:** Bump `DefaultCLIVersion` to v0.16.2 and remove the test that
   required the const to equal the repository's latest stable tag. The tag is
   cut before the commit that bumps the const can land, so the guard failed on
