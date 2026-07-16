@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -78,8 +79,13 @@ func TestWriteScopedState_ComponentLatestSetWritesOwnLeafOnly(t *testing.T) {
 	if api["version"] != "api-v1.1.0" || api["sha"] != "apirel2" {
 		t.Errorf("api marker = %v, want version api-v1.1.0 / sha apirel2", api)
 	}
-	if api["released_on"] != "2026-01-01T00:00:00Z" || api["released_by"] != "octocat" {
-		t.Errorf("api marker metadata = %v, want released_on/released_by carried through", api)
+	if api["released_on"] != "2026-01-01T00:00:00Z" {
+		t.Errorf("api marker metadata = %v, want released_on carried through", api)
+	}
+	// released_by is a top-level-only field of the shared record; the
+	// ComponentReleaseState leaf shape does not carry it.
+	if _, has := api["released_by"]; has {
+		t.Errorf("api marker carries top-level-only released_by: %v", api)
 	}
 
 	// The sibling's marker survives verbatim, unmodeled key included.
@@ -103,6 +109,56 @@ func TestWriteScopedState_ComponentLatestSetWritesOwnLeafOnly(t *testing.T) {
 	}
 	if _, flat := latest["sha"]; flat {
 		t.Errorf("component Latest set leaked a flat latest_release.sha:\n%s", got)
+	}
+}
+
+// TestWriteScopedState_ComponentLatestLeafIsComponentShaped drives the exact
+// directive shape production hands over: the finalizer passes the SHARED
+// LatestReleaseState, whose flat fields hold this publish and whose Components
+// map holds every component's recorded marker. The written leaf must be the
+// component's OWN marker only (the ComponentReleaseState shape the typed reader
+// consumes: version/sha/released_on). It must never nest a components map, a
+// sibling's marker, or the top-level-only released_by under the leaf.
+func TestWriteScopedState_ComponentLatestLeafIsComponentShaped(t *testing.T) {
+	got, err := WriteScopedState([]byte(componentLatestManifest), "ci",
+		StateWrite{Component: "api", Latest: &LatestReleaseState{
+			Version:    "api-v1.1.0",
+			SHA:        "apirel2",
+			ReleasedOn: "2026-01-01T00:00:00Z",
+			ReleasedBy: "octocat",
+			Components: map[string]*ComponentReleaseState{
+				"api": {Version: "api-v1.0.0", SHA: "apirel1"},
+				"web": {Version: "web-v2.0.0", SHA: "webrel1"},
+			},
+		}})
+	if err != nil {
+		t.Fatalf("WriteScopedState: %v", err)
+	}
+
+	comps := latestComponents(t, got)
+	api, ok := comps["api"].(map[string]any)
+	if !ok {
+		t.Fatalf("latest_release.components.api missing:\n%s", got)
+	}
+	if _, nested := api["components"]; nested {
+		t.Errorf("component leaf nests a components map (shared record written whole):\n%s", got)
+	}
+	want := map[string]any{
+		"version":     "api-v1.1.0",
+		"sha":         "apirel2",
+		"released_on": "2026-01-01T00:00:00Z",
+	}
+	if !reflect.DeepEqual(api, want) {
+		t.Errorf("api leaf = %v, want exactly the component marker %v", api, want)
+	}
+
+	// The sibling's own top-level marker is untouched.
+	web, ok := comps["web"].(map[string]any)
+	if !ok {
+		t.Fatalf("sibling latest_release.components.web dropped:\n%s", got)
+	}
+	if web["version"] != "web-v2.0.0" || web["sha"] != "webrel1" {
+		t.Errorf("web marker = %v, want verbatim web-v2.0.0 / webrel1", web)
 	}
 }
 

@@ -16,6 +16,13 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **promote:** Record only the publishing component's own release marker
+  (`version`, `sha`, `released_on`) under `latest_release.components.<name>`.
+  Previously a component publish wrote the entire shared release record under
+  its own leaf, nesting a stale snapshot of every component's markers there,
+  and a component promotion save could synthesize a phantom marker for a
+  component that had never released
+
 - **config:** Validate `run_policy`, `on_failure`, and `retries` on the
   `validate` block the same way as builds and deploys: `run_policy` and
   `on_failure` must be one of their documented values and `retries` must stay

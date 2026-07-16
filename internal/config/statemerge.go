@@ -194,6 +194,15 @@ func applyComponentStateLeaf(section *yaml.Node, w StateWrite) error {
 }
 
 // applyComponentLatestLeaf sets or deletes latest_release.components.<Component>.
+//
+// The leaf is the component's OWN release marker, so the directive's flat
+// version/sha/released_on fields are projected into the ComponentReleaseState
+// shape the typed readers consume (ParseManifestFile populates
+// LatestRelease.Components[name] from exactly these keys). Callers hand over
+// the shared LatestReleaseState they already maintain; marshaling that record
+// whole here would nest its per-component Components map (a stale snapshot of
+// every component's marker) and the top-level-only released_by under the
+// publishing component's leaf on every write.
 func applyComponentLatestLeaf(section *yaml.Node, w StateWrite) error {
 	if w.Latest == nil {
 		if comps := existingChild(section, "latest_release", "components"); comps != nil {
@@ -201,7 +210,11 @@ func applyComponentLatestLeaf(section *yaml.Node, w StateWrite) error {
 		}
 		return nil
 	}
-	node, err := valueNode(w.Latest)
+	node, err := valueNode(&ComponentReleaseState{
+		Version:    w.Latest.Version,
+		SHA:        w.Latest.SHA,
+		ReleasedOn: w.Latest.ReleasedOn,
+	})
 	if err != nil {
 		return fmt.Errorf("encoding component latest_release for state write: %w", err)
 	}
