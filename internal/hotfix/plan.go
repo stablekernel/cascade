@@ -339,8 +339,10 @@ type PlanResult struct {
 	// real checker that found no open resolution PR.
 	BranchReset bool `json:"branch_reset"`
 
-	// HotfixVersionCandidate is the next free hotfix version over the target
-	// env's current version base (e.g. v1.0.0-rc.1 -> v1.0.0-rc.1.hotfix.1).
+	// HotfixVersionCandidate is the version finalize will allocate over the
+	// target env's current version: an rc-based version yields its next nested
+	// hotfix segment (v1.0.0-rc.1 -> v1.0.0-rc.1.hotfix.1); a published base
+	// yields the next patch bump (v1.3.0 -> v1.3.1).
 	HotfixVersionCandidate string `json:"hotfix_version_candidate"`
 
 	// ConflictExpected hints whether the cherry-pick is likely to conflict.
@@ -540,9 +542,14 @@ func envTipDivergenceError(branch, tip, baseSHA string, diverged bool) error {
 		branch, short(tip), short(baseSHA), branch, branch, short(baseSHA))
 }
 
-// hotfixVersionCandidate returns the next free hotfix version over the base of
-// envVersion under spec. A pre-release version yields its first nested hotfix
-// segment, rendered in the configured grammar.
+// hotfixVersionCandidate returns the version finalize's allocateVersion will
+// produce over envVersion under spec, before tag reconciliation. A pre-release
+// version yields its first nested hotfix segment (vX.Y.Z-rc.N.hotfix.1),
+// rendered in the configured grammar. A published base version yields the next
+// patch bump (v1.3.0 -> v1.3.1), mirroring finalize; rendering NextHotfix here
+// instead would silently drop the hotfix segment (String() omits .hotfix.N
+// without a pre-release) and echo the already-published version back as the
+// candidate.
 func hotfixVersionCandidate(spec taggrammar.Spec, envVersion string) (string, error) {
 	if envVersion == "" {
 		return "", fmt.Errorf("target environment has no recorded version; cannot compute hotfix version")
@@ -551,7 +558,11 @@ func hotfixVersionCandidate(spec taggrammar.Spec, envVersion string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("parsing target version %q: %w", envVersion, err)
 	}
-	return v.WithGrammar(spec).NextHotfix().String(), nil
+	v = v.WithGrammar(spec)
+	if v.PreRelease < 0 {
+		return v.Bump(version.BumpPatch).String(), nil
+	}
+	return v.NextHotfix().String(), nil
 }
 
 // envBranch returns the integration branch name for env under this planner's

@@ -68,6 +68,12 @@ A `Migration` section is added to any release that bumps `schema_version`.
   cron and dispatch types, a custom git identity with GPG signing, and a
   `$`-carrying environment_url end to end.
 
+- **hotfix:** Report the patch bump (`v1.3.0` -> `v1.3.1`) as the plan's version
+  candidate when the target environment holds a published base version, matching
+  what finalize actually allocates. Previously `hotfix plan` echoed the current
+  published version back in its `Version:` line and in the
+  `hotfix_version_candidate` JSON and GHA outputs, because the hotfix segment was
+  silently dropped when rendered without a pre-release
 - **generate:** Treat a release artifact that omits `required:` as required,
   matching the documented default. Previously the unset value silently made
   the artifact optional, so a release with a missing asset warned and

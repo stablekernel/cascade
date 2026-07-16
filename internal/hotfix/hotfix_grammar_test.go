@@ -55,3 +55,14 @@ func TestHotfixVersionCandidate_CustomToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "1.4.0-beta.2.hotfix.1", got)
 }
+
+// TestHotfixVersionCandidate_PublishedBase proves the planner reports the
+// patch bump finalize allocates for a published (non-pre-release) base.
+// Rendering NextHotfix here would silently drop the hotfix segment (String()
+// omits .hotfix.N without a pre-release) and echo the current published
+// version back as the candidate.
+func TestHotfixVersionCandidate_PublishedBase(t *testing.T) {
+	got, err := hotfixVersionCandidate(taggrammar.Default(), "v1.3.0")
+	require.NoError(t, err)
+	require.Equal(t, "v1.3.1", got)
+}
