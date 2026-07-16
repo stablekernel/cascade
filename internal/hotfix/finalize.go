@@ -402,8 +402,12 @@ func (f *Finalizer) SetBuildResult(name, result string) {
 // first.
 //
 // Finalize is idempotent on identical inputs: a rerun after the state already
-// records the merge SHA is a no-op that neither double-applies patches nor
-// re-snapshots Previous.
+// records the merge SHA neither double-applies patches nor re-snapshots
+// Previous. Because the state commit lands before the tag/release step, a rerun
+// additionally converges the release: it re-invokes the release step with the
+// recorded version (find-or-create, tolerant of an existing tag), so a run that
+// failed between the state commit and the release creation is completed by its
+// rerun rather than silently reported as done with the release missing.
 func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseSHA string) error {
 	if len(fixSHAs) == 0 {
 		return fmt.Errorf("no fix commits supplied; finalize needs at least one trunk commit")
@@ -459,9 +463,19 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 	branch := f.envBranch(targetEnv)
 
 	// Idempotency gate: if state already records the merge SHA, finalize already
-	// ran for these inputs. Re-running must not double-apply.
+	// committed the state marker for these inputs. Re-running must not
+	// double-apply state, but it must not blind-return success either: the state
+	// commit precedes tag/release creation below, so a rerun can land here with
+	// the release step never completed (a release-API failure reddened the prior
+	// run after the marker was pushed). Converge instead of skip: re-invoke the
+	// release step idempotently with the version the prior run recorded, so the
+	// rerun completes the missing tag/release. When everything already exists
+	// the re-invocation is a no-op-shaped update.
 	if prior.SHA == mergeSHA {
-		return nil
+		if f.dryRun {
+			return nil
+		}
+		return f.convergeRelease(cfg, targetEnv, mergeSHA, prior, fixSHAs[0])
 	}
 
 	// Cross-check the merge SHA equals the env-branch tip.
@@ -516,12 +530,31 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 	}
 
 	// Create the hotfix tag and release object. The release body references the
-	// first carried commit as the representative fix SHA.
-	if err := f.createRelease(cfg, targetEnv, mergeSHA, hotfixVersion, fixSHAs[0], baseVersion); err != nil {
+	// first carried commit as the representative fix SHA. This runs AFTER the
+	// state commit: the recorded version pins the allocation, so a failure here
+	// is recovered by a rerun that re-creates the same tag through the
+	// idempotency-gate convergence above, never by re-allocating a new version.
+	if err := f.createRelease(cfg, targetEnv, mergeSHA, hotfixVersion, fixSHAs[0], baseVersion, release.ActionCreate); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// convergeRelease completes the tag/release step for a finalize whose state
+// marker is already recorded on trunk. The hotfix version is the one the prior
+// run allocated and committed (prior.Version), so a rerun converges on the same
+// tag rather than minting a new one; the base version for the release body is
+// recovered from the Previous ring snapshot that same run pushed. The release
+// step runs as a find-or-create update, so it creates whatever is missing (git
+// tag, release object, prerelease promotion) and is a no-op-shaped update when
+// everything already exists.
+func (f *Finalizer) convergeRelease(cfg *config.TrunkConfig, targetEnv, mergeSHA string, prior *config.EnvState, fixSHA string) error {
+	var baseVersion string
+	if len(prior.Previous) > 0 {
+		baseVersion = prior.Previous[0].Version
+	}
+	return f.createRelease(cfg, targetEnv, mergeSHA, prior.Version, fixSHA, baseVersion, release.ActionUpdate)
 }
 
 // applyHotfixState applies the hotfix state mutation for targetEnv onto cicd
@@ -760,7 +793,14 @@ func (f *Finalizer) recordSubstates(state *config.EnvState, sha, ver, timestamp 
 // createRelease creates the hotfix tag and release object. For a prerelease-env
 // target the release is promoted to a GitHub prerelease, superseding the env's
 // current prerelease object; for other envs it stays a draft.
-func (f *Finalizer) createRelease(cfg *config.TrunkConfig, targetEnv, sha, hotfixVersion, fixSHA, baseVersion string) error {
+//
+// action selects the release verb: the first finalize run passes ActionCreate
+// (the release cannot pre-exist, and create skips the find-release lookup and
+// its eventual-consistency retry window); the idempotency-gate convergence
+// passes ActionUpdate, whose find-or-create shape completes a partially created
+// release (tag creation treats an existing tag as success) instead of erroring
+// or duplicating it.
+func (f *Finalizer) createRelease(cfg *config.TrunkConfig, targetEnv, sha, hotfixVersion, fixSHA, baseVersion string, action release.Action) error {
 	mgr, err := f.resolveReleaseManager()
 	if err != nil {
 		return err
@@ -769,7 +809,7 @@ func (f *Finalizer) createRelease(cfg *config.TrunkConfig, targetEnv, sha, hotfi
 	body := fmt.Sprintf("Hotfix based on %s, carries trunk commit %s.", baseVersion, short(fixSHA))
 
 	created, err := mgr.Manage(release.Options{
-		Action:      release.ActionCreate,
+		Action:      action,
 		Environment: targetEnv,
 		SHA:         sha,
 		Tag:         hotfixVersion,

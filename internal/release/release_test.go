@@ -461,7 +461,7 @@ func TestManager_Update_ExistingRelease(t *testing.T) {
 
 	manager := &Manager{
 		client:  server.Client(),
-		baseURL: server.URL,
+		baseURL: server.URL + "/github", // marks as a GitHub host so update() exercises the real find+PATCH path (non-GitHub hosts short-circuit to create())
 		token:   "test-token",
 		repo:    "owner/repo",
 	}

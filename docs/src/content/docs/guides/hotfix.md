@@ -25,6 +25,8 @@ The `plan` job fetches env branches and tags and runs `cascade hotfix plan`. The
 The deploy and rollback jobs in `cascade-hotfix.yaml` do not yet invoke the configured deploy workflow. Each one holds the target's GitHub `environment:` gate, prints the deploy it stands in for, and succeeds. A green hotfix run therefore cherry-picks, builds, and finalizes (state, tag, release), but does not deploy the fix. Ship it yourself by running the configured deploy workflow against the hotfix merge SHA. The standalone `cascade-rollback.yaml` workflow is not affected; its deploy jobs invoke the real deploy callbacks.
 :::
 
+Finalize is rerun-safe. It records the diverged state on trunk, then creates the hotfix tag and release. If the run fails partway (for example the release API errors after the state commit), rerun the finalize job: the rerun completes the missing tag or release with the version already recorded, without double-applying state or allocating a new version.
+
 ## Environment branches and the stale-branch self-heal
 
 When an environment needs to diverge, the fix is staged on `env/<env>` (for example `env/test`), created on demand at the environment's recorded state SHA. The cherry-pick itself lands on `hotfix/<env>/<short-sha>`, based on `env/<env>`.
