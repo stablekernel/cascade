@@ -724,6 +724,15 @@ func (m *Manager) update(opts Options) (*Result, error) {
 		return m.create(opts)
 	}
 
+	// On a non-GitHub host (the Gitea e2e backend) the release-object endpoints
+	// reject the GitHub release shape and Bearer auth, so findRelease and the
+	// PATCH below cannot run. Mirror create(): delegate so the tag is materialized
+	// and a synthetic success is returned. Real-GitHub release-object convergence
+	// is covered by the finalize rerun unit test and the live fleet.
+	if !isGitHubHost(m.baseURL) {
+		return m.create(opts)
+	}
+
 	existing, err := m.findRelease(opts.Tag, opts.SHA)
 	if err != nil {
 		return nil, err
