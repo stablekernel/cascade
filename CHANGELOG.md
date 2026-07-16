@@ -16,6 +16,20 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **orchestrate:** A component-scoped orchestration now plans against the
+  component's fully resolved config instead of the root config. The generator
+  emits a component's orchestrate workflow from the resolved config, so its jobs
+  are named and gated on that component's own build and deploy names, while the
+  runtime enumerated the root config and emitted its `run_build_*` /
+  `run_deploy_*` outputs under root names. Every gate read an absent output and
+  evaluated false, so each build and deploy skipped deterministically while the
+  orchestration still recorded state and reported success. Under the documented
+  multi-component manifest, where no top-level `builds:` or `deploys:` are
+  declared at all, this meant no component ever built or deployed anything. The
+  component's effective environment ladder now also decides the no-environment
+  state key, and its extra paths, strict tag grammar, and changelog refs are
+  resolved once at construction rather than re-derived per concern
+
 - **rollback:** Drive a component-scoped rollback from the component's resolved
   configuration. The runtime narrowed only the environment ladder onto the root
   config, so a component overriding `deploys` had its rollback planned against

@@ -30,6 +30,15 @@ type Orchestrator struct {
 	// to today. It scopes version derivation to the component's path and strict
 	// tag namespace (calculateComponentVersion).
 	component string
+	// resolved is the scoped component's fully resolved view, resolved once at
+	// construction by applyResolvedComponentConfig. It is nil on the
+	// single-component path and for a component the config does not declare.
+	// It is retained because the resolved config it produced declares no nested
+	// components of its own (ResolveComponent clears them), so the component
+	// cannot be resolved a second time from cicdFile.Config: every downstream
+	// consumer of the component's path, extra paths, and strict tag grammar
+	// reads them from here instead of re-resolving.
+	resolved *config.ResolvedComponent
 	// pushBackoff is the delay between state-write push retries. A zero value
 	// selects the shared git package default; tests override it to keep the retry
 	// loop fast. It is threaded into git.PushWithRebaseRetry via git.WithBackoff.
@@ -67,15 +76,6 @@ func NewOrchestrator(configPath, manifestKey, environment string, opts ...Option
 
 	baseDir := filepath.Dir(filepath.Dir(configPath)) // Go up from .github/manifest.yaml
 
-	// For no-environment setups, use default state key
-	if environment == "" && len(cicdFile.Config.Environments) == 0 {
-		environment = DefaultStateKey
-		log.Debug("No environment specified and no environments configured - using state key: %s", environment)
-	}
-
-	log.Debug("Environments: %v", cicdFile.Config.EnvironmentNames())
-	log.Debug("Base directory: %s", baseDir)
-
 	o := &Orchestrator{
 		configPath:  configPath,
 		environment: environment,
@@ -104,7 +104,79 @@ func NewOrchestrator(configPath, manifestKey, environment string, opts ...Option
 			return nil, fmt.Errorf("failed to overlay component state: %w", err)
 		}
 	}
+
+	// Swap in the component's resolved config before anything reads the config,
+	// so every read below and in Setup/Finalize sees the component's effective
+	// view rather than the repo-global one.
+	if err := o.applyResolvedComponentConfig(); err != nil {
+		return nil, err
+	}
+
+	// For no-environment setups, use default state key. This is decided against
+	// the EFFECTIVE config: a component overriding environments owns its own
+	// ladder, so deciding it against the root list would pick the wrong state key
+	// for a component whose ladder differs from the repo-global one.
+	if o.environment == "" && len(o.cicdFile.Config.Environments) == 0 {
+		o.environment = DefaultStateKey
+		log.Debug("No environment specified and no environments configured - using state key: %s", o.environment)
+	}
+
+	log.Debug("Environments: %v", o.cicdFile.Config.EnvironmentNames())
+	log.Debug("Base directory: %s", baseDir)
+
 	return o, nil
+}
+
+// applyResolvedComponentConfig swaps the working config for the scoped
+// component's fully resolved config, read via config.TrunkConfig.ResolveComponent,
+// and retains the resolved view on the orchestrator.
+//
+// The generator emits a component's orchestrate workflow from that same resolved
+// config (generate/plan.go), so its setup gates read
+// needs.setup.outputs.run_build_<name> for the COMPONENT's build and deploy
+// names. A runtime that enumerates the root config's callbacks emits outputs
+// under root names, every gate reads an absent output and evaluates false, and
+// so every build and deploy silently skips while the run still reports success.
+// Under the documented multi-component manifest, where no top-level builds or
+// deploys are declared at all, the root enumeration is empty and nothing runs.
+// The runtime must therefore plan against the same config the workflow it is
+// driving was generated from. The assignment is wholesale, never per-field:
+// copying selected fields is exactly how this class of defect keeps recurring.
+//
+// It is a no-op when component is empty (the single-component path stays
+// byte-identical), when the manifest carries no config, or when the config does
+// not declare the component. A component recorded only under state.components
+// (per-component state seeding) has no config.components entry and so nothing to
+// resolve; leaving the root config in place preserves the existing refusal that
+// calculateComponentVersion raises for such a name, which is the correct outcome
+// because an undeclared component has no tag namespace of its own and would
+// otherwise mint an unprefixed version colliding with the repo-global one.
+func (o *Orchestrator) applyResolvedComponentConfig() error {
+	if o.component == "" || o.cicdFile.Config == nil {
+		return nil
+	}
+	if _, declared := o.cicdFile.Config.Components[o.component]; !declared {
+		return nil
+	}
+	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
+	if err != nil {
+		return fmt.Errorf("resolving component %q: %w", o.component, err)
+	}
+	// Carry the component namespace boundary into the working grammar. A
+	// component reads and emits its versions under its resolved grammar with
+	// StrictPrefix forced true (ResolvedComponent.TagGrammarSpec's isolation
+	// invariant). Every grammar read on this path already routes through
+	// TagGrammarSpec, so this flip changes no behaviour today; it keeps the
+	// working config from asserting a permissive grammar the component's tags
+	// are never actually read under, which is the divergence that let the
+	// promote downgrade gate fail open on prefixed versions.
+	if resolved.Config.TagGrammar == nil {
+		resolved.Config.TagGrammar = &config.TagGrammarConfig{}
+	}
+	resolved.Config.TagGrammar.StrictPrefix = true
+	o.resolved = resolved
+	o.cicdFile.Config = resolved.Config
+	return nil
 }
 
 // Setup runs the setup phase and returns the result.
@@ -374,19 +446,15 @@ func (o *Orchestrator) detectChanges(baseSHA, headSHA string, triggers []string)
 
 // componentExtraPaths returns the effective extra path set for the scoped
 // component: its extra_paths unioned with the manifest's top-level shared_paths.
-// It returns nil on the single-component path (o.component == ""), so change
-// detection there is byte-identical. A resolution error is logged and treated as
-// no extra paths rather than failing setup.
+// It reads the view resolved once at construction. It returns nil on the
+// single-component path (o.component == ""), so change detection there is
+// byte-identical, and nil for a component the config does not declare, which
+// carries no extra paths to add.
 func (o *Orchestrator) componentExtraPaths() []string {
-	if o.component == "" {
+	if o.resolved == nil {
 		return nil
 	}
-	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
-	if err != nil {
-		log.Warn("Failed to resolve component %s for change detection: %v", o.component, err)
-		return nil
-	}
-	return resolved.ExtraPaths
+	return o.resolved.ExtraPaths
 }
 
 // withExtraPaths unions a callback's own triggers with the component's effective
@@ -541,8 +609,20 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 // production path agree by construction. This mirrors the no-environment
 // (tag-derived) single-component path; per-component recorded-state promotion
 // coupling is a later stage.
+//
+// It derives from the view resolved at construction. A component the config does
+// not declare has no resolved view, and resolving it from the root config raises
+// the "not declared" refusal: an undeclared component has no tag namespace of its
+// own, so orchestrating it would mint an unprefixed version colliding with the
+// repo-global one. Refusing loudly is the correct outcome and is preserved here.
 func (o *Orchestrator) calculateComponentVersion() (string, error) {
-	inputs, err := version.ResolveComponentVersionInputs(o.cicdFile.Config, o.component, o.baseDir, "", "HEAD")
+	resolveInputs := func() (*version.ComponentVersionInputs, error) {
+		if o.resolved != nil {
+			return version.ResolveComponentVersionInputsFor(o.resolved, o.baseDir, "", "HEAD")
+		}
+		return version.ResolveComponentVersionInputs(o.cicdFile.Config, o.component, o.baseDir, "", "HEAD")
+	}
+	inputs, err := resolveInputs()
 	if err != nil {
 		return "", err
 	}
@@ -648,12 +728,13 @@ func (o *Orchestrator) calculateComponentChangelogRefs() (string, string) {
 		}
 	}
 
-	// 2b. No recorded marker: the component's latest published release tag.
-	// Failures fall through to the initial-commit tier rather than erroring,
-	// matching this function's best-effort contract; the version calculation
-	// path surfaces the same lookup's errors loudly.
-	if resolved, err := o.cicdFile.Config.ResolveComponent(o.component); err == nil {
-		if tag, sha, tagErr := git.GetLatestReleaseTagSpec(o.baseDir, resolved.TagGrammarSpec()); tagErr == nil && sha != "" {
+	// 2b. No recorded marker: the component's latest published release tag,
+	// read under the component's strict grammar from the view resolved at
+	// construction. Failures fall through to the initial-commit tier rather than
+	// erroring, matching this function's best-effort contract; the version
+	// calculation path surfaces the same lookup's errors loudly.
+	if o.resolved != nil {
+		if tag, sha, tagErr := git.GetLatestReleaseTagSpec(o.baseDir, o.resolved.TagGrammarSpec()); tagErr == nil && sha != "" {
 			return sha, tag
 		}
 	}
@@ -664,20 +745,13 @@ func (o *Orchestrator) calculateComponentChangelogRefs() (string, string) {
 }
 
 // componentEnvironmentNames returns the scoped component's effective env
-// ladder: its environments override when the config declares the component,
-// else the shared global list. A component recorded only under
-// state.components (state-seeded, undeclared) carries no override, so the
-// global ladder applies and resolving the undeclared name is not attempted.
+// ladder. The working config is already the component's resolved config, so its
+// environments are the component's own override when it declares one and the
+// shared list otherwise. A component recorded only under state.components
+// (state-seeded, undeclared) carries no override, so the working config is still
+// the root one and the global ladder applies, as before.
 func (o *Orchestrator) componentEnvironmentNames() []string {
-	if _, declared := o.cicdFile.Config.Components[o.component]; !declared {
-		return o.cicdFile.Config.EnvironmentNames()
-	}
-	resolved, err := o.cicdFile.Config.ResolveComponent(o.component)
-	if err != nil {
-		log.Warn("Failed to resolve component %s for changelog refs: %v", o.component, err)
-		return o.cicdFile.Config.EnvironmentNames()
-	}
-	return resolved.Config.EnvironmentNames()
+	return o.cicdFile.Config.EnvironmentNames()
 }
 
 // writeConfig writes the updated manifest back to disk. It rewrites only the
