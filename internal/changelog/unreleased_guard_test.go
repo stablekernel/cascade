@@ -52,8 +52,7 @@ var unreleasedBulletPattern = regexp.MustCompile(`^- (?:\*\*([^*]+):\*\*)?`)
 // the failure mode that kept recurring: a user-facing commit whose scope
 // has no [Unreleased] representation at all fails the suite.
 //
-// The test skips on shallow or tagless checkouts, like
-// TestDefaultCLIVersion_MatchesLatestReleaseTag: full local clones and CI
+// The test skips on shallow or tagless checkouts: full local clones and CI
 // jobs whose checkout fetches tags and full history enforce it.
 func TestChangelog_UnreleasedCoversUserFacingCommits(t *testing.T) {
 	if out, err := exec.Command("git", "rev-parse", "--is-shallow-repository").Output(); err != nil {

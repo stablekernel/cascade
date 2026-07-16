@@ -99,7 +99,7 @@ ci:
       - name: prod
         gha_environment: production
         environment_url: "https://app.example.com"
-    cli_version: v0.16.1
+    cli_version: v0.16.2
 ```
 
 Each entry is one of two forms:

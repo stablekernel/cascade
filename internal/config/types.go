@@ -324,9 +324,9 @@ func (c *TrunkConfig) ValidateSchemaVersion() (warnings []string, fatalErr error
 
 // DefaultCLIVersion is the immutable cascade release tag pinned into generated
 // workflows when cli_version is unset (or set to the mutable "latest"). Bump this
-// with each cascade release so generated pipelines track the newest stable tag;
-// TestDefaultCLIVersion_MatchesLatestReleaseTag fails when it lags the repo's tags.
-const DefaultCLIVersion = "v0.16.1"
+// with each cascade release so generated pipelines track the newest stable tag,
+// and keep the doc examples in sync (TestDefaultCLIVersion_MatchesDocsExamples).
+const DefaultCLIVersion = "v0.16.2"
 
 // GetCLIVersion returns the configured CLI version, resolving mutable refs to the
 // immutable pinned default for supply-chain integrity.

@@ -60,10 +60,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.1
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: v0.16.1
+          version: v0.16.2
       - name: Resolve Target
         id: preflight
         env:
@@ -116,10 +116,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.1
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: v0.16.1
+          version: v0.16.2
       - name: Finalize Rollback
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
