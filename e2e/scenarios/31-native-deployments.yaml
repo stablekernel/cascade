@@ -56,7 +56,7 @@ steps:
             - "            --field state=in_progress"
             - "      - name: Set deployment status"
             - "        if: ${{ github.server_url == 'https://github.com' && always() }}"
-            - "            production) environment_url=\"https://app.example.com\" ;;"
+            - "            production) environment_url='https://app.example.com' ;;"
 
   - name: "Regenerate and confirm no drift"
     action: verify
