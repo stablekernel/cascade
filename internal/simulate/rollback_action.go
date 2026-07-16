@@ -59,6 +59,19 @@ func (a *RollbackAction) Apply(ctx ActionContext) (*ActionOutcome, error) {
 		return nil, fmt.Errorf("plan rollback: %w", err)
 	}
 
+	// Mirror the real rollback finalize, which runs the deploy-result gate
+	// between Plan and Apply (gateOnDeployResults in internal/rollback): a
+	// deploy that did not succeed refuses the state write. The simulated gate
+	// reads the injected outcomes instead of DEPLOY_RESULT_* env vars, honors
+	// the same deployable scoping, and holds back the revert, so the preview
+	// never asserts a state write the real operation would refuse.
+	if gated := ctx.Deploys.gateScoped(a.deployable); gated != "" {
+		return &ActionOutcome{
+			Effects:        gatedEffectsFromRollback(plan, gated),
+			AfterStatePath: ctx.ClonePath,
+		}, nil
+	}
+
 	if err := rb.Apply(plan); err != nil {
 		return nil, fmt.Errorf("apply rollback: %w", err)
 	}
@@ -78,10 +91,7 @@ func effectsFromRollback(plan *rollback.Plan) []Effect {
 		return nil
 	}
 
-	target := plan.Environment
-	if plan.Deployable != "" {
-		target = fmt.Sprintf("%s/%s", plan.Environment, plan.Deployable)
-	}
+	target := rollbackTarget(plan)
 
 	if plan.NoOp {
 		return []Effect{{
@@ -107,6 +117,56 @@ func effectsFromRollback(plan *rollback.Plan) []Effect {
 			Detail:      fmt.Sprintf("sha %s, version %s", shortOrNone(plan.Target.SHA), orNone(plan.Target.Version)),
 		},
 	}
+}
+
+// gatedEffectsFromRollback renders the effect sequence for a rollback the
+// deploy-result gate held back. Mirroring the promote preview, the resolved
+// revert is still shown as run (the deploy callbacks did execute; one of them
+// is what failed), but the write-state effect is gated with the blocking
+// reason, because the real finalize aborts before Apply and leaves trunk state
+// unchanged. A gated no-op plan collapses to a single gate effect: there is no
+// revert to show and no write to hold back, but the real operation still
+// refuses, so a clean skip would overstate it.
+func gatedEffectsFromRollback(plan *rollback.Plan, reason string) []Effect {
+	if plan == nil {
+		return nil
+	}
+
+	target := rollbackTarget(plan)
+
+	if plan.NoOp {
+		return []Effect{{
+			Disposition: DispositionGate,
+			Action:      "rollback",
+			Target:      target,
+			Detail:      reason,
+		}}
+	}
+
+	return []Effect{
+		{
+			Disposition: DispositionRun,
+			Action:      "revert",
+			Target:      target,
+			Detail: fmt.Sprintf("to sha %s, version %s (from %s)",
+				shortOrNone(plan.Target.SHA), orNone(plan.Target.Version), plan.Target.Source),
+		},
+		{
+			Disposition: DispositionGate,
+			Action:      "write state",
+			Target:      target,
+			Detail:      reason,
+		},
+	}
+}
+
+// rollbackTarget renders the effect target for a plan: the environment alone,
+// or env/deployable when the rollback is scoped to a single deploy.
+func rollbackTarget(plan *rollback.Plan) string {
+	if plan.Deployable != "" {
+		return fmt.Sprintf("%s/%s", plan.Environment, plan.Deployable)
+	}
+	return plan.Environment
 }
 
 // emptyHistory is a record-only rollback.HistoryReader that reports no git

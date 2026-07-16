@@ -94,6 +94,8 @@ Effects (in order):
 
 A `skipped` outcome is never a failure, but it does not count as a success either. When every configured deploy is skipped, nothing was deployed, so the finalize still gates.
 
+The same gate applies to `simulate rollback`. A rollback re-deploys a prior SHA, and the real finalize refuses the state write when that deploy did not succeed, so injecting a failed (or all-skipped) outcome shows the `write state` effect gated and leaves the previewed state unchanged. With `--deployable`, only the scoped deploy's outcome is in scope, matching the live gate.
+
 ## Multi-component (monorepo) manifests
 
 When a manifest declares `components:`, each component owns an independent state ladder recorded under `state.components.<name>.<env>`, and there are no flat `state.<env>` rows. Scope a simulation to one component with `--component`; the engine reads and replays that component's recorded state through the same path the component-scoped `promote`, `rollback`, and `hotfix` commands use, so the what-if matches the run cascade would actually perform for that component:
