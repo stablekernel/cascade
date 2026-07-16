@@ -51,11 +51,3 @@ func Detect(cfg *config.TrunkConfig, baseSHA, headSHA string) (*DetectResult, er
 func isTriggered(triggers []string, changedFiles []string) bool {
 	return config.MatchAnyTrigger(triggers, changedFiles)
 }
-
-// matchGlob reports whether a single glob pattern matches a path. Negation is
-// handled at the pattern-list level by config.MatchTrigger; this helper matches
-// the bare glob and is retained for the existing unit coverage. A leading "!"
-// is stripped before matching.
-func matchGlob(pattern, path string) bool {
-	return config.MatchGlobPattern(pattern, path)
-}

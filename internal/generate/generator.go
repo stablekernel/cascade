@@ -83,17 +83,6 @@ func workflowDispatchTarget(path string) string {
 	return filepath.Base(path)
 }
 
-// envGHAName returns the GitHub Environment name for a given cascade environment
-// name. When the config has an EnvironmentConfig entry for that env whose
-// GHAEnvironment field is non-empty, that value is returned; otherwise the
-// cascade env name itself is used as the GitHub Environment name.
-func envGHAName(cfg *config.TrunkConfig, cascadeEnvName string) string {
-	if ec, ok := cfg.EnvConfig(cascadeEnvName); ok && ec.GHAEnvironment != "" {
-		return ec.GHAEnvironment
-	}
-	return cascadeEnvName
-}
-
 // anyEnvHasGHAConfig reports whether any environment in the config has an
 // EnvironmentConfig entry with a non-empty GHAEnvironment field.
 func anyEnvHasGHAConfig(cfg *config.TrunkConfig) bool {

@@ -158,29 +158,3 @@ func (r *graphQLResponse) UnmarshalJSON(data []byte) error {
 
 	return nil
 }
-
-// LookupConventionalCommitUsernames looks up GitHub usernames for conventional commits
-func LookupConventionalCommitUsernames(commits []ConventionalCommit, repo string) []ConventionalCommit {
-	if repo == "" || len(commits) == 0 {
-		return commits
-	}
-
-	// Convert to git.Commit for batch lookup
-	gitCommits := make([]git.Commit, len(commits))
-	for i, c := range commits {
-		gitCommits[i] = git.Commit{
-			Hash:        c.FullHash,
-			AuthorEmail: c.AuthorEmail,
-		}
-	}
-
-	// Perform batch lookup
-	gitCommits = LookupGitHubUsernames(gitCommits, repo)
-
-	// Copy usernames back
-	for i := range commits {
-		commits[i].GitHubUsername = gitCommits[i].GitHubUsername
-	}
-
-	return commits
-}

@@ -157,41 +157,6 @@ func TestGraphQLResponseUnmarshal_EmptyRepository(t *testing.T) {
 	}
 }
 
-func TestLookupConventionalCommitUsernames_EmptyInputs(t *testing.T) {
-	tests := []struct {
-		name    string
-		commits []ConventionalCommit
-		repo    string
-	}{
-		{
-			name:    "empty commits",
-			commits: []ConventionalCommit{},
-			repo:    "owner/repo",
-		},
-		{
-			name:    "nil commits",
-			commits: nil,
-			repo:    "owner/repo",
-		},
-		{
-			name: "empty repo",
-			commits: []ConventionalCommit{
-				{FullHash: "abc123", AuthorEmail: "test@example.com"},
-			},
-			repo: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := LookupConventionalCommitUsernames(tt.commits, tt.repo)
-			if len(result) != len(tt.commits) {
-				t.Errorf("LookupConventionalCommitUsernames() changed slice length: got %d, want %d", len(result), len(tt.commits))
-			}
-		})
-	}
-}
-
 func TestLookupGitHubUsernames_NoEmails(t *testing.T) {
 	// Commits without author emails should not trigger API calls
 	commits := []git.Commit{

@@ -299,20 +299,6 @@ func TestEnvGates_Promote_ProdDeployJob_OnlyFinalEnvGated(t *testing.T) {
 	assert.Contains(t, singleBlock, "environment:", "deploy-svc single job must carry job-level environment: since staging has gha_environment")
 }
 
-// TestEnvGates_Helper_envGHAName verifies the envGHAName helper returns the
-// gha_environment value when configured and falls back to the cascade env name.
-func TestEnvGates_Helper_envGHAName(t *testing.T) {
-	cfg := &config.TrunkConfig{
-		Environments: []config.EnvironmentEntry{
-			{Name: "prod", EnvironmentConfig: config.EnvironmentConfig{GHAEnvironment: "production"}},
-		},
-	}
-
-	assert.Equal(t, "production", envGHAName(cfg, "prod"), "should return gha_environment when configured")
-	assert.Equal(t, "dev", envGHAName(cfg, "dev"), "should fall back to cascade env name when not configured")
-	assert.Equal(t, "staging", envGHAName(cfg, "staging"), "should fall back to cascade env name for unconfigured env")
-}
-
 // TestEnvGates_Helper_anyEnvHasGHAConfig verifies anyEnvHasGHAConfig reports
 // correctly for configs with and without gha_environment.
 func TestEnvGates_Helper_anyEnvHasGHAConfig(t *testing.T) {

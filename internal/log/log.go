@@ -71,20 +71,6 @@ func TraceEnabled() bool {
 	return defaultLogger.level >= LevelTrace
 }
 
-// ParseLevel parses a string into a Level.
-func ParseLevel(s string) Level {
-	switch strings.ToLower(s) {
-	case "trace":
-		return LevelTrace
-	case "debug":
-		return LevelDebug
-	case "info":
-		return LevelInfo
-	default:
-		return LevelDebug
-	}
-}
-
 // Info logs at INFO level - key actions like "promoting X to Y".
 func Info(format string, args ...interface{}) {
 	defaultLogger.log(LevelInfo, "INFO", colorGreen, format, args...)

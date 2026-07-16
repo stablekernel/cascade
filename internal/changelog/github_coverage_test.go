@@ -60,20 +60,6 @@ func TestUnmarshalJSON_TopLevelError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestLookupConventionalCommitUsernames_WithCommits(t *testing.T) {
-	// Verify the conversion loop and the username copy-back loop both execute.
-	// The gh CLI call will fail in the test environment; the important thing is
-	// that the function does not panic and returns the same number of commits.
-	commits := []ConventionalCommit{
-		{FullHash: "abc1234567", AuthorEmail: "alice@example.com", Description: "first change"},
-		{FullHash: "def1234567", AuthorEmail: "bob@example.com", Description: "second change"},
-	}
-	result := LookupConventionalCommitUsernames(commits, "owner/repo")
-	require.Len(t, result, 2)
-	assert.Equal(t, "first change", result[0].Description)
-	assert.Equal(t, "second change", result[1].Description)
-}
-
 func TestLookupGitHubUsernames_InvalidRepoFormat(t *testing.T) {
 	// A repo without a slash propagates to lookupAuthorsBatch which returns empty,
 	// so no commit gets a username.

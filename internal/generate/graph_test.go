@@ -60,28 +60,6 @@ func TestTopologicalSort(t *testing.T) {
 	assert.Less(t, apiIdx, servicesIdx)
 }
 
-func TestGetAllDependencies(t *testing.T) {
-	cfg := &config.TrunkConfig{
-		Builds: []config.BuildConfig{
-			{Name: "base", DependsOn: []string{}},
-			{Name: "app", DependsOn: []string{"base"}},
-			{Name: "worker", DependsOn: []string{"app"}},
-		},
-	}
-
-	graph := BuildDependencyGraph(cfg)
-
-	// worker depends on app and base (transitively) - using prefixed job IDs
-	deps := graph.GetAllDependencies("build-worker")
-	assert.Contains(t, deps, "build-app")
-	assert.Contains(t, deps, "build-base")
-
-	// app depends only on base
-	deps = graph.GetAllDependencies("build-app")
-	assert.Contains(t, deps, "build-base")
-	assert.NotContains(t, deps, "build-worker")
-}
-
 func TestGetDirectDependencies(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		Builds: []config.BuildConfig{

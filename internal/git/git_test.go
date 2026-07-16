@@ -296,60 +296,6 @@ func TestBranchExists(t *testing.T) {
 	}
 }
 
-func TestRemoteBranchSHA(t *testing.T) {
-	dir := newScratchRepo(t)
-
-	wantSHA := commitFile(t, "a.txt", "one", "first commit")
-	runGit(t, "branch", "-M", "main")
-	runGit(t, "branch", "feature")
-
-	clone := t.TempDir()
-	runGit(t, "clone", dir, clone)
-
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(clone); err != nil {
-		t.Fatalf("chdir clone: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(orig); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	runGit(t, "fetch", "origin")
-
-	tests := []struct {
-		name    string
-		remote  string
-		branch  string
-		want    string
-		wantErr bool
-	}{
-		{name: "existing branch", remote: "origin", branch: "feature", want: wantSHA},
-		{name: "missing branch", remote: "origin", branch: "nope", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := RemoteBranchSHA(tt.remote, tt.branch)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("RemoteBranchSHA() expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("RemoteBranchSHA() unexpected error: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("RemoteBranchSHA() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // gitAt runs a git command in dir via "git -C" and fails the test on error. An
 // empty dir runs git without -C (in the process working directory).
 func gitAt(t *testing.T, dir string, args ...string) {
@@ -370,75 +316,6 @@ func configRepo(t *testing.T, dir string) {
 	gitAt(t, dir, "config", "user.email", "test@example.com")
 	gitAt(t, dir, "config", "user.name", "Test User")
 	gitAt(t, dir, "config", "commit.gpgsign", "false")
-}
-
-// TestCommitAndPushWithRetry_AbortsRebaseOnConflict proves that when the retry
-// loop's "git pull --rebase" hits a conflict, the helper aborts the rebase and
-// returns the error instead of looping into a guaranteed-failing push and
-// leaving the repository in a conflicted mid-rebase state.
-func TestCommitAndPushWithRetry_AbortsRebaseOnConflict(t *testing.T) {
-	origin := t.TempDir()
-	if out, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput(); err != nil {
-		t.Fatalf("git init --bare: %v\n%s", err, out)
-	}
-
-	// Seed origin/main with a base version of the shared state file.
-	seed := t.TempDir()
-	gitAt(t, "", "clone", origin, seed)
-	configRepo(t, seed)
-	if err := os.WriteFile(filepath.Join(seed, "state.txt"), []byte("base\n"), 0o600); err != nil {
-		t.Fatalf("write seed file: %v", err)
-	}
-	gitAt(t, seed, "add", "state.txt")
-	gitAt(t, seed, "commit", "-m", "seed state")
-	gitAt(t, seed, "push", "origin", "main")
-
-	// A local clone at the base state; this is where the helper runs.
-	local := t.TempDir()
-	gitAt(t, "", "clone", origin, local)
-	configRepo(t, local)
-
-	// Another writer advances origin/main with a conflicting change to the
-	// same file, so the local push will be rejected and the rebase will
-	// conflict.
-	other := t.TempDir()
-	gitAt(t, "", "clone", origin, other)
-	configRepo(t, other)
-	if err := os.WriteFile(filepath.Join(other, "state.txt"), []byte("remote change\n"), 0o600); err != nil {
-		t.Fatalf("write other file: %v", err)
-	}
-	gitAt(t, other, "add", "state.txt")
-	gitAt(t, other, "commit", "-m", "remote change")
-	gitAt(t, other, "push", "origin", "main")
-
-	// Run the helper from the local clone.
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(local); err != nil {
-		t.Fatalf("chdir local: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(orig); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.WriteFile(filepath.Join(local, "state.txt"), []byte("local change\n"), 0o600); err != nil {
-		t.Fatalf("write local file: %v", err)
-	}
-
-	err = CommitAndPushWithRetry("state.txt", "local change")
-	if err == nil {
-		t.Fatal("CommitAndPushWithRetry() with a conflicting remote: expected error, got nil")
-	}
-
-	// The repository must not be left mid-rebase.
-	for _, name := range []string{"rebase-merge", "rebase-apply"} {
-		if _, statErr := os.Stat(filepath.Join(local, ".git", name)); statErr == nil {
-			t.Fatalf("repository left mid-rebase: .git/%s still present", name)
-		}
-	}
 }
 
 // sharedRemoteClones builds a bare remote plus two working clones tracking it.
@@ -677,34 +554,6 @@ func TestGetLatestReleaseTag_ScopesToDir(t *testing.T) {
 	}
 	if sha == "" {
 		t.Errorf("GetLatestReleaseTag() returned empty SHA for %q", got)
-	}
-}
-
-func TestIsValidVersionTag(t *testing.T) {
-	tests := []struct {
-		tag  string
-		want bool
-	}{
-		{"v1.2.3", true},
-		{"v0.5.1", true},
-		{"v1.0.1-rc.0", true},
-		{"v1.0.1-rc.4.hotfix.5", true},
-		{"1.2.3", true},        // empty prefix is allowed
-		{"release1.2.3", true}, // alphabetic prefix is allowed
-		{"v0.6.0-dryrun.1", false},
-		{"vnightly", false},
-		{"nightly", false},
-		{"latest", false},
-		{"v1.2", false},
-		{"v1.2.3-rc", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.tag, func(t *testing.T) {
-			if got := IsValidVersionTag(tt.tag); got != tt.want {
-				t.Errorf("IsValidVersionTag(%q) = %v, want %v", tt.tag, got, tt.want)
-			}
-		})
 	}
 }
 

@@ -41,15 +41,6 @@ func BoundaryEnv(dir string) []string {
 	return append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(abs))
 }
 
-// IsValidVersionTag reports whether tag is a well-formed cascade version tag
-// under the default grammar. Tags that do not match (for example a
-// vX.Y.Z-dryrun.N exercise tag, a foreign "nightly" or "latest" tag, or a typo)
-// are invisible to version discovery so they can never be mistaken for the
-// latest released or prereleased version.
-func IsValidVersionTag(tag string) bool {
-	return IsValidVersionTagSpec(taggrammar.Default(), tag)
-}
-
 // IsValidVersionTagSpec reports whether tag is a well-formed version tag under
 // spec. Version discovery and git both read this from the canonical grammar, so
 // the predicate can never drift from the parser the way a hand-copied regex
@@ -407,59 +398,25 @@ func newPushOptions(opts []Option) pushOptions {
 	return o
 }
 
-// CommitAndPushWithRetry stages filePath, commits it with message, and pushes
-// to the current branch's upstream, retrying a rejected push up to
-// pushRetryAttempts times behind a pull --rebase. A "nothing to commit" state is
-// treated as success (no-op). This
-// is the manifest state-write path shared by promote and hotfix finalize: an
-// API-created commit on real GitHub goes through a different path, so this is the
-// plain-git fallback used when committing locally.
-//
-// Optional behaviour is supplied through Options: WithDir runs the commands in a
-// specific repository, and WithBackoff tunes the retry delay. With no options the
-// call behaves identically to the original positional signature.
-func CommitAndPushWithRetry(filePath, message string, opts ...Option) error {
-	o := newPushOptions(opts)
-
-	cmd := exec.Command("git", "add", filePath)
-	cmd.Dir = o.dir
-	cmd.Env = BoundaryEnv(o.dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git add failed: %s: %w", string(out), err)
-	}
-
-	cmd = exec.Command("git", "commit", "-m", message)
-	cmd.Dir = o.dir
-	cmd.Env = BoundaryEnv(o.dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		if strings.Contains(string(out), "nothing to commit") {
-			return nil
-		}
-		return fmt.Errorf("git commit failed: %s: %w", string(out), err)
-	}
-
-	return pushWithRebaseRetry(o)
-}
-
 // PushWithRebaseRetry pushes the current branch to its upstream, retrying a
 // rejected push up to pushRetryAttempts times (for example a non-fast-forward
 // caused by a concurrent state writer landing on trunk between checkout and
-// push). It is the push half of CommitAndPushWithRetry, exposed for callers that
-// stage and commit through their own flow and only need the shared retry
-// behaviour. By default a rejected push is retried behind a "git pull --rebase",
-// aborting the rebase and returning the wrapped error on a conflict rather than
-// leaving the repository mid-rebase. Passing WithReapply switches the retry to
-// re-derive the owned state leaf against re-fetched trunk instead, so an owned
-// leaf converges against a concurrent sibling's adjacent leaf without conflict.
+// push). It is exposed for callers that stage and commit through their own flow
+// and only need the shared retry behaviour. By default a rejected push is
+// retried behind a "git pull --rebase", aborting the rebase and returning the
+// wrapped error on a conflict rather than leaving the repository mid-rebase.
+// Passing WithReapply switches the retry to re-derive the owned state leaf
+// against re-fetched trunk instead, so an owned leaf converges against a
+// concurrent sibling's adjacent leaf without conflict.
 func PushWithRebaseRetry(opts ...Option) error {
 	return pushWithRebaseRetry(newPushOptions(opts))
 }
 
-// pushWithRebaseRetry is the single rebase-retry loop shared by
-// CommitAndPushWithRetry and PushWithRebaseRetry. Keeping one implementation
-// means the re-apply and rebase-abort-on-conflict behaviours live in exactly one
-// place. When o.reapply is set it re-derives the owned leaf against re-fetched
-// trunk on each rejected push; otherwise it falls back to a textual rebase.
+// pushWithRebaseRetry is the single rebase-retry loop behind PushWithRebaseRetry.
+// Keeping one implementation means the re-apply and rebase-abort-on-conflict
+// behaviours live in exactly one place. When o.reapply is set it re-derives the
+// owned leaf against re-fetched trunk on each rejected push; otherwise it falls
+// back to a textual rebase.
 //
 // Every attempt emits a stable "cascade-state-write:" log line carrying the
 // attempt count, so a live run can be grepped to prove a concurrent wave
@@ -648,34 +605,6 @@ func CurrentBranch() (string, error) {
 	return branch, nil
 }
 
-// CommitAndPush stages a file, commits with the given message, and pushes to origin.
-func CommitAndPush(filePath, message string) error {
-	// Dry-run backstop: refuse the commit-and-push under --dry-run.
-	if err := globals.GuardMutation(fmt.Sprintf("commit and push %s", filePath)); err != nil {
-		return err
-	}
-
-	// Stage the file
-	cmd := exec.Command("git", "add", filePath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git add: %w\n%s", err, output)
-	}
-
-	// Commit
-	cmd = exec.Command("git", "commit", "-m", message)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git commit: %w\n%s", err, output)
-	}
-
-	// Push
-	cmd = exec.Command("git", "push")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git push: %w\n%s", err, output)
-	}
-
-	return nil
-}
-
 // IsAncestor reports whether ancestor is an ancestor of descendant by running
 // "git merge-base --is-ancestor". An exit code of 0 means true, an exit code of 1
 // means false, and any other exit code or execution failure is returned as an error.
@@ -721,22 +650,6 @@ func BranchExists(remote, name string) (bool, error) {
 	}
 
 	return false, fmt.Errorf("git rev-parse --verify %s: %w", ref, err)
-}
-
-// RemoteBranchSHA returns the SHA of the remote-tracking ref
-// refs/remotes/<remote>/<name> by running "git rev-parse". The returned SHA is
-// whitespace-trimmed. An error is returned if the ref cannot be resolved.
-//
-// This resolves a remote-tracking ref, so the remote must have been fetched first.
-// A shallow or partial fetch that omits the branch will cause this to fail.
-func RemoteBranchSHA(remote, name string) (string, error) {
-	ref := fmt.Sprintf("refs/remotes/%s/%s", remote, name)
-	cmd := exec.Command("git", "rev-parse", ref)
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse %s: %w", ref, err)
-	}
-	return strings.TrimSpace(string(output)), nil
 }
 
 // ListRemoteBranches returns the branch names known for the given remote via the

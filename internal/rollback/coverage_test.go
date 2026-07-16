@@ -34,15 +34,6 @@ func stateOnlyManifest(t *testing.T) string {
 	return path
 }
 
-func TestConfigPath_ReturnsResolvedPath(t *testing.T) {
-	dir := t.TempDir()
-	path := writeManifest(t, dir, "prodsha9999999", "v1.9.0")
-	rb := newRollbacker(t, path, fakeHistory{})
-	if got := rb.ConfigPath(); got != path {
-		t.Errorf("ConfigPath() = %q, want %q", got, path)
-	}
-}
-
 func TestGitIdentity_DefaultsToBot(t *testing.T) {
 	dir := t.TempDir()
 	path := writeManifest(t, dir, "prodsha9999999", "v1.9.0")

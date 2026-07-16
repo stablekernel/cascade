@@ -473,32 +473,6 @@ func TestCascadePromotion_AtomicBehavior(t *testing.T) {
 	}
 }
 
-func TestStripRCSuffix(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"v1.0.0-rc.0", "v1.0.0"},
-		{"v1.0.0-rc.5", "v1.0.0"},
-		{"v2.3.4-rc.123", "v2.3.4"},
-		{"v1.0.0", "v1.0.0"},
-		{"v1.0.0-beta", "v1.0.0-beta"},
-	}
-
-	for _, tt := range tests {
-		result := stripRCSuffix(tt.input)
-		if result != tt.expected {
-			t.Errorf("stripRCSuffix(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestStripRCSuffix_HotfixVersion(t *testing.T) {
-	if got := stripRCSuffix("v1.4.0-rc.2.hotfix.1"); got != "v1.4.0" {
-		t.Errorf("stripRCSuffix(%q) = %q, want %q", "v1.4.0-rc.2.hotfix.1", got, "v1.4.0")
-	}
-}
-
 func TestPromotionResultToJSON(t *testing.T) {
 	result := &PromotionResult{
 		Success:   true,

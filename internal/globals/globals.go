@@ -5,10 +5,9 @@ package globals
 import "sync"
 
 var (
-	mu        sync.RWMutex
-	dryRun    bool
-	json      bool
-	ghaOutput bool
+	mu     sync.RWMutex
+	dryRun bool
+	json   bool
 )
 
 // SetDryRun sets the dry-run mode flag.
@@ -37,18 +36,4 @@ func JSON() bool {
 	mu.RLock()
 	defer mu.RUnlock()
 	return json
-}
-
-// SetGHAOutput sets the GitHub Actions output mode flag.
-func SetGHAOutput(v bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	ghaOutput = v
-}
-
-// GHAOutput returns true if GitHub Actions output mode is enabled.
-func GHAOutput() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return ghaOutput
 }
