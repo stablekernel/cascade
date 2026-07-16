@@ -103,6 +103,24 @@ and passes it as `GORELEASER_PREVIOUS_TAG`, so a final changelog spans the whole
 cycle (for example `v0.7.0..v0.8.0`). Candidate and dry-run tags leave the value unset and
 keep their existing incremental changelogs.
 
+### Oversized release notes are truncated
+
+GitHub's Releases API rejects a release body longer than 125,000 characters with a 422
+rather than shortening it server-side, so `manage-release` caps the body before sending it.
+A changelog that fits is sent untouched.
+
+This limit is reachable in normal use. When the previous tag is empty, the changelog spans
+the repository's whole history: that is the state after a state reset, and it is the state
+for the first cascade release in a repository that already has a long commit history.
+
+When the notes do not fit, cascade keeps as many whole changelog entries as the limit
+allows and appends a marker naming the truncation and linking to the changes it dropped.
+The cut lands on a line boundary, so a retained entry is never severed mid-sentence, and
+the marker's own length is reserved from the budget, so the body that ships stays under the
+limit rather than exactly at it. The link is a compare view (`previous...current`) when a
+previous tag is known, and the tag's commit history when one is not. Nothing is lost
+silently: the release always points at the full set of changes.
+
 ## Running a single lane with the repos selector
 
 A full fan-out is the right gate for a release, but it is heavy for developing one

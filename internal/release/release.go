@@ -495,7 +495,7 @@ func (m *Manager) create(opts Options) (*Result, error) {
 	}
 
 	releaseName := generateReleaseName(opts.Environment, opts.Tag)
-	bodyWithStatus := addStatusLine(opts.Changelog, opts.Environment)
+	bodyWithStatus := m.capBody(addStatusLine(opts.Changelog, opts.Environment), opts.PreviousTag, opts.Tag)
 
 	payload := map[string]interface{}{
 		"tag_name":         opts.Tag,
@@ -752,7 +752,7 @@ func (m *Manager) update(opts Options) (*Result, error) {
 	}
 
 	releaseName := generateReleaseName(opts.Environment, opts.Tag)
-	bodyWithStatus := addStatusLine(opts.Changelog, opts.Environment)
+	bodyWithStatus := m.capBody(addStatusLine(opts.Changelog, opts.Environment), opts.PreviousTag, opts.Tag)
 
 	// Always include tag_name to ensure proper association
 	// This fixes issues where draft releases may have "untagged-..." as tag_name
@@ -859,6 +859,7 @@ func (m *Manager) prerelease(opts Options) (*Result, error) {
 		// Preserve existing body if no new changelog provided
 		bodyWithStatus = updateStatusLine(existingBody, opts.Environment)
 	}
+	bodyWithStatus = m.capBody(bodyWithStatus, opts.PreviousTag, tagToUse)
 
 	payload := map[string]interface{}{
 		"tag_name":   tagToUse,
