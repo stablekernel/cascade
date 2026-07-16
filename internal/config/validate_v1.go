@@ -128,6 +128,23 @@ func validateWorkflowRunXOR(prefix, workflow, run, shell string) []string {
 	return errs
 }
 
+// validateCallbackPolicy enforces the run_policy/on_failure enums and the
+// retries bound shared by every callback block (builds, deploys, validate).
+// Empty strings mean "unset" and are accepted; retries must stay in 0..3.
+func validateCallbackPolicy(prefix, runPolicy, onFailure string, retries int) []string {
+	var errs []string
+	if runPolicy != "" && runPolicy != RunPolicyDefault && runPolicy != RunPolicyAlways && runPolicy != RunPolicyForce {
+		errs = append(errs, fmt.Sprintf("%s.run_policy must be one of: default, always, force", prefix))
+	}
+	if onFailure != "" && onFailure != OnFailureAbort && onFailure != OnFailureContinue {
+		errs = append(errs, fmt.Sprintf("%s.on_failure must be one of: abort, continue", prefix))
+	}
+	if retries < 0 || retries > 3 {
+		errs = append(errs, fmt.Sprintf("%s.retries must be between 0 and 3", prefix))
+	}
+	return errs
+}
+
 // validateExternalDeployWorkflowOnly enforces that external deploys are
 // reusable-workflow only. An external deploy resolves to a workflow in the
 // external repo, so it must declare workflow: and cannot use run:/shell:.

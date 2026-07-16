@@ -672,6 +672,81 @@ func TestValidate_NewFields(t *testing.T) {
 	}
 }
 
+func TestValidate_ValidateBlockPolicyParity(t *testing.T) {
+	tests := []struct {
+		name     string
+		validate *ValidateConfig
+		wantErrs []string
+	}{
+		{
+			name: "valid run_policy, on_failure, and retries",
+			validate: &ValidateConfig{
+				Workflow:  "w.yaml",
+				RunPolicy: "always",
+				OnFailure: "continue",
+				Retries:   intPtr(3),
+			},
+			wantErrs: nil,
+		},
+		{
+			name:     "unset retries is valid",
+			validate: &ValidateConfig{Workflow: "w.yaml"},
+			wantErrs: nil,
+		},
+		{
+			name:     "invalid run_policy",
+			validate: &ValidateConfig{Workflow: "w.yaml", RunPolicy: "invalid"},
+			wantErrs: []string{"validate.run_policy must be one of: default, always, force"},
+		},
+		{
+			name:     "invalid on_failure",
+			validate: &ValidateConfig{Workflow: "w.yaml", OnFailure: "invalid"},
+			wantErrs: []string{"validate.on_failure must be one of: abort, continue"},
+		},
+		{
+			name:     "retries above bound",
+			validate: &ValidateConfig{Workflow: "w.yaml", Retries: intPtr(5)},
+			wantErrs: []string{"validate.retries must be between 0 and 3"},
+		},
+		{
+			name:     "retries below bound",
+			validate: &ValidateConfig{Workflow: "w.yaml", Retries: intPtr(-1)},
+			wantErrs: []string{"validate.retries must be between 0 and 3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TrunkConfig{
+				Environments: EnvNames("dev"),
+				Builds: []BuildConfig{
+					{Name: "a", Workflow: "w.yaml"},
+				},
+				Validate: tt.validate,
+			}
+			errs := Validate(&cfg)
+			if tt.wantErrs == nil {
+				if len(errs) != 0 {
+					t.Errorf("Validate() returned errors, want none: %v", errs)
+				}
+				return
+			}
+			for _, want := range tt.wantErrs {
+				found := false
+				for _, err := range errs {
+					if err == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Validate() missing expected error: %q, got: %v", want, errs)
+				}
+			}
+		})
+	}
+}
+
 func TestHasExternalRelease(t *testing.T) {
 	tests := []struct {
 		name     string

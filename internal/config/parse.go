@@ -219,20 +219,8 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validatePermissions(fmt.Sprintf("builds[%d]", i), b.Permissions)...)
 		errors = append(errors, validateSecrets(fmt.Sprintf("builds[%d]", i), b.Secrets)...)
 
-		// Validate run_policy
-		if b.RunPolicy != "" && b.RunPolicy != RunPolicyDefault && b.RunPolicy != RunPolicyAlways && b.RunPolicy != RunPolicyForce {
-			errors = append(errors, fmt.Sprintf("builds[%d].run_policy must be one of: default, always, force", i))
-		}
-
-		// Validate on_failure
-		if b.OnFailure != "" && b.OnFailure != OnFailureAbort && b.OnFailure != OnFailureContinue {
-			errors = append(errors, fmt.Sprintf("builds[%d].on_failure must be one of: abort, continue", i))
-		}
-
-		// Validate retries
-		if b.Retries < 0 || b.Retries > 3 {
-			errors = append(errors, fmt.Sprintf("builds[%d].retries must be between 0 and 3", i))
-		}
+		// Validate run_policy, on_failure, and retries
+		errors = append(errors, validateCallbackPolicy(fmt.Sprintf("builds[%d]", i), b.RunPolicy, b.OnFailure, b.Retries)...)
 
 		// Validate depends_on references using ResolveDependency
 		for _, dep := range b.DependsOn {
@@ -282,20 +270,8 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validateRollout(fmt.Sprintf("deploys[%d]", i), d.Rollout, envNames)...)
 		errors = append(errors, validateDeployTarget(fmt.Sprintf("deploys[%d]", i), d.DeployTarget)...)
 
-		// Validate run_policy
-		if d.RunPolicy != "" && d.RunPolicy != RunPolicyDefault && d.RunPolicy != RunPolicyAlways && d.RunPolicy != RunPolicyForce {
-			errors = append(errors, fmt.Sprintf("deploys[%d].run_policy must be one of: default, always, force", i))
-		}
-
-		// Validate on_failure
-		if d.OnFailure != "" && d.OnFailure != OnFailureAbort && d.OnFailure != OnFailureContinue {
-			errors = append(errors, fmt.Sprintf("deploys[%d].on_failure must be one of: abort, continue", i))
-		}
-
-		// Validate retries
-		if d.Retries < 0 || d.Retries > 3 {
-			errors = append(errors, fmt.Sprintf("deploys[%d].retries must be between 0 and 3", i))
-		}
+		// Validate run_policy, on_failure, and retries
+		errors = append(errors, validateCallbackPolicy(fmt.Sprintf("deploys[%d]", i), d.RunPolicy, d.OnFailure, d.Retries)...)
 
 		// Validate depends_on references using ResolveDependency
 		// Deploys can depend on builds (preferred) or other deploys
@@ -329,6 +305,10 @@ func Validate(cfg *TrunkConfig) []string {
 		errors = append(errors, validateJobControlFields("validate", isReusable, v.RunsOn, v.Concurrency)...)
 		errors = append(errors, validatePermissions("validate", v.Permissions)...)
 		errors = append(errors, validateSecrets("validate", v.Secrets)...)
+		// run_policy/on_failure/retries obey the same rules as builds and
+		// deploys. Retries is a pointer here (inheritance deep-merge contract);
+		// RetryCount folds nil to 0, which is inside the bound.
+		errors = append(errors, validateCallbackPolicy("validate", v.RunPolicy, v.OnFailure, v.RetryCount())...)
 	}
 
 	// Unknown/misspelled top-level keys are hard errors (front-1 strictness),
