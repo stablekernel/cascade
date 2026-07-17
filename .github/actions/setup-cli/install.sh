@@ -29,16 +29,45 @@ INSTALL_DIR="${CASCADE_INSTALL_DIR:-/usr/local/bin}"
 GH_MAX_ATTEMPTS="${CASCADE_GH_MAX_ATTEMPTS:-3}"
 GH_RETRY_BASE_SLEEP="${CASCADE_GH_RETRY_BASE_SLEEP:-2}"
 
+# Both knobs are validated before anything runs. A value that is not an integer
+# makes the comparisons below error rather than compare, and an errored test is
+# falsy, so the loop would never reach its stop condition: an unbounded retry
+# with a doubling sleep, the exact failure the budget exists to prevent. A bad
+# value is rejected loudly rather than defaulted to, because these are only ever
+# set deliberately: silently substituting the default would leave someone who
+# asked for five attempts getting three and never learning why.
+case "$GH_MAX_ATTEMPTS" in
+  '' | *[!0-9]*)
+    echo "::error::CASCADE_GH_MAX_ATTEMPTS must be a positive integer, got '$GH_MAX_ATTEMPTS'."
+    exit 1
+    ;;
+esac
+if [ "$GH_MAX_ATTEMPTS" -lt 1 ]; then
+  echo "::error::CASCADE_GH_MAX_ATTEMPTS must be a positive integer, got '$GH_MAX_ATTEMPTS'."
+  exit 1
+fi
+case "$GH_RETRY_BASE_SLEEP" in
+  '' | *[!0-9]*)
+    echo "::error::CASCADE_GH_RETRY_BASE_SLEEP must be a non-negative integer, got '$GH_RETRY_BASE_SLEEP'."
+    exit 1
+    ;;
+esac
+
 gh_retry() {
   local attempt=1
   local sleep_for="$GH_RETRY_BASE_SLEEP"
+  local rc=0
   while :; do
+    # rc is captured in the else branch on purpose: an if whose condition fails
+    # and has no else exits 0, so reading $? after fi would lose gh's code.
     if gh "$@"; then
       return 0
+    else
+      rc=$?
     fi
     if [ "$attempt" -ge "$GH_MAX_ATTEMPTS" ]; then
-      echo "gh $1 $2 failed after $attempt attempts."
-      return 1
+      echo "gh $1 $2 failed after $attempt attempts (exit $rc)."
+      return "$rc"
     fi
     echo "gh $1 $2 failed (attempt $attempt/$GH_MAX_ATTEMPTS); retrying in ${sleep_for}s..."
     if [ "$sleep_for" -gt 0 ]; then
