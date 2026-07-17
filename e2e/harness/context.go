@@ -103,7 +103,12 @@ func (c *ExecutionContext) ResolveSHA(ref string) string {
 	return c.commits[ref]
 }
 
-// GetCommitCount returns the number of commits tracked
+// GetCommitCount returns the number of commits tracked, counting every SHA
+// recorded, including ones no `action: commit` step created.
+//
+// It is not the commitN alias number: deriving that from this count is what
+// made a merged hotfix's env branch tip shift every later alias by one. Use
+// NextCommitRef for the alias.
 func (c *ExecutionContext) GetCommitCount() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
