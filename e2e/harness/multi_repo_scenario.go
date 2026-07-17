@@ -193,6 +193,16 @@ func ValidateMultiRepoScenario(s *MultiRepoScenario) error {
 				return fmt.Errorf("scenario %q expects state on %q.%q, which is not an environment that repo declares (known: %s). An env name that does not exist has no state no matter what the code does, so the expectation can never fail",
 					s.Name, repoName, envName, sortedNames(validEnvs))
 			}
+			// The same rule as the repo level, one level down. An env block with
+			// nothing in it names a real env and proves nothing about it, so it
+			// passes no matter what the code does. There is no "this env has no
+			// state" reading for an empty block the way `tags: []` reads as "no
+			// tags", so rejecting it costs no expressiveness.
+			if envExpect.SHA == "" && envExpect.Version == "" && len(envExpect.External) == 0 {
+				return fmt.Errorf("scenario %q expects state on %q.%q but asserts nothing about it: an env expectation with no sha, no version, and no external deploys passes no matter what the code does",
+					s.Name, repoName, envName)
+			}
+
 			for deployName := range envExpect.External {
 				if !validExternal[deployName] {
 					return fmt.Errorf("scenario %q expects state on %q.%q.external.%q, which is not an external deploy that repo declares (known: %s). A deploy name that does not exist has no state no matter what the code does, so the expectation can never fail",

@@ -176,6 +176,25 @@ func TestValidateMultiRepoScenario_RejectsZeroExpectations(t *testing.T) {
 	assert.Contains(t, err.Error(), "asserts nothing")
 }
 
+// TestValidateMultiRepoScenario_RejectsEmptyEnvExpectation closes this guard's
+// own thesis one level down. The zero-expectation rule was checked at the repo
+// level only, so `state: {dev: {}}` decoded and validated clean while asserting
+// nothing: a state block naming a real env, proving nothing about it, passing
+// unconditionally. Unlike `tags: []`, an empty env block states no claim at all
+// (there is no "this env has no state" reading), so there is nothing to
+// implement here and rejecting it is the honest rule.
+func TestValidateMultiRepoScenario_RejectsEmptyEnvExpectation(t *testing.T) {
+	s, err := ParseMultiRepoScenario([]byte(baseScenarioYAML + `
+      state:
+        dev: {}
+`))
+	require.NoError(t, err, "the fixture must decode; the emptiness check is what should reject it")
+
+	err = ValidateMultiRepoScenario(s)
+	require.Error(t, err, "an env expectation with no sha, version, or external asserts nothing")
+	assert.Contains(t, err.Error(), "asserts nothing")
+}
+
 // TestValidateMultiRepoScenario_EmptyTagsIsAFalsifiableAssertion guards the
 // distinction the zero-expectation rule depends on. An absent tags key asserts
 // nothing, but `tags: []` is the corpus's way of saying "this repo has no tags
