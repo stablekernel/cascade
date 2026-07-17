@@ -149,13 +149,16 @@ func (c *TrunkConfig) ResolveComponent(name string) (*ResolvedComponent, error) 
 	// component. Start from the shared cancel policy, let the component override
 	// it, and always compose the per-component group so the shared lane trap
 	// cannot occur.
-	cancel := c.GetConcurrencyCancelInProgress()
-	if comp.Concurrency != nil {
-		cancel = comp.Concurrency.CancelInProgress
+	// A component overrides the shared cancel policy only when it states one:
+	// an empty per-component concurrency block inherits rather than silently
+	// resolving to false, which the pre-pointer plain bool could not express.
+	cancel := c.Concurrency.CancelInProgressOr(true)
+	if comp.Concurrency != nil && comp.Concurrency.CancelInProgress != nil {
+		cancel = *comp.Concurrency.CancelInProgress
 	}
 	eff.Concurrency = &ConcurrencyConfig{
 		Group:            ComponentConcurrencyGroup(name),
-		CancelInProgress: cancel,
+		CancelInProgress: &cancel,
 	}
 
 	// Derive a path-scoped push-paths filter from the component subtree when

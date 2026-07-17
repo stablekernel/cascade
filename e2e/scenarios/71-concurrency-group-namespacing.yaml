@@ -1,0 +1,68 @@
+name: "Concurrency Group Namespacing"
+description: |
+  An operator-supplied concurrency.group must be namespaced per workflow in the
+  generated output, and cancel_in_progress must be honored on orchestrate while
+  staying pinned false on the state-mutating promote workflow.
+
+  A GitHub concurrency group is repo-global ACROSS workflows, and a shared group
+  keeps only the latest QUEUED run even when cancel-in-progress is false. A
+  single operator group emitted bare onto every cascade workflow therefore let a
+  queued promote and a queued orchestrate silently cancel each other. The group
+  each workflow emits is the key GitHub matches on, so the emitted text is the
+  behavior.
+
+  This scenario also covers cancel_in_progress, which had no e2e cell: it is set
+  explicitly to false here and asserted on orchestrate (whose default is true),
+  so the manifest field is proven to reach generated output rather than being
+  masked by a default that happens to agree.
+
+  Generation-only, and deliberately so. The runtime effect of a concurrency group
+  (queueing a run, cancelling a pending one) is a GHA scheduler feature act does
+  not implement, and the harness runs one act invocation at a time, so there is
+  no second concurrent run for a group to act on. Asserting cancellation here
+  would assert nothing. The executing proof lives on the fleet; this cell is a
+  ceiling, labeled as such.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+  concurrency:
+    group: cascade-${{ github.ref }}
+    cancel_in_progress: false
+
+steps:
+  - name: "Initial commit; assert each workflow lands in its own concurrency group"
+    action: commit
+    commit:
+      message: "feat: add app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+    expect:
+      workflow_files:
+        # Orchestrate composes the operator group into its own lane and honors
+        # the explicit cancel_in_progress: false (its default is true).
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "group: cascade-${{ github.ref }}-orchestrate"
+            - "cancel-in-progress: false"
+          not_contains:
+            - "group: cascade-${{ github.ref }}-promote"
+        # Promote lands in a DIFFERENT lane than orchestrate. not_contains is the
+        # load-bearing assertion: it is what fails if the operator group is ever
+        # emitted bare again and the two workflows collapse onto one group.
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "group: cascade-${{ github.ref }}-promote"
+            - "cancel-in-progress: false"
+          not_contains:
+            - "group: cascade-${{ github.ref }}-orchestrate"

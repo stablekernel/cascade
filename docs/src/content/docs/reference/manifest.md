@@ -711,8 +711,52 @@ ci:
 
 | Sub-field | Status | Type | Description |
 |-----------|--------|------|-------------|
-| `group` | emitted | string | The concurrency group expression. |
-| `cancel_in_progress` | emitted | bool | Whether a new run cancels an in-progress run in the same group. |
+| `group` | emitted | string | The concurrency group expression. Composed with a per-workflow namespace at emission, never shared across workflows. |
+| `cancel_in_progress` | emitted | bool | Whether a new run cancels an in-progress run in the same group. Applies to orchestrate; the state-mutating workflows always queue. |
+
+#### The group is namespaced per workflow
+
+A GitHub concurrency group is repo-global: it is matched across every workflow in
+the repository, not scoped to the workflow that declares it. Two workflows sharing
+a group interfere even with `cancel_in_progress: false`, because GitHub keeps only
+the latest queued run in a group and cancels the rest. A single group emitted onto
+every cascade workflow would therefore let a queued promote and a queued release
+silently cancel each other.
+
+So `group` is a base expression, not the literal emitted key. Each workflow
+composes it with its own namespace:
+
+| Workflow | Emitted group for the example above |
+|----------|-------------------------------------|
+| orchestrate | `cascade-${{ github.ref }}-orchestrate` |
+| promote | `cascade-${{ github.ref }}-promote` |
+| rollback | `cascade-${{ github.ref }}-rollback` |
+| release | `cascade-${{ github.ref }}-release` |
+| external-update | `cascade-${{ github.ref }}-external-${{ inputs.deploy_name }}` |
+
+The external-update key keeps its `deploy_name` axis so two upstream components
+updating the same downstream repo do not collapse onto one lane.
+
+When `group` is omitted, each workflow keeps its own default: `orchestrate-${{ github.ref }}`
+on orchestrate, the bare workflow name on promote, rollback, and release, and
+`cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}` on external-update.
+When `components` are declared, the group is derived per component and cannot be
+set at all.
+
+#### cancel_in_progress applies to orchestrate
+
+`cancel_in_progress` defaults to `true` on orchestrate, where a newer push makes an
+older run's work obsolete. Set it to `false` to queue those runs instead.
+
+It is not honored on the workflows that mutate durable state: promote, rollback,
+release, external-update, and hotfix always emit `cancel-in-progress: false`. Those
+workflows push env state, tags, GitHub Releases, or a downstream manifest, and
+cancelling one mid-write leaves that state half-applied. Requesting
+`cancel_in_progress: true` does not override this.
+
+Omitting `cancel_in_progress` is distinct from setting it to `false`: an omitted
+value leaves each workflow on its own default, so setting only `group` does not
+change orchestrate's cancellation behavior.
 
 ### job_timeout_minutes
 

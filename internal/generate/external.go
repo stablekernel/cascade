@@ -298,25 +298,28 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 // is inert in the concurrency key and carries none of the run-body injection
 // risk that the env-bound inputs guard against.
 //
-// cancel-in-progress is always false by default: dropping a mid-flight write
-// leaves the manifest inconsistent. When the manifest explicitly sets
-// concurrency.group, that value is forwarded as-is (via GetConcurrencyGroup)
-// so operators can override the group, and cancel-in-progress follows the
-// explicit config value.
+// An operator-supplied concurrency.group is composed with the external-update
+// namespace AND the per-component axis rather than forwarded verbatim. Two
+// properties are preserved by the composition:
+//   - the group stays distinct from the group emitted on orchestrate, promote,
+//     rollback and release, so a queued external update and a queued promote do
+//     not cancel each other (a concurrency group is repo-global across workflows,
+//     and a shared one keeps only the latest PENDING run);
+//   - inputs.deploy_name is retained, so an override cannot collapse every
+//     upstream component onto one lane, which is exactly the regression the
+//     per-component default key exists to prevent.
+//
+// cancel-in-progress is pinned false and is deliberately not configurable here:
+// dropping a mid-flight write leaves the downstream manifest inconsistent.
 func (g *ExternalUpdateGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
-	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
-		// Operator override: forward the explicit group verbatim.
-		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
-	} else {
-		// Default: per-component, per-ref group so distinct upstream components
-		// run concurrently against the same downstream repo.
-		sb.WriteString("  group: cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}\n")
-	}
-	if g.config.Concurrency != nil {
-		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
-	} else {
-		sb.WriteString("  cancel-in-progress: false\n")
-	}
+
+	group := config.WorkflowConcurrencyGroup(
+		g.config.Concurrency,
+		"external-${{ inputs.deploy_name }}",
+		"cascade-external-${{ inputs.deploy_name }}-${{ github.ref }}",
+	)
+	fmt.Fprintf(sb, "  group: %s\n", group)
+	sb.WriteString("  cancel-in-progress: false\n")
 	sb.WriteString("\n")
 }

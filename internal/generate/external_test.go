@@ -719,7 +719,7 @@ func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
 		},
 		Concurrency: &config.ConcurrencyConfig{
 			Group:            "my-custom-external",
-			CancelInProgress: true,
+			CancelInProgress: boolPtr(true),
 		},
 	}
 
@@ -727,8 +727,16 @@ func TestExternalUpdateGenerator_ConcurrencyOverride(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, content, "group: my-custom-external", "custom group must propagate to external-update")
-	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to external-update")
+	// The operator's expression is preserved, namespaced into the external-update
+	// lane, and still carries the per-component deploy_name axis: forwarding it
+	// verbatim would both share a repo-global group with the other cascade
+	// workflows and collapse every upstream component onto one lane.
+	assert.Contains(t, content, "group: my-custom-external-external-${{ inputs.deploy_name }}",
+		"custom group must propagate to external-update, namespaced per workflow and per component")
+
+	// cancel_in_progress is deliberately NOT honored: dropping a mid-flight write
+	// leaves the downstream manifest inconsistent.
+	assert.Contains(t, content, "cancel-in-progress: false", "external-update must pin cancel-in-progress: false even when the manifest requests true")
 }
 
 // TestExternalUpdateGenerator_CheckoutUsesStateToken asserts that the receiver

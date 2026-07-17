@@ -523,7 +523,7 @@ var emittedFieldRegistry = map[string]registryEntry{
 	})},
 
 	"concurrency.group": {shape: shapeYAMLPlain, set: func(c *config.TrunkConfig, v string) {
-		c.Concurrency = &config.ConcurrencyConfig{Group: v, CancelInProgress: true}
+		c.Concurrency = &config.ConcurrencyConfig{Group: v, CancelInProgress: boolPtr(true)}
 	}},
 
 	"deploys[].artifact_upload.upload": {shape: shapeArtifactPath, set: setDeploy(func(d *config.DeployConfig, v string) {

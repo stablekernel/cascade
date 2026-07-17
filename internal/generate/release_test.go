@@ -325,7 +325,7 @@ func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
 		Environments: config.EnvNames("prod"),
 		Concurrency: &config.ConcurrencyConfig{
 			Group:            "my-custom-release",
-			CancelInProgress: true,
+			CancelInProgress: boolPtr(true),
 		},
 	}
 
@@ -333,8 +333,14 @@ func TestReleaseGenerator_ConcurrencyOverride(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, content, "group: my-custom-release", "custom group must propagate to release")
-	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to release")
+	// The operator's expression is preserved but namespaced into the release lane
+	// so it cannot share a repo-global group with the other cascade workflows.
+	assert.Contains(t, content, "group: my-custom-release-release", "custom group must propagate to release, namespaced per workflow")
+
+	// cancel_in_progress is deliberately NOT honored on release: a release run
+	// pushes tags and publishes GitHub Releases, so it must never be cancelled
+	// mid-write regardless of what the manifest asks for.
+	assert.Contains(t, content, "cancel-in-progress: false", "release must pin cancel-in-progress: false even when the manifest requests true")
 }
 
 func TestReleaseGenerator_AllowBreakingChanges_BakesGateOff(t *testing.T) {
