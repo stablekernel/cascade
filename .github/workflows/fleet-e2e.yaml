@@ -148,7 +148,10 @@ jobs:
             # A sha can carry more than one candidate tag; pick the highest by
             # version sort so selection is deterministic regardless of API
             # ordering. Accept rc and dryrun tags (see the resolve gate).
-            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+            # --paginate is required: the tags endpoint serves 30 per page, so
+            # without it the sha match only ever scans the first page and the
+            # fallback silently resolves empty once the repo outgrows 30 tags.
+            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" --paginate \
               --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
               | grep -E -- '-(rc|dryrun)\.' | sort -V -r | head -n 1 || true)
           else

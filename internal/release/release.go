@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -687,27 +688,146 @@ func (m *Manager) cleanupStaleDrafts(environment, currentTag string) error {
 	return nil
 }
 
-// listDraftReleases returns all draft releases in the repository
-func (m *Manager) listDraftReleases() ([]GitHubRelease, error) {
-	req, err := m.newRequest("GET", "/releases", nil)
+// listPageSize is the page size requested from the release list endpoint. 100 is
+// the maximum the GitHub REST API accepts; anything larger is silently clamped.
+// Without it the API serves 30 items per page, so a caller reading a single
+// response sees only the 30 most recent releases.
+const listPageSize = 100
+
+// maxListPages bounds the pagination walk. At listPageSize this covers 5000
+// releases, far beyond any repository the release path serves, while ensuring a
+// malformed or self-referential rel="next" chain terminates instead of spinning
+// forever and holding up a release.
+const maxListPages = 50
+
+// parseNextLink extracts the rel="next" URL from a GitHub Link header. It
+// returns an empty string when the header is absent or advertises no next page,
+// which is how the final page is signalled.
+func parseNextLink(header string) string {
+	for _, segment := range strings.Split(header, ",") {
+		parts := strings.Split(strings.TrimSpace(segment), ";")
+		if len(parts) < 2 {
+			continue
+		}
+		target := strings.TrimSpace(parts[0])
+		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
+			continue
+		}
+		for _, param := range parts[1:] {
+			if strings.EqualFold(strings.TrimSpace(param), `rel="next"`) {
+				return target[1 : len(target)-1]
+			}
+		}
+	}
+	return ""
+}
+
+// listAllReleases walks every page of the repository's release list, following
+// the Link header's rel="next" until the API stops advertising one.
+//
+// Any error, including exhausting the page bound, fails the whole listing rather
+// than returning the pages gathered so far. Callers treat the result as the
+// complete set of releases and act destructively on it: the draft reaper deletes
+// what it finds and preserves what it does not. Handing back a silently
+// truncated list would make those callers report success while skipping the very
+// releases they exist to act on.
+func (m *Manager) listAllReleases() ([]GitHubRelease, error) {
+	endpoint := fmt.Sprintf("/releases?per_page=%d", listPageSize)
+	req, err := m.newRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 
+	var all []GitHubRelease
+	for page := 1; ; page++ {
+		if page > maxListPages {
+			return nil, fmt.Errorf("release listing exceeded %d pages; refusing to follow a further rel=\"next\"", maxListPages)
+		}
+
+		items, next, err := m.fetchReleasePage(req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, items...)
+
+		if next == "" {
+			return all, nil
+		}
+
+		req, err = m.newPageRequest(next)
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// fetchReleasePage performs one release-list request, returning the decoded page
+// and the rel="next" URL advertised by the response (empty on the last page).
+func (m *Manager) fetchReleasePage(req *http.Request) ([]GitHubRelease, string, error) {
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
+		return nil, "", fmt.Errorf("API request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var releases []GitHubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	return releases, parseNextLink(resp.Header.Get("Link")), nil
+}
+
+// newPageRequest builds the request for a subsequent page from the URL the API
+// advertised. Both the scheme and the host are pinned to the configured base
+// URL: every request carries a Bearer token, so following a Link header to an
+// arbitrary host would hand that token to whoever set the header, and following
+// one that keeps the host but downgrades the scheme would put that token on the
+// wire in cleartext. Pinning the host alone leaves the same token exposed to the
+// same attacker, so both are checked.
+//
+// The comparison is relative to the configured base rather than a hardcoded
+// https. A GitHub Enterprise deployment reached over plain http via
+// GITHUB_API_URL advertises http links of its own and still matches, as does the
+// http test server; only a scheme that disagrees with the base is rejected.
+func (m *Manager) newPageRequest(next string) (*http.Request, error) {
+	nextURL, err := url.Parse(next)
+	if err != nil {
+		return nil, fmt.Errorf("parsing next page link %q: %w", next, err)
+	}
+	base, err := url.Parse(m.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing base URL %q: %w", m.baseURL, err)
+	}
+	if nextURL.Host != base.Host {
+		return nil, fmt.Errorf("next page link host %q does not match API host %q", nextURL.Host, base.Host)
+	}
+	if nextURL.Scheme != base.Scheme {
+		return nil, fmt.Errorf("next page link scheme %q does not match API scheme %q", nextURL.Scheme, base.Scheme)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, nextURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+m.token)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	return req, nil
+}
+
+// listDraftReleases returns all draft releases in the repository, across every
+// page of the release list.
+func (m *Manager) listDraftReleases() ([]GitHubRelease, error) {
+	releases, err := m.listAllReleases()
+	if err != nil {
+		return nil, err
 	}
 
 	// Filter to only draft releases
@@ -1070,28 +1190,10 @@ func (m *Manager) findReleaseByTagOrSHA(tag, sha string) (*GitHubRelease, error)
 			sleep(time.Duration(attempt) * listRetryBackoff)
 		}
 
-		req, err := m.newRequest("GET", "/releases?per_page=100", nil)
+		releases, err := m.listAllReleases()
 		if err != nil {
 			return nil, err
 		}
-
-		resp, err := m.client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("API request failed: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-		}
-
-		var releases []GitHubRelease
-		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("decoding response: %w", err)
-		}
-		_ = resp.Body.Close()
 
 		// Resolve the best match in priority order so a stale draft sharing a
 		// target_commitish cannot win over the intended release:
