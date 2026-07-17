@@ -13,6 +13,7 @@ package schema_test
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,6 +161,58 @@ func TestSchema_ValidatesREADMEExamples(t *testing.T) {
 	}
 	if ciBlocks < 2 {
 		t.Fatalf("expected at least 2 ci-rooted yaml blocks in README.md, found %d", ciBlocks)
+	}
+}
+
+// TestSchema_ValidatesDocsExamples holds the documentation site to the same bar
+// the README has always been held to. Every ci-rooted example a reader can copy
+// must validate against the published schema.
+//
+// The docs tree had no such check, and it drifted: examples omitted the required
+// trunk_branch, which the schema rejects but lint used to accept, and generation
+// then emitted an empty push allow-list. Following the docs produced a pipeline
+// that reported green and never ran. This test is what makes the schema, lint,
+// and docs agree by construction rather than by review.
+func TestSchema_ValidatesDocsExamples(t *testing.T) {
+	sch := compileSchema(t)
+	root := repoRoot(t)
+	docsDir := filepath.Join(root, "docs", "src", "content", "docs")
+
+	ciBlocks := 0
+	err := filepath.WalkDir(docsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || (!strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".mdx")) {
+			return nil
+		}
+		data, readErr := os.ReadFile(path) // #nosec G304 -- test-only walk of the in-repo docs tree
+		if readErr != nil {
+			return readErr
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		for i, block := range extractYAMLFences(string(data)) {
+			if !firstMeaningfulLineIsCI(block) {
+				continue
+			}
+			ciBlocks++
+			t.Run(fmt.Sprintf("%s-block-%d", rel, i), func(t *testing.T) {
+				doc := loadYAMLDoc(t, []byte(block))
+				if vErr := sch.Validate(toJSONValue(t, doc)); vErr != nil {
+					t.Fatalf("docs example in %s must validate against the published schema: %v", rel, vErr)
+				}
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk docs tree: %v", err)
+	}
+	if ciBlocks < 2 {
+		t.Fatalf("expected at least 2 ci-rooted yaml blocks under %s, found %d", docsDir, ciBlocks)
 	}
 }
 

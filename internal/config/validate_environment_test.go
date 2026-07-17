@@ -161,6 +161,7 @@ func TestParseEnvironmentConfigReservedFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := parseInline(t, `
+trunk_branch: main
 environments:
   - dev
   - name: prod

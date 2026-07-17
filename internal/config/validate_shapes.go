@@ -364,7 +364,17 @@ func validateNotifyShapes(n *NotifyConfig) []string {
 func validateEmittedScalars(cfg *TrunkConfig) []string {
 	var errs []string
 
-	errs = append(errs, validateGitRefName("trunk_branch", cfg.TrunkBranch)...)
+	// trunk_branch is required, matching the published schema. It is the sole
+	// source of the orchestrate push allow-list, so an unset value used to emit
+	// "branches: []" and produce a workflow that could never fire on a trunk
+	// push. There is no safe default to infer: guessing "main" for a repo whose
+	// trunk is "master" rebuilds the same dead workflow silently. Ask instead.
+	if cfg.TrunkBranch == "" {
+		errs = append(errs, "trunk_branch is required (for example \"main\"): "+
+			"it sets the branch the orchestrate workflow runs on")
+	} else {
+		errs = append(errs, validateGitRefName("trunk_branch", cfg.TrunkBranch)...)
+	}
 
 	if cfg.ManifestFile != "" {
 		errs = append(errs, validateShellDoubleQuoted("manifest_file", cfg.ManifestFile)...)

@@ -939,6 +939,7 @@ block the output keeps the historical `rc.N` shape shown above. A manifest with 
 ```yaml
 ci:
   config:
+    trunk_branch: main
     tag_grammar:
       prerelease_token: pre
       prerelease_separator: ""

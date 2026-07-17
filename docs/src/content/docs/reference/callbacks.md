@@ -409,6 +409,8 @@ Pass custom inputs via `inputs` and `env_inputs` in the manifest:
 ```yaml
 ci:
   config:
+    trunk_branch: main
+    environments: [prod]
     builds:
       - name: app
         workflow: .github/workflows/build-app.yaml
@@ -441,6 +443,7 @@ Outputs from one callback are passed to dependents:
 ```yaml
 ci:
   config:
+    trunk_branch: main
     builds:
       - name: app
         workflow: .github/workflows/build-app.yaml

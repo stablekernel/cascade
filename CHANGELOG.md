@@ -48,6 +48,37 @@ A `Migration` section is added to any release that bumps `schema_version`.
   per page, so the lookup scanned only the newest 30 of the repository's tags and
   resolved an empty version once the repository grew past 30 tags.
 
+- **config:** `trunk_branch` is now enforced as required, matching the manifest
+  schema, which has always listed it as required. Omitting it passed `lint` with
+  no diagnostics and then generated an orchestrate workflow whose push trigger
+  read `branches: []`, an allow-list matching no branch. The workflow was
+  accepted by GitHub and reported green while never firing on a trunk push, so a
+  pipeline could be adopted, committed, and appear healthy without ever running.
+  Manifests that omit it now fail `lint` and `generate-workflow` with a message
+  naming the field. No manifest that works today is affected: every manifest that
+  sets `trunk_branch` generates byte-identical output, and one that omits it
+  could not run at all. There is no default: inferring `main` for a repository
+  whose trunk is named otherwise would rebuild the same dead workflow silently.
+
+- **config:** `publish.workflow` and `external[].deploys` are now enforced as
+  required, matching the schema. Both were accepted when absent and both then
+  vanished from generated output, so a manifest could declare a publish callback
+  that never published, or an external repository that coordinated nothing.
+
+- **generate:** Generation of the orchestrate workflow now fails rather than
+  emitting an empty trigger filter. A filter that is present but empty matches
+  nothing and silently disables the trigger it guards, and GitHub accepts the
+  workflow and reports it green forever. The check covers every `branches`,
+  `paths`, and `tags` filter (and their `-ignore` forms) in the emitted
+  workflow, in both YAML list styles, so an emission site that forgets a length
+  guard fails the build instead of shipping a workflow that never runs.
+
+- **docs:** Every manifest example across the documentation now sets
+  `trunk_branch`, and the reference table no longer lists it as both required and
+  defaulted. Copying a documented example produced a pipeline that never ran. The
+  documentation examples are now validated against the published schema by the
+  same test that has always guarded the README examples.
+
 - **generate:** A manifest-level `concurrency.group` is now namespaced per
   workflow instead of being emitted bare onto every cascade workflow. A GitHub
   concurrency group is matched repository-wide rather than per workflow, and a

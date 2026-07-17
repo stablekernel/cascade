@@ -17,6 +17,7 @@ Generated workflows are build output, so their action pins are build output too.
 # .github/manifest.yaml
 ci:
   config:
+    trunk_branch: main
     pin_mode: sha
 ```
 
@@ -34,6 +35,7 @@ Under `sha`, the pin resolves to a 40-character commit SHA and the human-readabl
 ```yaml
 ci:
   config:
+    trunk_branch: main
     pin_mode: sha
     action_pins:
       actions/checkout: "0123456789abcdef0123456789abcdef01234567"
@@ -63,6 +65,7 @@ Rather than run `reconcile` by hand, enable the reconcile companion so an extern
 ```yaml
 ci:
   config:
+    trunk_branch: main
     reconcile:
       enabled: true
       source: dependabot

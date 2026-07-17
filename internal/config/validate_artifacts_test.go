@@ -14,6 +14,7 @@ import (
 func TestValidate_ReleaseArtifacts(t *testing.T) {
 	base := func(artifacts []ArtifactConfig) TrunkConfig {
 		return TrunkConfig{
+			TrunkBranch:  "main",
 			Environments: EnvNames("dev"),
 			Builds: []BuildConfig{
 				{Name: "app", Workflow: "w.yaml", Artifacts: artifacts},

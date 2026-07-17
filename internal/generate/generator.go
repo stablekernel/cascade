@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -346,6 +347,17 @@ func (g *Generator) Generate() (string, error) {
 		return "", err
 	}
 
+	// Guard the push allow-list before emission. trunk_branch is the sole
+	// source of the branch list, and an unset value renders "branches: []": an
+	// allow-list matching nothing, so orchestrate never fires on a trunk push.
+	// CLI-side config validation rejects this too, but Generate is exported and
+	// must not emit a workflow that is dead on arrival when called without it.
+	if !g.config.OrchestrateDispatchOnly() && g.config.TrunkBranch == "" {
+		return "", fmt.Errorf(
+			"trunk_branch is required to generate the orchestrate push trigger: " +
+				"an unset value emits an empty branch allow-list and the workflow would never run")
+	}
+
 	// Guard the external-release tag reference before emission. CLI-side
 	// config validation checks the same format, but Generate is exported and
 	// must not panic when called without it.
@@ -369,7 +381,79 @@ func (g *Generator) Generate() (string, error) {
 		return "", err
 	}
 
-	return sb.String(), nil
+	out := sb.String()
+	if err := assertNoDeadAllowList(out); err != nil {
+		return "", err
+	}
+
+	return out, nil
+}
+
+// allowListKeyRe matches a trigger filter key emitted as a YAML mapping key at
+// any indent, capturing its indent and its inline value. Anchoring at the start
+// of the line keeps the scan off values and off keys that merely end in one of
+// these names, so a "run: echo branches:" step is not mistaken for a filter.
+var allowListKeyRe = regexp.MustCompile(
+	`^(\s*)(branches|branches-ignore|paths|paths-ignore|tags|tags-ignore):[ \t]*(.*)$`)
+
+// assertNoDeadAllowList is the last gate before emitted YAML leaves the
+// generator. Individual fields are validated upstream; this catches the class
+// rather than the instance. A trigger filter that is present but empty matches
+// nothing and silently disables the trigger it guards, and GitHub accepts the
+// workflow and reports it green forever, so the failure is invisible.
+//
+// The scan covers every occurrence in the text it is given, every filter key,
+// and both YAML list styles (flow "key: []" and a block "key:" with no items).
+// It is deliberately not limited to the one field that prompted it: the point
+// is that a future emission site that forgets a length guard fails the build
+// rather than shipping a workflow that never runs.
+func assertNoDeadAllowList(out string) error {
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		m := allowListKeyRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		indent, key, value := m[1], m[2], strings.TrimSpace(m[3])
+
+		if value != "" {
+			// Flow style. Only an empty sequence is dead; anything else has
+			// entries. A trailing comment is not a value we need to judge.
+			if value == "[]" {
+				return deadAllowListErr(key)
+			}
+			continue
+		}
+		// Block style: dead unless a deeper "-" item follows.
+		if !hasBlockItems(lines[i+1:], len(indent)) {
+			return deadAllowListErr(key)
+		}
+	}
+	return nil
+}
+
+// deadAllowListErr reports an empty trigger filter under the key that carries it.
+func deadAllowListErr(key string) error {
+	return fmt.Errorf(
+		"generated workflow contains an empty %q trigger filter: "+
+			"it would match nothing and the workflow would never run", key)
+}
+
+// hasBlockItems reports whether the lines following a block-style key hold at
+// least one sequence item indented deeper than the key. Blank and comment lines
+// are skipped; the first line at or above the key's indent ends the block.
+func hasBlockItems(rest []string, keyIndent int) bool {
+	for _, line := range rest {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if len(line)-len(strings.TrimLeft(line, " ")) <= keyIndent {
+			return false
+		}
+		return strings.HasPrefix(trimmed, "- ")
+	}
+	return false
 }
 
 // Validate checks for potential issues and returns warnings

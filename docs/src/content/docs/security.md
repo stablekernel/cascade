@@ -70,6 +70,7 @@ Third-party action pinning is shipped today, not a roadmap item. Two mechanisms 
 ```yaml
 ci:
   config:
+    trunk_branch: main
     pin_mode: sha
     action_pins:
       actions/checkout: a1b2c3d4e5f6...
