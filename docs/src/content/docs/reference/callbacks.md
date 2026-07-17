@@ -523,7 +523,9 @@ Callback failures are handled by the `on_failure` policy:
 | `abort` | Fail the entire workflow |
 | `continue` | Other callbacks proceed |
 
-With `retries: N`, failed callbacks retry up to N times before final failure.
+With `retries: N`, a failed callback is retried up to N times before it counts as a final failure. Each retry is a separate job that re-invokes the same reusable workflow, and the chain stops at the first attempt that succeeds. A callback that fails and is then rescued by a retry counts as a success: the run stays green and the deploy is recorded in state.
+
+`run_policy`, `on_failure`, and `retries` apply to trunk runs (`orchestrate.yaml`). They are not emitted into `promote.yaml`; see [Policy fields](/reference/manifest/#policy-fields).
 
 ## Migrating from inline `run:`/`shell:` callbacks
 
