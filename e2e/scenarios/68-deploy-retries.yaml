@@ -1,0 +1,91 @@
+name: "Deploy Retries Re-Invoke A Failing Callback"
+description: |
+  A deploy declaring retries: 2 must emit two retry shim jobs that RE-INVOKE the
+  reusable workflow when the attempt before them failed, and those shims must
+  actually run.
+
+  The proof is executing, not textual. The staged deploy callback always exits
+  non-zero, so deploy-app fails, deploy-app-retry-1 fires on
+  needs.deploy-app.result == 'failure', and deploy-app-retry-2 fires on
+  needs.deploy-app-retry-1.result == 'failure'. Asserting each shim's conclusion
+  is "failure" (never "skipped") is what makes this executing coverage: a job the
+  generator never emitted is reported as not-found and fails the assertion, and
+  the harness treats an absent job as satisfying "skipped", so only a
+  success/failure expectation proves a job ran at all. retry-2 concluding failure
+  additionally proves the chain is wired to its PREDECESSOR shim rather than all
+  hanging off the original job.
+
+  The run as a whole is expected to fail: a retry shim re-runs the callback but
+  does not turn the failed original job green, which is GitHub's own semantics.
+  State is deliberately not asserted here because the harness skips its
+  state sync on the expect_failure path.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+      retries: 2
+
+# The deploy callback always fails, so the original job and both retry shims each
+# conclude in failure. That is what makes the shims observable: a shim that was
+# never emitted, or whose `if` never fired, would be absent from the run.
+setup_workflows:
+  ".github/workflows/deploy.yaml": |
+    name: deploy
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: false
+            type: string
+          sha:
+            required: false
+            type: string
+    jobs:
+      deploy:
+        runs-on: ubuntu-latest
+        steps:
+          - run: |
+              echo "deploy attempt for ${{ inputs.environment }} - failing on purpose"
+              exit 1
+
+steps:
+  - name: "Seed source; assert the retry shims are emitted and chained"
+    action: commit
+    commit:
+      message: "feat: seed app source"
+      files:
+        src/app.ts: |
+          export function main() {
+            console.log("App v0.1.0");
+          }
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "deploy-app-retry-1:"
+            - "deploy-app-retry-2:"
+            - "if: needs.deploy-app.result == 'failure'"
+            - "if: needs.deploy-app-retry-1.result == 'failure'"
+          not_contains:
+            # retries: 2 emits exactly two shims.
+            - "deploy-app-retry-3:"
+
+  - name: "Orchestrate: the failing deploy drives both retry shims"
+    action: orchestrate
+    expect_failure: true
+    expect:
+      jobs:
+        build-app: success
+        deploy-app: failure
+        # Each shim must have RUN and concluded failure. "skipped" would be
+        # satisfied by an absent job and would prove nothing.
+        deploy-app-retry-1: failure
+        deploy-app-retry-2: failure

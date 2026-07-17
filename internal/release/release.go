@@ -585,10 +585,23 @@ func (m *Manager) isRCTag(tag string) bool {
 
 // parseRCTagStrict extracts the base version (including its literal prefix) and
 // RC number from tag under spec. A tag that is not a version tag, that carries no
-// pre-release, or that is a nested hotfix variant is rejected, matching the plain
-// RC-tag contract of the permissive parseRCTag. The base is rendered through the
-// grammar so it carries the component's prefix.
+// pre-release, that is a nested hotfix variant, or that sits outside the spec's
+// prefix is rejected, matching the plain RC-tag contract of the permissive
+// parseRCTag. The base is rendered through the grammar so it carries the
+// component's prefix.
+//
+// The prefix is checked here rather than left to spec.Parse because Format always
+// re-emits the spec's OWN prefix: a spec whose read side is permissive
+// (StrictPrefix off) matches any alphabetic prefix, which would report a foreign
+// tag such as "api1.2.0-rc.1" under a base of "v1.2.0" and collide it with this
+// namespace. Every production caller threads a strict per-component grammar
+// (ResolvedComponent.TagGrammarSpec forces StrictPrefix on), so this enforces the
+// function's own namespace contract locally instead of relying on that invariant
+// holding at a distant call site.
 func parseRCTagStrict(spec taggrammar.Spec, tag string) (baseVersion string, rcNumber int, ok bool) {
+	if !strings.HasPrefix(tag, spec.Prefix) {
+		return "", -1, false
+	}
 	p, matched := spec.Parse(tag)
 	if !matched || p.PreRelease < 0 || p.Hotfix >= 0 {
 		return "", -1, false

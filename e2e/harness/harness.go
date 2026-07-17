@@ -259,8 +259,14 @@ runs:
         fi
 `
 
-		// Create mock manage-release action that creates real tags and cleans up RC tags
-		files[".github/actions/manage-release/action.yaml"] = `name: 'Manage Release (Mock)'
+		// Create mock manage-release action that creates real tags and cleans up RC tags.
+		// The folder follows the manifest's action_folder (default "manage-release"),
+		// matching the path the generator emits into every `uses:` that calls the
+		// action. A manifest that renames the folder therefore gets the mock staged
+		// where its generated workflows look for it, so act resolves the action only
+		// when the generator honored the field. A manifest that leaves action_folder
+		// unset stages at the historical path, byte-identical to before.
+		files[fmt.Sprintf(".github/actions/%s/action.yaml", config.GetActionFolder())] = `name: 'Manage Release (Mock)'
 description: 'Mock manage-release action for E2E tests - creates real tags and handles RC cleanup'
 inputs:
   repo:
