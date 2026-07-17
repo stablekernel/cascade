@@ -70,11 +70,15 @@ type StepTag struct {
 	Tag string `yaml:"tag"`
 }
 
-// MultiRepoStepExpect defines per-step assertions for multi-repo scenarios
+// MultiRepoStepExpect defines per-step assertions for multi-repo scenarios.
 type MultiRepoStepExpect struct {
-	Workflow *WorkflowExpect `yaml:"workflow"`
-	Tags     []string        `yaml:"tags"`
-	Error    string          `yaml:"error"` // Expected error message (partial match)
+	// Tags each must be present on the step's repo. An empty (but present) list
+	// asserts the repo carries no tags at all.
+	Tags []string `yaml:"tags"`
+	// Error is a substring the step's failure must contain. Setting it inverts
+	// the step's contract: the step is then required to fail, and succeeding is
+	// itself a failure.
+	Error string `yaml:"error"`
 }
 
 // MultiRepoExpect defines expectations across repos
@@ -82,11 +86,42 @@ type MultiRepoExpect struct {
 	Repos map[string]RepoExpect `yaml:"repos"` // Per-repo expectations
 }
 
-// RepoExpect defines expectations for a single repo
+// RepoExpect defines expectations for a single repo.
+//
+// Every field here is a typed struct rather than an open map, and that is
+// load-bearing rather than stylistic. yaml.v3's KnownFields(true) rejects a key
+// the schema does not define, but it can only do so where there is a schema:
+// it validates struct fields and cannot see inside a map[string]interface{}.
+// While this subtree was an open map, a typo'd expectation decoded cleanly,
+// asserted nothing, and reported green. Typing it is what puts these keys back
+// under the decoder's guard.
 type RepoExpect struct {
-	Tags     []TagExpect            `yaml:"tags"`
-	Manifest map[string]interface{} `yaml:"manifest"`
-	State    map[string]interface{} `yaml:"state"` // External state tracking
+	// Tags each must be present on the repo. A nil list (the key absent) asserts
+	// nothing; an empty but present list (`tags: []`) asserts the repo carries no
+	// tags at all.
+	Tags []TagExpect `yaml:"tags"`
+	// State is the expected ci.state subtree, keyed by environment name.
+	State map[string]EnvStateExpect `yaml:"state"`
+}
+
+// EnvStateExpect is the expected state of one environment. An empty field is
+// not asserted, matching the convention StateExpect follows on the single-repo
+// side.
+type EnvStateExpect struct {
+	SHA      string                          `yaml:"sha,omitempty"`
+	Version  string                          `yaml:"version,omitempty"`
+	External map[string]ExternalDeployExpect `yaml:"external,omitempty"`
+}
+
+// ExternalDeployExpect is the expected recorded state of a single external
+// deploy, at ci.state.<env>.external.<name>.
+type ExternalDeployExpect struct {
+	SHA     string `yaml:"sha,omitempty"`
+	Version string `yaml:"version,omitempty"`
+	// Artifacts is legitimately open at the key level: artifact names are chosen
+	// by the scenario, not the schema. The values are typed as strings, so there
+	// is no shape ambiguity for a phantom to hide in.
+	Artifacts map[string]string `yaml:"artifacts,omitempty"`
 }
 
 // ParseMultiRepoScenario parses YAML bytes into a MultiRepoScenario. Decoding is
@@ -105,6 +140,78 @@ func ParseMultiRepoScenario(data []byte) (*MultiRepoScenario, error) {
 		return nil, fmt.Errorf("parse multi-repo scenario: %w", err)
 	}
 	return &s, nil
+}
+
+// ValidateMultiRepoScenario checks that a scenario can actually fail.
+//
+// Strict decoding rejects a key the schema does not define, but it cannot judge
+// a key whose name is schema-valid and whose value names something that does not
+// exist. A state expectation on a mistyped env, or on an external deploy the
+// repo never declares, reads back as absent no matter how the product behaves,
+// so it passes unconditionally. Both are decidable against the scenario's own
+// config without running anything, which is what makes this cheap enough to run
+// at discovery.
+func ValidateMultiRepoScenario(s *MultiRepoScenario) error {
+	// A scenario with no steps runs nothing and therefore asserts nothing, so it
+	// reports green for the wrong reason.
+	if len(s.Steps) == 0 {
+		return fmt.Errorf("scenario %q declares no steps, so it asserts nothing", s.Name)
+	}
+
+	for repoName, expect := range s.Expect.Repos {
+		// An expectation with neither tags nor state makes no claim at all. Note
+		// `tags: []` is a claim (the repo has no tags) and decodes to an empty but
+		// non-nil slice, so it is deliberately not caught here.
+		if expect.Tags == nil && expect.State == nil {
+			return fmt.Errorf("scenario %q expects repo %q but asserts nothing about it: an expectation with no tags and no state passes no matter what the code does",
+				s.Name, repoName)
+		}
+
+		repo, ok := s.Repos[repoName]
+		if !ok {
+			return fmt.Errorf("scenario %q expects repo %q, which it never declares (known: %s)",
+				s.Name, repoName, sortedNames(multiRepoNames(s)))
+		}
+
+		envNames := repo.Config.EnvironmentNames()
+		validEnvs := make(map[string]bool, len(envNames))
+		for _, env := range envNames {
+			validEnvs[env] = true
+		}
+
+		// External deploy names come from the primary's external declarations,
+		// which is where the state rows under external.<name> originate.
+		validExternal := make(map[string]bool)
+		for _, ext := range repo.Config.External {
+			for _, d := range ext.Deploys {
+				validExternal[d.Name] = true
+			}
+		}
+
+		for envName, envExpect := range expect.State {
+			if !validEnvs[envName] {
+				return fmt.Errorf("scenario %q expects state on %q.%q, which is not an environment that repo declares (known: %s). An env name that does not exist has no state no matter what the code does, so the expectation can never fail",
+					s.Name, repoName, envName, sortedNames(validEnvs))
+			}
+			for deployName := range envExpect.External {
+				if !validExternal[deployName] {
+					return fmt.Errorf("scenario %q expects state on %q.%q.external.%q, which is not an external deploy that repo declares (known: %s). A deploy name that does not exist has no state no matter what the code does, so the expectation can never fail",
+						s.Name, repoName, envName, deployName, sortedNames(validExternal))
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// multiRepoNames returns the set of repos the scenario declares.
+func multiRepoNames(s *MultiRepoScenario) map[string]bool {
+	names := make(map[string]bool, len(s.Repos))
+	for name := range s.Repos {
+		names[name] = true
+	}
+	return names
 }
 
 // DiscoverMultiRepoScenarios finds and parses all multi-repo scenario files
@@ -134,7 +241,11 @@ func DiscoverMultiRepoScenarios(dir string) ([]*MultiRepoScenario, error) {
 
 		scenario, err := ParseMultiRepoScenario(data)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", path, err)
+		}
+
+		if err := ValidateMultiRepoScenario(scenario); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
 		}
 
 		// Store relative path for test naming
@@ -236,14 +347,30 @@ func (r *MultiRepoRunner) RunSteps(ctx context.Context) error {
 			stepName = fmt.Sprintf("step-%d", i+1)
 		}
 
-		if err := r.runStep(ctx, step); err != nil {
+		wantErr := ""
+		if step.Expect != nil {
+			wantErr = step.Expect.Error
+		}
+
+		err := r.runStep(ctx, step)
+
+		if err != nil {
 			// Check if error was expected
-			if step.Expect != nil && step.Expect.Error != "" {
-				if strings.Contains(err.Error(), step.Expect.Error) {
+			if wantErr != "" {
+				if strings.Contains(err.Error(), wantErr) {
 					continue // Expected error, continue
 				}
+				return fmt.Errorf("%s: expected failure containing %q, but it failed with: %w", stepName, wantErr, err)
 			}
 			return fmt.Errorf("%s failed: %w", stepName, err)
+		}
+
+		// A step declaring an expected error is required to fail. This branch used
+		// to fall through to the success path, so an expected-failure that instead
+		// succeeded passed: the test could not fail in the direction it existed to
+		// test.
+		if wantErr != "" {
+			return fmt.Errorf("%s: expected to fail with an error containing %q, but it succeeded", stepName, wantErr)
 		}
 
 		// Run per-step assertions if defined
@@ -418,11 +545,17 @@ func (r *MultiRepoRunner) AssertFinal(ctx context.Context) error {
 	}
 
 	for repoName, expect := range r.scenario.Expect.Repos {
-		// Check tags
-		if len(expect.Tags) > 0 {
+		// Check tags. A nil list means the scenario made no claim; an empty but
+		// present list is the claim "this repo has no tags", which a stray tag
+		// must break. Gating on len > 0 would have made the latter unfalsifiable.
+		if expect.Tags != nil {
 			tags, err := r.harness.GetTagsInRepo(ctx, repoName)
 			if err != nil {
 				return fmt.Errorf("failed to get tags for %s: %w", repoName, err)
+			}
+
+			if len(expect.Tags) == 0 && len(tags) > 0 {
+				return fmt.Errorf("repo %s expects no tags, but found: %v", repoName, tags)
 			}
 
 			for _, expectedTag := range expect.Tags {
@@ -434,7 +567,7 @@ func (r *MultiRepoRunner) AssertFinal(ctx context.Context) error {
 					}
 				}
 				if !found {
-					return fmt.Errorf("expected tag %s not found in repo %s", expectedTag.Pattern, repoName)
+					return fmt.Errorf("expected tag %s not found in repo %s (found: %v)", expectedTag.Pattern, repoName, tags)
 				}
 			}
 		}
@@ -455,7 +588,11 @@ func (r *MultiRepoRunner) AssertFinal(ctx context.Context) error {
 // RealCrossRepoDispatch) commits ci.state.<env>.external.<name> back to the
 // primary repo, so the source of truth is the committed .github/manifest.yaml,
 // not an in-process ExecutionContext.
-func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expected map[string]interface{}) error {
+// The expectation is typed, so a shape mismatch is now a decode error at
+// discovery rather than something this function has to tolerate at runtime. The
+// silent `continue` on every mismatch that used to live here was the same
+// disease as the phantom keys: it turned a malformed expectation into a pass.
+func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expected map[string]EnvStateExpect) error {
 	repo := r.harness.GetRepo(repoName)
 	if repo == nil {
 		return fmt.Errorf("repo %s not found", repoName)
@@ -468,43 +605,45 @@ func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expe
 
 	// For each environment in expected state
 	for envName, envExpected := range expected {
-		envMap, ok := envExpected.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		externalExpected, ok := envMap["external"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
 		envState := mapAt(state, envName)
+
+		// Env-level sha/version. These were never compared while the subtree was
+		// an open map: assertState read only env["external"], so a scenario
+		// asserting state.<env>.sha was asserting nothing.
+		if envExpected.SHA != "" {
+			want := r.interpolate(envExpected.SHA)
+			if got := stringAt(envState, "sha"); got != want {
+				return fmt.Errorf("%s.sha: expected %s, got %s", envName, want, got)
+			}
+		}
+		if envExpected.Version != "" {
+			want := r.interpolate(envExpected.Version)
+			if got := stringAt(envState, "version"); got != want {
+				return fmt.Errorf("%s.version: expected %s, got %s", envName, want, got)
+			}
+		}
+
 		externalState := mapAt(envState, "external")
 
-		for deployName, deployExpected := range externalExpected {
-			deployMap, ok := deployExpected.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
+		for deployName, deployExpected := range envExpected.External {
 			actual := mapAt(externalState, deployName)
 			if actual == nil {
 				return fmt.Errorf("%s.external.%s: no state recorded in manifest", envName, deployName)
 			}
 
-			if expectedSHA, ok := deployMap["sha"].(string); ok {
-				expectedSHA = r.interpolate(expectedSHA)
-				if got := stringAt(actual, "sha"); got != expectedSHA {
+			if deployExpected.SHA != "" {
+				want := r.interpolate(deployExpected.SHA)
+				if got := stringAt(actual, "sha"); got != want {
 					return fmt.Errorf("%s.external.%s.sha: expected %s, got %s",
-						envName, deployName, expectedSHA, got)
+						envName, deployName, want, got)
 				}
 			}
 
-			if expectedVersion, ok := deployMap["version"].(string); ok {
-				expectedVersion = r.interpolate(expectedVersion)
-				if got := stringAt(actual, "version"); got != expectedVersion {
+			if deployExpected.Version != "" {
+				want := r.interpolate(deployExpected.Version)
+				if got := stringAt(actual, "version"); got != want {
 					return fmt.Errorf("%s.external.%s.version: expected %s, got %s",
-						envName, deployName, expectedVersion, got)
+						envName, deployName, want, got)
 				}
 			}
 
@@ -512,14 +651,10 @@ func (r *MultiRepoRunner) assertState(ctx context.Context, repoName string, expe
 			// the dispatched --artifacts JSON survived the receiver's run: shell
 			// verbatim, which is the contract that breaks if the value is
 			// interpolated into the script text instead of routed through env:.
-			if expectedArtifacts, ok := deployMap["artifacts"].(map[string]interface{}); ok {
+			if len(deployExpected.Artifacts) > 0 {
 				actualArtifacts := mapAt(actual, "artifacts")
-				for k, v := range expectedArtifacts {
-					want, ok := v.(string)
-					if !ok {
-						continue
-					}
-					want = r.interpolate(want)
+				for k, v := range deployExpected.Artifacts {
+					want := r.interpolate(v)
 					if got := stringAt(actualArtifacts, k); got != want {
 						return fmt.Errorf("%s.external.%s.artifacts.%s: expected %q, got %q",
 							envName, deployName, k, want, got)

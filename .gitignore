@@ -1,6 +1,9 @@
 # Binaries
+# Anchored to the repo root: `go test` drops cascade-<random> binaries here, and
+# an unanchored pattern would also swallow any file named cascade-* anywhere in
+# the tree, including test scenarios, which then never reach CI.
 /cascade
-cascade-*
+/cascade-*
 dist/
 
 # Go
