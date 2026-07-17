@@ -82,7 +82,10 @@ jobs:
             # dispatch). Look up tags pointing at this commit and filter to final
             # tags. Accept the highest by semver sort (in case a sha carries
             # multiple tags) but reject any rc or dryrun.
-            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" \
+            # --paginate is required: the tags endpoint serves 30 per page, so
+            # without it the sha match only ever scans the first page and the
+            # fallback silently resolves empty once the repo outgrows 30 tags.
+            VERSION=$(gh api "repos/${GITHUB_REPOSITORY}/tags" --paginate \
               --jq ".[] | select(.commit.sha == \"$WR_HEAD_SHA\") | .name" \
               | grep -vE '-(rc|dryrun)\.' \
               | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
