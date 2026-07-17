@@ -198,3 +198,69 @@ func TestListDraftReleases_BoundsPathologicalLinkChain(t *testing.T) {
 	assert.LessOrEqual(t, int(atomic.LoadInt32(&pageRequests)), maxListPages+1,
 		"the walk must stop at the page bound")
 }
+
+// TestNewPageRequest_RejectsSchemeDowngrade pins the token-confidentiality half
+// of the Link check. An attacker who can set the response header could otherwise
+// keep the host and drop to http, putting the Bearer token on the wire in
+// cleartext. Pinning the host alone leaves the token exposed to exactly the
+// attacker the host pin exists to stop.
+func TestNewPageRequest_RejectsSchemeDowngrade(t *testing.T) {
+	m := NewManagerWithURL("owner/repo", "tok", "https://api.github.com")
+
+	_, err := m.newPageRequest("http://api.github.com/repos/owner/repo/releases?page=2")
+
+	require.Error(t, err, "a scheme downgrade on a matching host must be rejected")
+	assert.Contains(t, err.Error(), "scheme")
+}
+
+// TestNewPageRequest_RejectsForeignHost is the companion: a link pointing off the
+// configured API host must not receive the token, whatever its scheme.
+func TestNewPageRequest_RejectsForeignHost(t *testing.T) {
+	m := NewManagerWithURL("owner/repo", "tok", "https://api.github.com")
+
+	_, err := m.newPageRequest("https://evil.example.com/repos/owner/repo/releases?page=2")
+
+	require.Error(t, err, "a link to a foreign host must be rejected")
+	assert.Contains(t, err.Error(), "host")
+}
+
+// TestNewPageRequest_AllowsSchemeMatchingBase proves the scheme pin is relative
+// to the configured base rather than a hardcoded https, so it cannot break a
+// legitimate deployment. A GitHub Enterprise install reached over plain http via
+// GITHUB_API_URL advertises http links of its own; those must still be followed.
+// The https enterprise case is the ordinary one and is covered alongside it.
+func TestNewPageRequest_AllowsSchemeMatchingBase(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		next    string
+	}{
+		{
+			name:    "enterprise over https",
+			baseURL: "https://ghe.example.com/api/v3",
+			next:    "https://ghe.example.com/api/v3/repos/owner/repo/releases?page=2",
+		},
+		{
+			name:    "enterprise over plain http",
+			baseURL: "http://ghe.internal/api/v3",
+			next:    "http://ghe.internal/api/v3/repos/owner/repo/releases?page=2",
+		},
+		{
+			name:    "public github",
+			baseURL: "https://api.github.com",
+			next:    "https://api.github.com/repos/owner/repo/releases?page=2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManagerWithURL("owner/repo", "tok", tt.baseURL)
+
+			req, err := m.newPageRequest(tt.next)
+
+			require.NoError(t, err, "a link matching the configured base must be followed")
+			assert.Equal(t, tt.next, req.URL.String())
+			assert.Equal(t, "Bearer tok", req.Header.Get("Authorization"))
+		})
+	}
+}

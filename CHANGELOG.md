@@ -26,12 +26,14 @@ A `Migration` section is added to any release that bumps `schema_version`.
   the end, with a page bound so a malformed link chain cannot spin, and any
   failure mid-walk is reported instead of returning a truncated list. Draft
   resolution by tag or SHA, which stopped at the first 100 releases, uses the
-  same paginated listing
+  same paginated listing. A next-page link is followed only when its scheme and
+  host both match the configured API endpoint, since every request carries a
+  bearer token.
 
 - **fleet:** The `fleet-e2e` and `suite-bootstrap-pin` version fallbacks that
   resolve a tag by commit SHA now pass `--paginate`. The tags endpoint serves 30
   per page, so the lookup scanned only the newest 30 of the repository's tags and
-  resolved an empty version once the repository outgrew that
+  resolved an empty version once the repository grew past 30 tags.
 
 - **generate:** A manifest-level `concurrency.group` is now namespaced per
   workflow instead of being emitted bare onto every cascade workflow. A GitHub

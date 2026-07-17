@@ -784,9 +784,17 @@ func (m *Manager) fetchReleasePage(req *http.Request) ([]GitHubRelease, string, 
 }
 
 // newPageRequest builds the request for a subsequent page from the URL the API
-// advertised. The host is pinned to the configured base URL: every request
-// carries a Bearer token, so following a Link header to an arbitrary host would
-// hand that token to whoever set the header.
+// advertised. Both the scheme and the host are pinned to the configured base
+// URL: every request carries a Bearer token, so following a Link header to an
+// arbitrary host would hand that token to whoever set the header, and following
+// one that keeps the host but downgrades the scheme would put that token on the
+// wire in cleartext. Pinning the host alone leaves the same token exposed to the
+// same attacker, so both are checked.
+//
+// The comparison is relative to the configured base rather than a hardcoded
+// https. A GitHub Enterprise deployment reached over plain http via
+// GITHUB_API_URL advertises http links of its own and still matches, as does the
+// http test server; only a scheme that disagrees with the base is rejected.
 func (m *Manager) newPageRequest(next string) (*http.Request, error) {
 	nextURL, err := url.Parse(next)
 	if err != nil {
@@ -798,6 +806,9 @@ func (m *Manager) newPageRequest(next string) (*http.Request, error) {
 	}
 	if nextURL.Host != base.Host {
 		return nil, fmt.Errorf("next page link host %q does not match API host %q", nextURL.Host, base.Host)
+	}
+	if nextURL.Scheme != base.Scheme {
+		return nil, fmt.Errorf("next page link scheme %q does not match API scheme %q", nextURL.Scheme, base.Scheme)
 	}
 
 	req, err := http.NewRequest(http.MethodGet, nextURL.String(), nil)
