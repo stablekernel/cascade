@@ -1,24 +1,38 @@
 name: "Deploy Retries Re-Invoke A Failing Callback"
 description: |
-  A deploy declaring retries: 2 must emit two retry shim jobs that RE-INVOKE the
-  reusable workflow when the attempt before them failed, and those shims must
-  actually run.
+  A deploy declaring retries: 2 must emit two retry shim jobs that re-invoke the
+  reusable workflow when the attempt before them failed.
 
-  The proof is executing, not textual. The staged deploy callback always exits
-  non-zero, so deploy-app fails, deploy-app-retry-1 fires on
-  needs.deploy-app.result == 'failure', and deploy-app-retry-2 fires on
-  needs.deploy-app-retry-1.result == 'failure'. Asserting each shim's conclusion
-  is "failure" (never "skipped") is what makes this executing coverage: a job the
-  generator never emitted is reported as not-found and fails the assertion, and
-  the harness treats an absent job as satisfying "skipped", so only a
-  success/failure expectation proves a job ran at all. retry-2 concluding failure
-  additionally proves the chain is wired to its PREDECESSOR shim rather than all
-  hanging off the original job.
+  Coverage is split deliberately, because the harness can prove some of this at
+  runtime and some of it only in the emitted YAML. Both halves are stated
+  honestly rather than dressed up as one executing proof:
 
-  The run as a whole is expected to fail: a retry shim re-runs the callback but
-  does not turn the failed original job green, which is GitHub's own semantics.
-  State is deliberately not asserted here because the harness skips its
-  state sync on the expect_failure path.
+  Step 1 (emitted): the shims exist, there are exactly two of them, and each is
+  gated on its PREDECESSOR's failure rather than all hanging off the original
+  job. That is a text assertion and is labeled as such.
+
+  Step 2 (executing): the staged deploy callback always exits non-zero, so
+  deploy-web genuinely fails at runtime, and expect_log proves the callback BODY
+  really ran rather than a job object merely existing.
+
+  What is NOT asserted, and why: the individual retry shims are not observable
+  through expect.jobs. The harness keys jobs by the reusable workflow's INNER
+  job id (parser.go), not the calling job id, so deploy-web, deploy-web-retry-1
+  and deploy-web-retry-2 all call the same file and collapse onto the single key
+  "web". expect_log cannot separate them either, since all three invocations emit
+  identical text and the assertion is a substring Contains that cannot count
+  occurrences. Asserting a per-shim conclusion here would silently read the wrong
+  job, so it is left out rather than faked.
+
+  INNER-JOB-ID NAMESPACE TRAP, for the next author: expect.jobs entries are
+  resolved by findJob (assert.go), which strips a "build-"/"deploy-" prefix and
+  looks the remainder up among the INNER job ids of the called workflows. The
+  harness's generated stub names its inner job after the callback. So a build and
+  a deploy that share a NAME both resolve to the same key, and "deploy-x" would
+  silently return the BUILD's result. That is why the build here is "app" and the
+  deploy is "web", and why the staged callback's inner job id is "web" to match
+  the deploy name. Keep build and deploy names distinct in any scenario that
+  asserts expect.jobs on them.
 
 config:
   trunk_branch: main
@@ -28,14 +42,14 @@ config:
       workflow: build.yaml
       triggers: ["src/**"]
   deploys:
-    - name: app
+    - name: web
       workflow: deploy.yaml
       triggers: ["src/**"]
       retries: 2
 
 # The deploy callback always fails, so the original job and both retry shims each
-# conclude in failure. That is what makes the shims observable: a shim that was
-# never emitted, or whose `if` never fired, would be absent from the run.
+# re-invoke it and conclude in failure. Its inner job id is "web" so it matches
+# the deploy name and never collides with the build stub's inner job id ("app").
 setup_workflows:
   ".github/workflows/deploy.yaml": |
     name: deploy
@@ -49,11 +63,11 @@ setup_workflows:
             required: false
             type: string
     jobs:
-      deploy:
+      web:
         runs-on: ubuntu-latest
         steps:
           - run: |
-              echo "deploy attempt for ${{ inputs.environment }} - failing on purpose"
+              echo "cascade-e2e-retry-probe: deploy callback invoked, failing on purpose"
               exit 1
 
 steps:
@@ -70,22 +84,25 @@ steps:
       workflow_files:
         - path: ".github/workflows/orchestrate.yaml"
           contains:
-            - "deploy-app-retry-1:"
-            - "deploy-app-retry-2:"
-            - "if: needs.deploy-app.result == 'failure'"
-            - "if: needs.deploy-app-retry-1.result == 'failure'"
+            - "deploy-web-retry-1:"
+            - "deploy-web-retry-2:"
+            # Each shim is gated on the attempt immediately before it, so the
+            # chain is sequential rather than every shim firing off the original.
+            - "if: needs.deploy-web.result == 'failure'"
+            - "if: needs.deploy-web-retry-1.result == 'failure'"
           not_contains:
             # retries: 2 emits exactly two shims.
-            - "deploy-app-retry-3:"
+            - "deploy-web-retry-3:"
 
-  - name: "Orchestrate: the failing deploy drives both retry shims"
+  - name: "Orchestrate: the deploy callback genuinely fails at runtime"
     action: orchestrate
     expect_failure: true
     expect:
       jobs:
+        # build-app resolves to the build stub's inner job id "app"; deploy-web
+        # resolves to the staged callback's inner job id "web". Distinct names,
+        # so neither reads the other's result.
         build-app: success
-        deploy-app: failure
-        # Each shim must have RUN and concluded failure. "skipped" would be
-        # satisfied by an absent job and would prove nothing.
-        deploy-app-retry-1: failure
-        deploy-app-retry-2: failure
+        deploy-web: failure
+      # Proves the callback BODY executed, not merely that a job object exists.
+      expect_log: "cascade-e2e-retry-probe: deploy callback invoked"
