@@ -237,7 +237,7 @@ steps:
     action: hotfix_plan
     hotfix_plan:
       component: web
-      commit_ref: commit5
+      commit_ref: commit4
       target_env: prod
       dry_run: true
 
@@ -246,7 +246,7 @@ steps:
     hotfix_apply:
       component: web
       target_env: prod
-      commit_ref: commit5
+      commit_ref: commit4
       base_ref: commit2
     expect:
       branches:
@@ -275,7 +275,7 @@ steps:
           env: prod
           ref: "env/web/prod"
           base_sha: commit2
-          patches: [commit5]
+          patches: [commit4]
         # api's sha/version are byte-unchanged across web's finalize.
         api-prod:
           component: api

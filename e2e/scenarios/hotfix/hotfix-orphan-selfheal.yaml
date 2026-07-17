@@ -92,7 +92,9 @@ steps:
     promote:
       mode: default
 
-  - name: "Commit a new trunk fix to hotfix into test"
+  # Trunk carries a further fix that test does not have. The plan below targets
+  # commit3 rather than this, for the reason stated on that step.
+  - name: "Commit a further trunk fix that test does not carry"
     action: commit
     commit:
       message: "fix: second patch for test env"
@@ -109,9 +111,25 @@ steps:
   # the signal: it checks the diagnostic line emitted when ResetBranch fires,
   # distinguishing a genuine self-heal from a plan that succeeds for another
   # reason (branch already at base, branch freshly created, etc.).
+  #
+  # The target is commit3, the trunk advance test already carries, so the
+  # generated apply job finds every commit present and no-ops. That is
+  # deliberate: act's runner image ships no `gh`, so the generated apply job
+  # cannot run under act, and every other hotfix scenario records the same
+  # convention as "plan only: the harness's hotfix_apply step performs the real
+  # cherry-pick". Targeting a commit test lacks would dispatch the real apply job
+  # and fail on the missing binary, testing act's image rather than cascade.
+  #
+  # The self-heal does not depend on the target. The plan job's preflight resets
+  # the orphan env branch before any cherry-pick is considered, so a target that
+  # no-ops still exercises the whole path this scenario exists to prove.
+  #
+  # dry_run would be the wrong way to dodge the apply job: the planner returns
+  # reset=true in dry-run without calling ResetBranch, so assert_branch_reset
+  # would pass without a self-heal ever happening.
   - name: "Plan hotfix for test self-heals the orphan env branch"
     action: hotfix_plan
     hotfix_plan:
       target_env: test
-      commit_ref: commit4
+      commit_ref: commit3
       assert_branch_reset: true

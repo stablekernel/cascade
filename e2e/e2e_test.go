@@ -26,6 +26,24 @@ const envScenarioFilter = "E2E_SCENARIO"
 // scenarioFilter returns the trimmed scenario-name pattern, or "" when unset.
 func scenarioFilter() string { return strings.TrimSpace(os.Getenv(envScenarioFilter)) }
 
+// TestMultiStepScenarios_RealCorpusPassesDiscovery runs discovery over the
+// checked-in scenarios and nothing else. Discovery parses YAML and checks names
+// against each scenario's own config, so it needs no Docker and belongs in the
+// inner loop.
+//
+// The discovery checks are strict by design: an unknown field, a scenario with
+// no steps, or a state expectation naming an env or component the scenario never
+// declares aborts the walk on the first offender. That strictness is what keeps
+// an expectation falsifiable, and it is also why a checked-in scenario the
+// checks reject blocks every scenario behind it for every future change. The
+// full run proves that too, but only where Docker is, and long after the
+// mistake. Here it costs milliseconds.
+func TestMultiStepScenarios_RealCorpusPassesDiscovery(t *testing.T) {
+	scenarios, err := harness.DiscoverMultiStepScenarios("scenarios")
+	require.NoError(t, err, "the checked-in scenarios must pass discovery")
+	require.NotEmpty(t, scenarios, "discovery found no scenarios; the corpus or its path moved")
+}
+
 func TestMultiStepScenarios(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E tests")

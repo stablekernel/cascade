@@ -228,6 +228,38 @@ func TestRunner_ExecuteCommit(t *testing.T) {
 	assert.Contains(t, sha, "sha_commit1") // placeholder SHA
 }
 
+// TestRunner_ExecuteCommit_NumbersOnlyCommitSteps proves the commitN alias
+// counts `action: commit` steps and nothing else.
+//
+// A merge_pr that closes a hotfix records the post-merge env branch tip under
+// the "hotfix_head" alias. That tip is a real commit, but it is not a step the
+// scenario author wrote, so it must not shift the numbering of the commits they
+// did write. If it does, every later commitN silently names the commit before
+// the one the author meant, and an assertion against it looks right while
+// proving nothing about the commit under test.
+func TestRunner_ExecuteCommit_NumbersOnlyCommitSteps(t *testing.T) {
+	runner := &Runner{
+		ctx: NewExecutionContext(),
+		t:   t,
+	}
+	ctx := context.Background()
+
+	require.NoError(t, runner.executeCommit(ctx, &CommitStep{Message: "feat: first"}))
+
+	// Stand in for executeMergePR recording the post-merge env branch tip.
+	runner.ctx.RecordCommit("hotfix_head", "sha_hotfix_head")
+
+	require.NoError(t, runner.executeCommit(ctx, &CommitStep{Message: "fix: second"}))
+
+	assert.Equal(t, "sha_commit1", runner.ctx.ResolveSHA("commit1"))
+	assert.Equal(t, "sha_commit2", runner.ctx.ResolveSHA("commit2"),
+		"the second `action: commit` step must mint commit2; hotfix_head must not consume a number")
+	assert.Empty(t, runner.ctx.ResolveSHA("commit3"),
+		"no third commit step ran, so commit3 must not exist")
+	assert.Equal(t, "sha_hotfix_head", runner.ctx.ResolveSHA("hotfix_head"),
+		"hotfix_head stays resolvable as a named alias")
+}
+
 func TestRunner_AssertStep_UnchangedState(t *testing.T) {
 	runner := &Runner{
 		ctx: NewExecutionContext(),

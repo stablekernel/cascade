@@ -64,11 +64,10 @@ steps:
     promote:
       mode: default
 
-  # Both trunk fixes are committed up front, before any merge_pr records a
-  # post-merge env tip into the execution context. The harness numbers commit
-  # references off every recorded SHA, so committing both fixes here keeps them
-  # deterministically commit2 and commit3; interleaving a commit after a merge_pr
-  # would shift the numbering.
+  # Both trunk fixes are committed up front so the chain below reads in one
+  # place. They are commit2 and commit3: the harness numbers commit references
+  # off `action: commit` steps alone, so a merge_pr recording a post-merge env
+  # tip does not shift them.
   - name: "First trunk fix"
     action: commit
     commit:
