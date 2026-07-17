@@ -1,0 +1,64 @@
+name: "Custom Action Folder Resolves At Runtime"
+description: |
+  A manifest that renames the manage-release action directory via action_folder
+  must emit every `uses:` that calls the action against that folder, and the
+  action must actually resolve there when the workflow runs.
+
+  The proof is executing, not textual. The harness stages its mock
+  manage-release action at the manifest's action_folder, so the generated
+  workflow and the action on disk agree only if the generator honored the field.
+  A generator that emitted the historical "./.github/actions/manage-release"
+  path would point at a directory that does not exist, and act fails the job at
+  action resolution before any step runs.
+
+  The tag and the draft release are the assertion that carries the weight: only
+  the mock action creates them, so their existence proves the action was located
+  and executed from the custom folder. The workflow_files check pins the emitted
+  path alongside it, but on its own it would only prove the text, not that the
+  path resolves.
+
+config:
+  trunk_branch: main
+  action_folder: custom-release
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Seed source; assert the custom action path is emitted"
+    action: commit
+    commit:
+      message: "feat: seed app source"
+      files:
+        src/app.ts: |
+          export function main() {
+            console.log("App v0.1.0");
+          }
+    expect:
+      workflow_files:
+        - path: ".github/workflows/orchestrate.yaml"
+          contains:
+            - "uses: ./.github/actions/custom-release"
+          not_contains:
+            - "uses: ./.github/actions/manage-release"
+
+  - name: "Orchestrate: the action resolves from the custom folder and releases"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      # Only the manage-release action creates these, so they prove it ran from
+      # the custom folder rather than merely being named there.
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]

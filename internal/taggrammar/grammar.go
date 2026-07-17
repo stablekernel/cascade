@@ -164,7 +164,26 @@ func sedBREEscape(s string) string {
 }
 
 // atoi converts a submatch known to be all digits. The grammar guarantees the
-// input, so any error is discarded and yields 0.
+// input is non-empty and numeric, so strconv.ErrSyntax is unreachable and the
+// only error left is strconv.ErrRange, from a run of digits too large for an
+// int. Atoi saturates on that error, returning MaxInt (not 0), and the error is
+// discarded.
+//
+// Saturating is the safe direction for cascade's two reapers, though they reach
+// that outcome through different fields:
+//
+//   - cleanupStaleDrafts deletes a draft only when its RC number is strictly
+//     lower than the one being published, so a saturated RC number compares as
+//     greater and the draft is preserved.
+//   - strictSupersededRCMatcher ignores the RC number once it is present and
+//     reaps on the numeric base alone (major.minor.patch at or below the
+//     published base), so a saturated base field compares as greater and the tag
+//     is preserved. A saturated RC number does not sway it either way.
+//
+// Saturation therefore never becomes a wrong deletion. It either preserves the
+// tag outright or leaves the call to the base comparison, which is correct on its
+// own: a saturated RC tag sitting at or below the published base is still a
+// superseded RC tag, and reaping it is the intended outcome.
 func atoi(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
