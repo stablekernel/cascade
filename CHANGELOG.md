@@ -16,6 +16,18 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **setup-cli:** A transient GitHub API error during CLI install is now
+  retried instead of failing the job immediately. GitHub occasionally answers a
+  release download with a spurious error for a release that exists and
+  downloads fine moments later, and the install gave up after a single attempt,
+  so a momentary blip failed the whole workflow. Each download is now attempted
+  up to three times with exponential backoff. The budget stays small on
+  purpose: a release that is genuinely missing, such as a deleted tag or a
+  typo'd version, still fails within seconds rather than hanging, so a pin to a
+  tag that no longer exists remains as easy to spot as before. The signature
+  bundle fetch is retried on the same budget, so a blip there no longer
+  downgrades a signed release to checksum-only verification
+
 - **release:** Release notes that exceed GitHub's 125,000-character limit are
   now truncated instead of failing the release. GitHub rejects an oversized
   release body outright rather than shortening it, so creating the release
