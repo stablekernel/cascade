@@ -841,8 +841,22 @@ func (g *Generator) writeExtraTriggers(sb *strings.Builder, et *config.ExtraTrig
 // writeConcurrency emits a top-level concurrency: block. Two rapid pushes to
 // trunk used to fire concurrent orchestrate runs, which raced on state writes
 // and produced duplicate RC tags + non-fast-forward push failures (#92).
-// Default: cancel an older in-progress run when a newer push lands, because the
-// older run's work is obsolete. Override via config.concurrency.
+// Default: cancel an older in-progress run when a newer push lands. Override via
+// config.concurrency.
+//
+// Orchestrate is the one cascade workflow that may cancel mid-write, and the
+// reason is idempotence, NOT that a cancelled write is somehow repaired. Nothing
+// repairs it: a cancelled run does not resume, and the Contents API 409
+// read-modify-write retry in internal/statewrite protects against a racing
+// SIBLING writer, never against this run being killed. What makes cancelling
+// safe here is that the lane is keyed per ref, so the run that supersedes this
+// one recomputes and rewrites the same per-ref state from the newer commit. The
+// cancelled write is redone, not lost.
+//
+// That does not generalize. Promote, rollback, release and external-update each
+// carry a DISTINCT payload (a specific env, version, tag, or downstream
+// manifest), so no superseding run redoes their work and a mid-write cancel
+// loses it permanently. They pin cancel-in-progress: false for that reason.
 //
 // An operator-supplied concurrency.group is namespaced into the orchestrate lane
 // rather than emitted bare: emitted bare it would be byte-identical to the group

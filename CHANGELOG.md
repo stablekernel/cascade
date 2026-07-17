@@ -42,9 +42,10 @@ A `Migration` section is added to any release that bumps `schema_version`.
   manifest that set only `concurrency.group` was indistinguishable from one
   asking for `cancel_in_progress: false`, which silently flipped orchestrate's
   documented default of `true` and made every queued push wait behind the run
-  ahead of it. An omitted value now leaves each workflow on its own default.
-  Setting the field to `true` or `false` behaves as before, and the manifest
-  surface is unchanged
+  ahead of it. An omitted value now leaves each workflow on its own default. The
+  manifest surface is unchanged: the field is still an optional boolean, and a
+  value stated explicitly is still read exactly as written, then applied subject
+  to the per-workflow pinning above
 
 - **setup-cli:** A transient GitHub API error during CLI install is now
   retried instead of failing the job immediately. GitHub occasionally answers a

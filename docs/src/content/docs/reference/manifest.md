@@ -745,14 +745,22 @@ set at all.
 
 #### cancel_in_progress applies to orchestrate
 
-`cancel_in_progress` defaults to `true` on orchestrate, where a newer push makes an
-older run's work obsolete. Set it to `false` to queue those runs instead.
+`cancel_in_progress` defaults to `true` on orchestrate. Set it to `false` to queue
+those runs instead.
 
-It is not honored on the workflows that mutate durable state: promote, rollback,
-release, external-update, and hotfix always emit `cancel-in-progress: false`. Those
-workflows push env state, tags, GitHub Releases, or a downstream manifest, and
-cancelling one mid-write leaves that state half-applied. Requesting
-`cancel_in_progress: true` does not override this.
+Orchestrate is the one cascade workflow that may safely cancel mid-write, because
+its lane is keyed per ref: the run that supersedes a cancelled one recomputes and
+rewrites the same per-ref state from the newer commit, so the write is redone
+rather than lost. A cancelled run never resumes, so this is a property of the work
+being idempotent per ref, not of anything recovering the interrupted write.
+
+That reasoning does not extend to the workflows that mutate durable state, so
+`cancel_in_progress` is not honored on them: promote, rollback, release,
+external-update, and hotfix always emit `cancel-in-progress: false`. Each carries a
+distinct payload (a specific environment, version, tag, or downstream manifest)
+that no superseding run redoes, so cancelling one mid-write loses that work
+permanently and leaves the state half-applied. Requesting `cancel_in_progress: true`
+does not override this.
 
 Omitting `cancel_in_progress` is distinct from setting it to `false`: an omitted
 value leaves each workflow on its own default, so setting only `group` does not
