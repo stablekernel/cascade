@@ -52,10 +52,13 @@ A `Migration` section is added to any release that bumps `schema_version`.
   vanished from generated output, so a manifest could declare a publish callback
   that never published, or an external repository that coordinated nothing.
 
-- **generate:** Generation now fails rather than emitting any empty trigger
-  allow-list (`branches: []`, `paths: []`, `tags: []`). An empty allow-list
-  matches nothing and silently disables the workflow it guards, so it is now a
-  build error instead of a workflow that reports green forever and never runs.
+- **generate:** Generation of the orchestrate workflow now fails rather than
+  emitting an empty trigger filter. A filter that is present but empty matches
+  nothing and silently disables the trigger it guards, and GitHub accepts the
+  workflow and reports it green forever. The check covers every `branches`,
+  `paths`, and `tags` filter (and their `-ignore` forms) in the emitted
+  workflow, in both YAML list styles, so an emission site that forgets a length
+  guard fails the build instead of shipping a workflow that never runs.
 
 - **docs:** Every manifest example across the documentation now sets
   `trunk_branch`, and the reference table no longer lists it as both required and
