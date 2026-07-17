@@ -475,15 +475,19 @@ func (g *ReleaseGenerator) writeFinalizeJob(sb *strings.Builder) {
 // release that the next run would then conflict with.
 func (g *ReleaseGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("concurrency:\n")
-	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
-		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
-	} else {
-		sb.WriteString("  group: \"${{ github.workflow }}\"\n")
-	}
-	if g.config.Concurrency != nil {
-		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
-	} else {
-		sb.WriteString("  cancel-in-progress: false\n")
-	}
+
+	// An operator-supplied group is namespaced into the release lane rather than
+	// emitted bare: bare, it would be byte-identical to the group emitted on
+	// orchestrate, promote, rollback and external-update, and a concurrency group
+	// shared across workflows cancels all-but-the-latest PENDING run repo-wide.
+	group := config.WorkflowConcurrencyGroup(g.config.Concurrency, "release", `"${{ github.workflow }}"`)
+	fmt.Fprintf(sb, "  group: %s\n", group)
+
+	// Pinned, not configurable: a release run pushes tags and publishes GitHub
+	// Releases. Cancelling one mid-flight can leave a tag pushed but the release
+	// unpublished, which the next run then conflicts with. Queueing is the only
+	// safe policy, so an explicit cancel_in_progress: true is deliberately not
+	// honored here (matching the hotfix generator's unconditional false).
+	sb.WriteString("  cancel-in-progress: false\n")
 	sb.WriteString("\n")
 }

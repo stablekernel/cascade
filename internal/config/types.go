@@ -220,9 +220,60 @@ type TrunkConfig struct {
 // generated orchestrate workflow. Defaults: group=orchestrate-${{ github.ref }},
 // cancel-in-progress=true. Set cancel_in_progress=false to queue runs instead
 // of cancelling older ones.
+//
+// Group is a manifest-global expression: it is composed with a per-workflow
+// namespace at emission (see WorkflowConcurrencyGroup) rather than emitted bare
+// onto every workflow. GitHub concurrency groups are repo-global ACROSS
+// workflows, and a shared group cancels all-but-the-latest pending run even when
+// cancel-in-progress is false, so a bare shared group would let a queued promote
+// and a queued release silently cancel each other.
+//
+// CancelInProgress is a pointer so that "unset" and "explicitly false" stay
+// distinguishable. Each generated workflow carries its own default (orchestrate
+// cancels, the state-mutating workflows queue), and a nil value selects that
+// per-workflow default. A plain bool made a manifest that set only
+// concurrency.group indistinguishable from one that asked for
+// cancel_in_progress: false, silently flipping orchestrate's documented default.
 type ConcurrencyConfig struct {
 	Group            string `yaml:"group,omitempty" json:"group,omitempty"`
-	CancelInProgress bool   `yaml:"cancel_in_progress" json:"cancel_in_progress"`
+	CancelInProgress *bool  `yaml:"cancel_in_progress,omitempty" json:"cancel_in_progress,omitempty"`
+}
+
+// CancelInProgressOr returns the explicitly configured cancel_in_progress value,
+// or def when the block is absent or leaves the field unset. Nil-safe: each
+// generator passes the default appropriate to the workflow it emits.
+func (c *ConcurrencyConfig) CancelInProgressOr(def bool) bool {
+	if c == nil || c.CancelInProgress == nil {
+		return def
+	}
+	return *c.CancelInProgress
+}
+
+// GroupOr returns the configured group expression, or def when the block is
+// absent or leaves the group unset. Nil-safe.
+func (c *ConcurrencyConfig) GroupOr(def string) string {
+	if c == nil || c.Group == "" {
+		return def
+	}
+	return c.Group
+}
+
+// WorkflowConcurrencyGroup composes an operator-supplied manifest-global
+// concurrency.group with a per-workflow namespace, returning the group a given
+// workflow should emit. When the operator supplies no group, the workflow's own
+// default (def) is used verbatim, which keeps every existing manifest that omits
+// the block byte-identical.
+//
+// The operator's expression is preserved and prefixed rather than discarded, so
+// an override still means what the operator wrote; it just cannot collapse two
+// distinct workflows onto one repo-global lane. Prefix ordering matches the
+// per-component composition already used by the promote and rollback fan-outs
+// (<global>-<namespace>-<component>).
+func WorkflowConcurrencyGroup(c *ConcurrencyConfig, namespace, def string) string {
+	if c == nil || c.Group == "" {
+		return def
+	}
+	return fmt.Sprintf("%s-%s", c.Group, namespace)
 }
 
 // OrchestrateDispatchOnly reports whether the generated orchestrate workflow
@@ -239,14 +290,12 @@ func (c *TrunkConfig) GetConcurrencyGroup() string {
 	return "orchestrate-${{ github.ref }}"
 }
 
-// GetConcurrencyCancelInProgress returns whether to cancel older in-progress
-// runs. Defaults to true (newer push obsoletes older). Returns false only when
-// explicitly configured.
+// GetConcurrencyCancelInProgress returns whether the orchestrate workflow should
+// cancel older in-progress runs. Defaults to true (a newer push obsoletes the
+// older run). Returns false only when the manifest explicitly asks for it;
+// setting concurrency.group alone leaves the default intact.
 func (c *TrunkConfig) GetConcurrencyCancelInProgress() bool {
-	if c.Concurrency == nil {
-		return true
-	}
-	return c.Concurrency.CancelInProgress
+	return c.Concurrency.CancelInProgressOr(true)
 }
 
 // GetSchemaVersion returns the effective schema version: the configured value,

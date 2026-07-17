@@ -1391,15 +1391,15 @@ func (g *PromoteGenerator) writeConcurrency(sb *strings.Builder) {
 		return
 	}
 
-	if g.config.Concurrency != nil && g.config.Concurrency.Group != "" {
-		fmt.Fprintf(sb, "  group: %s\n", g.config.Concurrency.Group)
-	} else {
-		sb.WriteString("  group: \"${{ github.workflow }}\"\n")
-	}
-	if g.config.Concurrency != nil {
-		fmt.Fprintf(sb, "  cancel-in-progress: %t\n", g.config.Concurrency.CancelInProgress)
-	} else {
-		sb.WriteString("  cancel-in-progress: false\n")
-	}
+	// Single-component mode. An operator-supplied group is namespaced into the
+	// promote lane rather than emitted bare: bare, it would be byte-identical to
+	// the group emitted on orchestrate, release, rollback and external-update, and
+	// a concurrency group shared across workflows cancels all-but-the-latest
+	// PENDING run repo-wide. cancel-in-progress stays pinned false for the same
+	// reason it is pinned in component mode: promote mutates durable env state and
+	// tags, so a mid-flight cancel leaves state partially written.
+	group := config.WorkflowConcurrencyGroup(g.config.Concurrency, "promote", `"${{ github.workflow }}"`)
+	fmt.Fprintf(sb, "  group: %s\n", group)
+	sb.WriteString("  cancel-in-progress: false\n")
 	sb.WriteString("\n")
 }

@@ -1660,7 +1660,7 @@ func TestPromoteGenerator_ConcurrencyOverride(t *testing.T) {
 		Environments: config.EnvNames("dev", "prod"),
 		Concurrency: &config.ConcurrencyConfig{
 			Group:            "my-custom-promote",
-			CancelInProgress: true,
+			CancelInProgress: boolPtr(true),
 		},
 	}
 
@@ -1668,8 +1668,13 @@ func TestPromoteGenerator_ConcurrencyOverride(t *testing.T) {
 	content, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, content, "group: my-custom-promote", "custom group must propagate to promote")
-	assert.Contains(t, content, "cancel-in-progress: true", "custom cancel_in_progress must propagate to promote")
+	// The operator's expression is preserved but namespaced into the promote lane
+	// so it cannot share a repo-global group with the other cascade workflows.
+	assert.Contains(t, content, "group: my-custom-promote-promote", "custom group must propagate to promote, namespaced per workflow")
+
+	// cancel_in_progress is deliberately NOT honored on promote: promote pushes
+	// env state and release tags, so it must never be cancelled mid-write.
+	assert.Contains(t, content, "cancel-in-progress: false", "promote must pin cancel-in-progress: false even when the manifest requests true")
 }
 
 // TestPromoteGenerator_SelectiveDeploysAndForcePassthrough pins the generator

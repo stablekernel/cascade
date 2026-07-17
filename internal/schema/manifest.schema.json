@@ -235,11 +235,11 @@
       "properties": {
         "group": {
           "type": "string",
-          "description": "Concurrency group expression (default: orchestrate-${{ github.ref }})."
+          "description": "Concurrency group expression. Composed with a per-workflow namespace at emission (e.g. <group>-orchestrate, <group>-promote), because a concurrency group is repo-global across workflows and a shared one cancels all-but-the-latest queued run. Default per workflow: orchestrate-${{ github.ref }} on orchestrate, the bare workflow name on promote/rollback/release."
         },
         "cancel_in_progress": {
           "type": "boolean",
-          "description": "Cancel older in-progress runs (default: true). Set false to queue runs instead."
+          "description": "Cancel older in-progress runs. Applies to the orchestrate workflow, where it defaults to true; set false to queue runs instead. Ignored on the state-mutating workflows (promote, rollback, release, external-update, hotfix), which always queue so a run is never cancelled mid-write. When omitted, each workflow keeps its own default."
         }
       }
     },

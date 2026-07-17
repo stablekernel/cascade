@@ -130,7 +130,7 @@ func TestGenerator_OrchestrateConcurrencyOverride(t *testing.T) {
 		},
 		Concurrency: &config.ConcurrencyConfig{
 			Group:            "custom-orchestrate",
-			CancelInProgress: false,
+			CancelInProgress: boolPtr(false),
 		},
 	}
 
@@ -138,7 +138,11 @@ func TestGenerator_OrchestrateConcurrencyOverride(t *testing.T) {
 	result, err := gen.Generate()
 	require.NoError(t, err)
 
-	assert.Contains(t, result, "group: custom-orchestrate", "custom group must propagate")
+	// The operator's expression is preserved but namespaced into the orchestrate
+	// lane: emitted bare it would be byte-identical to the group on promote,
+	// rollback, release and external-update, and a concurrency group shared across
+	// workflows cancels all-but-the-latest pending run repo-wide.
+	assert.Contains(t, result, "group: custom-orchestrate-orchestrate", "custom group must propagate, namespaced per workflow")
 	assert.Contains(t, result, "cancel-in-progress: false", "cancel_in_progress: false must propagate")
 }
 

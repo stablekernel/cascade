@@ -16,6 +16,37 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** A manifest-level `concurrency.group` is now namespaced per
+  workflow instead of being emitted bare onto every cascade workflow. A GitHub
+  concurrency group is matched repository-wide rather than per workflow, and a
+  group shared by two workflows keeps only the latest queued run and cancels the
+  rest, even when `cancel_in_progress` is `false`. Setting one group therefore
+  put orchestrate, promote, rollback, release, and external-update on a single
+  lane, where a queued promote and a queued release silently cancelled one
+  another. Each workflow now composes that group with its own namespace
+  (`<group>-orchestrate`, `<group>-promote`, and so on), so the configured
+  expression still applies but no two workflows share a key. The external-update
+  key keeps its per-component `deploy_name` axis, which an override previously
+  discarded, collapsing every upstream component onto one lane. A manifest that
+  does not set `concurrency.group` generates byte-identical output
+
+- **generate:** The workflows that mutate durable state (promote, rollback,
+  release, and external-update) now always emit `cancel-in-progress: false`,
+  matching hotfix. These workflows push environment state, tags, GitHub
+  Releases, or a downstream manifest, and cancelling one mid-write leaves that
+  state half-applied, so `cancel_in_progress: true` is no longer honored on
+  them. It continues to apply to orchestrate, where it still defaults to `true`
+
+- **config:** `concurrency.cancel_in_progress` now distinguishes an omitted
+  value from an explicit `false`. Because the field was a plain boolean, a
+  manifest that set only `concurrency.group` was indistinguishable from one
+  asking for `cancel_in_progress: false`, which silently flipped orchestrate's
+  documented default of `true` and made every queued push wait behind the run
+  ahead of it. An omitted value now leaves each workflow on its own default. The
+  manifest surface is unchanged: the field is still an optional boolean, and a
+  value stated explicitly is still read exactly as written, then applied subject
+  to the per-workflow pinning above
+
 - **setup-cli:** A transient GitHub API error during CLI install is now
   retried instead of failing the job immediately. GitHub occasionally answers a
   release download with a spurious error for a release that exists and
