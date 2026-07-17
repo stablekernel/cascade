@@ -101,7 +101,7 @@ The two fields that define the pipeline shape.
 
 | Field | Status | Type | Required | Default | Description |
 |-------|--------|------|----------|---------|-------------|
-| `trunk_branch` | emitted | string | Yes | `main` | The trunk branch releases flow from. |
+| `trunk_branch` | emitted | string | Yes | - | The trunk branch the orchestrate workflow runs on. |
 | `environments` | emitted | list of strings or objects | No | - | The promotion ladder. Each entry is a bare name or an object carrying that environment's name, optional role, and inline settings. Omit for a no-environment library or CLI project. |
 
 ```yaml
@@ -153,6 +153,7 @@ produces cascade's historical grammar exactly: `vX.Y.Z` releases, `-rc.N` pre-re
 ```yaml
 ci:
   config:
+    trunk_branch: main
     tag_grammar:
       prefix: v
       prerelease_token: rc
@@ -242,6 +243,7 @@ The `sha` values come from a single committed pin table (`internal/generate/acti
 ```yaml
 ci:
   config:
+    trunk_branch: main
     pin_mode: sha
     action_pins:
       actions/checkout: 0123456789abcdef0123456789abcdef01234567
@@ -265,6 +267,7 @@ Reference secrets by bare name; cascade wraps a bare name in a `${{ secrets.* }}
 ```yaml
 ci:
   config:
+    trunk_branch: main
     release_token: RELEASE_PAT
     state_token: STATE_PAT
 ```
@@ -278,6 +281,7 @@ A GitHub App avoids storing a long-lived PAT. Point `release_token_app` and `sta
 ```yaml
 ci:
   config:
+    trunk_branch: main
     release_token_app:
       app_id: CASCADE_APP_ID
       private_key: CASCADE_APP_PRIVATE_KEY
@@ -295,6 +299,7 @@ Optional git identity and signing configuration for state commits.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     git:
       mode: custom
       user_name: deploy-bot
@@ -322,6 +327,7 @@ Optional pre-build validation callback.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     validate:
       workflow: .github/workflows/validate.yaml
       supports_dry_run: false
@@ -354,6 +360,8 @@ Builds produce artifacts (container images, binaries, and the like). `builds` is
 ```yaml
 ci:
   config:
+    trunk_branch: main
+    environments: [prod]
     builds:
       - name: app
         workflow: .github/workflows/build-app.yaml
@@ -457,6 +465,7 @@ Deploys target environments. `deploys` is a list and shares most fields with `bu
 ```yaml
 ci:
   config:
+    trunk_branch: main
     deploys:
       - name: infra
         workflow: .github/workflows/deploy-infra.yaml
@@ -533,6 +542,7 @@ The publish callback runs once per build when a release is published, at the poi
 ```yaml
 ci:
   config:
+    trunk_branch: main
     publish:
       workflow: .github/workflows/publish.yaml
 ```
@@ -554,6 +564,7 @@ ci:
 ```yaml
 ci:
   config:
+    trunk_branch: main
     external:
       - repo: org/cdk-infra
         ref: main
@@ -585,6 +596,7 @@ For satellite repos that report deployments back to a primary.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     notify:
       repo: org/my-backend
       workflow: external-update.yaml
@@ -608,6 +620,7 @@ The primary validates the dispatched `deploy_name` and `environment` against its
 ```yaml
 ci:
   config:
+    trunk_branch: main
     release_build:
       disabled: false
       workflow: .github/workflows/release-assets.yaml
@@ -655,6 +668,7 @@ leave the gate on.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     allow_breaking_changes: true
 ```
 
@@ -670,6 +684,7 @@ native GitHub Environment support and deployment URLs.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     environments:
       - name: production
         role: release
@@ -704,6 +719,7 @@ Top-level concurrency block emitted onto the orchestrate, promote, hotfix, rollb
 ```yaml
 ci:
   config:
+    trunk_branch: main
     concurrency:
       group: cascade-${{ github.ref }}
       cancel_in_progress: false
@@ -771,6 +787,7 @@ change orchestrate's cancellation behavior.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     job_timeout_minutes: 30
 ```
 
@@ -785,6 +802,7 @@ Non-push trigger types wired onto the generated workflows.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     extra_triggers:
       schedule:
         - cron: "0 7 * * *"
@@ -808,6 +826,7 @@ Opts the rollback workflow into a `repository_dispatch` trigger, driving the rol
 ```yaml
 ci:
   config:
+    trunk_branch: main
     rollback:
       repository_dispatch:
         types: [rollback-request]
@@ -828,6 +847,7 @@ Each of these emits an additional workflow only when its block is present. Omit 
 ```yaml
 ci:
   config:
+    trunk_branch: main
     pr_preview:
       enabled: true
       comment: true
@@ -899,6 +919,7 @@ components](/cascade/guides/components/) for the operator walkthrough.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     environments: [dev, staging, prod]
     components:
       api:
@@ -1005,6 +1026,7 @@ major of exactly the components that declare it, and leaves the rest untouched.
 ```yaml
 ci:
   config:
+    trunk_branch: main
     environments: [dev, prod]
     shared_paths:
       - libs/common/**   # every component depends on this

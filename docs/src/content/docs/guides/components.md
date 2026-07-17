@@ -127,6 +127,7 @@ the shared code it depends on:
 ```yaml
 ci:
   config:
+    trunk_branch: main
     environments: [dev, prod]
     shared_paths:
       - libs/common/**   # every component depends on this

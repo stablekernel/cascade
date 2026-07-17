@@ -86,6 +86,7 @@ func writeFinalizeManifest(t *testing.T, envs []string, states map[string]envFix
 	var b strings.Builder
 	b.WriteString("ci:\n")
 	b.WriteString("  config:\n")
+	b.WriteString("    trunk_branch: main\n")
 	b.WriteString("    environments:\n")
 	for _, e := range envs {
 		b.WriteString("      - " + e + "\n")
@@ -297,7 +298,7 @@ func TestFinalize_PreviousRingBounded(t *testing.T) {
 	// genuine transition: the new snapshot prepends and the oldest is dropped, so
 	// the ring stays bounded at MaxPreviousSnapshots.
 	var b strings.Builder
-	b.WriteString("ci:\n  config:\n    environments:\n")
+	b.WriteString("ci:\n  config:\n    trunk_branch: main\n    environments:\n")
 	for _, e := range []string{"dev", "test", "prod"} {
 		b.WriteString("      - " + e + "\n")
 	}

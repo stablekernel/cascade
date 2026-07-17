@@ -429,11 +429,14 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 		return fmt.Errorf("%q is not a configured environment", targetEnv)
 	}
 
-	// Resolve trunk the same way the state write does: the configured trunk
-	// branch, defaulting to "main".
+	// Resolve trunk from the manifest. trunk_branch is required, so a validated
+	// manifest always carries it, but this path parses without validating and
+	// the value decides which branch state is written to. Guessing "main" here
+	// would silently push state to the wrong branch on a repo whose trunk is
+	// named anything else, so an absent value is an error rather than a default.
 	trunk := cfg.TrunkBranch
 	if trunk == "" {
-		trunk = "main"
+		return fmt.Errorf("manifest has no trunk_branch: cannot resolve the branch to read hotfix state from")
 	}
 
 	// Read the manifest as it exists on trunk, not from the checked-out env

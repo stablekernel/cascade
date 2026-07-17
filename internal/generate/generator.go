@@ -346,6 +346,17 @@ func (g *Generator) Generate() (string, error) {
 		return "", err
 	}
 
+	// Guard the push allow-list before emission. trunk_branch is the sole
+	// source of the branch list, and an unset value renders "branches: []": an
+	// allow-list matching nothing, so orchestrate never fires on a trunk push.
+	// CLI-side config validation rejects this too, but Generate is exported and
+	// must not emit a workflow that is dead on arrival when called without it.
+	if !g.config.OrchestrateDispatchOnly() && g.config.TrunkBranch == "" {
+		return "", fmt.Errorf(
+			"trunk_branch is required to generate the orchestrate push trigger: " +
+				"an unset value emits an empty branch allow-list and the workflow would never run")
+	}
+
 	// Guard the external-release tag reference before emission. CLI-side
 	// config validation checks the same format, but Generate is exported and
 	// must not panic when called without it.
@@ -369,7 +380,56 @@ func (g *Generator) Generate() (string, error) {
 		return "", err
 	}
 
-	return sb.String(), nil
+	out := sb.String()
+	if err := assertNoDeadAllowList(out); err != nil {
+		return "", err
+	}
+
+	return out, nil
+}
+
+// deadAllowLists are emitted fragments that each render a trigger filter
+// matching nothing. A workflow carrying one is accepted by GitHub and reports
+// green forever while never running, which makes the failure invisible.
+var deadAllowLists = []string{
+	"branches: []",
+	"branches:\n",
+	"paths: []",
+	"tags: []",
+}
+
+// assertNoDeadAllowList is the last gate before emitted YAML leaves the
+// generator. Individual fields are validated upstream, but this catches the
+// class rather than the instance: any present-but-empty trigger allow-list,
+// from any field or future code path, silently disables the workflow it
+// guards. Failing here turns that silence into a build error.
+func assertNoDeadAllowList(out string) error {
+	for _, frag := range deadAllowLists {
+		if !strings.Contains(out, frag) {
+			continue
+		}
+		// "branches:\n" is only dead when no list item follows it.
+		if frag == "branches:\n" && !hasEmptyBlockList(out, frag) {
+			continue
+		}
+		return fmt.Errorf(
+			"generated workflow contains an empty trigger allow-list (%q): "+
+				"it would match nothing and the workflow would never run",
+			strings.TrimSuffix(frag, "\n"))
+	}
+	return nil
+}
+
+// hasEmptyBlockList reports whether a block-style key is followed by something
+// other than a "-" list item, meaning the key was emitted with no entries.
+func hasEmptyBlockList(out, key string) bool {
+	idx := strings.Index(out, key)
+	if idx == -1 {
+		return false
+	}
+	rest := out[idx+len(key):]
+	next := strings.TrimLeft(rest, " ")
+	return !strings.HasPrefix(next, "- ")
 }
 
 // Validate checks for potential issues and returns warnings

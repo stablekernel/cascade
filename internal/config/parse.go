@@ -410,11 +410,25 @@ func Validate(cfg *TrunkConfig) []string {
 		}
 	}
 
+	// The publish callback is a reusable-workflow reference, and the promote
+	// generator emits the publish step only when the path is non-empty. An
+	// empty one is accepted by YAML and then silently drops the step, so a
+	// manifest would declare publish and never publish. Required, per schema.
+	if cfg.Publish != nil && cfg.Publish.Workflow == "" {
+		errors = append(errors, "publish.workflow is required when a publish block is present")
+	}
+
 	// Validate external repos (for primary repos)
 	externalDeployNames := make(map[string]bool)
 	for i, ext := range cfg.External {
 		if ext.Repo == "" {
 			errors = append(errors, fmt.Sprintf("external[%d].repo is required", i))
+		}
+		// An external entry exists to coordinate deploys in another repo. With
+		// none it emits no jobs and coordinates nothing, so the entry is inert
+		// rather than wrong, and nothing surfaces that. Required, per schema.
+		if len(ext.Deploys) == 0 {
+			errors = append(errors, fmt.Sprintf("external[%d].deploys is required and must not be empty", i))
 		}
 
 		for j, d := range ext.Deploys {

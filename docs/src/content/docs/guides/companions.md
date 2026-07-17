@@ -13,6 +13,7 @@ The generated workflows are build output. If someone hand-edits `.github/workflo
 # .github/manifest.yaml
 ci:
   config:
+    trunk_branch: main
     drift_check:
       enabled: true
       comment: true
@@ -27,6 +28,7 @@ The preview companion renders what the pipeline would do for a pull request with
 ```yaml
 ci:
   config:
+    trunk_branch: main
     pr_preview:
       enabled: true
       comment: true
@@ -41,6 +43,7 @@ The validate check runs manifest validation as its own pull-request check, so a 
 ```yaml
 ci:
   config:
+    trunk_branch: main
     validate_check:
       enabled: true
 ```
@@ -54,6 +57,7 @@ When the repository uses GitHub's merge queue, the merge-queue companion adds a 
 ```yaml
 ci:
   config:
+    trunk_branch: main
     merge_queue:
       enabled: true
 ```

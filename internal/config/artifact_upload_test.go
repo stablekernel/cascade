@@ -15,6 +15,7 @@ func TestArtifactUpload_ParsesOnBuildAndDeploy(t *testing.T) {
 	y := `ci:
   config:
     schema_version: 1
+    trunk_branch: main
     environments: [dev]
     builds:
       - name: app
