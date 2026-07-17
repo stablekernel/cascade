@@ -644,6 +644,16 @@ cherry-pick and build run in the generated `cascade-hotfix.yaml` workflow, whose
 and rollback jobs are placeholders that do not yet invoke the configured deploy workflow.
 See [Run a hotfix](/cascade/guides/hotfix/) for the full flow and the limitation.
 
+With `--component`, every hotfix subcommand resolves that component's configuration: it
+validates the target against, and elevates along, the component's own environment ladder,
+and it reads and writes versions under the component's own tag grammar. A component that
+narrows `environments` to a subset of the repo-global ladder is hotfixed only across the
+environments it declares, never through a global-only environment it does not have. This
+matches the generated `cascade-hotfix-<name>.yaml`, which is emitted from the same resolved
+configuration and offers only that component's environments as a target. A component that
+is recorded only under `state.components` without a matching `config.components`
+declaration has no configuration to resolve, and the hotfix subcommands refuse it.
+
 #### hotfix plan
 
 Validate a hotfix request and compute the integration-branch plan. It enforces, in order:

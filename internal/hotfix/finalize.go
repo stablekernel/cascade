@@ -416,7 +416,16 @@ func (f *Finalizer) Finalize(targetEnv, mergeSHA string, fixSHAs []string, baseS
 	if cfg == nil {
 		return fmt.Errorf("manifest has no config block")
 	}
-	if cfg.GetEnvironmentIndex(targetEnv) == -1 {
+	// Eligibility is judged against this finalizer's resolved ladder: the
+	// component's own environments when scoped to one, the global ladder
+	// otherwise. The global ladder would accept a finalize into a global-only
+	// environment this component does not have, recording state for a row its own
+	// workflow never plans into.
+	ladder, err := resolveEnvLadder(f.cicd, f.component)
+	if err != nil {
+		return err
+	}
+	if ladderIndex(ladder, targetEnv) == -1 {
 		return fmt.Errorf("%q is not a configured environment", targetEnv)
 	}
 

@@ -1,0 +1,165 @@
+name: "Per-Component Hotfix Ladders Along the Component's Own Environments"
+description: |
+  Proves a component-scoped hotfix plans and elevates along that component's OWN
+  environment ladder when the component declares an `environments` subset of the
+  repo-global one. The manifest declares a global three-env ladder
+  [dev, staging, prod]; "api" narrows its ladder to [dev, prod], skipping the
+  global-only staging, while "web" inherits the full global ladder so staging is
+  a real environment of the repo rather than a vestigial entry.
+
+  The generator emits each component's cascade-hotfix-<name>.yaml from that
+  component's RESOLVED config, so cascade-hotfix-api.yaml offers only api's own
+  environments as target_env and its apply lane runs on api's ladder. The hotfix
+  runtime must expand the elevation chain from that same resolved ladder. A
+  runtime reading the ROOT ladder expands a chain into prod as
+  [staging, prod] and plans a hop through staging, which api does not have and
+  holds no state for: the plan job dies on "environment staging has no recorded
+  state SHA" and api's hotfix lane is unrunnable end to end.
+
+  The load-bearing step is the plan below, and it is a live run assertion, not a
+  state read: the plan job must report success, which it cannot do while the
+  chain walks a global-only environment. Both hotfix scenarios that came before
+  this one gave every component the full inherited ladder, which makes the
+  resolved and root ladders identical and the sink invisible, so no existing
+  scenario could fail on it.
+
+  api's versions ride its own "api-" tag namespace throughout, the hyphenated
+  prefix the components guide documents. That prefix is unparseable under the
+  repo-global permissive read-side grammar, so the finalize assertions below also
+  pin that the hotfix reads and emits api's versions under api's own grammar.
+
+  Every `action: commit` step precedes the first hotfix action, so no commitN
+  alias here is resolved after a hotfix action has advanced the shared commit
+  sequence.
+
+config:
+  trunk_branch: main
+  environments: [dev, staging, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["services/**"]
+  deploys:
+    - name: app
+      workflow: deploy.yaml
+      triggers: ["services/**"]
+  components:
+    api:
+      path: services/api
+      tag_grammar:
+        prefix: api-
+      environments: [dev, prod]
+    web:
+      path: services/web
+      tag_grammar:
+        prefix: web-
+
+steps:
+  - name: "Seed both component subtrees"
+    action: commit
+    commit:
+      message: "feat: seed component sources"
+      files:
+        services/api/main.go: |
+          package main
+
+          func main() {}
+        services/web/main.go: |
+          package main
+
+          func main() {}
+
+  # Confirm the multi-component generate then verify roundtrip is drift-free, so
+  # the per-component hotfix workflow executed below is the pristine generated
+  # output built from api's resolved (two-env) ladder.
+  - name: "Regenerate the per-component set and confirm no drift"
+    action: verify
+    verify:
+      regenerate: true
+      expect_exit: 0
+
+  - name: "Orchestrate api to cut its dev prerelease"
+    action: orchestrate
+    orchestrate:
+      component: api
+
+  # prod is the terminal position of api's OWN ladder, so this cascade is a single
+  # dev to prod crossing and lands the published api-0.1.0 rather than an rc. On
+  # the global ladder prod would sit one hop further out, behind staging.
+  - name: "Promote api from dev to prod along its own ladder"
+    action: promote
+    promote:
+      mode: cascade
+      target: prod
+      component: api
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          sha: commit1
+          version: "api-0.1.0"
+
+  - name: "Commit an api-only hotfix source"
+    action: commit
+    commit:
+      message: "fix: patch api"
+      files:
+        services/api/fix.go: |
+          package main
+
+          // api patch applied
+
+  # THE load-bearing step. api's ladder is [dev, prod], so a chain into prod
+  # elevates through prod alone. A runtime on the ROOT ladder expands
+  # [staging, prod] and fails the plan job outright on api's missing staging
+  # state, so the job assertion below is red in that world.
+  - name: "Plan the api hotfix for prod along api's own ladder"
+    action: hotfix_plan
+    hotfix_plan:
+      component: api
+      commit_ref: commit2
+      target_env: prod
+      dry_run: true
+    expect:
+      jobs:
+        plan: success
+
+  # Cherry-pick the api patch onto env/api/prod, anchored on api's own prod state
+  # (commit1), and open the resolution PR.
+  - name: "Apply the api hotfix to prod"
+    action: hotfix_apply
+    hotfix_apply:
+      component: api
+      target_env: prod
+      commit_ref: commit2
+      base_ref: commit1
+    expect:
+      branches:
+        exist: ["env/api/prod"]
+      prs:
+        open_with_label: "cascade-hotfix"
+
+  - name: "Merge the api hotfix PR"
+    action: merge_pr
+    merge_pr:
+      label: "cascade-hotfix"
+
+  # Finalize records api's divergence under only state.components.api.prod,
+  # tracking env/api/prod at api's own anchor with the api patch applied, and
+  # allocates the hotfix version in api's own tag namespace over the published
+  # api-0.1.0 its promotion landed.
+  - name: "Finalize the api hotfix for prod"
+    action: hotfix_merged
+    hotfix_merged:
+      component: api
+      target_env: prod
+    expect:
+      state:
+        api-prod:
+          component: api
+          env: prod
+          ref: "env/api/prod"
+          base_sha: commit1
+          patches: [commit2]
+          version: "api-0.1.1"

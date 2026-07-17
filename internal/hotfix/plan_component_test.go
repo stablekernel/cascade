@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -18,12 +19,29 @@ import (
 func writeComponentOnlyManifest(t *testing.T, envs []string, componentState map[string]map[string]string) string {
 	t.Helper()
 
+	names := make([]string, 0, len(componentState))
+	for name := range componentState {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	var b strings.Builder
 	b.WriteString("ci:\n")
 	b.WriteString("  config:\n")
 	b.WriteString("    environments:\n")
 	for _, e := range envs {
 		b.WriteString("      - " + e + "\n")
+	}
+	// Declare every seeded component with a path subtree and no overrides, so each
+	// inherits the global ladder and tag grammar. The real generated shape carries
+	// both halves: config.components declares the component (which is why its
+	// hotfix workflow exists at all) and state.components records its rows. Only
+	// the state half is exercised below; the declaration is what a component-scoped
+	// planner resolves its ladder out of.
+	b.WriteString("    components:\n")
+	for _, name := range names {
+		b.WriteString("      " + name + ":\n")
+		b.WriteString("        path: services/" + name + "\n")
 	}
 	b.WriteString("  state:\n")
 	b.WriteString("    components:\n")
@@ -56,7 +74,7 @@ func TestPlan_Component_UsesComponentScopedEnvBranch(t *testing.T) {
 		"dev":  fix,
 		"test": base,
 		"prod": base,
-	})
+	}, "web")
 
 	p := newPlanner(t, manifest, WithPlanComponent("web"))
 	res, err := p.Plan(fix, "test")
@@ -122,7 +140,7 @@ func TestPlan_Component_SingleFlightQueriesComponentBranch(t *testing.T) {
 		"dev":  fix,
 		"test": base,
 		"prod": base,
-	})
+	}, "web")
 
 	stub := &stubPRChecker{}
 	p := newPlanner(t, manifest, WithPlanComponent("web"), WithPRChecker(stub))

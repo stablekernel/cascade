@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stablekernel/cascade/internal/config"
 	"github.com/stablekernel/cascade/internal/git"
 )
 
@@ -164,8 +163,7 @@ func TestExpandTargetEnvs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.TrunkConfig{Environments: config.EnvNames(envs...)}
-			got, err := expandTargetEnvs(cfg, tt.targetEnv)
+			got, err := expandTargetEnvs(envs, tt.targetEnv)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expandTargetEnvs(%q) = %v, want error", tt.targetEnv, got)

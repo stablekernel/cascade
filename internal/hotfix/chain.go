@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/stablekernel/cascade/internal/config"
 )
 
 // PlanChainResult is the computed, validated plan for elevating a set of trunk
@@ -77,17 +75,23 @@ func parseCommitRefs(input string) ([]string, error) {
 // environment is excluded (a fix reaches it by merging to trunk) and any
 // environment above targetEnv is excluded. It rejects an unknown target and the
 // first environment.
-func expandTargetEnvs(cfg *config.TrunkConfig, targetEnv string) ([]string, error) {
-	idx := cfg.GetEnvironmentIndex(targetEnv)
+//
+// ladder is the caller's resolved environment ladder, from resolveEnvLadder: the
+// global ladder for the single-component path and the component's own ladder for
+// a component-scoped hotfix. Taking the ladder rather than the config is what
+// keeps the sequence on the component's environments; the global ladder would
+// elevate through global-only environments the component has no state for.
+func expandTargetEnvs(ladder []string, targetEnv string) ([]string, error) {
+	idx := ladderIndex(ladder, targetEnv)
 	if idx == -1 {
 		return nil, fmt.Errorf("%q is not a configured environment", targetEnv)
 	}
-	if cfg.IsFirstEnvironment(targetEnv) {
+	if isFirstLadderEnv(ladder, targetEnv) {
 		return nil, fmt.Errorf("%q is the first environment; a fix reaches it by merging to trunk, not by hotfix", targetEnv)
 	}
-	// Environments[1..idx] inclusive: skip the first env, stop at the target.
+	// ladder[1..idx] inclusive: skip the first env, stop at the target.
 	seq := make([]string, 0, idx)
-	seq = append(seq, cfg.EnvironmentNames()[1:idx+1]...)
+	seq = append(seq, ladder[1:idx+1]...)
 	return seq, nil
 }
 
@@ -197,8 +201,14 @@ func (p *Planner) PlanChain(refs []string, targetEnv string) (*PlanChainResult, 
 		return nil, err
 	}
 
-	// Bottom-up environment sequence (excludes the first env, stops at target).
-	envs, err := expandTargetEnvs(cfg, targetEnv)
+	// Bottom-up environment sequence (excludes the first env, stops at target),
+	// along this planner's resolved ladder: the component's own environments when
+	// scoped to one, the global ladder otherwise.
+	ladder, err := resolveEnvLadder(p.cicd, p.component)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := expandTargetEnvs(ladder, targetEnv)
 	if err != nil {
 		return nil, err
 	}
