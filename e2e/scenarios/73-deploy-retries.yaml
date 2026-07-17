@@ -1,7 +1,12 @@
-name: "Deploy Retries Re-Invoke A Failing Callback"
+name: "Deploy Retries Emit A Chained Shim Ladder"
 description: |
-  A deploy declaring retries: 2 must emit two retry shim jobs that re-invoke the
-  reusable workflow when the attempt before them failed.
+  A deploy declaring retries: 2 must emit two retry shim jobs that would
+  re-invoke the reusable workflow when the attempt before them failed.
+
+  The title deliberately says "emit ... a chained shim ladder" rather than
+  "re-invoke": the ladder's emission and chaining ARE proven here, but the
+  re-invocation itself is not observable in this harness (see below), so the name
+  claims only what the assertions carry.
 
   Coverage is split deliberately, because the harness can prove some of this at
   runtime and some of it only in the emitted YAML. Both halves are stated
