@@ -1,10 +1,19 @@
 package harness
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // ExecutionContext tracks state across multi-step scenario execution
 type ExecutionContext struct {
-	mu             sync.RWMutex
+	mu sync.RWMutex
+	// commitSteps counts the `action: commit` steps a scenario has run, and is
+	// the sole source of the commitN alias numbers. It is deliberately not
+	// len(commitSeq): the harness also records aliases for commits nobody wrote
+	// as a step, such as a merged hotfix's env branch tip, and those must not
+	// shift the numbering of the commits a scenario author did write.
+	commitSteps    int
 	commits        map[string]string                          // commit reference -> SHA
 	commitSeq      []string                                   // ordered commit SHAs
 	commitMessages map[string]string                          // SHA -> commit message
@@ -74,6 +83,17 @@ func (c *ExecutionContext) RecordCommit(ref, sha string) {
 	defer c.mu.Unlock()
 	c.commits[ref] = sha
 	c.commitSeq = append(c.commitSeq, sha)
+}
+
+// NextCommitRef reserves and returns the alias for the next `action: commit`
+// step: commit1, commit2, and so on, 1-indexed over commit steps alone. This is
+// the numbering a scenario author counts by eye when they write commit3, so
+// nothing but a commit step may advance it.
+func (c *ExecutionContext) NextCommitRef() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.commitSteps++
+	return fmt.Sprintf("commit%d", c.commitSteps)
 }
 
 // ResolveSHA resolves a commit reference to its SHA
@@ -302,6 +322,7 @@ func (c *ExecutionContext) Clone() *ExecutionContext {
 	for k, v := range c.commits {
 		clone.commits[k] = v
 	}
+	clone.commitSteps = c.commitSteps
 	clone.commitSeq = append([]string{}, c.commitSeq...)
 	for k, v := range c.state {
 		clone.state[k] = &EnvState{

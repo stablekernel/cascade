@@ -919,8 +919,7 @@ func parseRemoteHeads(out string) map[string]struct{} {
 // executeCommit creates a commit
 func (r *Runner) executeCommit(ctx context.Context, commit *CommitStep) error {
 	// Track commit reference
-	commitNum := r.ctx.GetCommitCount() + 1
-	ref := fmt.Sprintf("commit%d", commitNum)
+	ref := r.ctx.NextCommitRef()
 
 	// If harness is available, actually create the commit
 	if r.harness != nil && r.harness.gitea != nil && r.harness.repo != nil {
