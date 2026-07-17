@@ -12,9 +12,75 @@ set -euo pipefail
 
 INSTALL_DIR="${CASCADE_INSTALL_DIR:-/usr/local/bin}"
 
+# GitHub's API and release CDN occasionally answer a download for a release
+# that exists with a spurious error: a 5xx, an HTML error page, or a "release
+# not found" that succeeds on the very next call. An unguarded download turns
+# one such blip into a failed install, so every gh call below runs through a
+# small retry budget with exponential backoff.
+#
+# Every failure is retried, rather than only those matching a classifier. gh's
+# error text does not reliably separate a transient fault from a permanent one
+# (the incident that motivated this reported a missing release for one that was
+# published), and a wrong classifier fails in the more damaging direction. The
+# budget is the safeguard instead: three attempts and roughly 6s of backoff
+# means a genuinely missing release (a deleted tag, a typo'd version) still
+# fails loudly within seconds rather than hanging, so a dangling pin stays as
+# easy to spot as it was before.
+GH_MAX_ATTEMPTS="${CASCADE_GH_MAX_ATTEMPTS:-3}"
+GH_RETRY_BASE_SLEEP="${CASCADE_GH_RETRY_BASE_SLEEP:-2}"
+
+# Both knobs are validated before anything runs. A value that is not an integer
+# makes the comparisons below error rather than compare, and an errored test is
+# falsy, so the loop would never reach its stop condition: an unbounded retry
+# with a doubling sleep, the exact failure the budget exists to prevent. A bad
+# value is rejected loudly rather than defaulted to, because these are only ever
+# set deliberately: silently substituting the default would leave someone who
+# asked for five attempts getting three and never learning why.
+case "$GH_MAX_ATTEMPTS" in
+  '' | *[!0-9]*)
+    echo "::error::CASCADE_GH_MAX_ATTEMPTS must be a positive integer, got '$GH_MAX_ATTEMPTS'."
+    exit 1
+    ;;
+esac
+if [ "$GH_MAX_ATTEMPTS" -lt 1 ]; then
+  echo "::error::CASCADE_GH_MAX_ATTEMPTS must be a positive integer, got '$GH_MAX_ATTEMPTS'."
+  exit 1
+fi
+case "$GH_RETRY_BASE_SLEEP" in
+  '' | *[!0-9]*)
+    echo "::error::CASCADE_GH_RETRY_BASE_SLEEP must be a non-negative integer, got '$GH_RETRY_BASE_SLEEP'."
+    exit 1
+    ;;
+esac
+
+gh_retry() {
+  local attempt=1
+  local sleep_for="$GH_RETRY_BASE_SLEEP"
+  local rc=0
+  while :; do
+    # rc is captured in the else branch on purpose: an if whose condition fails
+    # and has no else exits 0, so reading $? after fi would lose gh's code.
+    if gh "$@"; then
+      return 0
+    else
+      rc=$?
+    fi
+    if [ "$attempt" -ge "$GH_MAX_ATTEMPTS" ]; then
+      echo "gh $1 $2 failed after $attempt attempts (exit $rc)."
+      return "$rc"
+    fi
+    echo "gh $1 $2 failed (attempt $attempt/$GH_MAX_ATTEMPTS); retrying in ${sleep_for}s..."
+    if [ "$sleep_for" -gt 0 ]; then
+      sleep "$sleep_for"
+    fi
+    attempt=$((attempt + 1))
+    sleep_for=$((sleep_for * 2))
+  done
+}
+
 echo "Downloading archive matching $ARCHIVE_PATTERN from release $TAG..."
 workdir=$(mktemp -d)
-gh release download "$TAG" \
+gh_retry release download "$TAG" \
   -R stablekernel/cascade \
   -p "$ARCHIVE_PATTERN" \
   -D "$workdir"
@@ -23,7 +89,7 @@ gh release download "$TAG" \
 # installed until the downloaded archive's sha256 matches it. A release
 # without checksums.txt, an archive with no checksum entry, or a hash
 # mismatch all abort the install.
-gh release download "$TAG" \
+gh_retry release download "$TAG" \
   -R stablekernel/cascade \
   -p "checksums.txt" \
   -D "$workdir"
@@ -53,7 +119,11 @@ fi
 # without a bundle, or a runner without cosign), fall back to the checksum
 # gate above with a loud warning, never silently.
 # Manual equivalent: docs/release-verification.md.
-if gh release download "$TAG" -R stablekernel/cascade -p "checksums.txt.bundle" -D .; then
+# The bundle fetch retries too: a blip here would otherwise downgrade a signed
+# release to the sha256-only fallback silently, which is the weaker gate. The
+# cost is that a release genuinely published without a bundle now spends the
+# retry budget before warning, which is seconds on a path that already warns.
+if gh_retry release download "$TAG" -R stablekernel/cascade -p "checksums.txt.bundle" -D .; then
   if command -v cosign >/dev/null 2>&1; then
     # cosign v2 needs --new-bundle-format to read the Sigstore bundle
     # format that the release pipeline (cosign v3) emits; probe the flag

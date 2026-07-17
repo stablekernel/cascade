@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,46 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+found=0
+for f in "$GH_STUB_RELEASE_DIR"/$pattern; do
+  [ -e "$f" ] || continue
+  cp "$f" "$dest/"
+  found=1
+done
+if [ "$found" -ne 1 ]; then
+  echo "release asset not found: $pattern" >&2
+  exit 1
+fi
+`
+
+// ghFlakyStub extends ghStub with two test affordances: it records how many
+// times each asset pattern was fetched, and it fails the first
+// GH_STUB_FAIL_TIMES fetches of GH_STUB_FLAKY_PATTERN with the spurious
+// "release not found" GitHub returns for a release that does exist. Together
+// they let a test assert how many attempts install.sh actually makes.
+const ghFlakyStub = `#!/usr/bin/env bash
+set -eu
+pattern=""
+dest="."
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -p) pattern="$2"; shift 2 ;;
+    -D) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+counter="$GH_STUB_COUNTER_DIR/$(printf '%s' "$pattern" | tr -c 'A-Za-z0-9' '_')"
+n=0
+[ -f "$counter" ] && n=$(cat "$counter")
+n=$((n + 1))
+printf '%s' "$n" > "$counter"
+
+if [ "$pattern" = "${GH_STUB_FLAKY_PATTERN:-}" ] && [ "$n" -le "${GH_STUB_FAIL_TIMES:-0}" ]; then
+  echo "release not found" >&2
+  exit "${GH_STUB_FAIL_CODE:-1}"
+fi
+
 found=0
 for f in "$GH_STUB_RELEASE_DIR"/$pattern; do
   [ -e "$f" ] || continue
@@ -138,7 +180,18 @@ func installStub(t *testing.T, binDir, name, script string) {
 // runInstall executes install.sh against the fixture release, with gh (and any
 // extra stubs) served from a stub bin directory. It returns the combined
 // output, the run error, and the path the binary would land at.
+// The backoff is zeroed here because these tests assert install.sh's gates, not
+// its retry timing; a fixture release without a signature bundle would
+// otherwise spend the real backoff on the tolerated bundle fetch. The retry
+// tests below drive the attempt counting directly.
 func runInstall(t *testing.T, releaseDir string, extraStubs map[string]string) (string, string, error) {
+	t.Helper()
+	return runInstallWith(t, releaseDir, ghStub, extraStubs, []string{"CASCADE_GH_RETRY_BASE_SLEEP=0"})
+}
+
+// runInstallWith is runInstall with the gh stub and the script's environment
+// under the caller's control, for tests that drive the retry behaviour.
+func runInstallWith(t *testing.T, releaseDir, ghScript string, extraStubs map[string]string, extraEnv []string) (string, string, error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is a bash script; not exercised on windows")
@@ -148,7 +201,7 @@ func runInstall(t *testing.T, releaseDir string, extraStubs map[string]string) (
 	}
 
 	stubBin := t.TempDir()
-	installStub(t, stubBin, "gh", ghStub)
+	installStub(t, stubBin, "gh", ghScript)
 	for name, script := range extraStubs {
 		installStub(t, stubBin, name, script)
 	}
@@ -165,8 +218,31 @@ func runInstall(t *testing.T, releaseDir string, extraStubs map[string]string) (
 		"ARCHIVE_PATTERN=cascade_*_linux_amd64.tar.gz",
 		"CASCADE_INSTALL_DIR="+installDir,
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	return string(out), filepath.Join(installDir, "cascade"), err
+}
+
+// attemptsFor reports how many times the flaky gh stub was asked for pattern.
+func attemptsFor(t *testing.T, counterDir, pattern string) int {
+	t.Helper()
+	var key strings.Builder
+	for _, r := range pattern {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			key.WriteRune(r)
+			continue
+		}
+		key.WriteByte('_')
+	}
+	raw, err := os.ReadFile(filepath.Join(counterDir, key.String()))
+	if err != nil {
+		t.Fatalf("no attempt counter for %q: %v", pattern, err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("unreadable attempt counter for %q: %v", pattern, err)
+	}
+	return n
 }
 
 func TestInstallScript_KnownGoodChecksumInstalls(t *testing.T) {
@@ -182,6 +258,115 @@ func TestInstallScript_KnownGoodChecksumInstalls(t *testing.T) {
 	}
 	if string(got) != fakeBinary {
 		t.Fatalf("installed binary does not match the archive payload:\n%q", got)
+	}
+}
+
+func TestInstallScript_RetriesTransientDownloadFailure(t *testing.T) {
+	// GitHub occasionally answers a download for a release that exists with a
+	// spurious error. Giving up on the first one turns a momentary blip into a
+	// failed install, so the download is retried a bounded number of times and
+	// the install still succeeds once the blip clears.
+	release := makeRelease(t, nil)
+	counters := t.TempDir()
+
+	out, installed, err := runInstallWith(t, release, ghFlakyStub, nil, []string{
+		"GH_STUB_COUNTER_DIR=" + counters,
+		"GH_STUB_FLAKY_PATTERN=cascade_*_linux_amd64.tar.gz",
+		"GH_STUB_FAIL_TIMES=2",
+		"CASCADE_GH_RETRY_BASE_SLEEP=0",
+	})
+	if err != nil {
+		t.Fatalf("install.sh failed on a release whose download blipped twice: %v\n%s", err, out)
+	}
+	if got := attemptsFor(t, counters, "cascade_*_linux_amd64.tar.gz"); got != 3 {
+		t.Fatalf("expected the archive download to be attempted 3 times, got %d\n%s", got, out)
+	}
+	if _, statErr := os.Stat(installed); statErr != nil {
+		t.Fatalf("no binary installed after the download recovered: %v\n%s", statErr, out)
+	}
+}
+
+func TestInstallScript_PersistentDownloadFailureFailsBounded(t *testing.T) {
+	// The retry budget must stay small: a genuinely missing release (a deleted
+	// tag, a typo'd version) has to fail loudly after a handful of attempts
+	// rather than hang, which is what makes a dangling pin easy to spot.
+	release := makeRelease(t, nil)
+	counters := t.TempDir()
+
+	out, installed, err := runInstallWith(t, release, ghFlakyStub, nil, []string{
+		"GH_STUB_COUNTER_DIR=" + counters,
+		"GH_STUB_FLAKY_PATTERN=cascade_*_linux_amd64.tar.gz",
+		"GH_STUB_FAIL_TIMES=99",
+		"GH_STUB_FAIL_CODE=42",
+		"CASCADE_GH_RETRY_BASE_SLEEP=0",
+	})
+	if err == nil {
+		t.Fatalf("install.sh succeeded although the archive never downloaded\n%s", out)
+	}
+	if got := attemptsFor(t, counters, "cascade_*_linux_amd64.tar.gz"); got != 3 {
+		t.Fatalf("expected the archive download to stop after 3 attempts, got %d\n%s", got, out)
+	}
+	// An exhausted retry must surface gh's real exit code, not a synthetic 1:
+	// that code is the diagnostic signal when a download fails in a live run.
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected an exit error, got %T: %v", err, err)
+	}
+	if exitErr.ExitCode() != 42 {
+		t.Fatalf("expected gh's exit code 42 to propagate, got %d\n%s", exitErr.ExitCode(), out)
+	}
+	if _, statErr := os.Stat(installed); statErr == nil {
+		t.Fatalf("a binary was installed despite the archive never downloading\n%s", out)
+	}
+}
+
+func TestInstallScript_NonIntegerRetryBudgetFailsLoudly(t *testing.T) {
+	// A budget that is not a positive integer makes the attempt comparison
+	// error out rather than compare, which is falsy, so the loop would never
+	// reach its stop condition: an unbounded retry with a doubling sleep. That
+	// is the exact failure the bounded budget exists to prevent, so a bad value
+	// is rejected before any download runs rather than defaulted silently.
+	release := makeRelease(t, nil)
+	counters := t.TempDir()
+
+	out, installed, err := runInstallWith(t, release, ghFlakyStub, nil, []string{
+		"GH_STUB_COUNTER_DIR=" + counters,
+		"GH_STUB_FLAKY_PATTERN=cascade_*_linux_amd64.tar.gz",
+		"GH_STUB_FAIL_TIMES=5",
+		"CASCADE_GH_RETRY_BASE_SLEEP=0",
+		"CASCADE_GH_MAX_ATTEMPTS=abc",
+	})
+	if err == nil {
+		t.Fatalf("install.sh accepted a non-integer retry budget\n%s", out)
+	}
+	if !strings.Contains(out, "CASCADE_GH_MAX_ATTEMPTS must be a positive integer") {
+		t.Fatalf("expected a loud rejection naming the bad knob, got:\n%s", out)
+	}
+	entries, readErr := os.ReadDir(counters)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("gh ran despite the bad budget (%d assets fetched); the loop is unbounded\n%s", len(entries), out)
+	}
+	if _, statErr := os.Stat(installed); statErr == nil {
+		t.Fatalf("a binary was installed despite the bad budget\n%s", out)
+	}
+}
+
+func TestInstallScript_NonIntegerBackoffFailsLoudly(t *testing.T) {
+	// The backoff base is env-readable on the same footing, and a bad value
+	// silently disables the sleep rather than erroring, so it is validated too.
+	release := makeRelease(t, nil)
+
+	out, _, err := runInstallWith(t, release, ghStub, nil, []string{
+		"CASCADE_GH_RETRY_BASE_SLEEP=soon",
+	})
+	if err == nil {
+		t.Fatalf("install.sh accepted a non-integer backoff base\n%s", out)
+	}
+	if !strings.Contains(out, "CASCADE_GH_RETRY_BASE_SLEEP must be a non-negative integer") {
+		t.Fatalf("expected a loud rejection naming the bad knob, got:\n%s", out)
 	}
 }
 
