@@ -2,6 +2,7 @@ package hotfix
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -37,6 +38,62 @@ func resolveFinalizeSpec(f *config.CICDFile, component string) (taggrammar.Spec,
 		return taggrammar.Spec{}, fmt.Errorf("resolving component %q tag grammar: %w", component, err)
 	}
 	return resolved.TagGrammarSpec(), nil
+}
+
+// resolveEnvLadder returns the environment ladder a hotfix validates its target
+// against and elevates along, as an ordered list of environment names. For the
+// default (empty) component it is the manifest's global ladder, byte-identical
+// to the single-component behavior. For a named component it is that component's
+// resolved ladder: `environments` is an inheritable per-component override, so a
+// component may declare a subset of the global ladder (or omit the block and
+// inherit it whole).
+//
+// The generator emits a component's hotfix workflow from that component's
+// resolved config, so the workflow's target_env choices, its apply lane, and
+// even whether the workflow exists at all are decided by the resolved ladder. A
+// runtime reading the global ladder therefore disagrees with the workflow it is
+// driving: it accepts a target the workflow never offered, and it elevates
+// through global-only environments the component has no state for.
+//
+// This is deliberately a ladder resolver rather than a wholesale config swap
+// like the promote, rollback, and orchestrate runtimes perform. Both hotfix
+// verbs resolve the component out of the working config a second time (via
+// resolveFinalizeSpec), and ResolveComponent clears Components on the config it
+// returns, so a swapped-in resolved config could not be resolved from again.
+//
+// An undeclared component is refused rather than silently falling back to the
+// global ladder, matching resolveFinalizeSpec: a hotfix elevates along a
+// component's resolved ladder, and a component the config does not declare has
+// none.
+func resolveEnvLadder(f *config.CICDFile, component string) ([]string, error) {
+	if f == nil || f.Config == nil {
+		return nil, fmt.Errorf("manifest has no config block")
+	}
+	if component == "" {
+		return f.Config.EnvironmentNames(), nil
+	}
+	resolved, err := f.Config.ResolveComponent(component)
+	if err != nil {
+		return nil, fmt.Errorf("resolving component %q environments: %w", component, err)
+	}
+	return resolved.Config.EnvironmentNames(), nil
+}
+
+// ladderIndex returns the position of env in ladder, or -1 when the ladder does
+// not carry it. It is the ladder-slice counterpart of
+// config.TrunkConfig.GetEnvironmentIndex, which a component-scoped caller cannot
+// use because it always reads the global ladder.
+func ladderIndex(ladder []string, env string) int {
+	return slices.Index(ladder, env)
+}
+
+// isFirstLadderEnv reports whether env is the first entry of ladder. It mirrors
+// config.TrunkConfig.IsFirstEnvironment, including its false-on-empty behavior,
+// against a resolved ladder rather than the global one. The first environment is
+// the one a fix reaches by merging to trunk, so it is never a hotfix target, and
+// which environment holds that position is a per-component fact.
+func isFirstLadderEnv(ladder []string, env string) bool {
+	return len(ladder) > 0 && ladder[0] == env
 }
 
 // EnvBranchPrefix is the prefix of the per-environment integration branches a

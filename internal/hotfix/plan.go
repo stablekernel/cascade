@@ -379,11 +379,20 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 	}
 	fixSHA := shas[0]
 
-	// 2. Target-env eligibility.
-	if cfg.GetEnvironmentIndex(targetEnv) == -1 {
+	// 2. Target-env eligibility, judged against this planner's resolved ladder:
+	// the component's own environments when scoped to one, the global ladder
+	// otherwise. The generated component workflow offers only the component's
+	// environments as target_env, so the global ladder would admit a target that
+	// workflow never offered and decide first-env position from a row the
+	// component may not even hold.
+	ladder, err := resolveEnvLadder(p.cicd, p.component)
+	if err != nil {
+		return nil, err
+	}
+	if ladderIndex(ladder, targetEnv) == -1 {
 		return nil, fmt.Errorf("%q is not a configured environment", targetEnv)
 	}
-	if cfg.IsFirstEnvironment(targetEnv) {
+	if isFirstLadderEnv(ladder, targetEnv) {
 		return nil, fmt.Errorf("%q is the first environment; a fix reaches it by merging to trunk, not by hotfix", targetEnv)
 	}
 	// Prod IS eligible here; prod gating happens at the workflow layer.
@@ -418,8 +427,18 @@ func (p *Planner) Plan(fixRef, targetEnv string) (*PlanResult, error) {
 		return result, nil
 	}
 
-	// Compute the hotfix version candidate from the env's current version.
-	candidate, err := hotfixVersionCandidate(resolveTagGrammar(p.cicd), state.Version)
+	// Compute the hotfix version candidate from the env's current version, under
+	// the same grammar the finalize that follows this plan emits its version and
+	// tag under (resolveFinalizeSpec). A component records its versions in its own
+	// tag namespace, and the manifest's permissive read-side grammar cannot parse
+	// the hyphenated prefix the components guide documents, so a root-grammar
+	// candidate either fails to parse the component's own recorded version or
+	// renders a candidate finalize would not agree with.
+	spec, err := resolveFinalizeSpec(p.cicd, p.component)
+	if err != nil {
+		return nil, err
+	}
+	candidate, err := hotfixVersionCandidate(spec, state.Version)
 	if err != nil {
 		return nil, err
 	}

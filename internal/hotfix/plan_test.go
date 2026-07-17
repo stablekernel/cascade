@@ -67,7 +67,15 @@ func commitFile(t *testing.T, name, content, message string) string {
 
 // writeManifest writes a manifest file with the given environments and state map
 // and returns its path. State entries are "env:sha" pairs.
-func writeManifest(t *testing.T, envs []string, state map[string]string) string {
+//
+// components, when given, are declared under config.components with a path
+// subtree and no overrides, so each inherits the global ladder and tag grammar
+// verbatim. A component-scoped planner resolves its ladder and grammar out of
+// that declaration, and only a declared component can be resolved, so any test
+// passing WithPlanComponent must declare it here. This mirrors production: the
+// generator emits a component's hotfix workflow only for a component the config
+// declares, so a component-scoped hotfix always runs against a declaration.
+func writeManifest(t *testing.T, envs []string, state map[string]string, components ...string) string {
 	t.Helper()
 
 	var b strings.Builder
@@ -76,6 +84,13 @@ func writeManifest(t *testing.T, envs []string, state map[string]string) string 
 	b.WriteString("    environments:\n")
 	for _, e := range envs {
 		b.WriteString("      - " + e + "\n")
+	}
+	if len(components) > 0 {
+		b.WriteString("    components:\n")
+		for _, c := range components {
+			b.WriteString("      " + c + ":\n")
+			b.WriteString("        path: services/" + c + "\n")
+		}
 	}
 	b.WriteString("  state:\n")
 	for e, sha := range state {

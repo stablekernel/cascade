@@ -28,6 +28,25 @@ A `Migration` section is added to any release that bumps `schema_version`.
   bundle fetch is retried on the same budget, so a blip there no longer
   downgrades a signed release to checksum-only verification
 
+- **hotfix:** A hotfix scoped to a component now plans and elevates along that
+  component's own environment ladder and computes its version candidate under
+  that component's own tag grammar. A component may narrow `environments` to a
+  subset of the repo-global ladder, and its generated hotfix workflow is emitted
+  from that resolved ladder, offering only the component's own environments as a
+  target. The runtime read the repo-global ladder instead, so it expanded the
+  elevation chain across global-only environments the component does not have
+  and holds no state for: the chain the generated workflow runs died on a
+  missing state SHA for an environment that component never deploys to, and the
+  component's hotfix lane could not complete. The same read also judged
+  target-environment eligibility and first-environment position against the
+  wrong ladder, accepting a target the component's own workflow never offers.
+  Separately, `hotfix plan` computed its version candidate under the
+  repo-global grammar while the finalize that follows it used the component's,
+  so for the hyphenated tag prefixes the components guide documents the plan
+  could not parse the component's own recorded version at all. A component the
+  configuration does not declare is refused rather than silently planned
+  against the repo-global ladder, matching what finalize already did.
+
 - **release:** Release notes that exceed GitHub's 125,000-character limit are
   now truncated instead of failing the release. GitHub rejects an oversized
   release body outright rather than shortening it, so creating the release
