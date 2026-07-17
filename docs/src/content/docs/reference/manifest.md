@@ -345,7 +345,7 @@ ci:
 | `env_inputs` | emitted | map | {} | Per-environment input overrides. |
 | `run_policy` | emitted | string | `default` | Execution policy. See [Policy fields](#policy-fields). |
 | `on_failure` | emitted | string | `abort` | Failure handling. See [Policy fields](#policy-fields). |
-| `retries` | emitted | int | 0 | Retry attempts (0-3). |
+| `retries` | emitted | int | 0 | Retry attempts (0-3). Trunk runs only. See [Policy fields](#policy-fields). |
 
 ## builds
 
@@ -1046,6 +1046,14 @@ versioning](/cascade/reference/versioning/#per-component-versioning).
 ### Policy fields
 
 `run_policy`, `on_failure`, and `retries` apply to `validate`, each `builds` entry, and each `deploys` entry.
+
+:::caution[Trunk runs only]
+These three fields shape `orchestrate.yaml`, the workflow that runs on a trunk merge. They are **not** emitted into `promote.yaml`, so a promotion runs each deploy once, with no retry and no `on_failure` handling.
+
+`retries` is deliberately not emitted into `promote.yaml`. A promote deploy that declares `inputs` compiles to a matrix job fanned across environments, and a matrix job reports one aggregate result: `failure` if any environment failed. A retry gated on that aggregate would re-invoke the callback for **every** environment, redeploying the ones that already succeeded, and GitHub Actions offers no way for a calling workflow to re-run only the failed legs of a dependency's matrix. Retrying a healthy production environment because an unrelated environment failed is worse than not retrying, so a promote-side retry needs a design that retries per environment. Track it in [issue #626](https://github.com/stablekernel/cascade/issues/626).
+
+To make a promotion resilient to a transient failure, handle the retry inside the reusable workflow the deploy points at, where it can be scoped to the one environment that failed.
+:::
 
 | `run_policy` | Behavior |
 |--------------|----------|

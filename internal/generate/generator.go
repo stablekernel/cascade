@@ -1626,19 +1626,27 @@ func (g *Generator) writeNativeDeploymentSteps(sb *strings.Builder, sorted []str
 		envExpr = fmt.Sprintf("${{ github.event.inputs.environment || '%s' }}", g.config.Environments[0].Name)
 	}
 
-	// Collect deploy job IDs so the terminal status reflects the real deploy
-	// outcome. The deployment succeeds only when every deploy callback succeeded.
-	var deployJobs []string
+	// Collect deploy callbacks so the terminal status reflects the real deploy
+	// outcome. The deployment succeeds only when every deploy callback succeeded,
+	// judged on each callback's effective result so a deploy rescued by a retry
+	// shim reports the Deployment as successful rather than failed.
+	var deployJobs []CallbackInfo
 	for _, jobID := range sorted {
-		if g.graph.Nodes[jobID].Type == config.CallbackTypeDeploy {
-			deployJobs = append(deployJobs, jobID)
+		if info := g.graph.Nodes[jobID]; info.Type == config.CallbackTypeDeploy {
+			deployJobs = append(deployJobs, info)
 		}
 	}
 	resultExpr := "success"
 	if len(deployJobs) > 0 {
 		var conds []string
-		for _, jobID := range deployJobs {
-			conds = append(conds, fmt.Sprintf("needs.%s.result == 'success'", jobID))
+		for _, info := range deployJobs {
+			cond := effectiveSuccessCond(info.JobID, info.Retries)
+			// Parenthesize a ladder's disjunction so it cannot bind loosely
+			// against the surrounding && chain.
+			if info.Retries > 0 {
+				cond = "(" + cond + ")"
+			}
+			conds = append(conds, cond)
 		}
 		resultExpr = fmt.Sprintf("${{ (%s) && 'success' || 'failure' }}", strings.Join(conds, " && "))
 	}
@@ -1661,8 +1669,11 @@ func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
 		if onFailure == "" {
 			onFailure = config.OnFailureAbort
 		}
-		// Use DisplayName for the table and JobID for the needs reference
-		fmt.Fprintf(sb, "          echo \"| %s | ${{ needs.%s.result }} | %s |\" >> \"$GITHUB_STEP_SUMMARY\"\n", info.DisplayName, info.JobID, onFailure)
+		// Use DisplayName for the table and JobID for the needs reference. A
+		// callback with retries reports its ladder's effective result so the
+		// summary agrees with the run's verdict rather than reporting the
+		// immutable first-attempt failure of a deploy a retry went on to rescue.
+		fmt.Fprintf(sb, "          echo \"| %s | %s | %s |\" >> \"$GITHUB_STEP_SUMMARY\"\n", info.DisplayName, effectiveResultExpr(info.JobID, info.Retries), onFailure)
 	}
 
 	// Add outputs section to summary (only if there are outputs with values)
@@ -1726,11 +1737,14 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 		fmt.Fprintf(sb, "          ENVIRONMENT: ${{ github.event.inputs.environment || '%s' }}\n", g.config.Environments[0].Name)
 	}
 
-	// Add env vars for each deploy result
+	// Add env vars for each deploy result. A deploy declaring retries reports its
+	// ladder's effective result: the base job's result is immutable, so a deploy
+	// that failed and was then rescued by a retry shim would otherwise be denied
+	// in recorded state even though the environment really was deployed.
 	for _, d := range g.config.Deploys {
 		envName := strings.ToUpper(strings.ReplaceAll(d.Name, "-", "_"))
 		jobName := fmt.Sprintf("deploy-%s", d.Name)
-		fmt.Fprintf(sb, "          %s_RESULT: ${{ needs.%s.result }}\n", envName, jobName)
+		fmt.Fprintf(sb, "          %s_RESULT: %s\n", envName, effectiveResultExpr(jobName, d.Retries))
 	}
 
 	// Add env vars for build artifact IDs. Only emitted when the build
@@ -1941,7 +1955,7 @@ func (g *Generator) writeNotifyPrimaryStep(sb *strings.Builder) {
 
 func (g *Generator) writeFailureCheckStep(sb *strings.Builder, sorted []string) {
 	// Collect callbacks with on_failure: abort (default behavior)
-	var abortCallbacks []string
+	var abortCallbacks []CallbackInfo
 	for _, jobID := range sorted {
 		info := g.graph.Nodes[jobID]
 		onFailure := info.OnFailure
@@ -1949,7 +1963,7 @@ func (g *Generator) writeFailureCheckStep(sb *strings.Builder, sorted []string) 
 			onFailure = config.OnFailureAbort
 		}
 		if onFailure == config.OnFailureAbort {
-			abortCallbacks = append(abortCallbacks, info.JobID)
+			abortCallbacks = append(abortCallbacks, info)
 		}
 	}
 
@@ -1963,9 +1977,11 @@ func (g *Generator) writeFailureCheckStep(sb *strings.Builder, sorted []string) 
 	// Build condition that only checks abort callbacks. A cancelled predecessor
 	// (e.g. a run superseded by a newer push under cancel-in-progress) is treated
 	// the same as a failure so a mid-flight cancellation is not silently tolerated.
+	// A callback declaring retries is judged on its ladder's effective result, so
+	// an attempt that failed and was then rescued by a shim does not fail the run.
 	var conditions []string
-	for _, jobName := range abortCallbacks {
-		conditions = append(conditions, failureOrCancelledCond(jobName))
+	for _, info := range abortCallbacks {
+		conditions = append(conditions, effectiveFailureOrCancelledCond(info.JobID, info.Retries))
 	}
 
 	fmt.Fprintf(sb, "        if: %s\n", strings.Join(conditions, " || "))
@@ -1981,6 +1997,78 @@ func (g *Generator) writeFailureCheckStep(sb *strings.Builder, sorted []string) 
 // it as a non-event would leave recorded state out of sync with reality.
 func failureOrCancelledCond(jobName string) string {
 	return fmt.Sprintf("contains(fromJSON('[\"failure\", \"cancelled\"]'), needs.%s.result)", jobName)
+}
+
+// retrySucceededCond builds the "some shim rescued it" half of a ladder's
+// effective result: a disjunction over each retry shim's success. It returns
+// the empty string when the callback declares no retries, which is what lets
+// the effective-result helpers collapse to their pre-retry form.
+func retrySucceededCond(jobName string, retries int) string {
+	if retries <= 0 {
+		return ""
+	}
+	conds := make([]string, 0, retries)
+	for i := 1; i <= retries; i++ {
+		conds = append(conds, fmt.Sprintf("needs.%s-retry-%d.result == 'success'", jobName, i))
+	}
+	return strings.Join(conds, " || ")
+}
+
+// effectiveSuccessCond builds a condition that matches when ANY attempt in a
+// callback's ladder succeeded: the base job, or any retry shim.
+//
+// A GitHub Actions job result is immutable. When a callback declares retries,
+// a base job that fails and is then rescued by a shim leaves needs.<base>.result
+// pinned at 'failure' for the whole run, even though the work completed. Reading
+// the base result alone therefore reports the opposite of what happened.
+//
+// The disjunction is over success rather than over failure because a shim that
+// never ran reports 'skipped', not 'failure': shims are gated on their
+// predecessor failing, so once an attempt succeeds every later shim skips. Only
+// 'success' is a positive signal that an attempt actually completed the work, so
+// asking "did any attempt succeed?" is correct for every ladder shape, while
+// asking "did the last attempt not fail?" would read a skipped shim as success.
+func effectiveSuccessCond(jobName string, retries int) string {
+	cond := fmt.Sprintf("needs.%s.result == 'success'", jobName)
+	if rescued := retrySucceededCond(jobName, retries); rescued != "" {
+		cond += " || " + rescued
+	}
+	return cond
+}
+
+// effectiveResultExpr renders a callback's effective result as a ${{ }}
+// expression evaluating to the string 'success' or 'failure', suitable for an
+// env: value that shell then compares against "success".
+//
+// With no retries it collapses to the bare needs.<job>.result, so a manifest
+// that does not use retries emits byte-identical output.
+func effectiveResultExpr(jobName string, retries int) string {
+	if retries <= 0 {
+		return fmt.Sprintf("${{ needs.%s.result }}", jobName)
+	}
+	return fmt.Sprintf("${{ (%s) && 'success' || 'failure' }}", effectiveSuccessCond(jobName, retries))
+}
+
+// effectiveFailureOrCancelledCond builds a condition that matches when a
+// callback's ladder genuinely failed: the base job failed or was cancelled AND
+// no retry shim rescued it.
+//
+// The failure/cancelled anchor is load-bearing and deliberately not rewritten as
+// a negated success. A base job whose triggers did not match reports 'skipped',
+// which is neither a failure nor something a retry can rescue; gating on
+// !success would turn that routine skip into a spurious run failure. Anchoring
+// on the base's failure/cancelled states first preserves today's semantics for
+// every non-retry shape and adds only the "unless a retry rescued it" exemption.
+// The returned clause is parenthesized as a unit whenever it carries the retry
+// exemption. Callers join these with " || ", and although GitHub Actions binds
+// && tighter than || (so the grouping would hold implicitly today), a gate that
+// decides whether a run goes red should not rest on implicit precedence.
+func effectiveFailureOrCancelledCond(jobName string, retries int) string {
+	cond := failureOrCancelledCond(jobName)
+	if rescued := retrySucceededCond(jobName, retries); rescued != "" {
+		cond = fmt.Sprintf("(%s && !(%s))", cond, rescued)
+	}
+	return cond
 }
 
 // ownRepoCLIArtifactName is the workflow-artifact name under which the build-cli

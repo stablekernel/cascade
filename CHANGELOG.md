@@ -16,6 +16,19 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** A callback declaring `retries` is now judged on its ladder's
+  effective result, so a deploy that fails and is then rescued by a retry no
+  longer fails the run or gets denied in recorded state. A GitHub Actions job
+  result is immutable: once the base job ended in `failure`, `needs.<job>.result`
+  reported `failure` for the rest of the run even after a retry shim redeployed
+  the environment successfully. The finalize failure gate, the manifest update,
+  the run summary, and the native Deployment status all read that frozen result,
+  so a successful retry still went red, and the manifest recorded the
+  environment's sha and version while refusing to record the deploy that had in
+  fact happened. Those four now ask whether any attempt in the base-plus-retry
+  ladder succeeded. A manifest that does not use `retries` emits byte-identical
+  output.
+
 - **release:** The stale-draft reaper now sees every release instead of only the
   30 most recent. The release list is paginated by the GitHub API, and the
   listing read a single response without requesting a page size or following the
@@ -203,6 +216,16 @@ A `Migration` section is added to any release that bumps `schema_version`.
   empty string on every deploy.
 - **git:** Pass `--` before the tag pattern in prefix-scoped `git tag -l`
   lookups as defense in depth beneath the new prefix validation.
+
+### Documentation
+
+- **manifest, callbacks:** `run_policy`, `on_failure`, and `retries` are now
+  documented as applying to trunk runs only. The promote generator never emitted
+  any of the three, so a promotion ran each deploy once regardless of what the
+  manifest declared. A promote-side retry needs a per-environment design, because
+  a promote deploy declaring `inputs` compiles to a matrix job whose single
+  aggregate result would make a retry redeploy every environment including the
+  ones that already succeeded ([#626](https://github.com/stablekernel/cascade/issues/626)).
 
 ### Added
 

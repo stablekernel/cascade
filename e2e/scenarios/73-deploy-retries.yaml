@@ -29,6 +29,30 @@ description: |
   occurrences. Asserting a per-shim conclusion here would silently read the wrong
   job, so it is left out rather than faked.
 
+  WHY base-fail-then-retry-SUCCEED IS NOT EXERCISED HERE, for the next author:
+  the case that matters most (the base attempt fails, a shim re-runs and
+  SUCCEEDS, so the environment really is deployed) cannot be expressed by this
+  harness, and the gap is structural rather than an omission:
+
+    1. Each shim is a separate GitHub Actions job, so it gets its own container
+       and its own workspace. A marker file written by the first attempt is gone
+       by the second, so the callback cannot count its own invocations locally.
+    2. Artifacts and the cache are the canonical cross-job state channels, and
+       both are unavailable: act is launched without an artifact server path
+       (harness/act.go), so upload-artifact/download-artifact cannot round-trip.
+    3. The callback body cannot self-discriminate which attempt it is either. The
+       generator emits identical with: inputs for the base job and every shim, and
+       inside a reusable workflow github.job resolves to the inner job id, which
+       is the same string for all three invocations.
+
+  A callback that fails once and then succeeds therefore has no way to keep state
+  across attempts here. Rather than fabricate a scenario that cannot prove the
+  claim, the runtime half is left unexercised and the effective-result gates are
+  pinned as emitted text above, with the four ladder shapes (no shims, base
+  succeeds, a middle shim succeeds, all attempts fail) covered as unit tests in
+  internal/generate/effective_result_test.go. Restoring the executing proof needs
+  an artifact server in the harness, not a change to this scenario.
+
   INNER-JOB-ID NAMESPACE TRAP, for the next author: expect.jobs entries are
   resolved by findJob (assert.go), which strips a "build-"/"deploy-" prefix and
   looks the remainder up among the INNER job ids of the called workflows. The
@@ -95,9 +119,21 @@ steps:
             # chain is sequential rather than every shim firing off the original.
             - "if: needs.deploy-web.result == 'failure'"
             - "if: needs.deploy-web-retry-1.result == 'failure'"
+            # A job result is immutable, so needs.deploy-web.result stays
+            # 'failure' for the whole run even after a shim redeploys the
+            # environment successfully. Both the finalize failure gate and the
+            # manifest-update gate must therefore judge the ladder's effective
+            # result ("did any attempt succeed?") rather than the base job's
+            # frozen one. The runtime half of this cannot be exercised here (see
+            # the note below), so the expressions are pinned as emitted text.
+            - "WEB_RESULT: ${{ (needs.deploy-web.result == 'success' || needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success') && 'success' || 'failure' }}"
+            - "!(needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success')"
           not_contains:
             # retries: 2 emits exactly two shims.
             - "deploy-web-retry-3:"
+            # The manifest gate must never bind to the immutable base result: that
+            # is what denied a retry-rescued deploy in recorded state.
+            - "WEB_RESULT: ${{ needs.deploy-web.result }}"
 
   - name: "Orchestrate: the deploy callback genuinely fails at runtime"
     action: orchestrate
