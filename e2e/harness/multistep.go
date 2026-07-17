@@ -602,19 +602,23 @@ func scenarioEnvNames(s *MultiStepScenario) map[string]bool {
 	return valid
 }
 
-// validateStateEnvNames checks that every state expectation names an environment
-// the scenario actually declares.
+// validateStateSubjects checks that every state expectation names an environment,
+// and a component where it selects one, that the scenario actually declares.
 //
-// This is what keeps an expectation falsifiable. An env the scenario never
+// This is what keeps an expectation falsifiable. A subject the scenario never
 // deployed to reads back as a zero EnvState, which is correct and useful:
 // "deploy dev, prove prod was untouched" is a real assertion, and it goes red if
-// the step wrongly writes prod. But a typo'd env name produces that same absence
+// the step wrongly writes prod. But a typo'd name produces that same absence
 // no matter how the code behaves, so the expectation can never fail. The two are
-// indistinguishable at runtime, since both are simply an env with no state. The
-// name is therefore checked against the scenario's own config, where a typo is
-// decidable without running anything.
-func validateStateEnvNames(s *MultiStepScenario) error {
-	valid := scenarioEnvNames(s)
+// indistinguishable at runtime, since both are simply a subject with no state.
+// The name is therefore checked against the scenario's own config, where a typo
+// is decidable without running anything.
+//
+// Both axes of the subject need this. State for a component is recorded under
+// the composite key components/<component>/<env>, so a typo in either half names
+// a row that can never exist, and unchanged against it passes unconditionally.
+func validateStateSubjects(s *MultiStepScenario) error {
+	validEnvs := scenarioEnvNames(s)
 
 	for _, step := range s.Steps {
 		if step.Expect == nil {
@@ -629,19 +633,42 @@ func validateStateEnvNames(s *MultiStepScenario) error {
 			if expect.Component != "" && expect.Env != "" {
 				name = expect.Env
 			}
-			if valid[name] {
+			if !validEnvs[name] {
+				return fmt.Errorf("step %q expects state on %q, which is not an environment this scenario declares (known: %s). An env name that does not exist has no state no matter what the code does, so the expectation can never fail",
+					step.Name, name, sortedNames(validEnvs))
+			}
+			// An expectation that names no component asserts on the flat state
+			// rows, which every single-component scenario uses. Only a named
+			// component is a claim about the config that can be wrong.
+			if expect.Component == "" {
 				continue
 			}
-			known := make([]string, 0, len(valid))
-			for n := range valid {
-				known = append(known, n)
+			if _, ok := s.Config.Components[expect.Component]; !ok {
+				return fmt.Errorf("step %q expects state on component %q, which is not a component this scenario declares (known: %s). A component name that does not exist has no state no matter what the code does, so the expectation can never fail",
+					step.Name, expect.Component, sortedNames(componentNames(s)))
 			}
-			sort.Strings(known)
-			return fmt.Errorf("step %q expects state on %q, which is not an environment this scenario declares (known: %s). An env name that does not exist has no state no matter what the code does, so the expectation can never fail",
-				step.Name, name, strings.Join(known, ", "))
 		}
 	}
 	return nil
+}
+
+// componentNames returns the set of components the scenario declares.
+func componentNames(s *MultiStepScenario) map[string]bool {
+	names := make(map[string]bool, len(s.Config.Components))
+	for name := range s.Config.Components {
+		names[name] = true
+	}
+	return names
+}
+
+// sortedNames renders a name set for an error message, in a stable order.
+func sortedNames(set map[string]bool) string {
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // DiscoverMultiStepScenarios finds and parses all multi-step scenario YAML files
@@ -681,7 +708,7 @@ func DiscoverMultiStepScenarios(dir string) ([]*MultiStepScenario, error) {
 			return fmt.Errorf("%s: scenario %q declares no steps, so it asserts nothing", path, scenario.Name)
 		}
 
-		if err := validateStateEnvNames(scenario); err != nil {
+		if err := validateStateSubjects(scenario); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 

@@ -277,6 +277,77 @@ steps:
 	assert.Contains(t, err.Error(), "stagingg")
 }
 
+// TestDiscoverMultiStepScenarios_UnknownStateComponentIsError proves the check
+// covers the component axis as well as the env axis. A component the scenario
+// never declares produces a composite state key that can never exist, so
+// unchanged reads true no matter what the code does. That is the same
+// unfalsifiable expectation a typo'd env name produces, one axis over.
+func TestDiscoverMultiStepScenarios_UnknownStateComponentIsError(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+name: "Typo'd component"
+description: "Asserts unchanged against a component that does not exist"
+config:
+  environments: [dev, prod]
+  components:
+    api:
+      path: api
+    web:
+      path: web
+steps:
+  - name: "Deploy dev"
+    action: commit
+    commit:
+      message: "test"
+      files:
+        test.txt: "content"
+    expect:
+      state:
+        api-prod:
+          component: apii
+          env: prod
+          unchanged: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "typo-component.yaml"), []byte(body), 0644))
+
+	_, err := DiscoverMultiStepScenarios(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "typo-component.yaml")
+	assert.Contains(t, err.Error(), "apii")
+	assert.Contains(t, err.Error(), "api")
+	assert.Contains(t, err.Error(), "web")
+}
+
+// TestDiscoverMultiStepScenarios_AcceptsAbsentComponent proves the component
+// check only fires when an expectation names a component. A single-component
+// scenario asserts on the flat state rows with no component at all, and those
+// must stay valid.
+func TestDiscoverMultiStepScenarios_AcceptsAbsentComponent(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+name: "No component"
+description: "Flat state rows carry no component"
+config:
+  environments: [dev, prod]
+steps:
+  - name: "Deploy dev"
+    action: commit
+    commit:
+      message: "test"
+      files:
+        test.txt: "content"
+    expect:
+      state:
+        prod:
+          unchanged: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "flat.yaml"), []byte(body), 0644))
+
+	scenarios, err := DiscoverMultiStepScenarios(dir)
+	require.NoError(t, err)
+	assert.Len(t, scenarios, 1)
+}
+
 func TestDiscoverMultiStepScenarios(t *testing.T) {
 	// Create temp directory with test scenarios
 	dir := t.TempDir()
