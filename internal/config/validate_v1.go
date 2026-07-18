@@ -253,8 +253,21 @@ func validateCallbackPolicy(prefix, runPolicy, onFailure string, retries int) []
 	if runPolicy != "" && runPolicy != RunPolicyDefault && runPolicy != RunPolicyAlways && runPolicy != RunPolicyForce {
 		errs = append(errs, fmt.Sprintf("%s.run_policy must be one of: default, always, force", prefix))
 	}
-	if onFailure != "" && onFailure != OnFailureAbort && onFailure != OnFailureContinue {
-		errs = append(errs, fmt.Sprintf("%s.on_failure must be one of: abort, continue", prefix))
+	switch onFailure {
+	case "", OnFailureAbort:
+		// Unset or abort: the run fails when the callback fails, which is the
+		// only outcome expressible for a reusable-workflow-call job.
+	case OnFailureContinue:
+		// cascade emits every callback as a reusable-workflow call (jobs.<id>.uses).
+		// GitHub Actions forbids continue-on-error on such a job, and a failed job
+		// otherwise fails the whole run regardless of any downstream check, so a
+		// tolerated failure cannot be expressed without emitting a workflow GitHub
+		// rejects at parse. Reject it loudly here rather than emit invalid YAML.
+		errs = append(errs, fmt.Sprintf("%s.on_failure: continue is not supported: cascade emits every "+
+			"callback as a reusable-workflow call and GitHub Actions forbids continue-on-error on such a job. "+
+			"Use on_failure: abort (the default), or tolerate the failure inside the reusable workflow itself", prefix))
+	default:
+		errs = append(errs, fmt.Sprintf("%s.on_failure must be: abort", prefix))
 	}
 	if retries < 0 || retries > 3 {
 		errs = append(errs, fmt.Sprintf("%s.retries must be between 0 and 3", prefix))

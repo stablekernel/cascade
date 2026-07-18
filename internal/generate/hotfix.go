@@ -2,6 +2,8 @@ package generate
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -706,9 +708,24 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		if b.Workflow != "" {
 			writeCallbackPermissions(sb, "    ", b.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(b.Workflow))
-			sb.WriteString("    with:\n")
-			sb.WriteString("      sha: ${{ github.event.pull_request.merge_commit_sha }}\n")
-			sb.WriteString("      target_env: ${{ needs.context.outputs.target_env }}\n")
+			// GitHub Actions rejects a reusable-workflow call that passes an input
+			// the callee does not declare, so gate each with: input on the callback's
+			// declared workflow_call inputs (mirroring the orchestrate writeWithInputs
+			// path). A callee that declares neither input gets no with: block.
+			declared := g.declaredCallbackInputs(b.Workflow, b.Inputs)
+			var withLines []string
+			if declared["sha"] {
+				withLines = append(withLines, "      sha: ${{ github.event.pull_request.merge_commit_sha }}")
+			}
+			if declared["target_env"] {
+				withLines = append(withLines, "      target_env: ${{ needs.context.outputs.target_env }}")
+			}
+			if len(withLines) > 0 {
+				sb.WriteString("    with:\n")
+				for _, line := range withLines {
+					sb.WriteString(line + "\n")
+				}
+			}
 			// Honor the same opt-in / least-privilege model as the orchestrate and
 			// promote callbacks: emit no secrets block unless the build opted in via
 			// secrets: inherit or an explicit per-secret map.
@@ -726,6 +743,37 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("        run: |\n")
 		fmt.Fprintf(sb, "          echo \"build %s\"\n", b.Name)
 	}
+}
+
+// declaredCallbackInputs returns the set of workflow_call inputs a hotfix build
+// callback's reusable workflow declares, so writeBuildJobs only threads inputs
+// the callee accepts. A local workflow is parsed from disk; a cross-repo
+// workflow (org/repo/.github/workflows/file.yaml@ref) cannot be read locally, so
+// it falls back to the standard callback contract (environment/sha/dry_run) plus
+// any operator-declared inputs, mirroring the orchestrate generator's
+// crossRepoInputs. An unreadable or unparsable local callee yields an empty set,
+// so no with: block is emitted rather than an input the callee might reject.
+func (g *HotfixGenerator) declaredCallbackInputs(workflow string, operatorInputs map[string]interface{}) map[string]bool {
+	set := make(map[string]bool)
+	if config.IsExternalWorkflow(workflow) {
+		for _, name := range crossRepoInputs(config.CallbackTypeBuild, operatorInputs) {
+			set[name] = true
+		}
+		return set
+	}
+	path := filepath.Join(g.baseDir, normalizeWorkflowPath(workflow))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return set
+	}
+	names, err := ParseWorkflowInputs(data)
+	if err != nil {
+		return set
+	}
+	for _, name := range names {
+		set[name] = true
+	}
+	return set
 }
 
 // buildJobNames returns the build job identifiers emitted by writeBuildJobs so

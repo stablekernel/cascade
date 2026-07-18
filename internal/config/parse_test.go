@@ -602,7 +602,7 @@ func TestValidate_NewFields(t *testing.T) {
 					{Name: "a", Workflow: "w.yaml", OnFailure: "invalid"},
 				},
 			},
-			wantErrs: []string{"builds[0].on_failure must be one of: abort, continue"},
+			wantErrs: []string{"builds[0].on_failure must be: abort"},
 		},
 		{
 			name: "retries out of range",
@@ -692,10 +692,20 @@ func TestValidate_ValidateBlockPolicyParity(t *testing.T) {
 			validate: &ValidateConfig{
 				Workflow:  "w.yaml",
 				RunPolicy: "always",
-				OnFailure: "continue",
+				OnFailure: "abort",
 				Retries:   intPtr(3),
 			},
 			wantErrs: nil,
+		},
+		{
+			name: "on_failure continue is rejected as unsupported",
+			validate: &ValidateConfig{
+				Workflow:  "w.yaml",
+				OnFailure: "continue",
+			},
+			wantErrs: []string{"validate.on_failure: continue is not supported: cascade emits every " +
+				"callback as a reusable-workflow call and GitHub Actions forbids continue-on-error on such a job. " +
+				"Use on_failure: abort (the default), or tolerate the failure inside the reusable workflow itself"},
 		},
 		{
 			name:     "unset retries is valid",
@@ -710,7 +720,7 @@ func TestValidate_ValidateBlockPolicyParity(t *testing.T) {
 		{
 			name:     "invalid on_failure",
 			validate: &ValidateConfig{Workflow: "w.yaml", OnFailure: "invalid"},
-			wantErrs: []string{"validate.on_failure must be one of: abort, continue"},
+			wantErrs: []string{"validate.on_failure must be: abort"},
 		},
 		{
 			name:     "retries above bound",

@@ -893,8 +893,8 @@
     },
     "onFailure": {
       "type": "string",
-      "enum": ["abort", "continue"],
-      "description": "Behavior when the callback fails."
+      "enum": ["abort"],
+      "description": "Behavior when the callback fails. Only 'abort' is supported: cascade emits every callback as a reusable-workflow call and GitHub Actions forbids continue-on-error on such a job, so 'continue' is rejected at validation."
     }
   }
 }

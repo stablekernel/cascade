@@ -523,8 +523,9 @@ Callback failures are handled by the `on_failure` policy:
 
 | Policy | Behavior |
 |--------|----------|
-| `abort` | Fail the entire workflow |
-| `continue` | Other callbacks proceed |
+| `abort` | Fail the entire workflow (the default, and the only supported value) |
+
+`abort` is the only supported value. `on_failure: continue` is rejected at config validation: cascade emits every callback as a reusable-workflow call (`jobs.<id>.uses`), and GitHub Actions forbids `continue-on-error` on such a job, so a tolerated failure cannot be expressed without emitting a workflow GitHub rejects at parse. To tolerate a failure, handle it inside the reusable workflow itself so the callback still concludes successfully.
 
 With `retries: N`, a failed callback is retried up to N times before it counts as a final failure. Each retry is a separate job that re-invokes the same reusable workflow, and the chain stops at the first attempt that succeeds. A callback that fails and is then rescued by a retry counts as a success: the run stays green and the deploy is recorded in state.
 

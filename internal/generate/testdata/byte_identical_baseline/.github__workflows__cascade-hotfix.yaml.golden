@@ -308,27 +308,18 @@ jobs:
     permissions:
       attestations: write
     uses: ./.github/workflows/image-build.yaml
-    with:
-      sha: ${{ github.event.pull_request.merge_commit_sha }}
-      target_env: ${{ needs.context.outputs.target_env }}
 
   build-bundle:
     name: Build bundle
     needs: context
     if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'cascade-hotfix')
     uses: ./.github/workflows/bundle-build.yaml
-    with:
-      sha: ${{ github.event.pull_request.merge_commit_sha }}
-      target_env: ${{ needs.context.outputs.target_env }}
 
   build-docs:
     name: Build docs
     needs: context
     if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'cascade-hotfix')
     uses: ./.github/workflows/bundle-build.yaml
-    with:
-      sha: ${{ github.event.pull_request.merge_commit_sha }}
-      target_env: ${{ needs.context.outputs.target_env }}
 
   deploy-app:
     name: Deploy app
