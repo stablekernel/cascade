@@ -28,6 +28,18 @@ A `Migration` section is added to any release that bumps `schema_version`.
   is never rebuilt from the flat map and any existing subtree is preserved
   verbatim. A single-component manifest with no `components` subtree emits
   byte-identical output.
+- **promote:** Promotion finalize no longer advances the environment pointer
+  (`state.<env>.sha` and `state.<env>.version`) when an in-scope deploy
+  terminally failed or was cancelled. Previously the pointer advanced to the new
+  commit regardless of the deploy result, so with `rollback_on_failure` (the
+  default) the auto-rollback job redeployed the environment's prior sha while
+  state recorded the new one: state asserted a version the environment was not
+  running. Finalize now gates the pointer advance on deploy success, mirroring
+  the rollback finalize gate, and holds the pointer at its prior value when any
+  in-scope deploy did not succeed, so a re-dispatch re-plans and retries the
+  failed deploy. Per-deploy success rows are still recorded individually, so a
+  partial success is not lost. A promotion whose deploys all succeed, or that
+  advances an environment with no deploys, is unchanged.
 - **generate:** A callback declaring `retries` is now judged on its ladder's
   effective result, so a deploy that fails and is then rescued by a retry no
   longer fails the run or gets denied in recorded state. A GitHub Actions job

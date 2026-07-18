@@ -295,6 +295,14 @@ type PromoteStep struct {
 	// fails, every deploy that already succeeded is rolled back to the SHA
 	// previously deployed in the target env (preflight's rollback_sha).
 	RollbackOnFailure bool `yaml:"rollback_on_failure,omitempty"`
+	// SyncStateOnFailure re-reads state from Gitea after an ExpectFailure promote
+	// so a step can assert what finalize actually wrote on a failed run. The
+	// finalize job runs under always(), so it commits state even when a deploy
+	// failed; without this the harness keeps the last successful sync and cannot
+	// observe that write. It is opt-in and only consulted alongside ExpectFailure,
+	// so every existing expect_failure scenario is byte-identical. A scenario sets
+	// it to prove the env pointer did NOT advance over a failed deploy.
+	SyncStateOnFailure bool `yaml:"sync_state_on_failure,omitempty"`
 }
 
 // RollbackStep defines a rollback action: a workflow_dispatch of the

@@ -53,13 +53,18 @@ func TestFinalize_UpdatesStateForSuccessfulDeploys(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
 	require.NoError(t, err)
 
-	// Check state was updated
+	// The env pointer must NOT advance: app terminally failed, so recording the
+	// promotion at the new sha would assert a version the environment is not
+	// running. The env holds at its prior (empty) pointer. Previously this test
+	// asserted testState.SHA == "abc123", which encoded the state/reality
+	// inversion this fix closes.
 	testState := cicdFile.State["test"]
 	require.NotNil(t, testState)
-	require.Equal(t, "abc123", testState.SHA)
-	require.Equal(t, "v1.0.0-1", testState.Version)
+	require.Equal(t, "", testState.SHA, "env pointer held: an in-scope deploy failed")
+	require.Equal(t, "", testState.Version, "env version held: an in-scope deploy failed")
 
-	// Check deploy states - success should be updated, failure should not
+	// The per-deploy SUCCESS row is still recorded (a partial success is not
+	// lost); the failed deploy is not.
 	require.NotNil(t, testState.Deploys)
 	require.NotNil(t, testState.Deploys["infra"], "infra deploy should be recorded (success)")
 	require.Equal(t, "abc123", testState.Deploys["infra"].SHA)
@@ -595,8 +600,13 @@ func TestFinalize_CancelledDeploys(t *testing.T) {
 	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
 	require.NoError(t, err)
 
-	// Cancelled deploy should not have state
-	require.Nil(t, cicdFile.State["test"].Deploys["infra"], "cancelled deploy should not be recorded")
+	// The only in-scope deploy was cancelled, so nothing landed: the env pointer
+	// is held at its prior (empty) value and the cancelled deploy is not recorded.
+	testState := cicdFile.State["test"]
+	require.NotNil(t, testState)
+	require.Equal(t, "", testState.SHA, "env pointer held: the only in-scope deploy was cancelled")
+	require.Equal(t, "", testState.Version)
+	require.Nil(t, testState.Deploys["infra"], "cancelled deploy should not be recorded")
 }
 
 // TestFinalize_NoReleaseActionDoesNotUpdateLatestRelease ensures that
@@ -940,4 +950,160 @@ func TestUpdateState_NoSnapshotOnSameSHA(t *testing.T) {
 	testState := cicdFile.State["test"]
 	require.NotNil(t, testState)
 	require.Empty(t, testState.Previous)
+}
+
+// TestFinalize_HoldsEnvPointerOnInScopeDeployFailure proves the env pointer
+// (state.<env>.sha/version) is NOT advanced when an in-scope deploy terminally
+// failed. Advancing it would record the new commit as live while
+// rollback_on_failure (default true) redeploys the OLD sha, inverting state and
+// reality. The prior deploy that succeeded is still recorded per-deployable, so
+// a re-dispatch retries only the failed one.
+func TestFinalize_HoldsEnvPointerOnInScopeDeployFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, uat, prod]
+    deploys:
+      - name: infra
+        workflow: .github/workflows/deploy-infra.yaml
+      - name: app
+        workflow: .github/workflows/deploy-app.yaml
+  state:
+    prod:
+      sha: oldsha111
+      version: v1.0.0
+      committed_at: "2026-01-01T10:00:00Z"
+      committed_by: alice
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0644))
+
+	fin, err := NewFinalizer(configPath, "prod")
+	require.NoError(t, err)
+	fin.SetActor("bob")
+	// infra succeeded, app terminally failed: a partial success.
+	fin.SetDeployResult("infra", "success")
+	fin.SetDeployResult("app", "failure")
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "prod",
+			SHA:         "newsha222",
+			Version:     "v1.1.0",
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	prodState := cicdFile.State["prod"]
+	require.NotNil(t, prodState)
+	// The env pointer must stay at the OLD sha/version: the deploy did not land.
+	require.Equal(t, "oldsha111", prodState.SHA,
+		"env pointer must not advance when an in-scope deploy failed")
+	require.Equal(t, "v1.0.0", prodState.Version,
+		"env version must not advance when an in-scope deploy failed")
+	require.Equal(t, "alice", prodState.CommittedBy,
+		"a held env keeps its prior audit attribution")
+	require.Empty(t, prodState.Previous,
+		"no transition happened, so nothing is pushed to the deploy-history ring")
+
+	// The per-deploy SUCCESS row is still recorded; the partial success is not lost.
+	require.NotNil(t, prodState.Deploys["infra"],
+		"a deploy that succeeded is still recorded even when a sibling failed")
+	require.Equal(t, "newsha222", prodState.Deploys["infra"].SHA)
+	require.Nil(t, prodState.Deploys["app"],
+		"the failed deploy is not recorded")
+}
+
+// TestFinalize_HoldsEnvPointerRollbackOnFailureDisabled proves the env pointer
+// is held on a failed deploy regardless of rollback_on_failure: the recorded
+// state must match what the environment is actually running, whether or not an
+// auto-rollback also fires.
+func TestFinalize_HoldsEnvPointerRollbackOnFailureDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, prod]
+    deploys:
+      - name: app
+        workflow: .github/workflows/deploy-app.yaml
+        rollback_on_failure: false
+  state:
+    prod:
+      sha: oldsha111
+      version: v1.0.0
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0644))
+
+	fin, err := NewFinalizer(configPath, "prod")
+	require.NoError(t, err)
+	fin.SetDeployResult("app", "failure")
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "prod",
+			SHA:         "newsha222",
+			Version:     "v1.1.0",
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	prodState := cicdFile.State["prod"]
+	require.NotNil(t, prodState)
+	require.Equal(t, "oldsha111", prodState.SHA,
+		"env pointer held at old sha even without auto-rollback")
+	require.Equal(t, "v1.0.0", prodState.Version)
+}
+
+// TestFinalize_AdvancesEnvPointerWhenAllInScopeSucceed proves the fix does not
+// change the happy path: with every in-scope deploy successful, the env pointer
+// advances exactly as before.
+func TestFinalize_AdvancesEnvPointerWhenAllInScopeSucceed(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "manifest.yaml")
+
+	initialConfig := `ci:
+  config:
+    environments: [dev, prod]
+    deploys:
+      - name: infra
+        workflow: .github/workflows/deploy-infra.yaml
+      - name: app
+        workflow: .github/workflows/deploy-app.yaml
+  state:
+    prod:
+      sha: oldsha111
+      version: v1.0.0
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0644))
+
+	fin, err := NewFinalizer(configPath, "prod")
+	require.NoError(t, err)
+	fin.SetDeployResult("infra", "success")
+	fin.SetDeployResult("app", "success")
+	fin.SetPromotionResult(&PromotionResult{
+		Promotions: []EnvPromotion{{
+			Environment: "prod",
+			SHA:         "newsha222",
+			Version:     "v1.1.0",
+		}},
+	})
+
+	require.NoError(t, fin.Run())
+
+	cicdFile, err := config.ParseManifestFile(configPath, config.DefaultManifestKey)
+	require.NoError(t, err)
+
+	prodState := cicdFile.State["prod"]
+	require.NotNil(t, prodState)
+	require.Equal(t, "newsha222", prodState.SHA)
+	require.Equal(t, "v1.1.0", prodState.Version)
 }
