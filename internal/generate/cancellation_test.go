@@ -98,11 +98,13 @@ func TestFailureCheckMatchesCancelled(t *testing.T) {
 	assert.NotContains(t, result, "needs.build-app.result == 'failure'\n        run:")
 }
 
-// TestOnFailureContinueEmitsContinueOnError asserts a callback configured with
-// on_failure: continue emits job-level continue-on-error: true, so a tolerated
-// failure does not paint the whole run red. The continue callback is also
-// excluded from the abort failure guard.
-func TestOnFailureContinueEmitsContinueOnError(t *testing.T) {
+// TestOnFailureContinueNeverEmitsContinueOnError asserts the generator never
+// emits continue-on-error, even when a callback is constructed directly with
+// on_failure: continue (bypassing config validation, which rejects that value).
+// GitHub Actions forbids continue-on-error on a reusable-workflow-call job and
+// every callback is such a job, so emitting it would produce a workflow real
+// GitHub rejects at parse. The invariant is absolute: valid YAML always.
+func TestOnFailureContinueNeverEmitsContinueOnError(t *testing.T) {
 	dir := writeCancellationWorkflows(t)
 
 	cfg := &config.TrunkConfig{
@@ -128,15 +130,11 @@ func TestOnFailureContinueEmitsContinueOnError(t *testing.T) {
 	result, err := NewGenerator(cfg, dir).Generate()
 	require.NoError(t, err)
 
-	// continue-on-error must be attached to the continue callback's job block.
-	assertContinueOnErrorScopedToJob(t, result, "build-notifications", true)
-	// The abort callback must NOT carry continue-on-error.
+	// No job carries continue-on-error, because it is invalid on a
+	// reusable-workflow-call job.
+	assertContinueOnErrorScopedToJob(t, result, "build-notifications", false)
 	assertContinueOnErrorScopedToJob(t, result, "build-app", false)
-
-	// The tolerated callback stays out of the abort failure guard. (It still
-	// appears in the summary table and finalize needs: list, so scope the
-	// assertion to the guard's condition form.)
-	assert.NotContains(t, result, `needs.build-notifications.result)`)
+	assert.NotContains(t, result, "continue-on-error: true")
 }
 
 // TestDefaultCallbackOmitsContinueOnError asserts the default case (no

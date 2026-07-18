@@ -54,6 +54,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # actionlint must be on PATH so the emitted-workflow enforcement guard
+      # (TestActionlint_FeatureMatrix and the census-driven sweep) genuinely runs
+      # instead of skipping. Pinned to the same SHA the workflow-lint job uses so
+      # the guard and the repo's own workflow lint agree on the actionlint version.
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca  # v1.7.12
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
 

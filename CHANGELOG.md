@@ -40,6 +40,24 @@ A `Migration` section is added to any release that bumps `schema_version`.
   failed deploy. Per-deploy success rows are still recorded individually, so a
   partial success is not lost. A promotion whose deploys all succeed, or that
   advances an environment with no deploys, is unchanged.
+- **generate:** A hotfix build callback no longer passes reusable-workflow inputs
+  the called workflow does not declare. The hotfix build job unconditionally sent
+  `sha` and `target_env` in its `with:` block, but GitHub Actions rejects a
+  reusable-workflow call that passes an undeclared `workflow_call` input, so every
+  hotfix build failed at parse on real GitHub. Each input is now gated on the
+  callback's declared inputs, mirroring the orchestrate path; a callee that
+  declares neither gets no `with:` block. Only the hotfix workflow's build `with:`
+  block changes, and only where the callee does not declare the input; all other
+  generated output is byte-identical.
+- **generate:** `on_failure: continue` is now rejected at config validation
+  instead of emitting an invalid workflow. cascade emits every callback as a
+  reusable-workflow call (`jobs.<id>.uses`), and GitHub Actions forbids
+  `continue-on-error` on such a job, so the emitted workflow was rejected at parse
+  by real GitHub. Because a tolerated failure cannot be expressed for a
+  reusable-workflow-call job, `continue` is refused with a clear message; `abort`
+  (the default) is the only supported value. Tolerate a failure inside the
+  reusable workflow itself so the callback still concludes successfully. A
+  manifest that does not set `on_failure: continue` emits byte-identical output.
 - **generate:** A callback declaring `retries` is now judged on its ladder's
   effective result, so a deploy that fails and is then rescued by a retry no
   longer fails the run or gets denied in recorded state. A GitHub Actions job

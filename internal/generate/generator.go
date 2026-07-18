@@ -1190,13 +1190,11 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// reviewers, wait timers, deployment branch policy, scoped secrets) must be
 	// declared inside the reusable workflow's own job.
 
-	// continue-on-error: a callback with on_failure: continue is one the operator
-	// has explicitly marked as tolerable. Emitting continue-on-error keeps the
-	// overall run green when only such callbacks fail, while the result is still
-	// recorded (the failure check below never gates on continue callbacks).
-	if info.OnFailure == config.OnFailureContinue {
-		sb.WriteString("    continue-on-error: true\n")
-	}
+	// continue-on-error is intentionally never emitted. GitHub Actions forbids
+	// continue-on-error on a reusable-workflow caller job (jobs.<id>.uses), and
+	// every callback is such a job, so a workflow carrying it is rejected at
+	// parse. on_failure: continue is therefore rejected at config validation
+	// (validateCallbackPolicy); OnFailure only ever reaches here as abort.
 
 	// permissions: is allowed on a reusable-workflow caller job. Render the
 	// callback's configured scopes so the GITHUB_TOKEN is least-privilege per

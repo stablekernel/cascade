@@ -56,18 +56,51 @@ func TestNormalizeWorkflowPath(t *testing.T) {
 
 // locateActionlint returns the actionlint binary path, or skips the test when
 // the linter is not installed in the runner.
+// actionlintResolution is the outcome of resolving the actionlint binary: found
+// (run the guard), skip (local dev without actionlint), or fatal (CI, where a
+// missing binary must red the guard rather than silently disable it).
+type actionlintResolution int
+
+const (
+	actionlintFound actionlintResolution = iota
+	actionlintSkip
+	actionlintFatal
+)
+
+// resolveActionlint decides how a test should treat the actionlint binary. It is
+// a pure function of its inputs so the CI-hard-fail contract can be unit-tested
+// without a real binary: under CI (ci == true) a missing actionlint is fatal, so
+// the emitted-workflow enforcement guard can never silently skip itself in the
+// merge gate; locally it skips.
+func resolveActionlint(lookPath func(string) (string, error), brewPath string, ci bool) (string, actionlintResolution) {
+	if p, err := lookPath("actionlint"); err == nil {
+		return p, actionlintFound
+	}
+	if _, err := os.Stat(brewPath); err == nil {
+		return brewPath, actionlintFound
+	}
+	if ci {
+		return "", actionlintFatal
+	}
+	return "", actionlintSkip
+}
+
 func locateActionlint(t *testing.T) string {
 	t.Helper()
-	if p, err := exec.LookPath("actionlint"); err == nil {
-		return p
+	// Under CI the actionlint binary is installed by the workflow (see the
+	// Install actionlint step in validate.yaml and pr.yaml). A missing binary in
+	// CI would make every actionlint-backed guard silently t.Skip and stop
+	// enforcing, which is the exact failure this guard family exists to catch, so
+	// fail loudly instead.
+	p, res := resolveActionlint(exec.LookPath, "/opt/homebrew/bin/actionlint", os.Getenv("CI") != "")
+	switch res {
+	case actionlintFatal:
+		t.Fatalf("actionlint not found on PATH under CI: the emitted-workflow enforcement guard cannot " +
+			"run and would silently skip. Ensure the 'Install actionlint' step runs before 'go test' in this lane.")
+	case actionlintSkip:
+		t.Skip("actionlint not found; skipping actionlint integration test")
 	}
-	// Fall back to the known homebrew path.
-	const brew = "/opt/homebrew/bin/actionlint"
-	if _, err := os.Stat(brew); err == nil {
-		return brew
-	}
-	t.Skip("actionlint not found; skipping actionlint integration test")
-	return ""
+	return p
 }
 
 // stageActionlintProject builds a self-contained project tree rooted at a fresh

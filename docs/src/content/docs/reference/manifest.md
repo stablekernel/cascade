@@ -1085,8 +1085,9 @@ To make a promotion resilient to a transient failure, handle the retry inside th
 
 | `on_failure` | Behavior |
 |--------------|----------|
-| `abort` | Fail the entire workflow. |
-| `continue` | Let other callbacks proceed. |
+| `abort` | Fail the entire workflow. The default, and the only supported value. |
+
+`on_failure: continue` is rejected at config validation. Every callback is emitted as a reusable-workflow call (`jobs.<id>.uses`), and GitHub Actions forbids `continue-on-error` on such a job, so a tolerated failure cannot be expressed without emitting a workflow GitHub rejects at parse. Tolerate a failure inside the reusable workflow itself instead, so the callback concludes successfully.
 
 `retries` is the number of retry attempts on failure (0-3).
 
@@ -1223,7 +1224,7 @@ The implicit `release` slot tracks the most recently published (non-draft) GitHu
 
 - `schema_version` should be `1`. Omitting it emits a warning.
 - Environment, build, and deploy names must be identifier-safe (letters, digits, underscores). Within a section, two names that differ only by hyphen versus underscore are rejected: hyphens become underscores in job IDs and output keys, so those names would emit colliding outputs. The generator-owned names `environment` and `dry_run` are reserved and cannot be used as `dispatch_inputs`.
-- `pin_mode` must be `tag` or `sha`; `run_policy` must be `default`, `always`, or `force`; `on_failure` must be `abort` or `continue`; `retries` must be 0-3.
+- `pin_mode` must be `tag` or `sha`; `run_policy` must be `default`, `always`, or `force`; `on_failure` must be `abort` (the only supported value; `continue` is rejected); `retries` must be 0-3.
 - A repository cannot set both `external` (primary) and `notify` (satellite).
 - A per-callback `permissions` block is the complete permission set for that caller job and replaces the workflow default rather than merging.
 - `cli_version_sha` takes effect only under `pin_mode: sha`.

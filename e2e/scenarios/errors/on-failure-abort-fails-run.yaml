@@ -1,0 +1,53 @@
+name: "on_failure abort reds the run"
+description: |
+  Exercises the builds on_failure field end to end, which no other scenario in
+  the corpus does. The app build is a reusable workflow whose inner job runs
+  "exit 1", and the build sets on_failure: abort explicitly. abort is the only
+  on_failure value cascade supports (on_failure: continue is rejected at config
+  validation because continue-on-error is invalid on a reusable-workflow-call
+  job), so this scenario pins the supported value: an aborting build that fails
+  concludes the orchestrate run in failure. expect_failure makes that failure the
+  success path, proving the emitter honors the field and the generated workflow
+  runs on act.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+      on_failure: abort
+  deploys: []
+
+steps:
+  - name: "Commit source that triggers the aborting build"
+    action: commit
+    commit:
+      message: "feat: add source whose build aborts"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+        # Reusable build callback whose inner job exits non-zero, so the generated
+        # build-app job fails. Inner job id is failbuild so act keys it distinctly.
+        .github/workflows/build.yaml: |
+          name: build
+          on:
+            workflow_call:
+              inputs:
+                environment:
+                  required: false
+                  type: string
+                sha:
+                  required: false
+                  type: string
+          jobs:
+            failbuild:
+              runs-on: ubuntu-latest
+              steps:
+                - run: exit 1
+
+  - name: "Orchestrate reds because the aborting build fails"
+    action: orchestrate
+    expect_failure: true
