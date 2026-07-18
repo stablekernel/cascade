@@ -459,6 +459,26 @@ deploys:
 			stubs: contractStubs(),
 		},
 		{
+			// Coverage-gap closer: the "retries" case above never exercises a
+			// dependent deploy of a retried job, so it could not have caught the
+			// defect where a dependent's needs: omitted the retry shims its own
+			// if: gate referenced (a shim outside needs: is unresolvable, both at
+			// actionlint parse time and at GHA runtime). This case pairs retries
+			// with depends_on so that combination is under permanent guard.
+			name: "retries_dependent_deploy",
+			manifest: wrap(base + `deploys:
+  - name: app
+    workflow: deploy.yaml
+    triggers: ["src/**"]
+    retries: 1
+  - name: notify
+    workflow: deploy.yaml
+    triggers: ["notify/**"]
+    depends_on: ["deploy:app"]
+`),
+			stubs: contractStubs(),
+		},
+		{
 			name: "cancel_in_progress_true",
 			manifest: wrap(buildDeploy + `concurrency:
   group: orchestrate-${{ github.ref }}
