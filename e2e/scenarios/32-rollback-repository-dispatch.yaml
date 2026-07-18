@@ -59,6 +59,12 @@ steps:
             # deploy guard and finalize gate coalesce dry_run and deployable.
             - "github.event.inputs.dry_run || github.event.client_payload.dry_run"
             - "github.event.inputs.deployable || github.event.client_payload.deployable"
+            # The dry_run guard matches both a JSON boolean true (client_payload)
+            # and the string 'true' (workflow_dispatch input): a natural
+            # {"dry_run": true} payload sends a boolean, and a bare "!= 'true'"
+            # would read it as not-a-dry-run and run real deploys.
+            - "(github.event.inputs.dry_run || github.event.client_payload.dry_run) != true"
+            - "(github.event.inputs.dry_run || github.event.client_payload.dry_run) != 'true'"
           not_contains:
             # the bare, un-coalesced reads must be gone once the toggle is on.
             - "ENVIRONMENT: ${{ github.event.inputs.environment }}"

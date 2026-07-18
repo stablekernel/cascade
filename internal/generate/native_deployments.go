@@ -31,20 +31,33 @@ func deploymentAutoInactive(cfg *config.TrunkConfig) bool {
 // envExpr is the shell-safe expression that resolves to the target environment
 // name at run time (it differs between the orchestrate and promote seams).
 // resultExpr is the shell expression that evaluates to "success" or "failure"
-// for the deploy outcome. indent is the per-step indent (matching the
-// surrounding generated YAML).
-func writeNativeDeploymentSteps(sb *strings.Builder, cfg *config.TrunkConfig, envExpr, resultExpr, indent string) {
+// for the deploy outcome. dryRunGuard is the expression body (no ${{ }} wrapper)
+// that is true when the run is NOT a dry run; a dry run must never create a real
+// GitHub Deployment, so it is ANDed into every step's if:. An empty dryRunGuard
+// leaves the steps ungated (no dry-run concept for that seam). indent is the
+// per-step indent (matching the surrounding generated YAML).
+func writeNativeDeploymentSteps(sb *strings.Builder, cfg *config.TrunkConfig, envExpr, resultExpr, dryRunGuard, indent string) {
 	if !nativeDeploymentsEnabled(cfg) {
 		return
 	}
 
 	body := indent + "  "
 
+	// Compose the server guard with the non-dry-run guard so a dry run neither
+	// creates the Deployment nor posts status against a Deployment that was never
+	// created. serverGuard is the bare comparison (no ${{ }} wrapper) so it can
+	// be joined with the other clauses inside a single expression.
+	serverGuard := stripTokenExprWrapper(appTokenServerGuard)
+	createGuard := "${{ " + serverGuard + " }}"
+	if dryRunGuard != "" {
+		createGuard = "${{ " + serverGuard + " && " + dryRunGuard + " }}"
+	}
+
 	// Create the Deployment. The environment name is resolved at run time, so the
 	// URL lookup is a shell case over the configured environment_config entries.
 	sb.WriteString(indent + "- name: Create deployment\n")
 	sb.WriteString(body + "id: cascade-deployment\n")
-	sb.WriteString(body + "if: " + appTokenServerGuard + "\n")
+	sb.WriteString(body + "if: " + createGuard + "\n")
 	sb.WriteString(body + "env:\n")
 	sb.WriteString(body + "  GH_TOKEN: ${{ github.token }}\n")
 	sb.WriteString(body + "run: |\n")
@@ -61,7 +74,7 @@ func writeNativeDeploymentSteps(sb *strings.Builder, cfg *config.TrunkConfig, en
 
 	// Mark the deployment in_progress.
 	sb.WriteString(indent + "- name: Set deployment in_progress\n")
-	sb.WriteString(body + "if: " + appTokenServerGuard + "\n")
+	sb.WriteString(body + "if: " + createGuard + "\n")
 	sb.WriteString(body + "env:\n")
 	sb.WriteString(body + "  GH_TOKEN: ${{ github.token }}\n")
 	sb.WriteString(body + "run: |\n")
@@ -72,8 +85,12 @@ func writeNativeDeploymentSteps(sb *strings.Builder, cfg *config.TrunkConfig, en
 	// Report the terminal status. always() lets it run even when a deploy failed,
 	// so the Deployment never sticks at in_progress. The URL is selected by the
 	// runtime environment name from the configured environment_config entries.
+	statusGuard := serverGuard
+	if dryRunGuard != "" {
+		statusGuard += " && " + dryRunGuard
+	}
 	sb.WriteString(indent + "- name: Set deployment status\n")
-	sb.WriteString(body + "if: ${{ " + stripTokenExprWrapper(appTokenServerGuard) + " && always() }}\n")
+	sb.WriteString(body + "if: ${{ " + statusGuard + " && always() }}\n")
 	sb.WriteString(body + "env:\n")
 	sb.WriteString(body + "  GH_TOKEN: ${{ github.token }}\n")
 	sb.WriteString(body + "run: |\n")

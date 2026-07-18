@@ -72,3 +72,8 @@ steps:
           contains:
             - "fail-fast: true"
             - "max-parallel: 2"
+            # The matrix deploy must thread the per-promotion environment and sha
+            # to its callback (the way orchestrate does), or the deploy targets an
+            # empty environment while its job name references matrix.environment.
+            - "environment: ${{ matrix.environment }}"
+            - "sha: ${{ matrix.sha }}"
