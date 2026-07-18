@@ -6,11 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Entries from 0.2.1 onward are derived from the conventional-commit history, the
 same source the release automation uses to build the notes on each
 [GitHub Release](https://github.com/stablekernel/cascade/releases), so this
-file and the release notes always tell the same story. The manifest schema is
-versioned with a single integer `schema_version`; the schema-version
+file and the release notes cover the same set of changes. Each versioned
+section below is rolled out of [Unreleased] when its release is cut. The
+manifest schema is versioned with a single integer `schema_version`; the
+schema-version
 compatibility policy is documented in
 [versioning and schema compatibility](https://stablekernel.github.io/cascade/reference/versioning/).
 A `Migration` section is added to any release that bumps `schema_version`.
+
 
 ## [Unreleased]
 
@@ -24,22 +27,26 @@ A `Migration` section is added to any release that bumps `schema_version`.
   never set. environment and sha are added to every matrix entry and passed in
   the `with:` block (sha only when the callback declares it, and neither when the
   manifest already wires it as an explicit input).
+
 - **rollback:** The repository_dispatch dry-run guard now treats a JSON boolean
   `true` from `client_payload` and the string `'true'` from a workflow_dispatch
   input alike. A bare `!= 'true'` compared a boolean against a string, which
   GitHub Actions coerces numerically, so a natural `{"dry_run": true}` payload
   read as not-a-dry-run and a dry-run rollback ran real deploys and wrote
   rolled-back state. Without the trigger the output is unchanged.
+
 - **generate:** A dependent deploy is now gated on the base deploy's effective
   result (the base job or any retry shim succeeded), so a base deploy rescued by
   a retry no longer skips the deploys that depend on it. The condition was
   reading the base job's immutable `result`, frozen at `failure` after a rescued
   attempt, and a deploy-on-deploy dependency also emitted the clause twice.
+
 - **promote:** A dry-run promote no longer creates a real GitHub Deployment, and
   the Deployment's terminal status no longer counts a legitimately skipped deploy
   as a failure or omits the prod deploy result. The native-deployment lifecycle
   steps are gated on a non-dry-run run, and the status expression judges each
   deploy (including its prod job) on success-or-skipped.
+
 - **state:** A single-component (flat) state write on a manifest that carries
   per-component state no longer destroys that state. The flat state map models
   environments only, so parsing a component-scoped manifest lifted
@@ -52,6 +59,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
   is never rebuilt from the flat map and any existing subtree is preserved
   verbatim. A single-component manifest with no `components` subtree emits
   byte-identical output.
+
 - **promote:** Promotion finalize no longer advances the environment pointer
   (`state.<env>.sha` and `state.<env>.version`) when an in-scope deploy
   terminally failed or was cancelled. Previously the pointer advanced to the new
@@ -64,6 +72,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
   failed deploy. Per-deploy success rows are still recorded individually, so a
   partial success is not lost. A promotion whose deploys all succeed, or that
   advances an environment with no deploys, is unchanged.
+
 - **generate:** A hotfix build callback no longer passes reusable-workflow inputs
   the called workflow does not declare. The hotfix build job unconditionally sent
   `sha` and `target_env` in its `with:` block, but GitHub Actions rejects a
@@ -73,6 +82,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
   declares neither gets no `with:` block. Only the hotfix workflow's build `with:`
   block changes, and only where the callee does not declare the input; all other
   generated output is byte-identical.
+
 - **generate:** `on_failure: continue` is now rejected at config validation
   instead of emitting an invalid workflow. cascade emits every callback as a
   reusable-workflow call (`jobs.<id>.uses`), and GitHub Actions forbids
@@ -82,6 +92,19 @@ A `Migration` section is added to any release that bumps `schema_version`.
   (the default) is the only supported value. Tolerate a failure inside the
   reusable workflow itself so the callback still concludes successfully. A
   manifest that does not set `on_failure: continue` emits byte-identical output.
+
+### Documentation
+
+- **reference:** The generated-workflows reference no longer describes the
+  orchestrate push trigger as reading `config.trunk_branch` with a default of
+  `main`. The field carries no default and is required, so the page now matches
+  the manifest reference and what `lint` enforces: a manifest that omits
+  `trunk_branch` fails rather than falling back to `main`.
+
+## [0.16.4] - 2026-07-17
+
+### Fixed
+
 - **generate:** A callback declaring `retries` is now judged on its ladder's
   effective result, so a deploy that fails and is then rescued by a retry no
   longer fails the run or gets denied in recorded state. A GitHub Actions job
@@ -139,11 +162,37 @@ A `Migration` section is added to any release that bumps `schema_version`.
   workflow, in both YAML list styles, so an emission site that forgets a length
   guard fails the build instead of shipping a workflow that never runs.
 
+### Documentation
+
 - **docs:** Every manifest example across the documentation now sets
   `trunk_branch`, and the reference table no longer lists it as both required and
   defaulted. Copying a documented example produced a pipeline that never ran. The
   documentation examples are now validated against the published schema by the
   same test that has always guarded the README examples.
+
+- **manifest, callbacks:** `run_policy`, `on_failure`, and `retries` are now
+  documented as applying to trunk runs only. The promote generator never emitted
+  any of the three, so a promotion ran each deploy once regardless of what the
+  manifest declared. A promote-side retry needs a per-environment design, because
+  a promote deploy declaring `inputs` compiles to a matrix job whose single
+  aggregate result would make a retry redeploy every environment including the
+  ones that already succeeded ([#626](https://github.com/stablekernel/cascade/issues/626)).
+
+## [0.16.3] - 2026-07-17
+
+### Added
+
+- **test:** A durable emitted-field guard: a reflection walk over the
+  manifest schema forces every string-carrying field to be classified as
+  either emitted (with its validated shape, exercised by an adversarial
+  hostile-value battery plus a generate-and-reparse round trip) or explicitly
+  not emitted with the reason. A new manifest field fails CI until it is
+  classified, so an unvalidated splice can no longer ship unnoticed. A new
+  e2e scenario (68-emitted-value-shapes) exercises apostrophe workflow names,
+  cron and dispatch types, a custom git identity with GPG signing, and a
+  `$`-carrying environment_url end to end.
+
+### Fixed
 
 - **generate:** A manifest-level `concurrency.group` is now namespaced per
   workflow instead of being emitted bare onto every cascade workflow. A GitHub
@@ -280,6 +329,7 @@ A `Migration` section is added to any release that bumps `schema_version`.
   main, on every PR, and inside the release's own test job, blocking the very
   release that would have satisfied it. The shape guard (stable `vX.Y.Z` only)
   and the docs-examples sync check remain
+
 - **config:** Shape-validate every manifest value that is spliced into
   emitted GitHub Actions contexts, closing the class of one-off holes found
   field by field in earlier audits. New checks at `cascade lint` and
@@ -299,10 +349,12 @@ A `Migration` section is added to any release that bumps `schema_version`.
   names, and multiline dispatch-input defaults (previously folded silently or
   broke the document). Shared shape helpers live in
   `internal/config/validate_shapes.go`.
+
 - **config:** Validate every component's resolved configuration with the same
   rules as the top level. Previously a per-component override (a build name,
   an environment, a notify block) bypassed validation entirely and reached
   the generator unchecked; inherited values are still reported once.
+
 - **generate:** Escape emitted free-form scalars instead of splicing them
   raw: `workflow_run` workflow names and paths-filter globs go through YAML
   single-quote escaping (an apostrophe in a workflow display name previously
@@ -311,36 +363,9 @@ A `Migration` section is added to any release that bumps `schema_version`.
   restructured the mapping), and `environment_url` is emitted in shell single
   quotes so a `$` in a URL query string is no longer silently expanded to an
   empty string on every deploy.
+
 - **git:** Pass `--` before the tag pattern in prefix-scoped `git tag -l`
   lookups as defense in depth beneath the new prefix validation.
-
-### Documentation
-
-- **manifest, callbacks:** `run_policy`, `on_failure`, and `retries` are now
-  documented as applying to trunk runs only. The promote generator never emitted
-  any of the three, so a promotion ran each deploy once regardless of what the
-  manifest declared. A promote-side retry needs a per-environment design, because
-  a promote deploy declaring `inputs` compiles to a matrix job whose single
-  aggregate result would make a retry redeploy every environment including the
-  ones that already succeeded ([#626](https://github.com/stablekernel/cascade/issues/626)).
-
-- **reference:** The generated-workflows reference no longer describes the
-  orchestrate push trigger as reading `config.trunk_branch` with a default of
-  `main`. The field carries no default and is required, so the page now matches
-  the manifest reference and what `lint` enforces: a manifest that omits
-  `trunk_branch` fails rather than falling back to `main`.
-
-### Added
-
-- **test:** A durable emitted-field guard: a reflection walk over the
-  manifest schema forces every string-carrying field to be classified as
-  either emitted (with its validated shape, exercised by an adversarial
-  hostile-value battery plus a generate-and-reparse round trip) or explicitly
-  not emitted with the reason. A new manifest field fails CI until it is
-  classified, so an unvalidated splice can no longer ship unnoticed. A new
-  e2e scenario (68-emitted-value-shapes) exercises apostrophe workflow names,
-  cron and dispatch types, a custom git identity with GPG signing, and a
-  `$`-carrying environment_url end to end.
 
 - **hotfix:** Report the patch bump (`v1.3.0` -> `v1.3.1`) as the plan's version
   candidate when the target environment holds a published base version, matching
@@ -348,12 +373,18 @@ A `Migration` section is added to any release that bumps `schema_version`.
   published version back in its `Version:` line and in the
   `hotfix_version_candidate` JSON and GHA outputs, because the hotfix segment was
   silently dropped when rendered without a pre-release
+
+## [0.16.2] - 2026-07-17
+
+### Fixed
+
 - **generate:** Treat a release artifact that omits `required:` as required,
   matching the documented default. Previously the unset value silently made
   the artifact optional, so a release with a missing asset warned and
   published instead of failing. Release-artifact names and paths are now also
   validated against the character set the emitted upload shell can carry
   safely, since the path is spliced unquoted so its glob can expand
+
 - **generate:** Route the promote matrix input JSON (`DEFAULT_INPUTS` /
   `ENV_INPUTS`) through the Build Deploy Matrices step `env:` map instead of
   embedding it in a shell single-quote literal, and emit dispatch-input
@@ -376,22 +407,28 @@ A `Migration` section is added to any release that bumps `schema_version`.
   underscores only) and each axis must list at least one value, instead of an
   invalid key or empty axis passing validation and failing at the first
   workflow run; the manifest JSON Schema enforces the same constraints
+
 - **config:** Validate `run_policy`, `on_failure`, and `retries` on the
   `validate` block the same way as builds and deploys: `run_policy` and
   `on_failure` must be one of their documented values and `retries` must stay
   between 0 and 3, instead of out-of-range settings being silently accepted
+
 - **config:** Bump the default `cli_version` pin for generated workflows to
   v0.16.1, and guard the default against lagging the latest stable release
+
 - **hotfix:** Converge the missing tag and release when the hotfix finalize
   job reruns after a partial failure, instead of skipping release creation
+
 - **promote:** Carry recorded component state (previous ring, sibling
   deploys, ref, base SHA, patches, divergence) through component finalize
   instead of overwriting it, and defer rejoin cleanup until the state write
   is durable, so a component promotion cannot drop a sibling component's
   recorded state
+
 - **orchestrate:** Overlay recorded component state into the working state
   map so the base-SHA ladder and finalize read each component's recorded
   rungs instead of rebuilding them from empty for component manifests
+
 - **orchestrate:** Anchor a component-scoped run's changelog base on the
   component's own dimension: the release marker recorded under
   `latest_release.components.<name>`, the component's `environments` override
@@ -399,9 +436,11 @@ A `Migration` section is added to any release that bumps `schema_version`.
   Previously only the top-level `latest_release` was read, which is always
   empty for component-scoped manifests, so after a component's first publish
   its release notes spanned the repository's full history
+
 - **config:** Reject build, deploy, and environment names whose emitted
   output keys collide because they differ only by hyphen versus underscore,
   at validation time instead of at first workflow run
+
 - **simulate:** Apply the deploy-result gate to the simulated rollback
   preview so it matches the eligibility rules a real rollback enforces
 
@@ -982,7 +1021,10 @@ Initial release of cascade: a trunk-based CI/CD orchestrator for GitHub Actions.
 - Self-hosted CI: cascade manages its own build, release, e2e, and promote
   workflows using the same manifest.
 
-[Unreleased]: https://github.com/stablekernel/cascade/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/stablekernel/cascade/compare/v0.16.4...HEAD
+[0.16.4]: https://github.com/stablekernel/cascade/compare/v0.16.3...v0.16.4
+[0.16.3]: https://github.com/stablekernel/cascade/compare/v0.16.2...v0.16.3
+[0.16.2]: https://github.com/stablekernel/cascade/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/stablekernel/cascade/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/stablekernel/cascade/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/stablekernel/cascade/compare/v0.14.2...v0.15.0
