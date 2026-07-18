@@ -108,15 +108,36 @@ func WriteScopedState(current []byte, manifestKey string, writes ...StateWrite) 
 	return data, nil
 }
 
+// componentsStateKey is the reserved child of a `state` node that holds the
+// per-component state subtree (state.components.<name>.<env>). It is never an
+// environment leaf. The typed flat state map (CICDFile.State) is
+// map[string]*EnvState, so parsing a component-scoped manifest lifts
+// state.components into that map as a bogus, empty EnvState keyed
+// "components". A flat writer that rebuilt the whole state node from that map
+// would emit `state.components: {}` and silently destroy every recorded
+// component row. The single-component write path treats this key as a reserved,
+// unowned sibling: it is never rebuilt from the flat map, and any existing
+// subtree is preserved verbatim across the rebuild.
+const componentsStateKey = "components"
+
 // applySingleComponentWrites reconciles the whole single-component `state` node
 // from the union of set writes (byte-identical to the historical whole-node
-// replacement) and applies the top-level latest_release directive.
+// replacement) and applies the top-level latest_release directive. The reserved
+// `components` subtree (state.components) is never treated as an env leaf: it is
+// excluded from the rebuilt map and any existing subtree is carried over
+// verbatim, so a flat writer on a component-scoped manifest can never wipe it.
 func applySingleComponentWrites(section *yaml.Node, writes []StateWrite) error {
 	state := make(map[string]*EnvState)
 	haveStateDirective := false
 	for _, w := range writes {
 		if w.Env == "" {
 			continue // latest_release directive, handled below
+		}
+		if w.Env == componentsStateKey {
+			// The per-component state subtree, not an env leaf. A flat writer does
+			// not own it; skip it so the rebuild neither emits a bogus components
+			// row nor drops the real subtree (preserved verbatim below).
+			continue
 		}
 		haveStateDirective = true
 		if w.State != nil {
@@ -126,12 +147,22 @@ func applySingleComponentWrites(section *yaml.Node, writes []StateWrite) error {
 	}
 
 	if haveStateDirective {
-		if len(state) == 0 {
+		// Preserve an existing state.components subtree verbatim across the rebuild:
+		// the flat writer replaces the whole state node, but the components subtree
+		// is an unmodeled sibling it does not own.
+		var componentsNode *yaml.Node
+		if existing := mappingValue(section, "state"); existing != nil && existing.Kind == yaml.MappingNode {
+			componentsNode = mappingValue(existing, componentsStateKey)
+		}
+		if len(state) == 0 && componentsNode == nil {
 			deleteMappingKey(section, "state")
 		} else {
 			node, err := valueNode(state)
 			if err != nil {
 				return fmt.Errorf("encoding state for state write: %w", err)
+			}
+			if componentsNode != nil {
+				setMappingValue(node, componentsStateKey, componentsNode)
 			}
 			setMappingValue(section, "state", node)
 		}
@@ -334,6 +365,11 @@ func fetchedStateEnvKeys(current []byte, manifestKey string) []string {
 	}
 	keys := make([]string, 0, len(state.Content)/2)
 	for i := 0; i+1 < len(state.Content); i += 2 {
+		if state.Content[i].Value == componentsStateKey {
+			// Reserved per-component subtree, not an env row: excluded so the
+			// wrapper never derives a delete directive that would drop it.
+			continue
+		}
 		keys = append(keys, state.Content[i].Value)
 	}
 	return keys

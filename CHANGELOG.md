@@ -16,6 +16,18 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **state:** A single-component (flat) state write on a manifest that carries
+  per-component state no longer destroys that state. The flat state map models
+  environments only, so parsing a component-scoped manifest lifted
+  `state.components` into it as an empty entry keyed `components`; rebuilding the
+  whole `state` node from that map then collapsed `state.components` to `{}` and
+  silently dropped every recorded component row while the write returned success.
+  A finalize invoked without `--component` on such a manifest (a stale
+  pre-migration workflow or a manual invocation) could land that loss on trunk.
+  The flat write path now treats `components` as a reserved, unowned subtree: it
+  is never rebuilt from the flat map and any existing subtree is preserved
+  verbatim. A single-component manifest with no `components` subtree emits
+  byte-identical output.
 - **generate:** A callback declaring `retries` is now judged on its ladder's
   effective result, so a deploy that fails and is then rescued by a retry no
   longer fails the run or gets denied in recorded state. A GitHub Actions job
