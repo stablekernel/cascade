@@ -152,7 +152,19 @@ func (g *PromoteGenerator) Generate() (string, error) {
 // discoverDeployInputs parses deploy workflow files to discover their inputs
 func (g *PromoteGenerator) discoverDeployInputs() error {
 	for _, d := range g.config.Deploys {
-		workflowPath := filepath.Join(g.baseDir, d.Workflow)
+		// Cross-repo callbacks reference a reusable workflow in another
+		// repository (org/repo/.github/workflows/file.yaml@ref); there is no
+		// local file to parse, and external deploys thread environment/sha
+		// directly rather than through declared-input detection.
+		if config.IsExternalWorkflow(d.Workflow) {
+			continue
+		}
+		// Resolve to the normalized on-disk location so a bare filename
+		// (deploy.yaml) resolves to .github/workflows/deploy.yaml, matching the
+		// emitted uses: reference and the orchestrate generator. Reading the raw
+		// d.Workflow silently missed a canonically-located file, which dropped
+		// declared-input detection (for example the sha a matrix deploy threads).
+		workflowPath := filepath.Join(g.baseDir, normalizeWorkflowPath(d.Workflow))
 		data, err := os.ReadFile(workflowPath)
 		if err != nil {
 			// Skip if workflow doesn't exist yet

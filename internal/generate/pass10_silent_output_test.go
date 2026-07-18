@@ -67,12 +67,16 @@ func pass10JobBlock(t *testing.T, content, jobID string) string {
 // the job name referenced ${{ matrix.environment }}, a key the matrix builder
 // never set.
 func TestGB2_PromoteMatrixDeploy_ThreadsEnvironmentAndSha(t *testing.T) {
+	// The manifest references the callback by a BARE filename (deploy.yaml), the
+	// same way the e2e scenarios do. Declared-input detection must resolve it to
+	// the canonical .github/workflows/deploy.yaml where the file is staged; a
+	// fully-qualified path here would mask the resolution bug that dropped sha.
 	dir := pass10Fixture(t, pass10DeployWorkflow)
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{{
-			Name: "web", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"},
+			Name: "web", Workflow: "deploy.yaml", Triggers: []string{"src/**"},
 			Inputs: map[string]interface{}{"region": "us-east-1"},
 		}},
 	}
@@ -101,7 +105,7 @@ func TestGB2_PromoteMatrixDeploy_OmitsShaWhenUndeclared(t *testing.T) {
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("dev", "prod"),
 		Deploys: []config.DeployConfig{{
-			Name: "web", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"},
+			Name: "web", Workflow: "deploy.yaml", Triggers: []string{"src/**"},
 			Inputs: map[string]interface{}{"region": "us-east-1"},
 		}},
 	}
@@ -111,6 +115,27 @@ func TestGB2_PromoteMatrixDeploy_OmitsShaWhenUndeclared(t *testing.T) {
 	assert.Contains(t, block, "environment: ${{ matrix.environment }}")
 	assert.NotContains(t, block, "sha: ${{ matrix.sha }}",
 		"sha must not be threaded to a callback that does not declare it")
+}
+
+// TestGB2_PromoteMatrixDeploy_NoDuplicateShaWhenManifestInput proves that when
+// the manifest already wires sha as an explicit deploy input, the with: block
+// emits it exactly once (from the matrix-input loop) and the framework does not
+// add a second sha key.
+func TestGB2_PromoteMatrixDeploy_NoDuplicateShaWhenManifestInput(t *testing.T) {
+	dir := pass10Fixture(t, pass10DeployWorkflow)
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("dev", "prod"),
+		Deploys: []config.DeployConfig{{
+			Name: "web", Workflow: "deploy.yaml", Triggers: []string{"src/**"},
+			Inputs: map[string]interface{}{"region": "us-east-1", "sha": "${{ matrix.sha }}"},
+		}},
+	}
+	out, err := NewPromoteGenerator(cfg, dir).Generate()
+	require.NoError(t, err)
+	block := pass10JobBlock(t, out, "deploy-web")
+	assert.Equal(t, 1, strings.Count(block, "sha: ${{ matrix.sha }}"),
+		"sha must be emitted exactly once, not duplicated, when it is a manifest input")
 }
 
 // TestGM4_RollbackDispatch_DryRunTreatsBooleanAndString proves the rollback
