@@ -40,7 +40,7 @@ flowchart TD
     class sn,vn,bn,dn,fn note;
 ```
 
-The trigger is written directly from `config.trunk_branch` (default `main`):
+The trigger is written directly from `config.trunk_branch`, a required field with no default (the example below uses `main`):
 
 ```yaml
 on:

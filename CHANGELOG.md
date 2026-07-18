@@ -300,6 +300,12 @@ A `Migration` section is added to any release that bumps `schema_version`.
   aggregate result would make a retry redeploy every environment including the
   ones that already succeeded ([#626](https://github.com/stablekernel/cascade/issues/626)).
 
+- **reference:** The generated-workflows reference no longer describes the
+  orchestrate push trigger as reading `config.trunk_branch` with a default of
+  `main`. The field carries no default and is required, so the page now matches
+  the manifest reference and what `lint` enforces: a manifest that omits
+  `trunk_branch` fails rather than falling back to `main`.
+
 ### Added
 
 - **test:** A durable emitted-field guard: a reflection walk over the

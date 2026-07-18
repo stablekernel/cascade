@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,23 @@ func TestScenarios_AreNotGitIgnored(t *testing.T) {
 		t.Skip("git not available")
 	}
 
-	files, err := filepath.Glob("scenarios/*/*.y*ml")
+	// Walk the whole tree so both tiers are covered: root-level scenarios
+	// (scenarios/02-two-env-repo.yaml) and subdirectory scenarios
+	// (scenarios/hotfix/x.yaml). A single-depth glob missed the root tier, the
+	// very tier the `cascade-*` incident struck, leaving it invisible again.
+	var files []string
+	err := filepath.WalkDir("scenarios", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if ext := filepath.Ext(path); ext == ".yaml" || ext == ".yml" {
+			files = append(files, path)
+		}
+		return nil
+	})
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "no scenario files found; the corpus or its path moved")
 
