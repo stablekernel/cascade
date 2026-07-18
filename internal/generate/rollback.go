@@ -357,7 +357,7 @@ func (g *RollbackGenerator) writePreflightJob(sb *strings.Builder) {
 // Actions expression (a comparison or boolean operand). In the baseline it is
 // the bare github.event.inputs.<name>; when the repository_dispatch trigger is
 // enabled the coalescing "inputs || client_payload" is wrapped in parentheses so
-// the surrounding operator (e.g. != 'true', == ”) binds to the whole coalesced
+// the surrounding operator (e.g. != 'true', == '') binds to the whole coalesced
 // value rather than only the client_payload half.
 func (g *RollbackGenerator) paramReadExpr(name string) string {
 	if g.dispatchTrigger() != nil {
