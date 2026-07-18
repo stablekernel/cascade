@@ -32,7 +32,7 @@ on:
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".github/workflows/deploy.yaml"), []byte(deployWorkflow), 0o644))
 
 	cfg := &config.TrunkConfig{
-		TrunkBranch:  "main",
+		TrunkBranch: "main",
 		Environments: []config.EnvironmentEntry{
 			{Name: "production", EnvironmentConfig: config.EnvironmentConfig{EnvironmentURL: "https://app.example.com"}},
 		},
@@ -63,8 +63,12 @@ func TestNativeDeployments_Enabled(t *testing.T) {
 		"must POST to the deployment statuses collection")
 	assert.Contains(t, out, "https://app.example.com",
 		"the configured environment_url must be wired into the status update")
-	assert.Contains(t, out, appTokenServerGuard,
+	assert.Contains(t, out, "github.server_url == 'https://github.com'",
 		"deployment steps must be guarded to real GitHub via the server_url guard")
+	// A dry-run orchestrate skips its deploys, so it must not create a real
+	// Deployment: every lifecycle step is also gated on a non-dry-run run.
+	assert.Contains(t, out, "github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true'",
+		"deployment steps must not run on a dry-run orchestrate")
 	// The terminal status reflects the deploy job result, not a hardcoded value.
 	assert.Contains(t, out, "needs.deploy-app.result",
 		"terminal status must derive from the deploy job result")

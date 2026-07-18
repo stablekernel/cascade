@@ -16,6 +16,30 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **promote:** A matrix-based promote deploy (a deploy declaring inputs) now
+  threads the per-promotion environment and sha to its reusable-workflow
+  callback, matching orchestrate. The matrix path previously emitted only the
+  declared manifest inputs, so the callback ran with an empty environment while
+  the job name referenced `${{ matrix.environment }}`, a key the matrix builder
+  never set. environment and sha are added to every matrix entry and passed in
+  the `with:` block (sha only when the callback declares it, and neither when the
+  manifest already wires it as an explicit input).
+- **rollback:** The repository_dispatch dry-run guard now treats a JSON boolean
+  `true` from `client_payload` and the string `'true'` from a workflow_dispatch
+  input alike. A bare `!= 'true'` compared a boolean against a string, which
+  GitHub Actions coerces numerically, so a natural `{"dry_run": true}` payload
+  read as not-a-dry-run and a dry-run rollback ran real deploys and wrote
+  rolled-back state. Without the trigger the output is unchanged.
+- **generate:** A dependent deploy is now gated on the base deploy's effective
+  result (the base job or any retry shim succeeded), so a base deploy rescued by
+  a retry no longer skips the deploys that depend on it. The condition was
+  reading the base job's immutable `result`, frozen at `failure` after a rescued
+  attempt, and a deploy-on-deploy dependency also emitted the clause twice.
+- **promote:** A dry-run promote no longer creates a real GitHub Deployment, and
+  the Deployment's terminal status no longer counts a legitimately skipped deploy
+  as a failure or omits the prod deploy result. The native-deployment lifecycle
+  steps are gated on a non-dry-run run, and the status expression judges each
+  deploy (including its prod job) on success-or-skipped.
 - **state:** A single-component (flat) state write on a manifest that carries
   per-component state no longer destroys that state. The flat state map models
   environments only, so parsing a component-scoped manifest lifted

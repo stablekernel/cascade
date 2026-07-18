@@ -1264,6 +1264,9 @@ func (g *Generator) writeStrategyBlock(sb *strings.Builder, m *config.MatrixConf
 func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, needs []string) {
 	var conditions []string
 	buildLinkedDeploy := false
+	// Dependencies already emitted by the build-linked path below, so the
+	// general dependency loop does not emit a second, duplicate clause for them.
+	linkedDeps := make(map[string]struct{})
 
 	// For deploys with depends_on build, check if build ran successfully
 	// instead of using setup detection
@@ -1278,14 +1281,20 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 					if err != nil {
 						continue
 					}
-					// Apply run_policy to build dependency check
+					// Record so the general dependency loop below does not emit
+					// a second, duplicate clause for the same dependency.
+					linkedDeps[depJobID] = struct{}{}
+					depRetries := g.graph.Nodes[depJobID].Retries
+					// Apply run_policy to the dependency check, judged on the
+					// dependency's effective result (base OR any retry shim
+					// succeeded) so a rescued deploy does not skip its dependents.
 					switch info.RunPolicy {
 					case config.RunPolicyAlways:
-						conditions = append(conditions, fmt.Sprintf("(needs.%s.result == 'success' || needs.%s.result == 'skipped')", depJobID, depJobID))
+						conditions = append(conditions, fmt.Sprintf("(%s || needs.%s.result == 'skipped')", effectiveSuccessCond(depJobID, depRetries), depJobID))
 					case config.RunPolicyForce:
 						// No condition needed for force
 					default:
-						conditions = append(conditions, fmt.Sprintf("needs.%s.result == 'success'", depJobID))
+						conditions = append(conditions, effectiveDepSuccessGate(depJobID, depRetries))
 					}
 				}
 				break
@@ -1309,12 +1318,17 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 		if buildLinkedDeploy && depInfo.Type == config.CallbackTypeBuild {
 			continue
 		}
+		// Skip any dependency the build-linked path already emitted, so a
+		// deploy-on-deploy dependency is not gated by a duplicated clause.
+		if _, done := linkedDeps[depJobID]; done {
+			continue
+		}
 
 		switch info.RunPolicy {
 		case config.RunPolicyDefault, "":
-			conditions = append(conditions, fmt.Sprintf("needs.%s.result == 'success'", depJobID))
+			conditions = append(conditions, effectiveDepSuccessGate(depJobID, depInfo.Retries))
 		case config.RunPolicyAlways:
-			conditions = append(conditions, fmt.Sprintf("(needs.%s.result == 'success' || needs.%s.result == 'skipped')", depJobID, depJobID))
+			conditions = append(conditions, fmt.Sprintf("(%s || needs.%s.result == 'skipped')", effectiveSuccessCond(depJobID, depInfo.Retries), depJobID))
 		case config.RunPolicyForce:
 			// No dependency condition
 		}
@@ -1733,7 +1747,11 @@ func (g *Generator) writeNativeDeploymentSteps(sb *strings.Builder, sorted []str
 		resultExpr = fmt.Sprintf("${{ (%s) && 'success' || 'failure' }}", strings.Join(conds, " && "))
 	}
 
-	writeNativeDeploymentSteps(sb, g.config, envExpr, resultExpr, "      ")
+	// A dry-run orchestrate skips its deploy callbacks, so it must not create a
+	// real GitHub Deployment either. github.event.inputs.dry_run is null-safe on
+	// the non-dispatch triggers (push/schedule/workflow_run), where it renders
+	// empty and reads as not-a-dry-run.
+	writeNativeDeploymentSteps(sb, g.config, envExpr, resultExpr, "github.event.inputs.dry_run != 'true'", "      ")
 }
 
 func (g *Generator) writeSummaryStep(sb *strings.Builder, sorted []string) {
@@ -2114,6 +2132,22 @@ func effectiveSuccessCond(jobName string, retries int) string {
 	cond := fmt.Sprintf("needs.%s.result == 'success'", jobName)
 	if rescued := retrySucceededCond(jobName, retries); rescued != "" {
 		cond += " || " + rescued
+	}
+	return cond
+}
+
+// effectiveDepSuccessGate renders the "dependency satisfied" clause for a
+// downstream job's if: condition, judged on the dependency's effective result so
+// a base deploy that failed but was rescued by a retry shim still lets its
+// dependents run. It reuses effectiveSuccessCond (the shared retry-aware helper)
+// and parenthesizes the disjunction only when a retry ladder is present, since
+// callers join these clauses with " && "; with no retries it collapses to the
+// bare needs.<job>.result == 'success', so a manifest without retries emits
+// byte-identical output.
+func effectiveDepSuccessGate(jobName string, retries int) string {
+	cond := effectiveSuccessCond(jobName, retries)
+	if retries > 0 {
+		return "(" + cond + ")"
 	}
 	return cond
 }

@@ -152,7 +152,19 @@ func (g *PromoteGenerator) Generate() (string, error) {
 // discoverDeployInputs parses deploy workflow files to discover their inputs
 func (g *PromoteGenerator) discoverDeployInputs() error {
 	for _, d := range g.config.Deploys {
-		workflowPath := filepath.Join(g.baseDir, d.Workflow)
+		// Cross-repo callbacks reference a reusable workflow in another
+		// repository (org/repo/.github/workflows/file.yaml@ref); there is no
+		// local file to parse, and external deploys thread environment/sha
+		// directly rather than through declared-input detection.
+		if config.IsExternalWorkflow(d.Workflow) {
+			continue
+		}
+		// Resolve to the normalized on-disk location so a bare filename
+		// (deploy.yaml) resolves to .github/workflows/deploy.yaml, matching the
+		// emitted uses: reference and the orchestrate generator. Reading the raw
+		// d.Workflow silently missed a canonically-located file, which dropped
+		// declared-input detection (for example the sha a matrix deploy threads).
+		workflowPath := filepath.Join(g.baseDir, normalizeWorkflowPath(d.Workflow))
 		data, err := os.ReadFile(workflowPath)
 		if err != nil {
 			// Skip if workflow doesn't exist yet
@@ -447,6 +459,13 @@ func (g *PromoteGenerator) writeMatrixBuildingLogic(sb *strings.Builder, outputN
 	sb.WriteString("                gsub(\"\\\\$\\\\{\\\\{ matrix.sha \\\\}\\\\}\"; $sha) |\n")
 	sb.WriteString("                gsub(\"\\\\$\\\\{\\\\{ matrix.version \\\\}\\\\}\"; $version)\n")
 	sb.WriteString("              else . end)')\n")
+	sb.WriteString("            \n")
+	sb.WriteString("            # Carry the per-promotion environment and sha on the matrix entry so\n")
+	sb.WriteString("            # the deploy job name and its environment/sha with: inputs resolve.\n")
+	sb.WriteString("            RESOLVED=$(echo \"$RESOLVED\" | jq -c \\\n")
+	sb.WriteString("              --arg env \"$ENV\" \\\n")
+	sb.WriteString("              --arg sha \"$SHA\" \\\n")
+	sb.WriteString("              '. + {environment: $env, sha: $sha}')\n")
 	sb.WriteString("            \n")
 	sb.WriteString("            # Add to matrix (with comma separator)\n")
 	sb.WriteString("            if [ \"$FIRST\" = \"true\" ]; then\n")
@@ -773,6 +792,22 @@ func (g *PromoteGenerator) writeDeployJobs(sb *strings.Builder) {
 			writeCallbackPermissions(sb, "    ", d.Permissions)
 			fmt.Fprintf(sb, "    uses: %s\n", normalizeWorkflowPath(d.Workflow))
 			sb.WriteString("    with:\n")
+
+			// Thread the per-promotion environment and (when the callback
+			// declares it) sha from the matrix entry. Orchestrate auto-passes
+			// both to the same callback; without them here a promote deploys to
+			// an empty environment while the job name (Deploy X (${{
+			// matrix.environment }})) references a key the matrix would not carry.
+			// environment mirrors orchestrate's contract that every deploy
+			// callback accepts it; sha is gated on declaration. Skip either when
+			// the manifest already wires it as an explicit input, so the with:
+			// block never emits a duplicate mapping key.
+			if _, ok := d.Inputs["environment"]; !ok {
+				sb.WriteString("      environment: ${{ matrix.environment }}\n")
+			}
+			if _, ok := d.Inputs["sha"]; !ok && g.deployHasInput(d.Name, "sha") {
+				sb.WriteString("      sha: ${{ matrix.sha }}\n")
+			}
 
 			// When the callback opts in to dry-run passthrough, forward the
 			// dispatch input so it can emulate internally.
@@ -1350,12 +1385,22 @@ func (g *PromoteGenerator) writeNativeDeploymentSteps(sb *strings.Builder) {
 	if len(g.config.Environments) > 0 && len(g.config.Deploys) > 0 {
 		var conds []string
 		for _, d := range g.config.Deploys {
-			conds = append(conds, fmt.Sprintf("needs.deploy-%s.result == 'success'", d.Name))
+			// A promotion runs a subset of deploys (only those whose scope
+			// includes the target env), and the prod deploy runs only in cascade
+			// mode, so a deploy job legitimately SKIPS. A skip is not a deploy
+			// failure, so success-or-skipped is the per-job success signal. The
+			// prod job is included so a failed prod deploy is not omitted from
+			// the Deployment's terminal status.
+			for _, job := range []string{fmt.Sprintf("deploy-%s", d.Name), fmt.Sprintf("deploy-%s-prod", d.Name)} {
+				conds = append(conds, fmt.Sprintf("(needs.%s.result == 'success' || needs.%s.result == 'skipped')", job, job))
+			}
 		}
 		resultExpr = fmt.Sprintf("${{ (%s) && 'success' || 'failure' }}", strings.Join(conds, " && "))
 	}
 
-	writeNativeDeploymentSteps(sb, g.config, envExpr, resultExpr, "      ")
+	// A dry-run promote skips every deploy and must not create a real GitHub
+	// Deployment; guard the Deployment lifecycle on the dispatch dry_run input.
+	writeNativeDeploymentSteps(sb, g.config, envExpr, resultExpr, "github.event.inputs.dry_run != 'true'", "      ")
 }
 
 // writeConcurrency emits a top-level concurrency: block on the promote workflow.

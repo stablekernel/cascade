@@ -372,9 +372,28 @@ func (g *RollbackGenerator) paramReadExpr(name string) string {
 // repository_dispatch trigger is enabled, so an external signal honors the same
 // dry-run and deployable scoping the manual path does.
 func (g *RollbackGenerator) rollbackDeployGuard(deployName string) string {
-	dryRun := g.paramReadExpr("dry_run")
 	deployable := g.paramReadExpr("deployable")
-	return fmt.Sprintf("${{ %s != 'true' && (%s == '' || %s == '%s') }}", dryRun, deployable, deployable, deployName)
+	return fmt.Sprintf("${{ %s && (%s == '' || %s == '%s') }}", g.notDryRunExpr(), deployable, deployable, deployName)
+}
+
+// notDryRunExpr returns the expression body (no ${{ }} wrapper) that is true
+// when the rollback is NOT a dry run, so a deploy or finalize job may proceed.
+//
+// Without the repository_dispatch trigger the dry_run signal is only ever the
+// workflow_dispatch input, which is always the string 'true' or 'false', so the
+// output collapses to the bare string comparison and stays byte-identical to the
+// baseline. With the trigger enabled the coalesced read can also carry a JSON
+// boolean true from client_payload (a natural {"dry_run": true} payload), and
+// GitHub Actions compares a boolean against the string 'true' by numeric
+// coercion (the string casts to NaN), so a bare "!= 'true'" reads a boolean true
+// as NOT a dry run and lets a dry-run rollback perform real deploys. Matching
+// both the boolean literal and the string closes that gap for either source.
+func (g *RollbackGenerator) notDryRunExpr() string {
+	if g.dispatchTrigger() == nil {
+		return "github.event.inputs.dry_run != 'true'"
+	}
+	v := g.paramRead("dry_run") // github.event.inputs.dry_run || github.event.client_payload.dry_run
+	return fmt.Sprintf("(%s) != true && (%s) != 'true'", v, v)
 }
 
 // writeDeployJobs emits one deploy job per configured deploy, re-running the same
@@ -432,7 +451,7 @@ func (g *RollbackGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("  finalize:\n")
 	sb.WriteString("    name: Finalize\n")
 	fmt.Fprintf(sb, "    needs: %s\n", needsStr)
-	fmt.Fprintf(sb, "    if: always() && needs.preflight.result == 'success' && %s != 'true'\n", g.paramReadExpr("dry_run"))
+	fmt.Fprintf(sb, "    if: always() && needs.preflight.result == 'success' && %s\n", g.notDryRunExpr())
 	sb.WriteString("    runs-on: ubuntu-latest\n")
 	// The finalize job commits the rolled-back state, so it needs contents: write.
 	writeJobPermissions(sb, "    ", [][2]string{{"contents", "write"}})

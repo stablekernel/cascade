@@ -49,13 +49,15 @@ steps:
           contains:
             - "  deployments: write"
             - "      - name: Create deployment"
-            - "        if: ${{ github.server_url == 'https://github.com' }}"
+            # A dry-run run skips its deploys, so it must not create a real
+            # Deployment: every lifecycle step is also gated on a non-dry-run run.
+            - "        if: ${{ github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true' }}"
             - "          deployment_id=$(gh api repos/${{ github.repository }}/deployments \\"
             - "            --field auto_inactive=false \\"
             - "      - name: Set deployment in_progress"
             - "            --field state=in_progress"
             - "      - name: Set deployment status"
-            - "        if: ${{ github.server_url == 'https://github.com' && always() }}"
+            - "        if: ${{ github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true' && always() }}"
             - "            production) environment_url='https://app.example.com' ;;"
 
   - name: "Regenerate and confirm no drift"
