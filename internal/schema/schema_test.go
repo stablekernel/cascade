@@ -229,7 +229,11 @@ func firstMeaningfulLineIsCI(block string) bool {
 	return false
 }
 
-// extractYAMLFences returns the contents of every ```yaml fenced code block.
+// extractYAMLFences returns the contents of every ```yaml fenced code block,
+// including fences that carry Starlight-style info-string attributes such as
+// ```yaml title="cascade.yaml". An annotated fence is still a yaml fence and must
+// not escape validation; only the exact ```yaml / ```yml used to match, so the
+// first annotated example would silently dodge the schema check.
 func extractYAMLFences(md string) []string {
 	var blocks []string
 	lines := strings.Split(md, "\n")
@@ -238,7 +242,7 @@ func extractYAMLFences(md string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inBlock {
-			if trimmed == "```yaml" || trimmed == "```yml" {
+			if isYAMLFenceOpen(trimmed) {
 				inBlock = true
 				cur = nil
 			}
@@ -252,6 +256,28 @@ func extractYAMLFences(md string) []string {
 		cur = append(cur, line)
 	}
 	return blocks
+}
+
+// isYAMLFenceOpen reports whether a trimmed line opens a yaml code fence. The
+// info string must begin with the whole token "yaml" or "yml", optionally
+// followed by whitespace and attributes (```yaml title="x"). It deliberately
+// does not match neighbours like ```yamlfoo or ```yaml-lint, which are different
+// languages, not annotated yaml.
+func isYAMLFenceOpen(trimmed string) bool {
+	info, ok := strings.CutPrefix(trimmed, "```")
+	if !ok {
+		return false
+	}
+	for _, lang := range []string{"yaml", "yml"} {
+		rest, ok := strings.CutPrefix(info, lang)
+		if !ok {
+			continue
+		}
+		if rest == "" || rest[0] == ' ' || rest[0] == '\t' {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSchema_RejectsKnownBadManifests(t *testing.T) {
