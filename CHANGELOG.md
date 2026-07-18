@@ -19,6 +19,14 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **ci:** The Release workflow's `Test` job now installs the SHA-pinned
+  `actionlint` binary before `go test ./...`, matching the unit-test lanes in
+  `validate.yaml` and `pr.yaml`. The emitted-workflow enforcement guard
+  hard-fails under CI when `actionlint` is absent, so a release-time test run
+  without it would fail its `Test` job and publish nothing. The install is
+  pinned to the same version the `workflow-lint` job uses, so there is no
+  version drift.
+
 - **promote:** A matrix-based promote deploy (a deploy declaring inputs) now
   threads the per-promotion environment and sha to its reusable-workflow
   callback, matching orchestrate. The matrix path previously emitted only the
