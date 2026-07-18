@@ -135,7 +135,8 @@ setup_workflows:
       notify:
         runs-on: ubuntu-latest
         steps:
-          - run: echo "cascade-e2e-retry-probe: notify callback invoked"
+          - run: |
+              echo "cascade-e2e-retry-probe: notify callback invoked"
 
 steps:
   - name: "Seed source; assert the retry shims are emitted and chained"
