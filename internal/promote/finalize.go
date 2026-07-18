@@ -126,6 +126,32 @@ func (f *Finalizer) SetDeployResult(name, result string) {
 	f.deployResults[name] = result
 }
 
+// inScopeDeployFailed reports whether any deploy this finalize is responsible
+// for terminally failed or was cancelled, returning the first such deploy's name
+// (sorted for a deterministic message) and true. The env-pointer advance is
+// gated on it: a promotion must not record state.<env>.sha/version at the new
+// commit when a deploy that was meant to land there did not succeed.
+//
+// A deploy the promotion did not run reports "skipped" (its generated job gate
+// evaluated false) and never holds the pointer; only a terminal "failure" or
+// "cancelled" (the reusable deploy workflow's conclusion after its own retries)
+// does. The deployResults map is already scoped to this finalize's deploys: the
+// finalize command reads DEPLOY_RESULT_<NAME> for the resolved deploy names, and
+// a component-scoped finalize resolves only its own component's deploys, so the
+// same enumeration that drives the failure results is the in-scope set here.
+func (f *Finalizer) inScopeDeployFailed() (string, bool) {
+	failed := ""
+	for name, result := range f.deployResults {
+		if result != "failure" && result != "cancelled" {
+			continue
+		}
+		if failed == "" || name < failed {
+			failed = name
+		}
+	}
+	return failed, failed != ""
+}
+
 // SetPromotionResult sets the promotion result from preflight output.
 // This contains information about which environments to update and release actions.
 func (f *Finalizer) SetPromotionResult(pr *PromotionResult) {
@@ -241,8 +267,25 @@ func (f *Finalizer) updateState() {
 		f.cicdFile.State = make(map[string]*config.EnvState)
 	}
 
+	// Gate the environment-pointer advance on in-scope deploy success. When a
+	// deploy this finalize is responsible for terminally failed or was cancelled,
+	// advancing state.<env>.sha/version would record the new commit as live while
+	// the environment is not actually running it (with rollback_on_failure, the
+	// default, the auto-rollback job redeploys the OLD sha), inverting state and
+	// reality. This mirrors the rollback finalize's gateOnDeployResults, except a
+	// promote holds ONLY the env pointer: the per-deploy success rows below are
+	// still recorded, so a partial success is not lost and a re-dispatch retries
+	// only the failed deploy.
+	failedDeploy, envPointerHeld := f.inScopeDeployFailed()
+	if envPointerHeld {
+		fmt.Printf(
+			"Deploy %q did not succeed; environment %q state pointer left unchanged (successful deploys still recorded)\n",
+			failedDeploy, f.targetEnv,
+		)
+	}
+
 	// Update environment state from promotion result
-	if f.promotionResult != nil {
+	if f.promotionResult != nil && !envPointerHeld {
 		for _, promo := range f.promotionResult.Promotions {
 			if f.cicdFile.State[promo.Environment] == nil {
 				f.cicdFile.State[promo.Environment] = &config.EnvState{}

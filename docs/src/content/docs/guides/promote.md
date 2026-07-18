@@ -40,6 +40,8 @@ A breaking-change gate sits at the prerelease-to-release boundary regardless of 
 
 With `rollback_on_failure: true` (the default), a promotion is all-or-nothing. Preflight records the target environment's current SHA as `rollback_sha`; if any deploy job fails, the deploys that already succeeded are rolled back to that SHA. Either every deploy lands or none does. Set it to `false` for a non-atomic promotion that leaves whatever succeeded in place.
 
+Either way, finalize holds the environment's recorded pointer (`state.<env>.sha` and `state.<env>.version`) at its prior value when any in-scope deploy failed or was cancelled, so recorded state matches what the environment is actually running. The per-deployable rows for the deploys that did succeed are still recorded, so a re-run re-plans and retries only the failed deploy. The environment pointer advances only when every in-scope deploy succeeds.
+
 This is a different knob from `rollout.fail_fast` and `rollout.max_parallel` on a `deploys[].rollout` entry in the manifest. Those two control the GitHub Actions `strategy:` block on that one deploy's matrix job (whether one failed matrix leg cancels the rest, and how many legs run in parallel); `rollback_on_failure` controls what promote does across deploys after a failure. See [the deploy strategy block](/cascade/reference/generated-workflows/#the-deploy-strategy-block) for the manifest-to-YAML mapping. Everything else under `rollout` (`type`, `canary`, `blue_green`) is reserved and has no effect on generated output.
 
 ## Selective deploys

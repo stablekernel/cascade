@@ -1317,6 +1317,15 @@ func (r *Runner) executePromote(ctx context.Context, promote *PromoteStep, confi
 	if promote.ExpectFailure {
 		if result.Conclusion == "failure" {
 			r.t.Log("  Promote: workflow failed as expected")
+			// The finalize job runs under always(), so it commits state even on a
+			// failed run. Opt-in re-sync lets the step assert what finalize actually
+			// wrote (for example that the env pointer did NOT advance over a failed
+			// deploy). Non-fatal, mirroring the success-path sync below.
+			if promote.SyncStateOnFailure {
+				if err := r.syncStateFromGitea(ctx, config); err != nil {
+					r.t.Logf("  Warning: failed to sync state from Gitea after expected failure: %v", err)
+				}
+			}
 			return nil
 		}
 		return fmt.Errorf("expected promote to fail but it succeeded")

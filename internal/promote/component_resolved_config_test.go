@@ -232,9 +232,10 @@ func TestNewFinalizer_ComponentResolvedDeploys(t *testing.T) {
 // TestGateOnExpectedDeploys covers the promote-side fail-safe: when preflight
 // planned deploys but none of them reported any result (every gate skipped or
 // the result wiring is absent), nothing deployed and the state write must be
-// refused. A reported failure or cancellation keeps the existing loud path
-// (rollback_on_failure and the red run own it); an empty plan is a legitimate
-// no-deploy promotion (trigger filters matched nothing) and always proceeds.
+// refused. A reported failure or cancellation does not abort this gate (the
+// env-pointer hold is applied downstream in updateState, while per-deploy
+// successes are still recorded); an empty plan is a legitimate no-deploy
+// promotion (trigger filters matched nothing) and always proceeds.
 func TestGateOnExpectedDeploys(t *testing.T) {
 	t.Run("all expected deploys skipped aborts", func(t *testing.T) {
 		err := gateOnExpectedDeploys([]string{"api-svc"}, map[string]string{"api-svc": "skipped"})
@@ -254,7 +255,7 @@ func TestGateOnExpectedDeploys(t *testing.T) {
 		))
 	})
 
-	t.Run("a failure keeps the existing failure path", func(t *testing.T) {
+	t.Run("a failure does not abort this gate (env-pointer hold is downstream)", func(t *testing.T) {
 		require.NoError(t, gateOnExpectedDeploys(
 			[]string{"api-svc"},
 			map[string]string{"api-svc": "failure"},

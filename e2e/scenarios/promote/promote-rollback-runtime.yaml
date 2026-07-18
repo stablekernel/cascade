@@ -167,13 +167,18 @@ steps:
         infradeploy: success
         appdeploy: success
 
-  - name: "Promote with rollback_on_failure: app fails, infra rolls back"
+  - name: "Promote with rollback_on_failure: app fails, infra rolls back, test pointer held"
     action: promote
     promote:
       mode: cascade
       target: test
       rollback_on_failure: true
       expect_failure: true
+      # Re-read state after the failed run so the assertion below observes what
+      # finalize actually committed (finalize runs under always()). Without this
+      # the harness keeps the last successful sync and the state assertion is not
+      # falsifiable.
+      sync_state_on_failure: true
     expect:
       jobs:
         preflight: success
@@ -188,3 +193,12 @@ steps:
         # with infra deployed and app failed).
         infradeploy: success
         appdeploy: failure
+      state:
+        # The env pointer must NOT advance to commit2: app terminally failed and
+        # rollback-infra redeployed test at commit1, so recording commit2 would
+        # assert a version the environment is not running. Finalize holds the
+        # pointer at commit1 (the sha test held before this promote). Before the
+        # promote-finalize gate this recorded commit2, the state/reality inversion
+        # this scenario now guards.
+        test:
+          sha: commit1

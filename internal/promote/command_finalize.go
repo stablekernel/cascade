@@ -234,11 +234,13 @@ func parseExpectedDeploys(raw string) ([]string, error) {
 // disagree (or the result wiring is absent), so recording the promotion would
 // advance env state over a no-op. That state write is refused.
 //
-// A reported failure or cancellation proceeds: the deploy ran and lost, the run
-// is already red, and rollback_on_failure owns that path; this gate must not
-// change failure semantics. An empty expected set also proceeds: a promotion
-// whose trigger filters matched no changes legitimately deploys nothing while
-// still advancing the env pointer.
+// A reported failure or cancellation does NOT abort here: the per-deploy success
+// rows are still worth recording, so the state write proceeds. The env-pointer
+// advance that a failed deploy must hold is gated downstream, in the finalizer's
+// updateState (inScopeDeployFailed), which leaves state.<env>.sha/version
+// unchanged while still recording the deploys that succeeded. An empty expected
+// set also proceeds: a promotion whose trigger filters matched no changes
+// legitimately deploys nothing while still advancing the env pointer.
 func gateOnExpectedDeploys(expected []string, results map[string]string) error {
 	if len(expected) == 0 {
 		return nil
