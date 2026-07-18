@@ -231,6 +231,58 @@ func TestGM5_DependentDeploy_NoRetries_SingleClause(t *testing.T) {
 	assert.NotContains(t, block, "retry", "no retry shims exist for a zero-retry dependency")
 }
 
+// TestGM7_DependentDeploy_NeedsIncludesRetryShims proves a dependent deploy's
+// needs: list carries every retry shim job ID its dependency declares, not just
+// the base dependency's job ID.
+//
+// The if: gate (effectiveDepSuccessGate, proven by TestGM5 above) already
+// references needs.deploy-web-retry-1 / -2 so a retry-rescued dependency does
+// not skip its dependents. But GitHub Actions can only resolve a needs.<job>
+// reference for a job actually listed in that job's needs:; a reference to a
+// job outside needs: is rejected by actionlint at parse and, if it somehow ran,
+// would resolve to an ever-empty value at runtime. Before this fix needs: was
+// built from GetDirectDependencies alone (the base job ID only), so the if:
+// gate and the needs: list silently disagreed.
+func TestGM7_DependentDeploy_NeedsIncludesRetryShims(t *testing.T) {
+	dir := pass10Fixture(t, pass10DeployWorkflow)
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("dev"),
+		Deploys: []config.DeployConfig{
+			{Name: "web", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}, Retries: 2},
+			{Name: "api", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}, DependsOn: []string{"web"}},
+		},
+	}
+	out, err := NewGenerator(cfg, dir).Generate()
+	require.NoError(t, err)
+
+	block := pass10JobBlock(t, out, "deploy-api")
+	assert.Contains(t, block, "needs: [setup, deploy-web, deploy-web-retry-1, deploy-web-retry-2]",
+		"needs: must list the base dependency plus every retry shim it declares, "+
+			"in ladder order, so the if: gate referencing those shims is well-formed")
+}
+
+// TestGM7_DependentDeploy_NoRetries_NeedsByteIdentical proves the no-retries
+// path is unchanged: a dependent of a deploy with no retries emits the bare
+// needs: list with no phantom shim references.
+func TestGM7_DependentDeploy_NoRetries_NeedsByteIdentical(t *testing.T) {
+	dir := pass10Fixture(t, pass10DeployWorkflow)
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("dev"),
+		Deploys: []config.DeployConfig{
+			{Name: "web", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}},
+			{Name: "api", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}, DependsOn: []string{"web"}},
+		},
+	}
+	out, err := NewGenerator(cfg, dir).Generate()
+	require.NoError(t, err)
+	block := pass10JobBlock(t, out, "deploy-api")
+	assert.Contains(t, block, "needs: [setup, deploy-web]",
+		"a no-retry dependency must emit the bare needs: list with no shim references")
+	assert.NotContains(t, block, "retry", "no retry shims exist for a zero-retry dependency")
+}
+
 // TestGM6_PromoteNativeDeployment_GuardsDryRunAndCountsSkips proves a dry-run
 // promote does not create a real GitHub Deployment, and that the terminal status
 // counts a legitimately skipped deploy as success and includes the prod deploy.

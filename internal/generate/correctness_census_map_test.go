@@ -72,7 +72,7 @@ var correctnessCensus = map[string]correctnessCoverage{
 	"deploys[].secrets.map.*":               {marker: markerStructural, note: "shared writeSecretsBlock, pinned by TestGenCorrectness_SecretsMap_PropagatesSourceToCallee"},
 	"deploys[].triggers[]":                  {marker: markerValidityOnly, note: "paths-filter glob; validity + round-trip is the contract"},
 	"deploys[].workflow":                    {marker: markerValidityOnly, note: "callback path spliced into uses:; validity + round-trip is the contract"},
-	"deploys[].depends_on[]":                {assertion: "TestGM5_DependentDeploy_JudgesEffectiveResult"},
+	"deploys[].depends_on[]":                {assertion: "TestGM7_DependentDeploy_NeedsIncludesRetryShims"},
 	"deploys[].optional_depends_on[]":       {assertion: "TestGenCorrectness_DependsOn_SequencesButOnlyRequiredGates"},
 	"deploys[].env_inputs[key]":             {marker: markerValidityOnly, note: "environment reference key; validity + round-trip is the contract"},
 	"deploys[].env_inputs.*":                {assertion: "TestPromoteGenerator_UnresolvedEnvStateRefStaysVisible"},

@@ -108,7 +108,7 @@ only under real installation tokens on the fleet, never in the token-free harnes
 | Least-privilege permissions | `orchestrate/least-privilege-permissions`, `09-single-env-repo` | least-priv posture (callbacks); gen-time wiring (3env); single-env release posture (single-env) | `internal/generate` | Permissions are scoped to the job that needs them, not the top level |
 | OIDC id-token propagation | `orchestrate/callback-permissions-oidc` | OIDC posture at callee (callbacks); gen-time `id-token: write` scoped (3env) | `internal/generate` | `id-token: write` propagates to the caller job without leaking workflow-wide |
 | Callback dependency ordering (`depends_on`) | `11-job-timeouts-and-optional-deps` | needs ordering (callbacks); base to app order (3env gen-time) | `internal/generate` | A dependent callback starts only after its prerequisite concludes |
-| Callback retry wrapper | | retry-wrapper jobs present (callbacks); retry shim jobs (3env gen-time) | `internal/generate` | The retry jobs are emitted and wired for `retries: N` |
+| Callback retry wrapper | `73-deploy-retries` | retry-wrapper jobs present (callbacks); retry shim jobs (3env gen-time) | `internal/generate` | The retry jobs are emitted and wired for `retries: N`, including a dependent deploy's `needs:` carrying its dependency's retry shims |
 | Signed auto-commit identity (`auto_commits`) | `03-three-env-repo` | auto_commits author and message (3env) | `internal/promote/auto_commit_sha*.go` | The state commit carries the configured author and message |
 
 See [the `auto_commits` field](/cascade/reference/manifest/) in the manifest reference for what a callback must do to trigger this capture.

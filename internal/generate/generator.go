@@ -1157,9 +1157,21 @@ func (g *Generator) writeCallbackJob(sb *strings.Builder, info CallbackInfo, wor
 	// IDs). optional_depends_on adds ordering-only edges: they go into needs: so
 	// this job waits for them, but they are excluded from the if: skip-gate below
 	// (#18) so a skipped optional dep does not skip this job.
+	//
+	// A hard dependency that declares retries also needs its retry shim job IDs
+	// appended here: the if: gate below (via effectiveDepSuccessGate /
+	// retrySucceededCond) reads needs.<dep>-retry-N.result to judge the
+	// dependency's effective (ladder-wide) result, and GitHub Actions can only
+	// resolve a needs.<job> reference for a job actually listed in needs:. A
+	// shim missing from needs: is both an actionlint parse error and, were it
+	// somehow accepted, an always-empty read at runtime, so a retry-rescued
+	// dependency would never unblock this job.
 	hardDeps := g.graph.GetDirectDependencies(info.JobID)
 	needs := []string{"setup"}
-	needs = append(needs, hardDeps...)
+	for _, dep := range hardDeps {
+		needs = append(needs, dep)
+		needs = append(needs, retryShimJobIDs(dep, g.graph.Nodes[dep].Retries)...)
+	}
 	needs = append(needs, g.graph.GetOptionalDependencies(info.JobID)...)
 	// When a pre-download job was emitted, make the callback depend on it so the
 	// downloaded artifacts are available in the runner's workspace.
@@ -1606,9 +1618,7 @@ func (g *Generator) writeFinalizeJob(sb *strings.Builder, sorted []string) {
 	for _, jobID := range sorted {
 		info := g.graph.Nodes[jobID]
 		allJobs = append(allJobs, jobID)
-		for i := 1; i <= info.Retries; i++ {
-			allJobs = append(allJobs, fmt.Sprintf("%s-retry-%d", jobID, i))
-		}
+		allJobs = append(allJobs, retryShimJobIDs(jobID, info.Retries)...)
 	}
 	// The custom changelog runs as its own job; finalize consumes its output,
 	// so it must be in finalize's needs:.
@@ -2099,17 +2109,36 @@ func failureOrCancelledCond(jobName string) string {
 	return fmt.Sprintf("contains(fromJSON('[\"failure\", \"cancelled\"]'), needs.%s.result)", jobName)
 }
 
+// retryShimJobIDs returns a job's retry shim job IDs in ladder order
+// (<jobID>-retry-1 .. <jobID>-retry-N), or nil when retries is zero. It is the
+// single source of truth for a job's shim IDs: every place that either
+// references a shim's result (retrySucceededCond) or must list a shim in a
+// needs: block (writeCallbackJob, writeFinalizeJob) derives from this function
+// so the two can never drift apart again, the way they did before this fix
+// (the if: gate referenced a shim that needs: never listed).
+func retryShimJobIDs(jobID string, retries int) []string {
+	if retries <= 0 {
+		return nil
+	}
+	shims := make([]string, 0, retries)
+	for i := 1; i <= retries; i++ {
+		shims = append(shims, fmt.Sprintf("%s-retry-%d", jobID, i))
+	}
+	return shims
+}
+
 // retrySucceededCond builds the "some shim rescued it" half of a ladder's
 // effective result: a disjunction over each retry shim's success. It returns
 // the empty string when the callback declares no retries, which is what lets
 // the effective-result helpers collapse to their pre-retry form.
 func retrySucceededCond(jobName string, retries int) string {
-	if retries <= 0 {
+	shims := retryShimJobIDs(jobName, retries)
+	if len(shims) == 0 {
 		return ""
 	}
-	conds := make([]string, 0, retries)
-	for i := 1; i <= retries; i++ {
-		conds = append(conds, fmt.Sprintf("needs.%s-retry-%d.result == 'success'", jobName, i))
+	conds := make([]string, 0, len(shims))
+	for _, shim := range shims {
+		conds = append(conds, fmt.Sprintf("needs.%s.result == 'success'", shim))
 	}
 	return strings.Join(conds, " || ")
 }

@@ -14,11 +14,20 @@ description: |
 
   Step 1 (emitted): the shims exist, there are exactly two of them, and each is
   gated on its PREDECESSOR's failure rather than all hanging off the original
-  job. That is a text assertion and is labeled as such.
+  job. That is a text assertion and is labeled as such. The same step also
+  covers a DEPENDENT deploy (notify, depends_on: web): its needs: list must
+  carry the base dependency plus every retry shim, matching the shims its own
+  if: gate already reads. A shim referenced by if: but missing from needs: is
+  both an actionlint parse error and, were it ever accepted, an always-empty
+  read at runtime, silently skipping the dependent on a rescue.
 
   Step 2 (executing): the staged deploy callback always exits non-zero, so
   deploy-web genuinely fails at runtime, and expect_log proves the callback BODY
-  really ran rather than a job object merely existing.
+  really ran rather than a job object merely existing. Since no attempt in the
+  ladder ever succeeds, deploy-notify's default run_policy (require success)
+  correctly skips it: this is the non-rescue path, and it is unchanged by the
+  needs:-list fix (a dependent job that is going to skip regardless is not where
+  the defect was observable).
 
   What is NOT asserted, and why: the individual retry shims are not observable
   through expect.jobs. The harness keys jobs by the reusable workflow's INNER
@@ -31,7 +40,7 @@ description: |
 
   WHY base-fail-then-retry-SUCCEED IS NOT EXERCISED HERE, for the next author:
   the case that matters most (the base attempt fails, a shim re-runs and
-  SUCCEEDS, so the environment really is deployed) cannot be expressed by this
+  SUCCEEDS, so the dependent deploy actually RUNS) cannot be expressed by this
   harness, and the gap is structural rather than an omission:
 
     1. Each shim is a separate GitHub Actions job, so it gets its own container
@@ -47,11 +56,17 @@ description: |
 
   A callback that fails once and then succeeds therefore has no way to keep state
   across attempts here. Rather than fabricate a scenario that cannot prove the
-  claim, the runtime half is left unexercised and the effective-result gates are
-  pinned as emitted text above, with the four ladder shapes (no shims, base
-  succeeds, a middle shim succeeds, all attempts fail) covered as unit tests in
-  internal/generate/effective_result_test.go. Restoring the executing proof needs
-  an artifact server in the harness, not a change to this scenario.
+  claim, the rescue-runtime half is left unexercised and instead pinned as unit
+  tests: internal/generate/pass10_silent_output_test.go
+  (TestGM7_DependentDeploy_NeedsIncludesRetryShims proves the needs:/if:
+  agreement this scenario also checks in emitted text;
+  TestGM5_DependentDeploy_JudgesEffectiveResult proves the if: gate itself reads
+  the ladder's effective result). The actionlint feature-matrix guard
+  (internal/generate/actionlint_feature_matrix_test.go, case
+  retries_dependent_deploy) additionally proves real GitHub would accept the
+  emitted needs:/if: pair at parse for this exact combination, permanently.
+  Restoring the executing rescue proof needs an artifact server in the harness,
+  not a change to this scenario.
 
   INNER-JOB-ID NAMESPACE TRAP, for the next author: expect.jobs entries are
   resolved by findJob (assert.go), which strips a "build-"/"deploy-" prefix and
@@ -61,7 +76,8 @@ description: |
   silently return the BUILD's result. That is why the build here is "app" and the
   deploy is "web", and why the staged callback's inner job id is "web" to match
   the deploy name. Keep build and deploy names distinct in any scenario that
-  asserts expect.jobs on them.
+  asserts expect.jobs on them. notify uses its own stub file (notify.yaml) with
+  inner job id "notify" for the same reason.
 
 config:
   trunk_branch: main
@@ -75,6 +91,10 @@ config:
       workflow: deploy.yaml
       triggers: ["src/**"]
       retries: 2
+    - name: notify
+      workflow: notify.yaml
+      triggers: ["src/**"]
+      depends_on: ["deploy:web"]
 
 # The deploy callback always fails, so the original job and both retry shims each
 # re-invoke it and conclude in failure. Its inner job id is "web" so it matches
@@ -98,6 +118,25 @@ setup_workflows:
           - run: |
               echo "cascade-e2e-retry-probe: deploy callback invoked, failing on purpose"
               exit 1
+  # notify's dependency (web) never succeeds in this scenario, so notify never
+  # runs; its body only needs to exist for the workflow set to be valid.
+  ".github/workflows/notify.yaml": |
+    name: notify
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: false
+            type: string
+          sha:
+            required: false
+            type: string
+    jobs:
+      notify:
+        runs-on: ubuntu-latest
+        steps:
+          - run: |
+              echo "cascade-e2e-retry-probe: notify callback invoked"
 
 steps:
   - name: "Seed source; assert the retry shims are emitted and chained"
@@ -128,6 +167,11 @@ steps:
             # the note below), so the expressions are pinned as emitted text.
             - "WEB_RESULT: ${{ (needs.deploy-web.result == 'success' || needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success') && 'success' || 'failure' }}"
             - "!(needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success')"
+            # notify (deploys[].depends_on: web) must list every one of web's
+            # retry shims in its own needs:, not only the base job, so the shims
+            # its if: gate reads below are actually resolvable references.
+            - "needs: [setup, deploy-web, deploy-web-retry-1, deploy-web-retry-2]"
+            - "(needs.deploy-web.result == 'success' || needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success')"
           not_contains:
             # retries: 2 emits exactly two shims.
             - "deploy-web-retry-3:"
@@ -145,5 +189,11 @@ steps:
         # so neither reads the other's result.
         build-app: success
         deploy-web: failure
+        # web never succeeds in this scenario (base nor either shim), so notify's
+        # default run_policy (require success) correctly skips it. This is the
+        # non-rescue path; see the description above for why the rescue path
+        # (which is what the needs:-list fix actually protects) cannot be
+        # exercised in this harness.
+        deploy-notify: skipped
       # Proves the callback BODY executed, not merely that a job object exists.
       expect_log: "cascade-e2e-retry-probe: deploy callback invoked"
