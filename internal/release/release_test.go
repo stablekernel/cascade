@@ -361,6 +361,15 @@ func updateTagRecordingServer(t *testing.T, seen *[]string, existingDraft bool, 
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
 			w.WriteHeader(gitRefStatus)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/refs/tags/"):
+			// The 422 idempotency subcase re-cuts a tag that already points at the
+			// same commit the update targets ("deadbeef"), so the ref resolves to
+			// that sha and createGitTag treats the existing tag as a harmless match.
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ref":    r.URL.Path,
+				"object": map[string]any{"sha": "deadbeef", "type": "commit"},
+			})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases/tags/"):
 			if existingDraft {
 				w.WriteHeader(http.StatusOK)
@@ -429,6 +438,88 @@ func TestManager_Update_CutsGitTag(t *testing.T) {
 
 			assert.True(t, containsPathSuffix(seen, http.MethodPost, "/git/refs"),
 				"update with CreateTag must cut the git tag; saw %v", seen)
+		})
+	}
+}
+
+// existingTagServer answers a tag-only update against a GitHub host. The
+// POST /git/refs (ref create) always returns 422 (the tag already exists), and
+// the follow-up GET /git/refs/tags/<name> reports the tag pointing at
+// existingSHA. It records every method+path so a test can assert the resolve
+// GET fired.
+func existingTagServer(t *testing.T, seen *[]string, existingSHA string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*seen = append(*seen, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "Reference already exists"})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/refs/tags/"):
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ref":    r.URL.Path,
+				"object": map[string]any{"sha": existingSHA, "type": "commit"},
+			})
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(GitHubRelease{})
+		}
+	}))
+}
+
+// TestManager_CreateGitTag_ExistingTagDifferentSHA is the regression guard for
+// the frozen-rc defect: a release cut whose tag already exists at a DIFFERENT
+// commit must not report success and leave the tag stranded on the stale commit.
+// Before the fix a 422 from the ref-create was swallowed as harmless; this test
+// drives the tag-only update path (the shape the release cut uses) and asserts
+// the mismatch surfaces loudly and that the existing target was actually
+// resolved. The same-sha subcase proves a genuine convergence rerun (the tag
+// already points where the cut targets) stays idempotently successful.
+func TestManager_CreateGitTag_ExistingTagDifferentSHA(t *testing.T) {
+	tests := []struct {
+		name        string
+		targetSHA   string
+		existingSHA string
+		wantErr     bool
+	}{
+		{name: "different sha fails loudly", targetSHA: "newsha111", existingSHA: "148cf87stale", wantErr: true},
+		{name: "same sha is idempotent success", targetSHA: "samesha222", existingSHA: "samesha222", wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen []string
+			server := existingTagServer(t, &seen, tt.existingSHA)
+			defer server.Close()
+
+			manager := &Manager{
+				client:  server.Client(),
+				baseURL: server.URL + "/github", // host substring marks it as GitHub
+				token:   "test-token",
+				repo:    "owner/repo",
+				sleepFn: func(time.Duration) {},
+			}
+
+			_, err := manager.Manage(Options{
+				Action:      ActionUpdate,
+				Environment: "prerelease",
+				SHA:         tt.targetSHA,
+				Tag:         "v0.16.5-rc.1",
+				CreateTag:   true,
+				TagOnly:     true,
+			})
+
+			if tt.wantErr {
+				require.Error(t, err, "an existing tag at a different sha must fail, not silently succeed")
+				assert.Contains(t, err.Error(), tt.existingSHA, "error should name the stale target sha")
+				assert.Contains(t, err.Error(), tt.targetSHA, "error should name the intended target sha")
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.True(t, containsPathSuffix(seen, http.MethodGet, "/git/refs/tags/v0.16.5-rc.1"),
+				"createGitTag must resolve the existing tag's target on a 422; saw %v", seen)
 		})
 	}
 }

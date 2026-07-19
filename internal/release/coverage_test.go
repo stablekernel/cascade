@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -161,11 +162,27 @@ func TestCreateGitTag_SkipsNonGitHubHost(t *testing.T) {
 }
 
 func TestCreateGitTag_AcceptsCreatedAndExists(t *testing.T) {
+	// A fresh ref create (201) succeeds outright. A 422 (ref already exists) is
+	// accepted only when the existing tag already points at the requested commit,
+	// which createGitTag confirms with a follow-up GET; the same-sha case is the
+	// genuinely idempotent one. A 422 whose existing target DIFFERS is a distinct,
+	// fail-closed case covered by TestManager_CreateGitTag_ExistingTagDifferentSHA.
 	for _, status := range []int{http.StatusCreated, http.StatusUnprocessableEntity} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "POST", r.Method)
-			assert.Contains(t, r.URL.Path, "/git/refs")
-			w.WriteHeader(status)
+			switch {
+			case r.Method == http.MethodPost:
+				assert.Contains(t, r.URL.Path, "/git/refs")
+				w.WriteHeader(status)
+			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/refs/tags/"):
+				// The existing tag points at the same commit the cut targets.
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ref":    r.URL.Path,
+					"object": map[string]any{"sha": "abc123", "type": "commit"},
+				})
+			default:
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			}
 		}))
 		m := &Manager{client: server.Client(), baseURL: server.URL + "/github", token: "t", repo: "owner/repo"}
 		err := m.createGitTag("v1.0.0", "abc123")

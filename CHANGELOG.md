@@ -19,6 +19,19 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **release:** A release cut that materializes a git tag now fails closed when the
+  tag already exists at a different commit, instead of treating the
+  `422 reference already exists` response as an unconditional success. The old
+  behavior was a silent no-op that left the tag frozen on the stale commit while
+  the cut reported success. A tag already pointing at the target commit stays the
+  genuinely idempotent case.
+
+- **orchestrate:** Version derivation now advances the release-candidate counter
+  past any tag that already exists at a different commit, so a stalled or
+  rolled-back recorded state can no longer mint an rc number already published at
+  another commit. A candidate already pointing at the current commit is reused
+  unchanged, keeping the no-collision path identical.
+
 - **ci:** The Release workflow's `Test` job now installs the SHA-pinned
   `actionlint` binary before `go test ./...`, matching the unit-test lanes in
   `validate.yaml` and `pr.yaml`. The emitted-workflow enforcement guard

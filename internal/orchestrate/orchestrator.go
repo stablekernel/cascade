@@ -592,7 +592,77 @@ func (o *Orchestrator) calculateVersion() (string, error) {
 		return "", fmt.Errorf("calculating version: %w", err)
 	}
 
-	return nextVersion.String(), nil
+	// A stale or rolled-back recorded state can drive the rc counter to a value
+	// that already exists as a tag at a different commit; resolve any such
+	// collision before returning so a fresh cut never reuses a published rc.
+	resolved, err := o.resolveRCCollision(nextVersion)
+	if err != nil {
+		return "", err
+	}
+
+	return resolved.String(), nil
+}
+
+// resolveRCCollision advances an rc candidate past any tag of the same name that
+// already exists at a DIFFERENT commit than the current HEAD, so a stale, raced,
+// or rolled-back recorded state can never re-mint an rc number that was already
+// published at another sha (the frozen-rc incident, where a state stuck at rc.0
+// recomputed rc.1 while a v...-rc.1 tag already pointed at an outdated commit).
+//
+// A tag that already exists AT the current HEAD is the same cut re-running and is
+// reused unchanged, keeping convergence idempotent. A candidate with no rc
+// segment, or a HEAD that cannot be resolved, leaves the version untouched, so
+// the no-collision path stays byte-identical to before.
+func (o *Orchestrator) resolveRCCollision(v *version.Version) (*version.Version, error) {
+	if v == nil || v.PreRelease < 0 {
+		return v, nil
+	}
+
+	headSHA, err := o.gitOutput("rev-parse", "HEAD")
+	if err != nil || headSHA == "" {
+		// Without a resolvable HEAD there is nothing to compare against; preserve
+		// the historical behavior rather than fail the whole calculation.
+		return v, nil
+	}
+
+	// maxRCAdvance bounds the walk so a pathological run of colliding tags can
+	// never spin forever; it is far beyond any realistic rc depth for one base.
+	const maxRCAdvance = 1000
+	for i := 0; i < maxRCAdvance; i++ {
+		tag := v.String()
+		sha, exists, err := o.tagCommit(tag)
+		if err != nil {
+			return nil, fmt.Errorf("checking rc tag collision for %s: %w", tag, err)
+		}
+		if !exists || sha == headSHA {
+			return v, nil
+		}
+		log.Debug("rc tag %s already exists at %s (head %s); advancing rc number",
+			tag, truncateSHA(sha), truncateSHA(headSHA))
+		v = v.WithRC(v.PreRelease + 1)
+	}
+
+	return nil, fmt.Errorf("rc collision resolution exceeded %d advances starting from %s", maxRCAdvance, v.String())
+}
+
+// tagCommit reports the commit a tag points at in the orchestration's repository
+// and whether the tag exists. A missing tag returns ("", false, nil); only an
+// unexpected git failure returns an error. Existence is checked first so a
+// non-existent tag is distinguished from a genuine git error rather than inferred
+// from a rev-list exit code.
+func (o *Orchestrator) tagCommit(tag string) (sha string, exists bool, err error) {
+	listed, err := o.gitOutput("tag", "-l", "--", tag)
+	if err != nil {
+		return "", false, err
+	}
+	if listed == "" {
+		return "", false, nil
+	}
+	sha, err = o.gitOutput("rev-list", "-n", "1", tag)
+	if err != nil {
+		return "", true, err
+	}
+	return sha, true, nil
 }
 
 // calculateComponentVersion derives the next version for the orchestration's
@@ -635,7 +705,16 @@ func (o *Orchestrator) calculateComponentVersion() (string, error) {
 		return "", fmt.Errorf("calculating version for component %q: %w", o.component, err)
 	}
 
-	return nextVersion.String(), nil
+	// Guard the component's rc counter against a stale-state collision, exactly as
+	// the single-component path does. The candidate carries the component's strict
+	// tag grammar, so its String() renders the component-prefixed tag the collision
+	// check looks up, keeping the check scoped to the component's namespace.
+	resolved, err := o.resolveRCCollision(nextVersion)
+	if err != nil {
+		return "", fmt.Errorf("resolving rc collision for component %q: %w", o.component, err)
+	}
+
+	return resolved.String(), nil
 }
 
 // calculateChangelogRefs returns the changelog base SHA and previous tag,
