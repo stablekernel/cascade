@@ -225,17 +225,72 @@ func (m *Manager) createGitTag(tagName, sha string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 201 Created or 422 (already exists) are acceptable
 	if resp.StatusCode == http.StatusCreated {
 		return nil
 	}
 	if resp.StatusCode == http.StatusUnprocessableEntity {
-		// Tag already exists - this is fine
-		return nil
+		// The ref already exists. This is idempotent ONLY when the existing tag
+		// already points at the requested commit (a convergence rerun re-cutting
+		// the same tag). When it points at a DIFFERENT commit the ref create was a
+		// silent no-op that would leave the tag frozen at the old commit, which is
+		// how a stale or collided release cut previously stranded an rc tag on an
+		// outdated sha. Resolve the existing target and fail closed on a mismatch
+		// rather than reporting success.
+		return m.verifyExistingTagTarget(tagName, sha)
 	}
 
 	body, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("create tag failed with status %d: %s", resp.StatusCode, string(body))
+}
+
+// gitRef is the GitHub git-data ref shape returned by GET /git/refs/tags/<name>.
+// Only the target object's sha is needed to confirm where an existing tag points.
+type gitRef struct {
+	Object struct {
+		SHA  string `json:"sha"`
+		Type string `json:"type"`
+	} `json:"object"`
+}
+
+// verifyExistingTagTarget confirms that an already-present tag points at wantSHA.
+// It is called only after a ref-create returned 422 (already exists): a match is
+// the genuinely-harmless idempotent case, while a mismatch means the tag is
+// frozen at a different commit than the release cut targets. An rc tag is
+// immutable in cascade's single-flight release model - a fresh cut that needs a
+// different commit must take a new rc number, not silently reuse an existing tag
+// - so a mismatch fails loudly instead of returning a false success. A target
+// that cannot be resolved also fails closed, since success cannot be confirmed.
+func (m *Manager) verifyExistingTagTarget(tagName, wantSHA string) error {
+	req, err := m.newRequest("GET", "/git/refs/tags/"+tagName, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("resolving existing tag %s: %w", tagName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("tag %s already exists but its target could not be resolved (status %d): %s", tagName, resp.StatusCode, string(body))
+	}
+
+	var ref gitRef
+	if err := json.NewDecoder(resp.Body).Decode(&ref); err != nil {
+		return fmt.Errorf("decoding existing tag %s ref: %w", tagName, err)
+	}
+
+	if ref.Object.SHA == "" {
+		return fmt.Errorf("tag %s already exists but its target sha could not be determined to confirm it points at %s", tagName, wantSHA)
+	}
+
+	if ref.Object.SHA != wantSHA {
+		return fmt.Errorf("tag %s already exists at %s but this release cut targets %s; refusing to leave the tag frozen on the stale commit (an rc tag is immutable - a fresh cut needs a new rc number)", tagName, ref.Object.SHA, wantSHA)
+	}
+
+	return nil
 }
 
 // deleteGitTag deletes a git tag
