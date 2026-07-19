@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The changelog written to $GITHUB_OUTPUT carries arbitrary commit-message
-// text. With a fixed heredoc delimiter, a commit message containing a bare
-// "EOF" line terminates the heredoc early and the remaining lines parse as
-// forged step outputs (versions, refs) consumed by downstream jobs. Every
-// generated heredoc must therefore mint a random delimiter at runtime.
+// A multiline value written to $GITHUB_OUTPUT carries arbitrary text. With a
+// fixed heredoc delimiter, a line containing a bare "EOF" terminates the
+// heredoc early and the remaining lines parse as forged step outputs (versions,
+// refs) consumed by downstream jobs. Every generated $GITHUB_OUTPUT heredoc must
+// therefore mint a random delimiter at runtime.
 
 // assertRandomizedOutputHeredoc asserts the generated step body writes its
 // multiline output through a runtime-random delimiter rather than a fixed one.
@@ -28,7 +28,26 @@ func assertRandomizedOutputHeredoc(t *testing.T, content, key string) {
 		"heredoc must close with the same random delimiter")
 }
 
-func TestOrchestrate_ChangelogHeredocRandomDelimiter(t *testing.T) {
+// The changelog carries arbitrary commit-message text and can grow large. It is
+// no longer routed through $GITHUB_OUTPUT at all: the Generate Changelog step
+// writes it to a file on the runner temp dir, and manage-release reads that path
+// via changelog_file. This closes the heredoc-forgery vector by construction
+// (no $GITHUB_OUTPUT heredoc for the changelog to forge) and keeps large content
+// off the env/argv path (execve caps a single env var near 128KB, failing a big
+// changelog with E2BIG).
+
+// assertChangelogWrittenToFile asserts the generated Generate Changelog step
+// writes the changelog to the runner temp file and never emits it as a
+// $GITHUB_OUTPUT heredoc.
+func assertChangelogWrittenToFile(t *testing.T, content string) {
+	t.Helper()
+	assert.Contains(t, content, `echo "$RESULT" | jq -r '.changelog' > "$RUNNER_TEMP/cascade-changelog.md"`,
+		"Generate Changelog step must write the changelog to the runner temp file")
+	assert.NotContains(t, content, "changelog<<",
+		"changelog must not be emitted as a $GITHUB_OUTPUT heredoc; the forgery vector is closed by writing to a file")
+}
+
+func TestOrchestrate_ChangelogWrittenToFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStubWorkflow(t, tmpDir, "build.yaml")
 
@@ -42,10 +61,10 @@ func TestOrchestrate_ChangelogHeredocRandomDelimiter(t *testing.T) {
 
 	content, err := NewGenerator(cfg, tmpDir).Generate()
 	require.NoError(t, err)
-	assertRandomizedOutputHeredoc(t, content, "changelog")
+	assertChangelogWrittenToFile(t, content)
 }
 
-func TestPromote_ChangelogHeredocRandomDelimiter(t *testing.T) {
+func TestPromote_ChangelogWrittenToFile(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("staging", "prod"),
@@ -53,10 +72,10 @@ func TestPromote_ChangelogHeredocRandomDelimiter(t *testing.T) {
 
 	content, err := NewPromoteGenerator(cfg, "").Generate()
 	require.NoError(t, err)
-	assertRandomizedOutputHeredoc(t, content, "changelog")
+	assertChangelogWrittenToFile(t, content)
 }
 
-func TestRelease_ChangelogHeredocRandomDelimiter(t *testing.T) {
+func TestRelease_ChangelogWrittenToFile(t *testing.T) {
 	cfg := &config.TrunkConfig{
 		TrunkBranch:  "main",
 		Environments: config.EnvNames("prod"),
@@ -64,7 +83,7 @@ func TestRelease_ChangelogHeredocRandomDelimiter(t *testing.T) {
 
 	content, err := NewReleaseGenerator(cfg, "").Generate()
 	require.NoError(t, err)
-	assertRandomizedOutputHeredoc(t, content, "changelog")
+	assertChangelogWrittenToFile(t, content)
 }
 
 // TestPRPreview_SummaryHeredocRandomDelimiter asserts the plan-summary body

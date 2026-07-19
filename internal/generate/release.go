@@ -335,7 +335,11 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          fi\n")
 	sb.WriteString("          \n")
 	sb.WriteString("          RESULT=$(cascade generate-changelog --base-sha \"$LATEST_SHA\" --head-sha \"$SOURCE_SHA\" --repo \"${{ github.repository }}\")\n")
-	writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
+	// Write the changelog to a file on the runner temp dir and pass its path to
+	// manage-release via changelog_file. Placing the content on an action input
+	// makes it an environment variable, and execve caps a single env var near
+	// 128KB, so a large changelog would fail the step with E2BIG.
+	sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' > \"$RUNNER_TEMP/cascade-changelog.md\"\n")
 
 	// Create draft release
 	sb.WriteString("      - name: Create Draft Release\n")
@@ -347,7 +351,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          environment: draft\n")
 	sb.WriteString("          sha: ${{ needs.preflight.outputs.source_sha }}\n")
 	sb.WriteString("          tag: ${{ needs.preflight.outputs.semver_tag }}\n")
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// Create prerelease
@@ -361,7 +365,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          sha: ${{ needs.preflight.outputs.source_sha }}\n")
 	sb.WriteString("          tag: ${{ needs.preflight.outputs.source_version }}\n")
 	sb.WriteString("          new_tag: ${{ needs.preflight.outputs.semver_tag }}\n")
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// Publish release
@@ -375,7 +379,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          sha: ${{ needs.preflight.outputs.source_sha }}\n")
 	sb.WriteString("          tag: ${{ needs.preflight.outputs.semver_tag }}\n")
 	sb.WriteString("          delete_tag: ${{ needs.preflight.outputs.source_version }}\n") // RC tag to find release
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n\n", g.getReleaseTokenRef())
 }
 

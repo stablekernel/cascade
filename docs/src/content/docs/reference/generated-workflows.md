@@ -138,11 +138,14 @@ Baseline trigger is `workflow_dispatch` only, with inputs `environment`, `target
 |-------|---------|
 | `action` | `create`, `update`, `lock`, `prerelease`, `publish`, or `delete`. |
 | `repo`, `sha`, `tag`, `environment` | Identify the release target. |
-| `changelog` | Release notes markdown. |
+| `changelog` | Release notes markdown, passed inline. |
+| `changelog_file` | Path to a file holding the release notes. Preferred over `changelog`; the generated workflows pass the built-in changelog this way. |
 | `previous_tag`, `new_tag`, `delete_tag`, `create_tag` | Used by specific actions (changelog comparison, retagging, cleanup). |
 | `token` | A GitHub token with repo permissions. |
 
 Outputs: `release_id`, `release_url`, `html_url`. The action shells out to the same `cascade` binary already installed by `setup-cli`, so its behavior matches the CLI exactly.
+
+The built-in changelog is passed by file reference, not inline. The Generate Changelog step writes the notes to a file under the runner temp dir and the Manage Release step reads that path via `changelog_file`. This keeps large content off the environment: a changelog placed on an action input becomes an environment variable, and `execve` caps a single environment variable near 128KB, so a big changelog on that path fails the step with `E2BIG`. A file path is small and fixed, so the content never transits an input regardless of size. The inline `changelog` input remains for callers that pass notes directly.
 
 ## Opt-in companions
 

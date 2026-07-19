@@ -24,6 +24,10 @@ inputs:
     description: 'Release notes markdown'
     required: false
     default: ''
+  changelog_file:
+    description: 'Path to a file with release notes markdown (preferred over changelog; keeps large content off the env/argv path to avoid E2BIG)'
+    required: false
+    default: ''
   token:
     description: 'GitHub token with repo permissions'
     required: true
@@ -68,15 +72,24 @@ runs:
         INPUT_SHA: ${{ inputs.sha }}
         INPUT_TAG: ${{ inputs.tag }}
         INPUT_CHANGELOG: ${{ inputs.changelog }}
+        INPUT_CHANGELOG_FILE: ${{ inputs.changelog_file }}
         INPUT_PREVIOUS_TAG: ${{ inputs.previous_tag }}
         INPUT_NEW_TAG: ${{ inputs.new_tag }}
         INPUT_DELETE_TAG: ${{ inputs.delete_tag }}
         INPUT_CREATE_TAG: ${{ inputs.create_tag }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
-        # Write changelog to temp file to handle multiline content
-        CHANGELOG_FILE=$(mktemp)
-        printf '%s' "$INPUT_CHANGELOG" > "$CHANGELOG_FILE"
+        # Resolve changelog source. A caller-provided file keeps large changelog
+        # content off the env/argv path: execve caps one env var near 128KB, so a
+        # big changelog on INPUT_CHANGELOG fails with E2BIG. Fall back to the
+        # inline input for callers that still pass content directly.
+        if [[ -n "$INPUT_CHANGELOG_FILE" ]]; then
+          CHANGELOG_FILE="$INPUT_CHANGELOG_FILE"
+        else
+          CHANGELOG_FILE=$(mktemp)
+          CHANGELOG_TEMP="$CHANGELOG_FILE"
+          printf '%s' "$INPUT_CHANGELOG" > "$CHANGELOG_FILE"
+        fi
 
         # Build command arguments
         CMD_ARGS=(
@@ -93,7 +106,7 @@ runs:
 
         # Run CLI
         OUTPUT=$(cascade manage-release "${CMD_ARGS[@]}" --changelog-file "$CHANGELOG_FILE")
-        rm -f "$CHANGELOG_FILE"
+        [[ -n "${CHANGELOG_TEMP:-}" ]] && rm -f "$CHANGELOG_TEMP"
 
         # Parse and write outputs
         echo "release_id=$(echo "$OUTPUT" | sed -n '1p')" >> "$GITHUB_OUTPUT"

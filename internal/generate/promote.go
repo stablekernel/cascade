@@ -1137,7 +1137,11 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 		changelogCmd += " --contributors"
 	}
 	fmt.Fprintf(sb, "          RESULT=$(%s)\n", changelogCmd)
-	writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
+	// Write the changelog to a file on the runner temp dir and pass its path to
+	// manage-release via changelog_file. Placing the content on an action input
+	// makes it an environment variable, and execve caps a single env var near
+	// 128KB, so a large changelog would fail the step with E2BIG.
+	sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' > \"$RUNNER_TEMP/cascade-changelog.md\"\n")
 
 	// Extract release data from promotion result (for prerelease/publish steps)
 	// This contains the correct SHA and versions for the environment being released,
@@ -1179,7 +1183,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          environment: ${{ needs.preflight.outputs.target_env }}\n")
 	sb.WriteString("          sha: ${{ needs.preflight.outputs.source_sha }}\n")
 	sb.WriteString("          tag: ${{ needs.preflight.outputs.source_version }}\n")
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// For prerelease/final env targets, ensure the release exists first (create as draft if needed)
@@ -1193,7 +1197,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          environment: ${{ needs.preflight.outputs.source_env }}\n")
 	sb.WriteString("          sha: ${{ needs.preflight.outputs.source_sha }}\n")
 	sb.WriteString("          tag: ${{ needs.preflight.outputs.source_version }}\n")
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// Prerelease - at second-to-last environment, mark as pre-release but KEEP RC tag
@@ -1207,7 +1211,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          environment: ${{ needs.preflight.outputs.target_env }}\n")
 	sb.WriteString("          sha: ${{ steps.release-data.outputs.sha }}\n")
 	sb.WriteString("          tag: ${{ steps.release-data.outputs.rc_version }}\n")
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// Clean up orphaned releases for skipped environments
@@ -1242,7 +1246,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("          sha: ${{ steps.release-data.outputs.sha }}\n")
 	sb.WriteString("          tag: ${{ steps.release-data.outputs.sem_version }}\n")
 	sb.WriteString("          delete_tag: ${{ steps.release-data.outputs.rc_version }}\n") // RC tag to find release
-	sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+	sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
 
 	// Trigger the configured release-build workflow to build and attach binaries.

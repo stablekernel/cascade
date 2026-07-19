@@ -1,0 +1,87 @@
+name: "Release changelog passed by file reference"
+description: |
+  A single-environment repository generates a Release workflow into
+  promote.yaml (see 09-single-env-repo.yaml). Its built-in changelog can grow
+  large on a big-history environment, so the Generate Changelog step writes the
+  content to a file on the runner temp dir and the Manage Release step reads
+  that path via changelog_file rather than placing the content on a composite
+  action input. Passing large content on an input makes it an environment
+  variable, and execve caps a single env var near 128KB, so a big changelog on
+  that path fails the step with E2BIG.
+
+  This scenario cuts a draft RC (orchestrate exercises the manage-release update
+  via changelog_file at runtime) and then publishes it (manage-release publish
+  via changelog_file at runtime). Both runtime paths flip the observed release
+  state, and the generation-only workflow_files assertions pin the file-write
+  redirect and the changelog_file wiring so the content never transits an input.
+
+config:
+  trunk_branch: main
+  environments: [prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+  deploys: []
+
+steps:
+  - name: "Initial feature commit"
+    action: commit
+    commit:
+      message: "feat: add initial feature"
+      files:
+        src/app.go: |
+          package main
+          func main() {
+            println("Hello v0.1.0")
+          }
+
+  - name: "Orchestrate cuts a draft RC via changelog_file"
+    action: orchestrate
+    expect:
+      state:
+        prod:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      jobs:
+        build-app: success
+      releases:
+        - tag: "v0.1.0-rc.0"
+          prerelease: true
+          draft: true
+      tags:
+        exist: ["v0.1.0-rc.0"]
+      # Generation-only: the built-in changelog is written to a file and passed
+      # to the Manage Release step by path, so large content never reaches an
+      # action input (env var, capped near 128KB by execve).
+      workflow_files:
+        - path: ".github/workflows/promote.yaml"
+          contains:
+            - "          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n"
+            - "echo \"$RESULT\" | jq -r '.changelog' > \"$RUNNER_TEMP/cascade-changelog.md\"\n"
+          not_contains:
+            # The changelog content never rides an action input nor a
+            # $GITHUB_OUTPUT heredoc for the built-in path.
+            - "changelog: ${{ steps.changelog.outputs.changelog }}"
+            - "changelog<<"
+
+  - name: "Publish the release via changelog_file"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        release:
+          sha: commit1
+          version: "v0.1.0"
+        prod:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+      releases:
+        - tag: "v0.1.0"
+          prerelease: false
+          draft: false
+          latest: true
+      tags:
+        exist: ["v0.1.0"]
+        deleted: ["v0.1.0-rc.0"]
