@@ -137,12 +137,7 @@ jobs:
             --head-sha "${{ needs.setup.outputs.head_sha }}" \
             --contributors \
             --repo "${{ github.repository }}")
-          CASCADE_DELIM="$(dd if=/dev/urandom bs=15 count=1 status=none | base64)"
-          {
-            echo "changelog<<${CASCADE_DELIM}"
-            echo "$RESULT" | jq -r '.changelog'
-            echo "${CASCADE_DELIM}"
-          } >> "$GITHUB_OUTPUT"
+          echo "$RESULT" | jq -r '.changelog' > "$RUNNER_TEMP/cascade-changelog.md"
       - name: Manage Release
         uses: ./.github/actions/manage-release
         with:
@@ -153,7 +148,7 @@ jobs:
           tag_only: 'true'
           environment: prerelease
           sha: ${{ needs.setup.outputs.head_sha }}
-          changelog: ${{ steps.changelog.outputs.changelog }}
+          changelog_file: ${{ runner.temp }}/cascade-changelog.md
           previous_tag: ${{ needs.setup.outputs.previous_tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Dispatch Release Candidate Build
