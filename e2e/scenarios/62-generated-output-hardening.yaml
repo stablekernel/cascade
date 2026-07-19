@@ -9,12 +9,15 @@ description: |
      parser rejects it, so the whole workflow is unusable). A sibling deploy
      with run_policy: always proves the combined form still chains correctly.
 
-  2. $GITHUB_OUTPUT heredoc integrity: changelog and plan-summary bodies carry
-     arbitrary commit-message and manifest-derived text. Every emitted heredoc
-     must mint a random delimiter at runtime (dd | base64) so no line of the
-     value can close the block early and forge extra step outputs. The fixed
-     EOF / CASCADE_EOF delimiters must be gone from orchestrate, promote, and
-     the PR-preview summary step.
+  2. Changelog stays off the env/output path: the built-in changelog carries
+     arbitrary commit-message text whose size the manifest does not bound, so
+     orchestrate and promote write it to a file on the runner temp dir and pass
+     the path via changelog_file, rather than emitting it through a
+     $GITHUB_OUTPUT heredoc that would land on a composite-action input (an
+     environment variable capped near 128KB by execve, failing with E2BIG). The
+     PR-preview summary body remains a heredoc and must still mint a random
+     delimiter at runtime (dd | base64) so no line of the value can close the
+     block early and forge extra step outputs.
 
   3. github-script splice removal: the PR-preview comment step must bind the
      plan body via env: (PLAN_BODY) and read process.env.PLAN_BODY, never
@@ -62,20 +65,23 @@ steps:
             - "if: always()\n    uses:"
             # Always policy keeps the prefix and chains the dependency condition.
             - "always() &&\n      (needs.build-app.result == 'success' || needs.build-app.result == 'skipped')"
-            # Changelog heredoc uses a runtime-random delimiter.
-            - "CASCADE_DELIM=\"$(dd if=/dev/urandom bs=15 count=1 status=none | base64)\""
-            - "echo \"changelog<<${CASCADE_DELIM}\""
+            # Changelog is written to a file on the runner temp dir and passed by
+            # path, keeping large content off the env/output heredoc path.
+            - "echo \"$RESULT\" | jq -r '.changelog' > \"$RUNNER_TEMP/cascade-changelog.md\""
+            - "changelog_file: ${{ runner.temp }}/cascade-changelog.md"
           not_contains:
             # The dangling operator form that GitHub's parser rejects.
             - "always() &&\n    uses:"
-            # The forgeable fixed delimiter.
-            - "changelog<<EOF"
+            # The changelog must never ride the output heredoc / env path again.
+            - "echo \"changelog<<"
+            - "changelog: ${{ steps.changelog.outputs.changelog }}"
         - path: ".github/workflows/promote.yaml"
           contains:
-            - "CASCADE_DELIM=\"$(dd if=/dev/urandom bs=15 count=1 status=none | base64)\""
-            - "echo \"changelog<<${CASCADE_DELIM}\""
+            - "echo \"$RESULT\" | jq -r '.changelog' > \"$RUNNER_TEMP/cascade-changelog.md\""
+            - "changelog_file: ${{ runner.temp }}/cascade-changelog.md"
           not_contains:
-            - "changelog<<EOF"
+            - "echo \"changelog<<"
+            - "changelog: ${{ steps.changelog.outputs.changelog }}"
         - path: ".github/workflows/cascade-pr-preview.yaml"
           contains:
             # Summary body heredoc is randomized like every other heredoc.

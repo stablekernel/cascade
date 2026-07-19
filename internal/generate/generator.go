@@ -2301,7 +2301,11 @@ func (g *Generator) writeChangelogStep(sb *strings.Builder) {
 			sb.WriteString("            --contributors \\\n")
 		}
 		sb.WriteString("            --repo \"${{ github.repository }}\")\n")
-		writeOutputHeredocLines(sb, "          ", "changelog", "echo \"$RESULT\" | jq -r '.changelog'")
+		// Write the changelog to a file on the runner temp dir and pass its path
+		// to manage-release via changelog_file. Placing the content on an action
+		// input makes it an environment variable, and execve caps a single env
+		// var near 128KB, so a large changelog would fail the step with E2BIG.
+		sb.WriteString("          echo \"$RESULT\" | jq -r '.changelog' > \"$RUNNER_TEMP/cascade-changelog.md\"\n")
 	}
 }
 
@@ -2380,11 +2384,18 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 	sb.WriteString("          sha: ${{ needs.setup.outputs.head_sha }}\n")
 	if g.config.ChangelogEnabled() {
 		if g.config.HasCustomChangelog() {
-			// Custom changelog runs as its own job; read its job output.
+			// Custom changelog runs as its own job on a different runner, so its
+			// content only reaches this step as a cross-job workflow output.
+			// That path retains the content input; it cannot be file-referenced
+			// without an artifact contract and is a documented residual. The
+			// built-in path below passes the changelog by file (changelog_file).
 			fmt.Fprintf(sb, "          changelog: ${{ needs.%s.outputs.changelog }}\n", changelogJobID)
 		} else {
-			// Built-in changelog runs as a step in this job; read the step output.
-			sb.WriteString("          changelog: ${{ steps.changelog.outputs.changelog }}\n")
+			// Built-in changelog runs as a step in this job, which wrote the
+			// content to a file on the runner temp dir. Pass its path so large
+			// content never transits an action input (env var, capped near 128KB
+			// by execve, which fails a big changelog with E2BIG).
+			sb.WriteString("          changelog_file: ${{ runner.temp }}/cascade-changelog.md\n")
 		}
 	}
 	sb.WriteString("          previous_tag: ${{ needs.setup.outputs.previous_tag }}\n")
