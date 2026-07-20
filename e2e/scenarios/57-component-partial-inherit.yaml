@@ -11,8 +11,8 @@ description: |
   enabled defaulting back to false: api's orchestrate workflow would have emitted
   no deployment reporting at all. Under deep-merge api keeps the inherited
   enabled: true and layers its keep_prior_active on top, so its finalize job
-  reports the deployment with auto_inactive=false, while web inherits the plain
-  enabled: true and reports with the default auto_inactive=true. The scenario
+  reports the deployment with auto_inactive false, while web inherits the plain
+  enabled: true and reports with the default auto_inactive true. The scenario
   generates the per-component set, proves the roundtrip is drift-free, and asserts
   each component's orchestrate workflow carries the correctly merged deployment
   reporting rather than the sibling's.
@@ -70,21 +70,23 @@ steps:
       expect_exit: 0
     # api set only keep_prior_active; it inherits the top-level enabled: true, so
     # its orchestrate workflow still creates a deployment and, because
-    # keep_prior_active merged in, reports it with auto_inactive=false. web
+    # keep_prior_active merged in, reports it with auto_inactive false. web
     # inherits the bare enabled: true and reports with the default
-    # auto_inactive=true. The not_contains cross-checks that neither component
-    # picked up the other's auto_inactive value.
+    # auto_inactive true. auto_inactive rides in the create-deployment JSON body
+    # ("auto_inactive":<bool>), so the assertions match that form. The
+    # not_contains cross-checks that neither component picked up the other's
+    # auto_inactive value.
     expect:
       workflow_files:
         - path: ".github/workflows/orchestrate-api.yaml"
           contains:
             - "Create deployment"
-            - "auto_inactive=false"
+            - '"auto_inactive":false'
           not_contains:
-            - "auto_inactive=true"
+            - '"auto_inactive":true'
         - path: ".github/workflows/orchestrate-web.yaml"
           contains:
             - "Create deployment"
-            - "auto_inactive=true"
+            - '"auto_inactive":true'
           not_contains:
-            - "auto_inactive=false"
+            - '"auto_inactive":false'
