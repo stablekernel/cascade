@@ -94,6 +94,18 @@ runs:
       run: |
         set -euo pipefail
 
+        # Sleep for base seconds plus up to base seconds of random jitter. Many
+        # suites are watched concurrently on a full fan-out, so polling in
+        # lockstep re-trips GitHub's shared secondary rate limit; the jitter
+        # spreads the retries out. A non-positive base is a no-op.
+        sleep_with_jitter() {
+          local base="$1"
+          if [ "$base" -le 0 ]; then
+            return 0
+          fi
+          sleep "$(( base + (RANDOM % base) ))"
+        }
+
         # One full dispatch -> recover -> watch cycle. Returns 0 only when the
         # recovered run concludes success, and non-zero on a failed/cancelled
         # run, a recovery miss, or a watch timeout. It never calls `exit`, so the
@@ -125,8 +137,13 @@ runs:
 
           # Recover the run id. Cross-repo dispatch is async; the run may not be
           # listable immediately, so poll with a bounded retry.
-          local RUN_ID="" recover_attempt
+          local RUN_ID="" recover_attempt list_rc
           for recover_attempt in $(seq 1 "$RECOVER_ATTEMPTS"); do
+            # Tolerate a transient list error (secondary rate limit, 5xx, or auth
+            # blip). Under `set -e` a failed command substitution would abort the
+            # whole action and skip the outer retry, so capture the status and
+            # treat a failure as "not visible yet" and keep polling instead of
+            # failing closed on the first blip.
             RUN_ID=$(gh run list \
               --repo "$TARGET_REPO" \
               --workflow "$TARGET_WORKFLOW" \
@@ -134,13 +151,18 @@ runs:
               --created ">=$DISPATCH_TS" \
               --limit 20 \
               --json databaseId,status,conclusion,createdAt \
-              --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty')
-            if [ -n "$RUN_ID" ]; then
+              --jq 'sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>&1) \
+              && list_rc=0 || list_rc=$?
+            if [ "$list_rc" -ne 0 ]; then
+              echo "Transient error listing runs (attempt $recover_attempt/$RECOVER_ATTEMPTS): $RUN_ID"
+              RUN_ID=""
+            elif [ -n "$RUN_ID" ]; then
               echo "Recovered run id $RUN_ID on attempt $recover_attempt"
               break
+            else
+              echo "Run not visible yet (attempt $recover_attempt/$RECOVER_ATTEMPTS)"
             fi
-            echo "Run not visible yet (attempt $recover_attempt/$RECOVER_ATTEMPTS); sleeping ${RECOVER_INTERVAL}s"
-            sleep "$RECOVER_INTERVAL"
+            sleep_with_jitter "$RECOVER_INTERVAL"
           done
 
           if [ -z "$RUN_ID" ]; then
@@ -193,7 +215,7 @@ runs:
                 return 1
               fi
 
-              sleep "$WATCH_INTERVAL"
+              sleep_with_jitter "$WATCH_INTERVAL"
               continue
             fi
 
@@ -213,8 +235,8 @@ runs:
               fi
             fi
 
-            echo "Run $RUN_ID status=$status (attempt $attempt/$MAX_ATTEMPTS), waiting ${WATCH_INTERVAL}s..."
-            sleep "$WATCH_INTERVAL"
+            echo "Run $RUN_ID status=$status (attempt $attempt/$MAX_ATTEMPTS), waiting ~${WATCH_INTERVAL}s..."
+            sleep_with_jitter "$WATCH_INTERVAL"
           done
 
           echo "::error::Timed out waiting for run $RUN_ID in $TARGET_REPO after $MAX_ATTEMPTS attempts"
