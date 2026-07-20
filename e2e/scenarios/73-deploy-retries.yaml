@@ -156,8 +156,14 @@ steps:
             - "deploy-web-retry-2:"
             # Each shim is gated on the attempt immediately before it, so the
             # chain is sequential rather than every shim firing off the original.
-            - "if: needs.deploy-web.result == 'failure'"
-            - "if: needs.deploy-web-retry-1.result == 'failure'"
+            # The gate is wrapped in ${{ }} and carries the !cancelled() status
+            # function: GitHub applies an implicit needs-success requirement to a
+            # job whose if: has no status function, which would SKIP the shim
+            # exactly when the predecessor failed (the only time it should run).
+            # This is a text assertion; act evaluates if: leniently and cannot
+            # prove the real-GitHub skip, which is what the live fleet caught.
+            - "if: ${{ !cancelled() && needs.deploy-web.result == 'failure' }}"
+            - "if: ${{ !cancelled() && needs.deploy-web-retry-1.result == 'failure' }}"
             # A job result is immutable, so needs.deploy-web.result stays
             # 'failure' for the whole run even after a shim redeploys the
             # environment successfully. Both the finalize failure gate and the
@@ -172,12 +178,22 @@ steps:
             # its if: gate reads below are actually resolvable references.
             - "needs: [setup, deploy-web, deploy-web-retry-1, deploy-web-retry-2]"
             - "(needs.deploy-web.result == 'success' || needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success')"
+            # notify's own if: must ALSO carry a status function, or GitHub's
+            # implicit needs-success gate skips it the moment deploy-web fails,
+            # before the effective-result OR above can rescue it via a shim.
+            - "!cancelled()"
           not_contains:
             # retries: 2 emits exactly two shims.
             - "deploy-web-retry-3:"
             # The manifest gate must never bind to the immutable base result: that
             # is what denied a retry-rescued deploy in recorded state.
             - "WEB_RESULT: ${{ needs.deploy-web.result }}"
+            # Lock the fix: the shim gate must never regress to the bare boolean
+            # form (no status function), which real GitHub skips when the base
+            # failed. The wrapped ${{ !cancelled() && ... }} form is asserted
+            # above; these bare forms must be absent.
+            - "if: needs.deploy-web.result == 'failure'"
+            - "if: needs.deploy-web-retry-1.result == 'failure'"
 
   - name: "Orchestrate: the deploy callback genuinely fails at runtime"
     action: orchestrate

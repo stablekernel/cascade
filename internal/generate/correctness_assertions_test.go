@@ -490,3 +490,78 @@ func TestGenCorrectness_ReconcileCommit_AppendVsFollowup(t *testing.T) {
 			"followup mode must not push in place onto the PR head branch")
 	})
 }
+
+// TestGenCorrectness_RetryShim_IfGateCarriesStatusFunction pins the fix for a
+// real-GitHub defect the fleet caught: a retry shim (and a dependent of a
+// retried callback) whose if: gate is a BARE boolean expression is skipped by
+// GitHub's implicit needs-success gate exactly when it is needed. GitHub only
+// lifts that implicit gate when the if: contains a status-check function
+// (always(), !cancelled(), success(), failure(), cancelled()); a bare
+// "needs.X.result == 'failure'" does not qualify, so when X fails the shim is
+// skipped and the rescue never runs.
+//
+// A retry re-invokes a deployment, so a cancelled run must NOT trigger it:
+// !cancelled() (not always()) is the correct function. The "== 'failure'"
+// clause already excludes a cancelled predecessor (its result is 'cancelled',
+// not 'failure'), so !cancelled() only adds the honor-the-cancel behavior for a
+// run cancelled mid-flight, which is exactly what a re-deploy shim wants.
+//
+// The `retries` field is an int, so it is outside the string-field correctness
+// census surface (emitted_fields_guard_test.go walks string-carrying fields
+// only); that is precisely why this shim-if defect escaped the census. This
+// assertion, plus the dependent coverage folded into GM5/GM7 (the censused
+// deploys[].depends_on[] assertions), is the regression guard. The runtime
+// rescue itself is the fleet's proof; this pins the emitted shape.
+func TestGenCorrectness_RetryShim_IfGateCarriesStatusFunction(t *testing.T) {
+	dir := correctnessDir(t)
+
+	t.Run("retry_shims_and_dependent_lift_the_needs_gate", func(t *testing.T) {
+		cfg := &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: config.EnvNames("dev"),
+			Deploys: []config.DeployConfig{
+				{Name: "web", Workflow: "deploy.yaml", Triggers: []string{"src/**"}, Retries: 2},
+				{Name: "api", Workflow: "deploy.yaml", Triggers: []string{"src/**"}, DependsOn: []string{"web"}},
+			},
+		}
+		out, err := NewGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		retry1 := pass10JobBlock(t, out, "deploy-web-retry-1")
+		assert.Contains(t, retry1, "if: ${{ !cancelled() && needs.deploy-web.result == 'failure' }}",
+			"retry-1's if: must carry a status function so GitHub does not skip it via the implicit needs-success gate when the base fails")
+		assert.NotContains(t, retry1, "if: needs.deploy-web.result == 'failure'",
+			"a bare boolean gate is skipped on real GitHub exactly when the base failed")
+
+		retry2 := pass10JobBlock(t, out, "deploy-web-retry-2")
+		assert.Contains(t, retry2, "if: ${{ !cancelled() && needs.deploy-web-retry-1.result == 'failure' }}",
+			"every rung of the ladder, including retry-N chained off retry-(N-1), must lift the implicit gate")
+		assert.NotContains(t, retry2, "if: needs.deploy-web-retry-1.result == 'failure'",
+			"retry-2's bare boolean gate would be skipped when retry-1 failed")
+
+		dependent := pass10JobBlock(t, out, "deploy-api")
+		assert.Contains(t, dependent, "!cancelled()",
+			"a dependent of a retried deploy must lift the implicit needs-success gate so its effective-result OR is evaluated after the base failed but a shim rescued it")
+		assert.Contains(t, dependent, "(needs.deploy-web.result == 'success' || needs.deploy-web-retry-1.result == 'success' || needs.deploy-web-retry-2.result == 'success')",
+			"the dependent must still judge the dependency's effective result across the whole ladder")
+	})
+
+	t.Run("dependent_of_non_retried_deploy_is_unchanged", func(t *testing.T) {
+		cfg := &config.TrunkConfig{
+			TrunkBranch:  "main",
+			Environments: config.EnvNames("dev"),
+			Deploys: []config.DeployConfig{
+				{Name: "web", Workflow: "deploy.yaml", Triggers: []string{"src/**"}},
+				{Name: "api", Workflow: "deploy.yaml", Triggers: []string{"src/**"}, DependsOn: []string{"web"}},
+			},
+		}
+		out, err := NewGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		dependent := pass10JobBlock(t, out, "deploy-api")
+		assert.NotContains(t, dependent, "!cancelled()",
+			"a dependent of a NON-retried deploy has no immutable-result hazard, so it must not gain a status function (no churn)")
+		assert.Contains(t, dependent, "needs.deploy-web.result == 'success'",
+			"the no-retry dependent still gates on the bare dependency success")
+	})
+}

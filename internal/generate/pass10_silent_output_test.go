@@ -205,6 +205,11 @@ func TestGM5_DependentDeploy_JudgesEffectiveResult(t *testing.T) {
 	assert.Contains(t, block, "needs.deploy-web-retry-1.result == 'success'",
 		"dependent deploy must consult the base deploy's retry shims")
 	assert.Contains(t, block, "needs.deploy-web-retry-2.result == 'success'")
+	// The if: must carry a status function (!cancelled()). Without it GitHub's
+	// implicit needs-success gate skips the dependent the moment the base deploy
+	// fails, before the effective-result OR can rescue it via a shim.
+	assert.Contains(t, block, "!cancelled()",
+		"a dependent of a retried deploy must lift the implicit needs-success gate so its effective-result OR is actually evaluated")
 	// The duplicated immutable-result clause must be gone.
 	assert.NotContains(t, block, "needs.deploy-web.result == 'success' &&\n      needs.deploy-web.result == 'success'",
 		"the duplicated dependency clause must be removed")
@@ -235,14 +240,16 @@ func TestGM5_DependentDeploy_NoRetries_SingleClause(t *testing.T) {
 // needs: list carries every retry shim job ID its dependency declares, not just
 // the base dependency's job ID.
 //
-// The if: gate (effectiveDepSuccessGate, proven by TestGM5 above) already
-// references needs.deploy-web-retry-1 / -2 so a retry-rescued dependency does
-// not skip its dependents. But GitHub Actions can only resolve a needs.<job>
-// reference for a job actually listed in that job's needs:; a reference to a
-// job outside needs: is rejected by actionlint at parse and, if it somehow ran,
-// would resolve to an ever-empty value at runtime. Before this fix needs: was
-// built from GetDirectDependencies alone (the base job ID only), so the if:
-// gate and the needs: list silently disagreed.
+// The if: gate (effectiveDepSuccessGate, proven by TestGM5 above) references
+// needs.deploy-web-retry-1 / -2 so a retry-rescued dependency does not skip its
+// dependents. Two conditions must hold for that to work on real GitHub. First,
+// GitHub Actions can only resolve a needs.<job> reference for a job actually
+// listed in that job's needs:; a reference to a job outside needs: is rejected
+// by actionlint at parse and, if it somehow ran, would resolve to an ever-empty
+// value at runtime (this test pins the needs: list). Second, the if: must carry
+// a status-check function so GitHub does not apply its implicit needs-success
+// gate; without it the dependent skips the moment the base deploy fails, before
+// the effective-result OR can rescue it (pinned here via !cancelled()).
 func TestGM7_DependentDeploy_NeedsIncludesRetryShims(t *testing.T) {
 	dir := pass10Fixture(t, pass10DeployWorkflow)
 	cfg := &config.TrunkConfig{
@@ -260,6 +267,9 @@ func TestGM7_DependentDeploy_NeedsIncludesRetryShims(t *testing.T) {
 	assert.Contains(t, block, "needs: [setup, deploy-web, deploy-web-retry-1, deploy-web-retry-2]",
 		"needs: must list the base dependency plus every retry shim it declares, "+
 			"in ladder order, so the if: gate referencing those shims is well-formed")
+	assert.Contains(t, block, "!cancelled()",
+		"the if: gate must lift the implicit needs-success gate; a bare boolean gate skips the "+
+			"dependent when the base deploy fails, defeating the retry-rescue the needs: list enables")
 }
 
 // TestGM7_DependentDeploy_NoRetries_NeedsByteIdentical proves the no-retries
