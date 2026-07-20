@@ -52,13 +52,22 @@ steps:
             # A dry-run run skips its deploys, so it must not create a real
             # Deployment: every lifecycle step is also gated on a non-dry-run run.
             - "        if: ${{ github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true' }}"
-            - "          deployment_id=$(gh api repos/${{ github.repository }}/deployments \\"
-            - "            --field auto_inactive=false \\"
+            # The create body is assembled as JSON and piped in via --input so
+            # required_contexts is a real, explicit empty array. An empty array
+            # means "no required contexts"; sending the literal string "[]"
+            # (via --field/--raw-field) made GitHub reject the create with 422.
+            - '          deployment_id=$(printf ''{"ref":"%s","environment":"%s","auto_merge":false,"required_contexts":[],"auto_inactive":false}'' "${{ github.sha }}" "$ENV_NAME" \'
+            - "            | gh api repos/${{ github.repository }}/deployments \\"
+            - "              --input - \\"
             - "      - name: Set deployment in_progress"
             - "            --field state=in_progress"
             - "      - name: Set deployment status"
             - "        if: ${{ github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true' && always() }}"
             - "            production) environment_url='https://app.example.com' ;;"
+          not_contains:
+            # The string form GitHub rejected with HTTP 422 must never reappear.
+            - "--raw-field required_contexts='[]'"
+            - "required_contexts='[]'"
 
   - name: "Regenerate and confirm no drift"
     action: verify
