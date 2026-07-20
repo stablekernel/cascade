@@ -20,10 +20,10 @@ Auto-promote publishes the final version, but only when the entire fleet is gree
 The fleet ([`.github/workflows/fleet-e2e.yaml`](https://github.com/stablekernel/cascade/blob/main/.github/workflows/fleet-e2e.yaml))
 revalidates the downstream `cascade-example-*` fleet on live GitHub. Every example
 repository dispatches its own `scenario-suite.yaml` under one shared fleet token. A
-green run means this cascade version validated across all twelve example repositories,
+green run means this cascade version validated across all fourteen example repositories,
 each running its own scenario suite in its own repository context.
 
-Dispatching all twelve repositories at once tripped transient GitHub API failures
+Dispatching all fourteen repositories at once tripped transient GitHub API failures
 (401, 403, and 500 responses) on a rotating repository each run, because they all
 draw on the same token. The fan-out is therefore split into sequenced lanes that
 hold peak live concurrency near two repositories at a time. A `gh()` transient-retry
@@ -49,7 +49,7 @@ flowchart LR
 | `primary` | Runs first and must pass before its dependents start. |
 | `dependents` | `artifact-a` and `artifact-b` mutate the primary's shared external state, so they run only after the primary is green. The two run together, which is the lane that defines the fleet's peak of about two repositories. |
 | `heavy` | `4env` is the heaviest and most fragile repository, so it runs alone in its own job, sequenced after the dependents lane so the two never stack. |
-| `remainder` | The light repositories (`3env`, `2env`, `single-env`, `release-only`, `no-env`, `callbacks`, `rollback-dispatch`, `monorepo`) run in a matrix capped at two in flight via `max-parallel`, sequenced after the heavy lane. |
+| `remainder` | The light repositories (`3env`, `2env`, `single-env`, `release-only`, `no-env`, `callbacks`, `rollback-dispatch`, `monorepo`, `retries`, `dryrun`) run in a matrix capped at two in flight via `max-parallel`, sequenced after the heavy lane. |
 | `aggregate` | The Fleet gate. It needs every lane, so a green gate means every selected repository passed. Auto-promote keys off this conclusion. |
 
 The fleet triggers on completion of the Release workflow for a release-candidate or
