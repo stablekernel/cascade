@@ -1275,6 +1275,13 @@ func (g *Generator) writeStrategyBlock(sb *strings.Builder, m *config.MatrixConf
 
 func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, needs []string) {
 	var conditions []string
+	// dependsOnRetriedJob records that a gated dependency declares retries, so its
+	// effective-result clause references retry shims. When it does, the if: must
+	// carry a status-check function: GitHub otherwise applies its implicit
+	// needs-success gate and skips this job the moment the base dependency fails,
+	// before the effective-result OR can rescue it via a shim. Only the default
+	// run_policy needs this here; the always/force branches already emit always().
+	dependsOnRetriedJob := false
 	buildLinkedDeploy := false
 	// Dependencies already emitted by the build-linked path below, so the
 	// general dependency loop does not emit a second, duplicate clause for them.
@@ -1307,6 +1314,9 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 						// No condition needed for force
 					default:
 						conditions = append(conditions, effectiveDepSuccessGate(depJobID, depRetries))
+						if depRetries > 0 {
+							dependsOnRetriedJob = true
+						}
 					}
 				}
 				break
@@ -1339,6 +1349,9 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 		switch info.RunPolicy {
 		case config.RunPolicyDefault, "":
 			conditions = append(conditions, effectiveDepSuccessGate(depJobID, depInfo.Retries))
+			if depInfo.Retries > 0 {
+				dependsOnRetriedJob = true
+			}
 		case config.RunPolicyAlways:
 			conditions = append(conditions, fmt.Sprintf("(%s || needs.%s.result == 'skipped')", effectiveSuccessCond(depJobID, depInfo.Retries), depJobID))
 		case config.RunPolicyForce:
@@ -1360,6 +1373,14 @@ func (g *Generator) writeIfCondition(sb *strings.Builder, info CallbackInfo, nee
 			return
 		}
 		sb.WriteString("    if: |\n      always() &&\n")
+	} else if dependsOnRetriedJob {
+		// A default-policy job gating on a retried dependency must lift GitHub's
+		// implicit needs-success gate, or it is skipped the moment the base
+		// dependency fails, before its effective-result OR can rescue it. Use
+		// !cancelled() (consistent with the retry shim's own gate) so a cancelled
+		// run does not force the dependent to run. dependsOnRetriedJob is only set
+		// after a condition was appended, so len(conditions) > 0 holds here.
+		sb.WriteString("    if: |\n      !cancelled() &&\n")
 	} else if len(conditions) > 0 {
 		sb.WriteString("    if: |\n")
 	}
@@ -1584,7 +1605,23 @@ func (g *Generator) writeRetryJob(sb *strings.Builder, info CallbackInfo, workfl
 	fmt.Fprintf(sb, "  %s:\n", retryJobName)
 	fmt.Fprintf(sb, "    name: %s - Retry %d\n", info.DisplayName, retryNum)
 	fmt.Fprintf(sb, "    needs: [setup, %s]\n", prevJobName)
-	fmt.Fprintf(sb, "    if: needs.%s.result == 'failure'\n", prevJobName)
+	// The gate must carry a status-check function. GitHub applies an implicit
+	// needs-success requirement to any job whose if: has no status function, so a
+	// BARE "needs.<prev>.result == 'failure'" is skipped exactly when the
+	// predecessor failed, which is the only time a retry shim should run. Lift
+	// that implicit gate with !cancelled() rather than always(): a retry
+	// re-invokes the callback, and a run cancelled mid-flight (superseded by a
+	// newer run, or cancelled by an operator) must not re-deploy. The
+	// "== 'failure'" clause already excludes a cancelled predecessor (its result
+	// is 'cancelled', not 'failure'), so !cancelled() only governs the whole-run
+	// cancellation case, where honoring the cancel is correct.
+	//
+	// The expression is wrapped in ${{ }} (the idiom used across promote.go /
+	// external.go) because a bare YAML scalar may not begin with "!": leading
+	// "!" is a YAML tag indicator and the "&&" trips the anchor parser, both of
+	// which actionlint and GitHub reject. The wrapper keeps the "!" inside the
+	// expression context where it is the boolean-negation operator.
+	fmt.Fprintf(sb, "    if: ${{ !cancelled() && needs.%s.result == 'failure' }}\n", prevJobName)
 	// timeout-minutes is forbidden on a reusable-workflow caller job
 	// (jobs.<id>.uses): GitHub rejects the workflow at parse time. A retry shim
 	// re-invokes the reusable workflow via uses:, so no timeout is emitted here.
