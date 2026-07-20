@@ -62,14 +62,18 @@ func writeNativeDeploymentSteps(sb *strings.Builder, cfg *config.TrunkConfig, en
 	sb.WriteString(body + "  GH_TOKEN: ${{ github.token }}\n")
 	sb.WriteString(body + "run: |\n")
 	fmt.Fprintf(sb, "%s  ENV_NAME=\"%s\"\n", body, envExpr)
-	fmt.Fprintf(sb, "%s  deployment_id=$(gh api repos/${{ github.repository }}/deployments \\\n", body)
-	sb.WriteString(body + "    --method POST \\\n")
-	sb.WriteString(body + "    --field ref=${{ github.sha }} \\\n")
-	sb.WriteString(body + "    --field environment=\"$ENV_NAME\" \\\n")
-	sb.WriteString(body + "    --field auto_merge=false \\\n")
-	sb.WriteString(body + "    --raw-field required_contexts='[]' \\\n")
-	fmt.Fprintf(sb, "%s    --field auto_inactive=%t \\\n", body, deploymentAutoInactive(cfg))
-	sb.WriteString(body + "    --jq '.id')\n")
+	// Assemble the create-deployment request body as JSON and pipe it in via
+	// --input so required_contexts is a real empty array. An explicit [] means
+	// the deployment is not gated on any status contexts; omitting the field
+	// would instead make GitHub apply the repository's default required
+	// contexts, a different and potentially blocking behavior. gh api --field
+	// and --raw-field always send scalar strings, so an empty JSON array cannot
+	// be expressed through them; the body is built here and read from stdin.
+	fmt.Fprintf(sb, "%s  deployment_id=$(printf '{\"ref\":\"%%s\",\"environment\":\"%%s\",\"auto_merge\":false,\"required_contexts\":[],\"auto_inactive\":%t}' \"${{ github.sha }}\" \"$ENV_NAME\" \\\n", body, deploymentAutoInactive(cfg))
+	sb.WriteString(body + "    | gh api repos/${{ github.repository }}/deployments \\\n")
+	sb.WriteString(body + "      --method POST \\\n")
+	sb.WriteString(body + "      --input - \\\n")
+	sb.WriteString(body + "      --jq '.id')\n")
 	sb.WriteString(body + "  echo \"deployment_id=${deployment_id}\" >> \"$GITHUB_OUTPUT\"\n")
 
 	// Mark the deployment in_progress.

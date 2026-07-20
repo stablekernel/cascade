@@ -74,6 +74,29 @@ func TestNativeDeployments_Enabled(t *testing.T) {
 		"terminal status must derive from the deploy job result")
 }
 
+// TestNativeDeployments_RequiredContextsIsJSONArray proves the create-deployment
+// step sends required_contexts as a real JSON array, not the literal string
+// "[]". gh api --field/--raw-field always transmit scalar strings, so the prior
+// `--raw-field required_contexts='[]'` made GitHub receive "[]" and reject the
+// create with HTTP 422 (not an array or null). The explicit empty array must be
+// preserved, not dropped: omitting the field would let GitHub apply the repo's
+// default required contexts instead of "no required contexts".
+func TestNativeDeployments_RequiredContextsIsJSONArray(t *testing.T) {
+	cfg, tmpDir := nativeDeploymentsConfig(t)
+
+	out, err := NewGenerator(cfg, tmpDir).Generate()
+	require.NoError(t, err)
+
+	assert.NotContains(t, out, "--raw-field required_contexts='[]'",
+		"required_contexts must not be sent via --raw-field (transmits the literal string \"[]\", which GitHub rejects with HTTP 422)")
+	assert.NotContains(t, out, "required_contexts='[]'",
+		"required_contexts must not be sent as a shell string in any form")
+	assert.Contains(t, out, `"required_contexts":[]`,
+		"required_contexts must be sent as a real, explicit empty JSON array")
+	assert.Contains(t, out, "--input -",
+		"the create-deployment body must be piped in as JSON via --input so the empty array survives")
+}
+
 // TestNativeDeployments_Disabled proves none of the Deployments API wiring is
 // emitted when the toggle is absent, keeping the OFF-state output unchanged.
 func TestNativeDeployments_Disabled(t *testing.T) {
