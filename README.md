@@ -51,7 +51,7 @@ Read [How Cascade works](https://stablekernel.github.io/cascade/start/how-it-wor
 go install github.com/stablekernel/cascade/cmd/cascade@latest
 ```
 
-See [Getting started](https://stablekernel.github.io/cascade/start/getting-started/) for the pinned-version install and the `setup-cli` action, both of which most teams should use instead of a bare `@latest` install.
+See [Getting started](https://stablekernel.github.io/cascade/start/getting-started/) for the pinned-version install and the `setup-cli` action, both of which most teams should use instead of a bare `@latest` install. If your organization restricts Actions to an allowlist, generate with `--cli-install=binary` so the generated workflows install the CLI inline with no third-party action (same signed-release verification); see the [`--cli-install` flag](https://stablekernel.github.io/cascade/reference/cli/#installing-the-cli-in-generated-workflows).
 
 Write a manifest, write your build and deploy callbacks, then generate. Callbacks must exist first: the generator reads their `workflow_call` outputs to wire the rest.
 

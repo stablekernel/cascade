@@ -135,6 +135,28 @@ cascade generate-workflow
 | `--push`, `-p` | bool | false | Push (implies `--commit`) |
 | `--orchestrate-only` | bool | false | Only generate the orchestrate workflow |
 | `--promote-only` | bool | false | Only generate the promote workflow |
+| `--cli-install` | string | `action` | How generated workflows install the cascade CLI: `action` or `binary` |
+
+#### Installing the CLI in generated workflows
+
+Every generated workflow installs the cascade CLI before it runs. `--cli-install`
+selects how:
+
+- `action` (default): the workflow uses the `setup-cli` composite action
+  (`stablekernel/cascade/.github/actions/setup-cli`). This is unchanged from prior
+  releases.
+- `binary`: the workflow installs the CLI with a self-contained step that uses no
+  third-party action at all. It resolves the release tag, detects the runner
+  OS/arch, installs a checksum-verified [cosign](https://github.com/sigstore/cosign)
+  by direct download, and runs the same mandatory sha256 gate and keyless cosign
+  verification the action performs. Both modes share one install script, so the
+  authenticity guarantees are identical - see
+  [Verifying cascade releases](/cascade/security/#verifying-cascade-releases).
+
+Use `binary` when your organization restricts GitHub Actions to an allowlist:
+binary mode needs no allowlist entry for a third-party action, because it uses
+none. Both modes install the same signed release binary with the same
+verification; the choice is purely about how that install step is expressed.
 
 #### Generated workflow features
 

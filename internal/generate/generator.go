@@ -124,6 +124,7 @@ func writeGitConfigSteps(sb *strings.Builder, cfg *config.TrunkConfig, indent st
 
 // Generator handles workflow file generation
 type Generator struct {
+	installModeHolder
 	config         *config.TrunkConfig
 	baseDir        string
 	outputs        map[string][]string // callback name -> output names
@@ -1070,6 +1071,7 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 
 	// Setup CLI
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),
@@ -2302,6 +2304,7 @@ func (g *Generator) writeFinalizeCLIBootstrap(sb *strings.Builder) {
 // it is emitted as the step's if: guard.
 func (g *Generator) writeFinalizePinnedCLI(sb *strings.Builder, cond string) {
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),

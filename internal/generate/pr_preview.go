@@ -22,6 +22,7 @@ const prPreviewMarker = "<!-- cascade-pr-preview -->"
 // dry_run is enforced (--dry-run is always passed, never sourced from an input)
 // so the preview can never create a release, write state, or trigger a deploy.
 type PRPreviewGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 }
@@ -118,9 +119,10 @@ func (g *PRPreviewGenerator) writeJob(sb *strings.Builder) {
 	// authenticate gh release download against the public stablekernel/cascade
 	// repository and requires no adopter configuration.
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
 	})
 	sb.WriteString("\n")
 

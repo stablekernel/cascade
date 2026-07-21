@@ -41,6 +41,12 @@ You rarely need to invoke Cascade manually in CI: generated workflows install it
 
 The action downloads the release archive, extracts it, and puts `cascade` on `PATH`.
 
+If your organization restricts GitHub Actions to an allowlist, you can instead
+have `generate-workflow` emit a self-contained install that uses no third-party
+action: run it with `--cli-install=binary`. The generated workflows then install
+the CLI inline, with the same signed-release verification, and need no allowlist
+entry. See [`--cli-install`](/cascade/reference/cli/#installing-the-cli-in-generated-workflows).
+
 ## Scaffold with `cascade init`
 
 The fastest path to a working manifest is `cascade init`. It renders the manifest and callback stubs, verifies them through the real generator, and writes them into your repository:

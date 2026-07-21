@@ -13,6 +13,7 @@ import (
 
 // PromoteGenerator handles promote workflow generation
 type PromoteGenerator struct {
+	installModeHolder
 	config         *config.TrunkConfig
 	baseDir        string
 	inputs         map[string][]string // deploy name -> input names
@@ -666,6 +667,7 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 
 	// Setup CLI
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),
@@ -719,6 +721,7 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),
@@ -1112,6 +1115,7 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),

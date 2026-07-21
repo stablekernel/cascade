@@ -41,6 +41,7 @@ const driftCommentWorkflowName = "Cascade Drift Comment"
 // pull_requests array, or a head-SHA lookup for fork PRs), never from the
 // fork-controlled artifact, so a fork cannot redirect the comment at another PR.
 type DriftCheckGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 }
@@ -140,9 +141,10 @@ func (g *DriftCheckGenerator) writeCheckJob(sb *strings.Builder) {
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
 	})
 	sb.WriteString("\n")
 

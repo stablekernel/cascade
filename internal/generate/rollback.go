@@ -18,6 +18,7 @@ import (
 // path. The generator is gated on the configured environment count: it
 // emits only when at least one environment is declared.
 type RollbackGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 
@@ -306,6 +307,7 @@ func (g *RollbackGenerator) writeSetupCLI(sb *strings.Builder) {
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),

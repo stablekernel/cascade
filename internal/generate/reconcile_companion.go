@@ -51,6 +51,7 @@ const reconcileFollowupBranchExpr = "cascade-reconcile/pr-${{ steps.resolve.outp
 // as data, runs the pinned cascade binary to adopt the bump into the manifest,
 // and pushes (or opens a followup PR) with the trigger-capable state token.
 type ReconcileGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 	ownRepo bool
@@ -147,9 +148,10 @@ func (g *ReconcileGenerator) writeCheckJob(sb *strings.Builder) {
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
 	})
 	sb.WriteString("\n")
 
@@ -413,10 +415,11 @@ func (g *ReconcileGenerator) writeCompanionCheckoutStep(sb *strings.Builder) {
 // run` off the repository's own (possibly malicious) source tree.
 func (g *ReconcileGenerator) writeCompanionSetupCLIStep(sb *strings.Builder) {
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
-		ifExpr:  "steps.resolve.outputs.relevant == 'true'",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
+		ifExpr:      "steps.resolve.outputs.relevant == 'true'",
 	})
 	sb.WriteString("\n")
 }
