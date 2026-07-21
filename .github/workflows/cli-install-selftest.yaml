@@ -1,0 +1,208 @@
+# CLI install self-test - proves the --cli-install=binary generator flag both
+# generates and runs as expected, against cascade's own published releases.
+#
+# Binary mode emits a self-contained "Setup CLI" step with no third-party
+# action: it downloads a release archive, enforces a mandatory sha256 gate, and
+# (on linux) verifies checksums.txt with keyless cosign fetched by pinned
+# checksum. That live download + cosign + Rekor/Fulcio path is not exercised by
+# the PR gate, so this workflow runs it on real runners on a weekly cadence and
+# on demand, never on push or pull_request (the network dependency must not
+# become a flaky required merge gate).
+#
+# One matrix job proves both halves so what is generated is provably what runs:
+#   1. Generate: run generate-workflow --cli-install=binary against a minimal
+#      manifest and assert the output carries no setup-cli / cosign-installer
+#      action, keeps the mandatory sha256 gate, and pins the cosign identity;
+#      actionlint the generated workflow.
+#   2. Run: extract the emitted step's run body with yq and execute it verbatim
+#      to install and verify a real release, then prove the binary works.
+#
+# cosign coverage is linux-only by design (only linux amd64/arm64 carry a pinned
+# cosign checksum). The macos legs therefore assert the documented sha256-only
+# fallback, so the linux-only behavior is a tested outcome rather than a silent
+# gap.
+
+name: CLI install self-test
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 09:19 UTC (off the top of the hour per GitHub guidance).
+    - cron: '19 9 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-install-selftest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  selftest:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Runner labels are current GitHub-hosted images. Free arm64 linux
+        # hosted runners (ubuntu-24.04-arm) are available to public repos, so
+        # both linux arches are covered. cosign is expected only on linux.
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            expect_cosign: 'true'
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            expect_cosign: 'true'
+          - runner: macos-latest
+            platform: macos/arm64
+            expect_cosign: 'false'
+          - runner: macos-15-intel
+            platform: macos/amd64
+            expect_cosign: 'false'
+    env:
+      # The published release this test installs and verifies. github.token can
+      # read stablekernel/cascade's own public releases, so no extra secret is
+      # required.
+      CASCADE_CLI_VERSION: v1.0.0
+      # actionlint pinned to the same commit the repo's own workflow lint uses,
+      # so the self-test and the repo agree on the linter version.
+      ACTIONLINT: github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build cascade CLI from source
+        run: go build -o "$RUNNER_TEMP/cascade" ./cmd/cascade
+
+      - name: Generate binary-mode workflow
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/selftest/.github"
+          mkdir -p "$work"
+          # Minimal schema-valid manifest: trunk_branch is the only required
+          # field, and CLI-install mode is a generator flag, not a manifest key.
+          {
+            printf 'ci:\n'
+            printf '  config:\n'
+            printf '    trunk_branch: main\n'
+          } > "$work/manifest.yaml"
+          mkdir -p "$RUNNER_TEMP/gen"
+          "$RUNNER_TEMP/cascade" generate-workflow \
+            --config "$work/manifest.yaml" \
+            --cli-install=binary \
+            --orchestrate-only \
+            --output "$RUNNER_TEMP/gen/orchestrate.yaml" \
+            --force
+
+      - name: Assert binary-mode generation
+        run: |
+          set -euo pipefail
+          gen="$RUNNER_TEMP/gen/orchestrate.yaml"
+          # Bullet 1 - no third-party install action in binary mode.
+          if grep -Eq 'uses:[[:space:]]*[^[:space:]]*setup-cli@' "$gen"; then
+            echo "::error::binary mode must not reference a setup-cli action"
+            exit 1
+          fi
+          if grep -q 'sigstore/cosign-installer' "$gen"; then
+            echo "::error::binary mode must not reference sigstore/cosign-installer"
+            exit 1
+          fi
+          # Bullet 1 - mandatory sha256 gate and pinned cosign identity present.
+          grep -Fq 'sha256sum -c archive.sha256' "$gen" \
+            || { echo "::error::mandatory sha256 gate missing from generated step"; exit 1; }
+          grep -Fq "certificate-identity-regexp='^https://github.com/stablekernel/cascade/'" "$gen" \
+            || { echo "::error::cosign certificate-identity missing from generated step"; exit 1; }
+          grep -Fq 'certificate-oidc-issuer=https://token.actions.githubusercontent.com' "$gen" \
+            || { echo "::error::cosign oidc issuer missing from generated step"; exit 1; }
+          echo "binary-mode generation assertions passed"
+
+      - name: Actionlint the generated workflow
+        env:
+          # SC2129 (grouped-redirect style) is a pre-existing, deliberately
+          # ignored finding in the emitted "Generate Summary" step; match the
+          # repo's own workflow lint so the self-test agrees with it.
+          SHELLCHECK_OPTS: -e SC2129
+        run: go run "$ACTIONLINT" -no-color "$RUNNER_TEMP/gen/orchestrate.yaml"
+
+      - name: Ensure yq
+        run: |
+          set -euo pipefail
+          if ! command -v yq >/dev/null 2>&1; then
+            go install github.com/mikefarah/yq/v4@v4.44.3
+            echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Install and verify the release via the emitted step
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gen="$RUNNER_TEMP/gen/orchestrate.yaml"
+          run_body="$RUNNER_TEMP/setup-cli-run.sh"
+          # Extract the emitted "Setup CLI" step's run body verbatim and execute
+          # it, so what generation produced is exactly what runs here. Env is
+          # supplied by the caller (CASCADE_CLI_VERSION at the job level, GH_TOKEN
+          # on this step, CASCADE_INSTALL_DIR below) rather than the generated
+          # env map, which pins a different default version.
+          yq -r '.jobs.setup.steps[] | select(.name == "Setup CLI") | .run' "$gen" > "$run_body"
+          if [ ! -s "$run_body" ]; then
+            echo "::error::could not extract the Setup CLI run body from the generated workflow"
+            exit 1
+          fi
+          install_dir="$RUNNER_TEMP/cascade-bin"
+          mkdir -p "$install_dir"
+          log="$RUNNER_TEMP/install.log"
+          set +e
+          CASCADE_INSTALL_DIR="$install_dir" bash "$run_body" 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          {
+            echo "install_dir=$install_dir"
+            echo "install_log=$log"
+          } >> "$GITHUB_ENV"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::emitted Setup CLI step failed with exit $status"
+            exit "$status"
+          fi
+
+      - name: Assert install and verification outcome
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          EXPECT_COSIGN: ${{ matrix.expect_cosign }}
+        run: |
+          set -euo pipefail
+          bin="$install_dir/cascade"
+          # Always: a working binary that reports the installed version.
+          if [ ! -x "$bin" ]; then
+            echo "::error::$PLATFORM: cascade was not installed at $bin"
+            exit 1
+          fi
+          ver="$("$bin" version)"
+          printf '%s\n' "$ver"
+          printf '%s\n' "$ver" | grep -Fq '1.0.0' \
+            || { echo "::error::$PLATFORM: cascade version did not report 1.0.0"; exit 1; }
+          if [ "$EXPECT_COSIGN" = "true" ]; then
+            # Fail if it silently fell back to sha256-only instead of verifying.
+            if ! grep -Fq 'cosign signature on checksums.txt verified.' "$install_log"; then
+              echo "::error::$PLATFORM: expected keyless cosign verification, but the install fell back to sha256-only"
+              exit 1
+            fi
+            echo "$PLATFORM: keyless cosign verification confirmed"
+          else
+            # No pinned cosign for this platform: the documented sha256-only
+            # fallback must fire, and cosign must not have verified.
+            if ! grep -Fq 'proceeding on sha256 verification only' "$install_log"; then
+              echo "::error::$PLATFORM: expected the documented sha256-only fallback warning, but it was absent"
+              exit 1
+            fi
+            if grep -Fq 'cosign signature on checksums.txt verified.' "$install_log"; then
+              echo "::error::$PLATFORM: unexpected cosign verification on a platform with no pinned cosign"
+              exit 1
+            fi
+            echo "$PLATFORM: documented sha256-only fallback confirmed"
+          fi
