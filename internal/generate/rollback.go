@@ -305,11 +305,12 @@ func (g *RollbackGenerator) writeSetupCLI(sb *strings.Builder) {
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 }
 
 // writePreflightJob emits the read-only target-resolution job. It exposes the

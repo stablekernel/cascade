@@ -144,13 +144,13 @@ func (g *ReconcileGenerator) writeCheckJob(sb *strings.Builder) {
 	sb.WriteString("          fetch-depth: 0\n")
 	sb.WriteString("\n")
 
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
-	sb.WriteString("          token: ${{ github.token }}\n")
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:     g.getCLIRef(),
+		version: g.config.GetCLIVersion(),
+		token:   "${{ github.token }}",
+	})
 	sb.WriteString("\n")
 
 	g.writeChangedFilesStep(sb)
@@ -412,12 +412,12 @@ func (g *ReconcileGenerator) writeCompanionCheckoutStep(sb *strings.Builder) {
 // writeCompanionSetupCLIStep obtains a PINNED release binary, never a `go
 // run` off the repository's own (possibly malicious) source tree.
 func (g *ReconcileGenerator) writeCompanionSetupCLIStep(sb *strings.Builder) {
-	sb.WriteString("      - name: Setup CLI\n")
-	sb.WriteString("        if: steps.resolve.outputs.relevant == 'true'\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
-	sb.WriteString("          token: ${{ github.token }}\n")
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:     g.getCLIRef(),
+		version: g.config.GetCLIVersion(),
+		token:   "${{ github.token }}",
+		ifExpr:  "steps.resolve.outputs.relevant == 'true'",
+	})
 	sb.WriteString("\n")
 }
 

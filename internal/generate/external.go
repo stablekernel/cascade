@@ -230,11 +230,12 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("\n")
 
 	// Setup CLI
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 	sb.WriteString("\n")
 
 	// Configure git identity so the verb's commit/push of the manifest state

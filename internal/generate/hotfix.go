@@ -917,13 +917,13 @@ func (g *HotfixGenerator) writeFinalizeJob(sb *strings.Builder) {
 
 // writeSetupCLI emits the setup-cli step, mirroring the merge-queue generator.
 func (g *HotfixGenerator) writeSetupCLI(sb *strings.Builder) {
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
-	sb.WriteString("          token: ${{ github.token }}\n")
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:     g.getCLIRef(),
+		version: g.config.GetCLIVersion(),
+		token:   "${{ github.token }}",
+	})
 }
 
 // writeFetchEnvBranches emits a step that fetches the env/* branches and tags so
