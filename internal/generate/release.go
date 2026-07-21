@@ -231,11 +231,12 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("          echo \"::notice::Semver tag: $SEMVER_TAG (from $SOURCE_VERSION)\"\n")
 
 	// Check for breaking changes
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 	sb.WriteString("      - name: Check Breaking Changes\n")
 	sb.WriteString("        id: check\n")
 	sb.WriteString("        env:\n")
@@ -314,11 +315,12 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 	sb.WriteString("          fetch-depth: 0\n")
 
 	// Setup CLI
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 
 	// Generate changelog
 	sb.WriteString("      - name: Generate Changelog\n")

@@ -114,14 +114,14 @@ func (g *PRPreviewGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("\n")
 
 	// Setup CLI.
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
 	// github.token is the built-in Actions token. It is sufficient to
 	// authenticate gh release download against the public stablekernel/cascade
 	// repository and requires no adopter configuration.
-	sb.WriteString("          token: ${{ github.token }}\n")
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:     g.getCLIRef(),
+		version: g.config.GetCLIVersion(),
+		token:   "${{ github.token }}",
+	})
 	sb.WriteString("\n")
 
 	g.writeValidateStep(sb)

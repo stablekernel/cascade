@@ -102,13 +102,13 @@ func (g *MergeQueueGenerator) writeJob(sb *strings.Builder) {
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
 
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
-	sb.WriteString("          token: ${{ github.token }}\n")
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:     g.getCLIRef(),
+		version: g.config.GetCLIVersion(),
+		token:   "${{ github.token }}",
+	})
 
 	// Validity gate: lint --json reports validity in its JSON output, so gate
 	// on the parsed result.

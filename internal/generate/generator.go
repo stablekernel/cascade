@@ -1069,11 +1069,12 @@ func (g *Generator) writeSetupJob(sb *strings.Builder) {
 	sb.WriteString("          fetch-depth: 0\n")
 
 	// Setup CLI
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 
 	// Single CLI call does all setup work
 	sb.WriteString("      - name: Run Setup\n")
@@ -2300,14 +2301,13 @@ func (g *Generator) writeFinalizeCLIBootstrap(sb *strings.Builder) {
 // writeFinalizePinnedCLI emits the pinned Setup CLI step. When cond is non-empty
 // it is emitted as the step's if: guard.
 func (g *Generator) writeFinalizePinnedCLI(sb *strings.Builder, cond string) {
-	sb.WriteString("      - name: Setup CLI\n")
-	if cond != "" {
-		fmt.Fprintf(sb, "        if: %s\n", cond)
-	}
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+		ifExpr:             cond,
+	})
 }
 
 // writeChangelogStep emits the built-in changelog generation as a step inside

@@ -665,11 +665,12 @@ func (g *PromoteGenerator) writePreflightJob(sb *strings.Builder) {
 	sb.WriteString("          fetch-depth: 0\n")
 
 	// Setup CLI
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 
 	// Single CLI call does everything
 	sb.WriteString("      - name: Run Preflight\n")
@@ -717,11 +718,12 @@ func (g *PromoteGenerator) writePromoteJob(sb *strings.Builder) {
 	sb.WriteString("    steps:\n")
 	writeMintSteps(sb, g.config, "      ", seamRelease)
 	writeActionStep(sb, g.config, "      ", actionCheckout)
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 	sb.WriteString("      - name: Validate Promotion\n")
 	// The mode input is untrusted workflow_dispatch data. GitHub expands ${{ ... }}
 	// into the run: script before the shell runs it, so a mode value carrying shell
@@ -1109,11 +1111,12 @@ func (g *PromoteGenerator) writeFinalizeJob(sb *strings.Builder) {
 	writeActionStep(sb, g.config, "      ", actionCheckout)
 	sb.WriteString("        with:\n")
 	sb.WriteString("          fetch-depth: 0\n")
-	sb.WriteString("      - name: Setup CLI\n")
-	fmt.Fprintf(sb, "        uses: stablekernel/cascade/.github/actions/setup-cli@%s\n", g.getCLIRef())
-	sb.WriteString("        with:\n")
-	fmt.Fprintf(sb, "          token: %s\n", g.getReleaseTokenRef())
-	fmt.Fprintf(sb, "          version: %s\n", g.config.GetCLIVersion())
+	writeSetupCLIStep(sb, setupCLIStep{
+		ref:                g.getCLIRef(),
+		version:            g.config.GetCLIVersion(),
+		token:              g.getReleaseTokenRef(),
+		tokenBeforeVersion: true,
+	})
 
 	// Generate changelog
 	sb.WriteString("      - name: Generate Changelog\n")
