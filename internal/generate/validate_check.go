@@ -15,6 +15,7 @@ import (
 // not run the consumer's build/test CI, requests contents: read alone, and has
 // no dry-run or comment side effects.
 type ValidateCheckGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 }
@@ -98,9 +99,10 @@ func (g *ValidateCheckGenerator) writeJob(sb *strings.Builder) {
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
 	})
 
 	sb.WriteString("      - name: Validate Manifest\n")

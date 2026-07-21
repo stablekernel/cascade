@@ -27,6 +27,7 @@ func NewCommand() *cobra.Command {
 	var orchestrateOnly bool
 	var promoteOnly bool
 	var ownRepo bool
+	var cliInstall string
 
 	cmd := &cobra.Command{
 		Use:   "generate-workflow",
@@ -45,6 +46,10 @@ the "ci" key by default. Use --manifest-key to change the key name.`,
 			if push {
 				commit = true
 			}
+			installMode, err := parseCLIInstallMode(cliInstall)
+			if err != nil {
+				return err
+			}
 			opts := generateOptions{
 				configPath:        configPath,
 				manifestKey:       manifestKey,
@@ -59,6 +64,7 @@ the "ci" key by default. Use --manifest-key to change the key name.`,
 				orchestrateOnly:   orchestrateOnly,
 				promoteOnly:       promoteOnly,
 				ownRepo:           ownRepo,
+				cliInstallMode:    installMode,
 			}
 			return runGenerateWorkflow(opts)
 		},
@@ -77,6 +83,7 @@ the "ci" key by default. Use --manifest-key to change the key name.`,
 	cmd.Flags().BoolVar(&orchestrateOnly, "orchestrate-only", false, "Only generate orchestrate.yaml")
 	cmd.Flags().BoolVar(&promoteOnly, "promote-only", false, "Only generate promote.yaml")
 	cmd.Flags().BoolVar(&ownRepo, "own-repo", false, "Generate cascade's own-repo release-plumbing variant (tag-only manage-release, non-triggering tag-create). Maintainer-only; never used by a downstream manifest.")
+	cmd.Flags().StringVar(&cliInstall, "cli-install", "action", "How generated workflows install the cascade CLI: \"action\" (setup-cli composite action, default) or \"binary\" (self-contained install with no third-party action, so no org Actions allowlist entry is needed)")
 
 	return cmd
 }
@@ -96,6 +103,7 @@ type generateOptions struct {
 	orchestrateOnly    bool
 	promoteOnly        bool
 	ownRepo            bool
+	cliInstallMode     cliInstallMode
 }
 
 func runGenerateWorkflow(opts generateOptions) error {
@@ -161,6 +169,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 			return fmt.Errorf("planning orchestrate workflow: %w", err)
 		}
 		for _, t := range orchTargets {
+			t.Gen.setInstallMode(opts.cliInstallMode)
 			for _, w := range t.Gen.Validate() {
 				fmt.Fprintf(os.Stderr, "%s\n", w)
 			}
@@ -203,7 +212,9 @@ func runGenerateWorkflow(opts generateOptions) error {
 	if generatePromote {
 		if cfg.IsSingleEnvironment() {
 			// Single-environment projects get a simpler Release workflow.
-			content, err := NewReleaseGenerator(cfg, baseDir).Generate()
+			relGen := NewReleaseGenerator(cfg, baseDir)
+			relGen.setInstallMode(opts.cliInstallMode)
+			content, err := relGen.Generate()
 			if err != nil {
 				return fmt.Errorf("generating release workflow: %w", err)
 			}
@@ -225,6 +236,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 				return fmt.Errorf("planning promote workflow: %w", perr)
 			}
 			for _, t := range promoteTargets {
+				t.Gen.setInstallMode(opts.cliInstallMode)
 				content, err := t.Gen.Generate()
 				if err != nil {
 					return fmt.Errorf("generating promote workflow %s: %w", t.Path, err)
@@ -248,6 +260,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	// Generate external-update workflow for primary repos
 	if cfg.IsPrimary() {
 		externalGen := NewExternalUpdateGenerator(cfg, baseDir)
+		externalGen.setInstallMode(opts.cliInstallMode)
 		content, err := externalGen.Generate()
 		if err != nil {
 			return fmt.Errorf("generating external-update workflow: %w", err)
@@ -272,6 +285,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 
 	// Generate the opt-in manifest-validation PR check (validate_check.enabled).
 	validateCheckGen := NewValidateCheckGenerator(cfg, baseDir)
+	validateCheckGen.setInstallMode(opts.cliInstallMode)
 	if validateCheckGen.Enabled() {
 		content, err := validateCheckGen.Generate()
 		if err != nil {
@@ -292,6 +306,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 
 	// Generate the opt-in merge-queue validation lane (merge_queue.enabled).
 	mergeQueueGen := NewMergeQueueGenerator(cfg, baseDir)
+	mergeQueueGen.setInstallMode(opts.cliInstallMode)
 	if mergeQueueGen.Enabled() {
 		content, err := mergeQueueGen.Generate()
 		if err != nil {
@@ -318,6 +333,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 		return fmt.Errorf("planning hotfix workflow: %w", err)
 	}
 	for _, t := range hfTargets {
+		t.Gen.setInstallMode(opts.cliInstallMode)
 		content, err := t.Gen.Generate()
 		if err != nil {
 			return fmt.Errorf("generating hotfix workflow %s: %w", t.Path, err)
@@ -343,6 +359,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 		return fmt.Errorf("planning rollback workflow: %w", err)
 	}
 	for _, t := range rbTargets {
+		t.Gen.setInstallMode(opts.cliInstallMode)
 		content, err := t.Gen.Generate()
 		if err != nil {
 			return fmt.Errorf("generating rollback workflow %s: %w", t.Path, err)
@@ -363,6 +380,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	// disabled pr_preview emits nothing, so existing manifests are unaffected.
 	if cfg.PRPreview.IsEnabled() {
 		previewGen := NewPRPreviewGenerator(cfg, baseDir)
+		previewGen.setInstallMode(opts.cliInstallMode)
 		content, err := previewGen.Generate()
 		if err != nil {
 			return fmt.Errorf("generating pr-preview workflow: %w", err)
@@ -386,6 +404,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	// drift_check emits nothing, so existing manifests are unaffected. The
 	// comment companion is emitted only when drift_check.comment is also set.
 	driftGen := NewDriftCheckGenerator(cfg, baseDir)
+	driftGen.setInstallMode(opts.cliInstallMode)
 	if driftGen.Enabled() {
 		content, err := driftGen.Generate()
 		if err != nil {
@@ -426,6 +445,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	// the pull_request detector plus its workflow_run companion. Absent or
 	// disabled reconcile emits nothing, so existing manifests are unaffected.
 	reconcileGen := NewReconcileGenerator(cfg, baseDir)
+	reconcileGen.setInstallMode(opts.cliInstallMode)
 	if reconcileGen.Enabled() {
 		content, err := reconcileGen.Generate()
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 
 // ReleaseGenerator handles release workflow generation for single-environment projects
 type ReleaseGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 }
@@ -232,6 +233,7 @@ func (g *ReleaseGenerator) writePreflightJob(sb *strings.Builder) {
 
 	// Check for breaking changes
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),
@@ -316,6 +318,7 @@ func (g *ReleaseGenerator) writeReleaseJob(sb *strings.Builder) {
 
 	// Setup CLI
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),

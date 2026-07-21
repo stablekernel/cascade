@@ -39,6 +39,7 @@ const hotfixConflictLabel = "cascade-hotfix-conflict"
 // when two or more environments are declared, because a single-environment
 // pipeline has no intermediate target to hotfix onto.
 type HotfixGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 
@@ -920,9 +921,10 @@ func (g *HotfixGenerator) writeSetupCLI(sb *strings.Builder) {
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
 	})
 }
 

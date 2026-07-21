@@ -21,6 +21,7 @@ import (
 // side-effecting orchestrate workflow on a speculative merge-queue build with no
 // gh-readonly-queue guard; merge_queue.enabled emits this read-only lane instead.
 type MergeQueueGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 }
@@ -105,9 +106,10 @@ func (g *MergeQueueGenerator) writeJob(sb *strings.Builder) {
 	// github.token is the built-in Actions token, sufficient to authenticate
 	// gh release download against the public stablekernel/cascade repository.
 	writeSetupCLIStep(sb, setupCLIStep{
-		ref:     g.getCLIRef(),
-		version: g.config.GetCLIVersion(),
-		token:   "${{ github.token }}",
+		installMode: g.installMode,
+		ref:         g.getCLIRef(),
+		version:     g.config.GetCLIVersion(),
+		token:       "${{ github.token }}",
 	})
 
 	// Validity gate: lint --json reports validity in its JSON output, so gate

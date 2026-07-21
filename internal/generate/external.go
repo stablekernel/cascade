@@ -9,6 +9,7 @@ import (
 
 // ExternalUpdateGenerator handles external-update workflow generation
 type ExternalUpdateGenerator struct {
+	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
 }
@@ -231,6 +232,7 @@ func (g *ExternalUpdateGenerator) writeJob(sb *strings.Builder) {
 
 	// Setup CLI
 	writeSetupCLIStep(sb, setupCLIStep{
+		installMode:        g.installMode,
 		ref:                g.getCLIRef(),
 		version:            g.config.GetCLIVersion(),
 		token:              g.getReleaseTokenRef(),
