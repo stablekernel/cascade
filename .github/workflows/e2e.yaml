@@ -153,7 +153,7 @@ jobs:
           # that triggered the run so we test what GitHub resolved.
           ref: ${{ github.event.inputs.ref || github.sha }}
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The e2e module declares its own toolchain (go 1.24). Drive the
           # installed Go straight from e2e/go.mod so the runner always matches
