@@ -12,13 +12,23 @@ description: |
   removing either guard turns this scenario red because the tag would be created
   and state.dev would be written.
 
+  The manifest uses release_trigger: dispatch so the generated orchestrate
+  workflow has only the workflow_dispatch trigger (no push:). That is what lets
+  act honor the dry_run dispatch input: with a push: trigger present, act's
+  --detect-event runs the workflow as a push and leaves github.event.inputs
+  empty, so the dry_run gate could never be exercised at run time. The same
+  dispatch-mode setup is the proven state-advancing path in
+  40-release-trigger-dispatch-only.yaml; here the run is a dry-run rehearsal.
+
 config:
   trunk_branch: main
-  environments: [dev, prod]
+  release_trigger: dispatch
+  environments: [dev]
   builds:
     - name: app
       workflow: build.yaml
       triggers: ["src/**"]
+  deploys: []
 
 steps:
   - name: "Seed trunk with a feature commit"
@@ -26,10 +36,9 @@ steps:
     commit:
       message: "feat: add app feature"
       files:
-        src/app.ts: |
-          export function main() {
-            console.log("App v0.1.0");
-          }
+        src/app.go: |
+          package main
+          func main() {}
 
   - name: "Dry-run orchestrate: no tag cut, no state committed"
     action: orchestrate
@@ -37,14 +46,14 @@ steps:
       dry_run: true
     expect:
       # The Update Manifest step previewed the edit and exited before committing,
-      # so trunk state for dev never advanced. Version-independent: catches the
-      # state-write guard regressing regardless of the computed version.
+      # so trunk state for dev never advanced. Under 40-release-trigger-dispatch-only
+      # a non-dry-run dispatch advances dev to v0.1.0-rc.0; this rehearsal must not.
       state:
         dev:
           wiped: true
       # The Manage Release step ran `cascade manage-release --dry-run`, which
       # previews the plan and creates nothing, so the candidate tag a real run
-      # would cut (v0.1.0-rc.0, matching the two-env happy path) is absent.
+      # would cut (v0.1.0-rc.0) is absent.
       tags:
         deleted: ["v0.1.0-rc.0"]
       # Positive runtime signal that the state-write step actually took its
