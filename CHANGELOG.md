@@ -19,6 +19,16 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **verify:** `cascade verify` (and the generated `cascade-drift-check.yaml`,
+  which runs it) always re-planned every generator assuming the default
+  `action` `--cli-install` mode, so a repo generated with
+  `--cli-install=binary` reported every Setup CLI step as spurious drift,
+  permanently, with no way to reconcile it. `verify` now accepts its own
+  `--cli-install` flag, threaded through to every generator `Plan` builds, and
+  the drift-check generator's emitted `cascade verify` invocation now passes
+  `--cli-install=binary` when that is the mode it was generated in. Action-mode
+  output is unchanged.
+
 - **release:** A release cut that materializes a git tag now fails closed when the
   tag already exists at a different commit, instead of treating the
   `422 reference already exists` response as an unconditional success. The old

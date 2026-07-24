@@ -71,25 +71,87 @@ func newRepo(t *testing.T) string {
 // path is absolute so Plan resolves the manifest, base directory, and emitted
 // files without consulting the process working directory.
 func planOpts(dir string) generate.PlanOptions {
+	return planOptsWithCLIInstall(dir, "")
+}
+
+// planOptsWithCLIInstall is planOpts with an explicit --cli-install mode, for
+// tests that need to plan (or re-plan) a repo generated in binary mode.
+func planOptsWithCLIInstall(dir, cliInstall string) generate.PlanOptions {
 	return generate.PlanOptions{
 		ConfigPath:        filepath.Join(dir, ".github", "manifest.yaml"),
 		ManifestKey:       config.DefaultManifestKey,
 		ActionFolder:      "manage-release",
 		OutputPath:        filepath.Join(dir, ".github", "workflows", "orchestrate.yaml"),
 		PromoteOutputPath: filepath.Join(dir, ".github", "workflows", "promote.yaml"),
+		CLIInstall:        cliInstall,
 	}
 }
 
 // opts builds the verify options for a repo rooted at dir, mirroring planOpts so
 // the verify run reads the same absolute paths the plan emitted.
 func opts(dir string) Options {
+	return optsWithCLIInstall(dir, "")
+}
+
+// optsWithCLIInstall is opts with an explicit --cli-install mode, mirroring
+// planOptsWithCLIInstall so a verify Run reads back what a matching Plan wrote.
+func optsWithCLIInstall(dir, cliInstall string) Options {
 	return Options{
 		ConfigPath:        filepath.Join(dir, ".github", "manifest.yaml"),
 		ManifestKey:       config.DefaultManifestKey,
 		ActionFolder:      "manage-release",
 		OutputPath:        filepath.Join(dir, ".github", "workflows", "orchestrate.yaml"),
 		PromoteOutputPath: filepath.Join(dir, ".github", "workflows", "promote.yaml"),
+		CLIInstall:        cliInstall,
 	}
+}
+
+// newRepoWithCLIInstall mirrors newRepo but plans and materializes the repo
+// using the given --cli-install mode, so tests can build a binary-mode
+// generated fixture the same way a real adopter's repo would look.
+func newRepoWithCLIInstall(t *testing.T, cliInstall string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+
+	stubs := map[string]string{
+		".github/workflows/image-build.yaml": "" +
+			"name: Image Build\non:\n  workflow_call:\n    inputs:\n      os:\n        type: string\n",
+		".github/workflows/bundle-build.yaml": "" +
+			"name: Bundle Build\non:\n  workflow_call:\n    inputs:\n      image:\n        type: string\n",
+		".github/workflows/deploy.yaml": "" +
+			"name: Deploy\non:\n  workflow_call:\n    inputs:\n      environment:\n        type: string\n",
+	}
+	for path, body := range stubs {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), []byte(body), 0o644))
+	}
+
+	cfg := &config.TrunkConfig{
+		TrunkBranch:  "main",
+		Environments: config.EnvNames("dev", "staging", "prod"),
+		Builds: []config.BuildConfig{
+			{Name: "image", Workflow: ".github/workflows/image-build.yaml", Triggers: []string{"src/**"}},
+		},
+		Deploys: []config.DeployConfig{
+			{Name: "app", Workflow: ".github/workflows/deploy.yaml", Triggers: []string{"src/**"}, DependsOn: []string{"image"}},
+		},
+	}
+	manifest := map[string]any{config.DefaultManifestKey: config.CICDFile{Config: cfg}}
+	body, err := yaml.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "manifest.yaml"), body, 0o644))
+
+	planned, err := generate.Plan(planOptsWithCLIInstall(dir, cliInstall))
+	require.NoError(t, err)
+	for _, p := range planned {
+		path := p.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(dir, path)
+		}
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(p.Content), 0o644))
+	}
+	return dir
 }
 
 func TestRun_CleanRepo_NoDrift(t *testing.T) {
@@ -348,4 +410,34 @@ func TestErrDrift_ExitCodeOne(t *testing.T) {
 	var ec exitCoder
 	require.ErrorAs(t, error(ErrDrift), &ec)
 	require.Equal(t, 1, ec.ExitCode())
+}
+
+// TestRun_CLIInstallBinary_NoDriftWhenModeMatches proves verify can correctly
+// check a repo generated with --cli-install=binary: without CLIInstall wired
+// through to the underlying Plan, every generator silently defaults to action
+// mode internally, so a binary-mode repo would report spurious drift on every
+// file whose Setup CLI step differs by mode even though nothing is out of
+// sync.
+func TestRun_CLIInstallBinary_NoDriftWhenModeMatches(t *testing.T) {
+	t.Parallel()
+	dir := newRepoWithCLIInstall(t, "binary")
+
+	var out, errOut bytes.Buffer
+	err := Run(optsWithCLIInstall(dir, "binary"), &out, &errOut)
+	require.NoError(t, err, "a clean binary-mode repo must verify with no drift when CLIInstall matches; report:\n%s", errOut.String())
+	require.Contains(t, out.String(), "no drift")
+}
+
+// TestRun_CLIInstallBinary_MismatchedModeIsRealDrift is the control for the
+// test above: a binary-mode repo checked WITHOUT CLIInstall set (defaulting to
+// action) must still report drift, proving the two modes produce genuinely
+// different bytes and the prior test isn't passing by coincidence.
+func TestRun_CLIInstallBinary_MismatchedModeIsRealDrift(t *testing.T) {
+	t.Parallel()
+	dir := newRepoWithCLIInstall(t, "binary")
+
+	var out, errOut bytes.Buffer
+	err := Run(opts(dir), &out, &errOut) // opts(dir) leaves CLIInstall unset (action)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrDrift), "action-mode verify against a binary-mode repo must report drift, got %v", err)
 }

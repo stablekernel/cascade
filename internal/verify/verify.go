@@ -78,6 +78,11 @@ type Options struct {
 	// the own-repo output; without this, verify would compute the plain variant
 	// and report the deliberate own-repo differences as spurious drift.
 	OwnRepo bool
+	// CLIInstall mirrors generate-workflow's --cli-install flag ("" / "action"
+	// or "binary"). It must match the mode the committed files were actually
+	// generated with, or every planned file whose Setup CLI step differs by
+	// mode reports as spurious drift.
+	CLIInstall string
 }
 
 // Run compares every file the manifest would generate against the bytes
@@ -103,6 +108,7 @@ func Run(o Options, stdout, stderr io.Writer) error {
 		OutputPath:        o.OutputPath,
 		PromoteOutputPath: o.PromoteOutputPath,
 		OwnRepo:           o.OwnRepo,
+		CLIInstall:        o.CLIInstall,
 	})
 	if err != nil {
 		return operational(fmt.Errorf("planning workflows: %w", err))

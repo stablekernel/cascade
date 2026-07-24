@@ -192,3 +192,28 @@ func TestDriftCheckGenerator_Actionlint(t *testing.T) {
 	out, runErr := cmd.CombinedOutput()
 	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
 }
+
+// TestDriftCheckGenerator_ActionMode_OmitsCLIInstallFlag proves the default
+// (action-mode) verify invocation is byte-identical to before --cli-install
+// existed: no downstream manifest's committed cascade-drift-check.yaml changes
+// just because this generator learned a new flag.
+func TestDriftCheckGenerator_ActionMode_OmitsCLIInstallFlag(t *testing.T) {
+	g := NewDriftCheckGenerator(driftCheckConfig(false), t.TempDir())
+	content, err := g.Generate()
+	require.NoError(t, err)
+	assert.Contains(t, content, "cascade verify --config .github/manifest.yaml > drift-report.txt")
+	assert.NotContains(t, content, "--cli-install")
+}
+
+// TestDriftCheckGenerator_BinaryMode_PassesCLIInstallFlag proves a
+// binary-mode-generated repo's own drift-check workflow invokes verify with
+// the matching --cli-install=binary flag, so verify re-plans the repo in the
+// same mode it was generated in instead of silently assuming action mode and
+// reporting every Setup CLI step as drift.
+func TestDriftCheckGenerator_BinaryMode_PassesCLIInstallFlag(t *testing.T) {
+	g := NewDriftCheckGenerator(driftCheckConfig(false), t.TempDir())
+	g.setInstallMode(cliInstallModeBinary)
+	content, err := g.Generate()
+	require.NoError(t, err)
+	assert.Contains(t, content, "cascade verify --config .github/manifest.yaml --cli-install=binary > drift-report.txt")
+}
