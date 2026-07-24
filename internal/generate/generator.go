@@ -1881,6 +1881,12 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	fmt.Fprintf(sb, "          GH_TOKEN: %s\n", g.getStateTokenRef())
 	sb.WriteString("          HEAD_SHA: ${{ needs.setup.outputs.head_sha }}\n")
 	sb.WriteString("          VERSION: ${{ needs.setup.outputs.version }}\n")
+	// Forward the orchestrate dry_run dispatch input so a rehearsal previews the
+	// state edit instead of committing it to trunk. github.event.inputs.dry_run
+	// is null-safe on the non-dispatch triggers (push/schedule/workflow_run),
+	// where it renders empty and reads as not-a-dry-run; comparing against 'true'
+	// yields a clean boolean-valued "true"/"false" for the shell gate below.
+	sb.WriteString("          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' }}\n")
 
 	// Only include environment if there are environments configured
 	if len(g.config.Environments) > 0 {
@@ -1999,6 +2005,19 @@ func (g *Generator) writeManifestUpdateStep(sb *strings.Builder, sorted []string
 	}
 
 	sb.WriteString("          }\n")
+	sb.WriteString("          \n")
+
+	// A dry-run orchestrate must not commit state to trunk. Apply the yq edits to
+	// the local working copy so the operator sees the diff, print a runtime marker
+	// the e2e harness asserts on, then exit before the commit/push loop below ever
+	// runs. This gates the mutation at the step (the CLI-delegated Manage Release
+	// gates at the command); the hand-rolled state write has no CLI to delegate to.
+	sb.WriteString("          if [[ \"$DRY_RUN\" == \"true\" ]]; then\n")
+	sb.WriteString("            apply_state_edits\n")
+	sb.WriteString("            echo \"cascade-state-write: dry-run preview (no commit)\"\n")
+	sb.WriteString("            git --no-pager diff -- \"$MANIFEST_FILE\" || true\n")
+	sb.WriteString("            exit 0\n")
+	sb.WriteString("          fi\n")
 	sb.WriteString("          \n")
 
 	// Persist the manifest state to the trunk branch. On real GitHub this writes
@@ -2422,6 +2441,16 @@ func (g *Generator) writeReleaseStep(sb *strings.Builder) {
 		sb.WriteString("          environment: prerelease\n")
 	}
 	sb.WriteString("          sha: ${{ needs.setup.outputs.head_sha }}\n")
+	// Forward the orchestrate dry_run dispatch input so a rehearsal previews the
+	// release instead of cutting a real tag and creating a real release. The
+	// manage-release CLI already has a tested --dry-run gate (printDryRunPlan in
+	// internal/release/command.go); this wires it up from the generated workflow,
+	// which otherwise invokes the CLI with no flag and mutates unconditionally.
+	// github.event.inputs.dry_run is null-safe on the non-dispatch triggers
+	// (push/schedule/workflow_run), where the inputs context is null and it
+	// renders empty (reading as not-a-dry-run); comparing against 'true' coerces
+	// it to a real boolean the composite action's dry_run input accepts.
+	sb.WriteString("          dry_run: ${{ github.event.inputs.dry_run == 'true' }}\n")
 	if g.config.ChangelogEnabled() {
 		if g.config.HasCustomChangelog() {
 			// Custom changelog runs as its own job on a different runner, so its
@@ -2471,7 +2500,12 @@ func (g *Generator) writeCandidateDispatchStep(sb *strings.Builder) {
 	}
 	sb.WriteString("      - name: Dispatch Release Candidate Build\n")
 	// Real GitHub only: the act/gitea e2e harness has no workflow-dispatch API.
-	sb.WriteString("        if: ${{ github.server_url == 'https://github.com' }}\n")
+	// Also suppressed on a dry-run rehearsal: firing the release workflow starts a
+	// real external run, so a dry_run dispatch must not trigger it. The
+	// github.event.inputs.dry_run accessor is null-safe on the non-dispatch
+	// triggers (push/schedule/workflow_run) where it renders empty and reads as
+	// not-a-dry-run, mirroring writeNativeDeploymentSteps' guard.
+	sb.WriteString("        if: ${{ github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true' }}\n")
 	sb.WriteString("        env:\n")
 	fmt.Fprintf(sb, "          GITHUB_TOKEN: %s\n", g.getReleaseTokenRef())
 	sb.WriteString("          TAG: ${{ needs.setup.outputs.version }}\n")

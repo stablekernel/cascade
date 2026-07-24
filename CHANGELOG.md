@@ -19,6 +19,17 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** A dry-run `orchestrate` dispatch (`dry_run: true`) no longer
+  mutates real state in the `finalize` job. The `Manage Release` step now
+  forwards `dry_run` to `cascade manage-release --dry-run` (whose existing
+  `printDryRunPlan` gate previews the plan instead of cutting a real tag and
+  release), the `Update Manifest` step previews the state edit and exits before
+  its commit/push loop, and the `Dispatch Release Candidate Build` step is
+  suppressed so no external release run is triggered. Previously a rehearsal
+  dispatch created a real tag and release and committed real state to trunk.
+  The `manage-release` composite action gains a `dry_run` input to carry the
+  flag; action-mode output is otherwise unchanged.
+
 - **verify:** `cascade verify` (and the generated `cascade-drift-check.yaml`,
   which runs it) always re-planned every generator assuming the default
   `action` `--cli-install` mode, so a repo generated with

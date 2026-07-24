@@ -47,6 +47,10 @@ inputs:
     description: 'Create git tag on create action'
     required: false
     default: 'false'
+  dry_run:
+    description: 'Preview mode: print the resolved release plan and mutate nothing'
+    required: false
+    default: 'false'
 
 outputs:
   release_id:
@@ -77,6 +81,7 @@ runs:
         INPUT_NEW_TAG: ${{ inputs.new_tag }}
         INPUT_DELETE_TAG: ${{ inputs.delete_tag }}
         INPUT_CREATE_TAG: ${{ inputs.create_tag }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         # Resolve changelog source. A caller-provided file keeps large changelog
@@ -103,6 +108,7 @@ runs:
         [[ -n "$INPUT_NEW_TAG" ]] && CMD_ARGS+=(--new-tag "$INPUT_NEW_TAG")
         [[ -n "$INPUT_DELETE_TAG" ]] && CMD_ARGS+=(--delete-tag "$INPUT_DELETE_TAG")
         [[ "$INPUT_CREATE_TAG" == "true" ]] && CMD_ARGS+=(--create-tag)
+        [[ "$INPUT_DRY_RUN" == "true" ]] && CMD_ARGS+=(--dry-run)
 
         # Run CLI
         OUTPUT=$(cascade manage-release "${CMD_ARGS[@]}" --changelog-file "$CHANGELOG_FILE")
