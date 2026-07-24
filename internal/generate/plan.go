@@ -41,6 +41,13 @@ type PlanOptions struct {
 	// verify/generate-workflow --own-repo invocation sets this; it is not a
 	// manifest field.
 	OwnRepo bool
+	// CLIInstall selects how every planned generator emits its "Setup CLI"
+	// step: "" or "action" (default) for the setup-cli composite action, or
+	// "binary" for the self-contained install. Mirrors generate-workflow's
+	// --cli-install flag; verify passes its own --cli-install here so a
+	// binary-mode-generated repo can be planned back for comparison instead
+	// of always assuming the action-mode default.
+	CLIInstall string
 }
 
 // Plan resolves the manifest and returns the complete set of files the generate
@@ -63,6 +70,14 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	cfg, err := config.ParseWithKey(configPath, opts.ManifestKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	// Parsed once and applied to every generator below via setInstallMode,
+	// mirroring exactly what the generate-workflow command does (command.go)
+	// so Plan can never disagree with generate-workflow on a binary-mode repo.
+	installMode, err := parseCLIInstallMode(opts.CLIInstall)
+	if err != nil {
+		return nil, fmt.Errorf("parsing --cli-install: %w", err)
 	}
 
 	if opts.PinOverridesPath != "" {
@@ -113,6 +128,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	}
 	var content string
 	for _, t := range orchTargets {
+		t.Gen.setInstallMode(installMode)
 		content, err = t.Gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating orchestrate workflow: %w", err)
@@ -125,7 +141,9 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	//    out to one promote-<name>.yaml per component; otherwise a single
 	//    promote.yaml, byte-identical to today.
 	if cfg.IsSingleEnvironment() {
-		content, err = NewReleaseGenerator(cfg, baseDir).Generate()
+		relGen := NewReleaseGenerator(cfg, baseDir)
+		relGen.setInstallMode(installMode)
+		content, err = relGen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating release workflow: %w", err)
 		}
@@ -136,6 +154,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 			return nil, perr
 		}
 		for _, t := range promoteTargets {
+			t.Gen.setInstallMode(installMode)
 			content, err = t.Gen.Generate()
 			if err != nil {
 				return nil, fmt.Errorf("generating promote workflow: %w", err)
@@ -146,7 +165,9 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 
 	// 3. external-update -> .github/workflows/external-update.yaml when primary.
 	if cfg.IsPrimary() {
-		content, err = NewExternalUpdateGenerator(cfg, baseDir).Generate()
+		extGen := NewExternalUpdateGenerator(cfg, baseDir)
+		extGen.setInstallMode(installMode)
+		content, err = extGen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating external-update workflow: %w", err)
 		}
@@ -155,6 +176,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 
 	// 4. validate-check -> .github/workflows/cascade-validate.yaml when enabled.
 	if gen := NewValidateCheckGenerator(cfg, baseDir); gen.Enabled() {
+		gen.setInstallMode(installMode)
 		content, err = gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating validate-check workflow: %w", err)
@@ -164,6 +186,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 
 	// 5. merge-queue -> .github/workflows/cascade-merge-queue.yaml when enabled.
 	if gen := NewMergeQueueGenerator(cfg, baseDir); gen.Enabled() {
+		gen.setInstallMode(installMode)
 		content, err = gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating merge-queue workflow: %w", err)
@@ -179,6 +202,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 		return nil, err
 	}
 	for _, t := range hfTargets {
+		t.Gen.setInstallMode(installMode)
 		content, err = t.Gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating hotfix workflow: %w", err)
@@ -194,6 +218,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 		return nil, err
 	}
 	for _, t := range rbTargets {
+		t.Gen.setInstallMode(installMode)
 		content, err = t.Gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating rollback workflow: %w", err)
@@ -203,7 +228,9 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 
 	// 8. pr-preview -> .github/workflows/cascade-pr-preview.yaml when enabled.
 	if cfg.PRPreview.IsEnabled() {
-		content, err = NewPRPreviewGenerator(cfg, baseDir).Generate()
+		previewGen := NewPRPreviewGenerator(cfg, baseDir)
+		previewGen.setInstallMode(installMode)
+		content, err = previewGen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating pr-preview workflow: %w", err)
 		}
@@ -213,6 +240,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	// 9. drift-check -> .github/workflows/cascade-drift-check.yaml when enabled,
 	//    plus the fork-safe comment companion when drift_check.comment is set.
 	if gen := NewDriftCheckGenerator(cfg, baseDir); gen.Enabled() {
+		gen.setInstallMode(installMode)
 		content, err = gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating drift-check workflow: %w", err)
@@ -234,6 +262,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	//     sees the same two files generate writes and reports no drift on a clean
 	//     tree.
 	if gen := NewReconcileGenerator(cfg, baseDir); gen.Enabled() {
+		gen.setInstallMode(installMode)
 		content, err = gen.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("generating reconcile-check workflow: %w", err)

@@ -153,7 +153,16 @@ func (g *DriftCheckGenerator) writeCheckJob(sb *strings.Builder) {
 	sb.WriteString("      - name: Check for workflow drift\n")
 	sb.WriteString("        run: |\n")
 	sb.WriteString("          set +e\n")
-	fmt.Fprintf(sb, "          cascade verify --config %s > drift-report.txt 2>&1\n", g.getManifestFilePath())
+	// --cli-install is omitted in action mode (the default) so existing
+	// manifests keep byte-identical output; verify's own --cli-install
+	// default already matches. Binary mode must say so explicitly, or verify
+	// silently re-plans every file assuming action mode and reports spurious
+	// drift on every Setup CLI step.
+	if g.installMode == cliInstallModeBinary {
+		fmt.Fprintf(sb, "          cascade verify --config %s --cli-install=binary > drift-report.txt 2>&1\n", g.getManifestFilePath())
+	} else {
+		fmt.Fprintf(sb, "          cascade verify --config %s > drift-report.txt 2>&1\n", g.getManifestFilePath())
+	}
 	sb.WriteString("          echo $? > drift-exit.txt\n")
 	sb.WriteString("          set -e\n")
 	sb.WriteString("          cat drift-report.txt\n")
