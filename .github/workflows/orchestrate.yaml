@@ -148,11 +148,12 @@ jobs:
           tag_only: 'true'
           environment: prerelease
           sha: ${{ needs.setup.outputs.head_sha }}
+          dry_run: ${{ github.event.inputs.dry_run == 'true' }}
           changelog_file: ${{ runner.temp }}/cascade-changelog.md
           previous_tag: ${{ needs.setup.outputs.previous_tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Dispatch Release Candidate Build
-        if: ${{ github.server_url == 'https://github.com' }}
+        if: ${{ github.server_url == 'https://github.com' && github.event.inputs.dry_run != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           TAG: ${{ needs.setup.outputs.version }}
@@ -168,6 +169,7 @@ jobs:
           GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
           HEAD_SHA: ${{ needs.setup.outputs.head_sha }}
           VERSION: ${{ needs.setup.outputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
           MANIFEST_FILE=".github/manifest.yaml"
           MANIFEST_KEY="ci"
@@ -188,6 +190,13 @@ jobs:
             yq eval -i ".$MANIFEST_KEY.state.prerelease.committed_at = \"$TIMESTAMP\"" "$MANIFEST_FILE"
             yq eval -i ".$MANIFEST_KEY.state.prerelease.committed_by = \"${{ github.actor }}\"" "$MANIFEST_FILE"
           }
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            apply_state_edits
+            echo "cascade-state-write: dry-run preview (no commit)"
+            git --no-pager diff -- "$MANIFEST_FILE" || true
+            exit 0
+          fi
           
           if [[ "$GITHUB_SERVER_URL" != "https://github.com" ]]; then
             # act/gitea e2e: no GitHub API, and the trunk is neither protected nor
