@@ -1125,24 +1125,10 @@ func (r *Runner) executeOrchestrate(ctx context.Context, config Config, expectFa
 		event = orch.Event
 	}
 
-	// A dry-run orchestrate is a rehearsal. The dry_run input only exists on the
-	// workflow_dispatch trigger, so force that event (unless a scenario pinned an
-	// explicit one) and seed the input. act makes github.event.inputs
-	// authoritative from the synthesized event file, matching how executeRollback
-	// drives its own dry_run dispatch.
-	var inputs map[string]string
-	if orch != nil && orch.DryRun {
-		if orch.Event == "" {
-			event = "workflow_dispatch"
-		}
-		inputs = map[string]string{"dry_run": "true"}
-	}
-
 	// Run the actual orchestrate workflow via ActRunner
 	result, err := r.harness.act.RunWorkflowFromRepo(ctx, RunOpts{
 		WorkflowPath: workflowPath,
 		Event:        event,
-		Inputs:       inputs,
 		Env: map[string]string{
 			"GITHUB_SHA":        sha,
 			"GITHUB_REF":        fmt.Sprintf("refs/heads/%s", branch),

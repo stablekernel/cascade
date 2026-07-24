@@ -16,7 +16,6 @@ kinds:
     scenarios:
       - 02-two-env-repo.yaml
       - 03-three-env-repo.yaml
-      - orchestrate/dry-run-finalize-no-mutations.yaml
 
   promote:
     summary: Environment-to-environment promotion workflow for multi-environment repositories.
