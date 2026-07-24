@@ -217,6 +217,7 @@ jobs:
           create_tag: 'true'
           environment: ${{ github.event.inputs.environment || 'dev' }}
           sha: ${{ needs.setup.outputs.head_sha }}
+          dry_run: ${{ github.event.inputs.dry_run == 'true' }}
           changelog_file: ${{ runner.temp }}/cascade-changelog.md
           previous_tag: ${{ needs.setup.outputs.previous_tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -225,6 +226,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ needs.setup.outputs.head_sha }}
           VERSION: ${{ needs.setup.outputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
           APP_RESULT: ${{ needs.deploy-app.result }}
           SIDECAR_RESULT: ${{ needs.deploy-sidecar.result }}
@@ -258,6 +260,13 @@ jobs:
               yq eval -i ".$MANIFEST_KEY.state.$ENVIRONMENT.deploys.sidecar.deployed_by = \"${{ github.actor }}\"" "$MANIFEST_FILE"
             fi
           }
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            apply_state_edits
+            echo "cascade-state-write: dry-run preview (no commit)"
+            git --no-pager diff -- "$MANIFEST_FILE" || true
+            exit 0
+          fi
           
           if [[ "$GITHUB_SERVER_URL" != "https://github.com" ]]; then
             # act/gitea e2e: no GitHub API, and the trunk is neither protected nor

@@ -174,17 +174,18 @@ func TestManageReleaseAction_OwnRepoTagOnlyInput(t *testing.T) {
 	assert.NotContains(t, plainAction, "--tag-only", "plain (downstream) composite action must not forward --tag-only")
 }
 
-// TestManageReleaseAction_PlainModeByteIdenticalToPreOwnRepo locks plain
-// (non-own-repo) generation to the exact byte shape the action had before
-// own-repo mode existed, so a downstream manifest's generated action.yaml is
-// provably unaffected by this change. Any future edit to the shared template
-// must keep this equal for ownRepo=false.
-func TestManageReleaseAction_PlainModeByteIdenticalToPreOwnRepo(t *testing.T) {
+// TestManageReleaseAction_PlainModeSharedTemplateShape locks the plain
+// (non-own-repo) action to its exact byte shape: it carries the shared input
+// set (including the dry_run safety input, which both modes need so a
+// framework-managed downstream release can no-op under a dry-run dispatch) and
+// omits only own-repo's tag_only. The dry_run input sits between create_tag and
+// outputs:, its env var between INPUT_CREATE_TAG and GITHUB_TOKEN, and its CLI
+// arg between --create-tag and the Run CLI block. Any future edit to the shared
+// template must keep these adjacencies for ownRepo=false.
+func TestManageReleaseAction_PlainModeSharedTemplateShape(t *testing.T) {
 	plain := generateManageReleaseAction(false)
 	assert.NotContains(t, plain, "tag_only")
-	// The plain action must still declare exactly the pre-existing input set,
-	// in order, with nothing extra spliced in between create_tag and outputs:.
-	assert.Contains(t, plain, "  create_tag:\n    description: 'Create git tag on create action'\n    required: false\n    default: 'false'\n\noutputs:\n")
-	assert.Contains(t, plain, "        INPUT_CREATE_TAG: ${{ inputs.create_tag }}\n        GITHUB_TOKEN: ${{ inputs.token }}\n")
-	assert.Contains(t, plain, `[[ "$INPUT_CREATE_TAG" == "true" ]] && CMD_ARGS+=(--create-tag)`+"\n\n        # Run CLI\n")
+	assert.Contains(t, plain, "  create_tag:\n    description: 'Create git tag on create action'\n    required: false\n    default: 'false'\n  dry_run:\n    description: 'Preview mode: print the resolved release plan and mutate nothing'\n    required: false\n    default: 'false'\n\noutputs:\n")
+	assert.Contains(t, plain, "        INPUT_CREATE_TAG: ${{ inputs.create_tag }}\n        INPUT_DRY_RUN: ${{ inputs.dry_run }}\n        GITHUB_TOKEN: ${{ inputs.token }}\n")
+	assert.Contains(t, plain, `[[ "$INPUT_CREATE_TAG" == "true" ]] && CMD_ARGS+=(--create-tag)`+"\n"+`        [[ "$INPUT_DRY_RUN" == "true" ]] && CMD_ARGS+=(--dry-run)`+"\n\n        # Run CLI\n")
 }

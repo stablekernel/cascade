@@ -1,0 +1,53 @@
+name: "Dry-Run Orchestrate Finalize Mutates Nothing"
+description: |
+  Proves a dry-run orchestrate dispatch is a true rehearsal: the finalize job
+  still runs (it is gated on always()), but none of its real mutations fire.
+
+  A dispatch with dry_run=true must NOT cut the framework-managed candidate tag
+  (the Manage Release step forwards dry_run to `cascade manage-release`, whose
+  --dry-run gate previews the plan instead of creating the tag/release) and must
+  NOT commit state to trunk (the Update Manifest step previews the yq edit and
+  exits before its commit/push loop). This is the runtime counterpart to the
+  generation-correctness tests in internal/generate/dry_run_finalize_test.go:
+  removing either guard turns this scenario red because the tag would be created
+  and state.dev would be written.
+
+config:
+  trunk_branch: main
+  environments: [dev, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+
+steps:
+  - name: "Seed trunk with a feature commit"
+    action: commit
+    commit:
+      message: "feat: add app feature"
+      files:
+        src/app.ts: |
+          export function main() {
+            console.log("App v0.1.0");
+          }
+
+  - name: "Dry-run orchestrate: no tag cut, no state committed"
+    action: orchestrate
+    orchestrate:
+      dry_run: true
+    expect:
+      # The Update Manifest step previewed the edit and exited before committing,
+      # so trunk state for dev never advanced. Version-independent: catches the
+      # state-write guard regressing regardless of the computed version.
+      state:
+        dev:
+          wiped: true
+      # The Manage Release step ran `cascade manage-release --dry-run`, which
+      # previews the plan and creates nothing, so the candidate tag a real run
+      # would cut (v0.1.0-rc.0, matching the two-env happy path) is absent.
+      tags:
+        deleted: ["v0.1.0-rc.0"]
+      # Positive runtime signal that the state-write step actually took its
+      # dry-run branch at run time, not merely that the marker text exists in the
+      # emitted script (which would stay green even if the guard were deleted).
+      expect_log: "cascade-state-write: dry-run preview (no commit)"

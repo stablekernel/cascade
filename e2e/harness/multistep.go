@@ -249,6 +249,13 @@ type OrchestrateStep struct {
 	// A bare source grep for the absent "push:" string cannot distinguish a
 	// suppressed trigger from a malformed on: block that would still fire.
 	ExpectNoRun bool `yaml:"expect_no_run,omitempty"`
+	// DryRun runs orchestrate as a rehearsal: it forces the workflow_dispatch
+	// event (the dry_run input only exists on that trigger) and seeds the
+	// dry_run="true" input. The finalize job still runs (it is gated on always()),
+	// but its release, state-write, and candidate-dispatch steps must all no-op,
+	// so a scenario proves the rehearsal cut no tag and committed no state. Empty
+	// Event is overridden to workflow_dispatch; an explicit Event still wins.
+	DryRun bool `yaml:"dry_run,omitempty"`
 }
 
 // RunWorkflowStep defines a "run_workflow" action: a generic act run of a chosen

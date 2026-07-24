@@ -112,6 +112,10 @@ inputs:
     description: 'Create git tag on create action'
     required: false
     default: 'false'
+  dry_run:
+    description: 'Preview mode: print the resolved release plan and mutate nothing'
+    required: false
+    default: 'false'
 `)
 	if ownRepo {
 		sb.WriteString(`  tag_only:
@@ -150,6 +154,7 @@ runs:
         INPUT_NEW_TAG: ${{ inputs.new_tag }}
         INPUT_DELETE_TAG: ${{ inputs.delete_tag }}
         INPUT_CREATE_TAG: ${{ inputs.create_tag }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
 `)
 	if ownRepo {
 		sb.WriteString("        INPUT_TAG_ONLY: ${{ inputs.tag_only }}\n")
@@ -180,6 +185,7 @@ runs:
         [[ -n "$INPUT_NEW_TAG" ]] && CMD_ARGS+=(--new-tag "$INPUT_NEW_TAG")
         [[ -n "$INPUT_DELETE_TAG" ]] && CMD_ARGS+=(--delete-tag "$INPUT_DELETE_TAG")
         [[ "$INPUT_CREATE_TAG" == "true" ]] && CMD_ARGS+=(--create-tag)
+        [[ "$INPUT_DRY_RUN" == "true" ]] && CMD_ARGS+=(--dry-run)
 `)
 	if ownRepo {
 		sb.WriteString(`        [[ "$INPUT_TAG_ONLY" == "true" ]] && CMD_ARGS+=(--tag-only)
