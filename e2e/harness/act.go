@@ -72,7 +72,7 @@ const actStartupPollInterval = 2 * time.Second
 // `docker run --rm <image> node --version` reports >= actRunnerNodeMajorMin,
 // then record the resolved digest here
 // (`docker inspect --format '{{index .RepoDigests 0}}' <image>`).
-const actRunnerImage = "ghcr.io/catthehacker/ubuntu@sha256:2362bb12b0c61438d334b9ed3686809981796a864ab89d93b5ee657652774eb7"
+const actRunnerImage = "ghcr.io/catthehacker/ubuntu@sha256:148374205122af210a8ca475111dd1a2934a10bbeea39b53850041517dccc570"
 
 // actRunnerNodeMajorMin is the minimum Node major version the pinned image must
 // provide. checkout v7, github-script v9, and download-artifact v8 are Node 24
