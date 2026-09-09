@@ -7,7 +7,7 @@ toolchain go1.26.5
 replace github.com/stablekernel/cascade => ../
 
 require (
-	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/api v1.56.0
 	github.com/stablekernel/cascade v0.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.43.0
