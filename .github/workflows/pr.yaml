@@ -10,11 +10,19 @@
 # job aggregates their results and is the single check to require in branch
 # protection: it passes when each gated job succeeds or is skipped, and
 # fails when any gated job fails or is cancelled.
+#
+# A draft PR runs no jobs: every job, the gate included, skips while the PR is
+# a draft, so work under review spends no CI time. Marking it ready for review
+# (ready_for_review) runs everything. The same guard is on e2e.yaml,
+# validate.yaml and codeql.yml. The cost: a skipped required check counts as
+# passing, so a draft could be merged without CI. We accept that to keep
+# drafts free of runs and red checks.
 name: PR Validation
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -22,6 +30,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -119,6 +128,7 @@ jobs:
 
   workflow-drift:
     name: Workflow Drift Check
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # contents:read only. This job runs on pull_request, so a fork PR gets a
     # read-only token and no secrets. It cannot post a PR comment itself; it
@@ -232,7 +242,7 @@ jobs:
   pr-gate:
     name: PR Gate
     needs: [unit-tests, lint, workflow-drift, docs-build]
-    if: ${{ always() }}
+    if: ${{ always() && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - name: Verify gated jobs succeeded or were skipped

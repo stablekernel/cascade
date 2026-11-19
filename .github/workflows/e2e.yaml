@@ -20,6 +20,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   workflow_dispatch:
     inputs:
@@ -57,6 +58,7 @@ permissions:
 jobs:
   changes:
     name: Detect Code Changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -244,7 +246,7 @@ jobs:
     # stays the one required-check identity over the whole sharded suite.
     name: Integration Gate
     needs: [changes, plan, e2e]
-    if: always()
+    if: ${{ always() && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
