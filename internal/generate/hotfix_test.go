@@ -827,12 +827,16 @@ func TestHotfixGenerator_Actionlint(t *testing.T) {
 // reusableWorkflowStub is a minimal valid workflow_call reusable workflow that
 // satisfies actionlint's resolution of local `uses: ./...` references. It
 // declares the inputs the hotfix generator passes to a reusable build workflow
-// (sha, target_env) so actionlint can validate the call site's `with:` block
-// against the called workflow's declared inputs under full strictness.
+// (environment, sha, target_env) so actionlint can validate the call site's
+// `with:` block against the called workflow's declared inputs under full
+// strictness.
 const reusableWorkflowStub = `name: Stub
 on:
   workflow_call:
     inputs:
+      environment:
+        required: false
+        type: string
       sha:
         required: false
         type: string
