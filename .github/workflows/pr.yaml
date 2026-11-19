@@ -14,9 +14,10 @@
 # A draft PR runs no jobs: every job, the gate included, skips while the PR is
 # a draft, so work under review spends no CI time. Marking it ready for review
 # (ready_for_review) runs everything. The same guard is on e2e.yaml,
-# validate.yaml and codeql.yml. The cost: a skipped required check counts as
-# passing, so a draft could be merged without CI. We accept that to keep
-# drafts free of runs and red checks.
+# validate.yaml and codeql.yml. GitHub won't merge a draft. The one gap: right
+# after a PR is marked ready, the draft's skipped gate reads as passed until the
+# ready run starts, so a merge in those seconds would skip CI. We accept that
+# window.
 name: PR Validation
 
 on:
