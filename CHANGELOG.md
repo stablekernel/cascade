@@ -24,6 +24,15 @@ A `Migration` section is added to any release that bumps `schema_version`.
   that declare the standard `environment` input, so a callback declaring it as
   required no longer fails the reusable-workflow dispatch on a merged hotfix.
 
+- **generate:** The hotfix workflow's build jobs now thread a manifest build's
+  operator-declared `inputs:` to the callback under the same rules as
+  orchestrate: only inputs the callee declares, after the standard
+  `environment`/`sha`/`target_env` inputs (which win and are not duplicated),
+  with identical value rendering and a stable sorted order. `env_inputs:` and
+  `${{ state.<env>.* }}` references remain unthreaded on hotfix builds because
+  the target environment is chosen at run time; a state reference the callee
+  declares now fails generation loudly instead of being silently dropped.
+
 - **generate:** A dry-run `orchestrate` dispatch (`dry_run: true`) no longer
   mutates real state in the `finalize` job. The `Manage Release` step now
   forwards `dry_run` to `cascade manage-release --dry-run` (whose existing

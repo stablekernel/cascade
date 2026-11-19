@@ -1560,7 +1560,24 @@ func (g *Generator) callbackInputs(info CallbackInfo) map[string]interface{} {
 // contract: state is not a GitHub Actions runtime context, so emitting the
 // dead ref would produce a workflow GitHub rejects at parse time.
 func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct{}) ([]string, error) {
-	declared := g.callbackInputs(info)
+	return renderOperatorInputs(g.callbackInputs(info), func(name string) bool {
+		return g.jobHasInput(info.JobID, name)
+	}, skip, g.state, info.JobID)
+}
+
+// renderOperatorInputs builds the "      key: value" with: lines for a
+// callback's manifest-declared inputs, shared by the orchestrate and hotfix
+// generators so the two surfaces cannot drift on the operator-input contract.
+// declaredByCallee gates each input on the callee's declared workflow_call
+// inputs (GitHub Actions rejects an input the callee does not declare). Keys
+// already present in skip (standard inputs) are omitted; they take precedence
+// and are not duplicated. Passthrough expressions survive verbatim;
+// ${{ state.* }} references resolve at generation time against state (a nil
+// state fails loudly, per the resolveInputValue contract, so callers that
+// cannot resolve state refs must reject them before delegating here);
+// literals emit as-is. Output is sorted for deterministic generation. owner
+// names the callback in error messages.
+func renderOperatorInputs(declared map[string]interface{}, declaredByCallee func(string) bool, skip map[string]struct{}, state map[string]*config.EnvState, owner string) ([]string, error) {
 	if len(declared) == 0 {
 		return nil, nil
 	}
@@ -1575,8 +1592,8 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 		if _, ok := skip[k]; ok {
 			continue
 		}
-		// Only emit inputs the callback actually declares as workflow inputs.
-		if !g.jobHasInput(info.JobID, k) {
+		// Only emit inputs the callee actually declares as workflow inputs.
+		if !declaredByCallee(k) {
 			continue
 		}
 		s, ok := declared[k].(string)
@@ -1584,9 +1601,9 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 			lines = append(lines, fmt.Sprintf("      %s: %v", k, declared[k]))
 			continue
 		}
-		val, err := resolveInputValue(s, g.state)
+		val, err := resolveInputValue(s, state)
 		if err != nil {
-			return nil, fmt.Errorf("input %q of %s: %w", k, info.JobID, err)
+			return nil, fmt.Errorf("input %q of %s: %w", k, owner, err)
 		}
 		// Single-quote string values so freeform content (apostrophes, colons,
 		// JSON snippets) cannot restructure the with: mapping. Quoting is

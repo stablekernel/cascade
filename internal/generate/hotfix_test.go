@@ -1103,3 +1103,193 @@ func TestHotfixGenerator_BuildThreadsEnvironmentInput(t *testing.T) {
 			"a cross-repo build callback must receive the standard contract's sha input")
 	})
 }
+
+// TestHotfixGenerator_BuildThreadsOperatorInputs guards the operator-input half
+// of the hotfix build wiring: a manifest build's operator-declared inputs: must
+// reach the callback's with: block under orchestrate's rules (only inputs the
+// callee declares, standard inputs win and are not duplicated, the shared value
+// rendering, sorted order), and the deliberately unsupported shape (a
+// ${{ state.* }} reference) must fail generation loudly rather than emit a dead
+// ref GitHub Actions rejects at parse time. env_inputs are not threaded,
+// matching orchestrate's own build callbacks, which do not emit them either.
+func TestHotfixGenerator_BuildThreadsOperatorInputs(t *testing.T) {
+	t.Run("declared_input_emitted_after_standard_inputs", func(t *testing.T) {
+		dir := writeHotfixBuildStub(t, "environment", "sha", "dockerfile")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"dockerfile": "./docker/Dockerfile.prod",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+
+		// Pin the whole with: block so the operator input lands after the
+		// standard inputs, matching orchestrate's writeWithInputs ordering.
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n      dockerfile: './docker/Dockerfile.prod'\n",
+			"a declared operator input must be threaded after the standard inputs, single-quoted like orchestrate's rendering")
+	})
+
+	t.Run("undeclared_input_not_emitted", func(t *testing.T) {
+		// GitHub Actions rejects a reusable-workflow call that passes an input
+		// the callee does not declare, so an operator input absent from the
+		// callee's workflow_call inputs must be dropped, not threaded.
+		dir := writeHotfixBuildStub(t, "environment", "sha")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"dockerfile": "./docker/Dockerfile.prod",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.NotContains(t, buildJob, "dockerfile:",
+			"an operator input the callee does not declare must not be threaded; GitHub Actions rejects undeclared inputs")
+	})
+
+	t.Run("operator_input_named_like_standard_not_duplicated", func(t *testing.T) {
+		// A standard input (sha) always wins: the operator's same-named input
+		// must not duplicate or override it, mirroring orchestrate's seen() skip.
+		dir := writeHotfixBuildStub(t, "environment", "sha")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"sha": "operators-own-sha",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      sha: ${{ github.event.pull_request.merge_commit_sha }}",
+			"the standard sha wiring must survive an operator input with the same name")
+		assert.NotContains(t, buildJob, "operators-own-sha",
+			"an operator input sharing a standard input's name must not duplicate it")
+		assert.Equal(t, 1, strings.Count(buildJob, "      sha:"),
+			"the sha input must appear exactly once in the with: block")
+	})
+
+	t.Run("expression_and_literal_render_like_orchestrate", func(t *testing.T) {
+		// The same manifest build is generated through both surfaces; the
+		// operator-input lines must be byte-identical, proving the hotfix path
+		// reuses orchestrate's rendering (passthrough expressions verbatim,
+		// literals single-quoted, non-strings via %v) rather than diverging.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "region", "dockerfile", "replicas")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"region":     "${{ vars.DEPLOY_REGION }}",
+			"dockerfile": "./docker/Dockerfile.prod",
+			"replicas":   3,
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		hotfixJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, hotfixJob, "hotfix build job section should be present")
+
+		// Orchestrate needs only the build (no deploys) so the same callee stub
+		// satisfies its workflow reads.
+		orchestrateCfg := &config.TrunkConfig{
+			TrunkBranch:  cfg.TrunkBranch,
+			Environments: cfg.Environments,
+			Builds:       cfg.Builds,
+		}
+		orchestrate, err := NewGenerator(orchestrateCfg, dir).Generate()
+		require.NoError(t, err)
+		orchestrateJob := extractJobSection(t, orchestrate, "build-app:")
+		require.NotEmpty(t, orchestrateJob, "orchestrate build job section should be present")
+
+		for _, line := range []string{
+			"      dockerfile: './docker/Dockerfile.prod'",
+			// Passthrough expressions emit single-quoted like literals; quoting is
+			// transparent to ${{ }} expressions, which GitHub evaluates inside
+			// quoted scalars.
+			"      region: '${{ vars.DEPLOY_REGION }}'",
+			"      replicas: 3",
+		} {
+			assert.Contains(t, hotfixJob, line,
+				"the hotfix build job must render %q exactly like orchestrate", line)
+			assert.Contains(t, orchestrateJob, line,
+				"the orchestrate build job must render %q (oracle for the hotfix rendering)", line)
+		}
+	})
+
+	t.Run("cross_repo_callee_receives_operator_inputs", func(t *testing.T) {
+		// A cross-repo callee cannot be parsed locally, so its contract is
+		// seeded from the standard inputs plus the operator-declared inputs
+		// (mirroring orchestrate's crossRepoInputs); the operator inputs must
+		// be threaded, sorted after the standard wiring.
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Workflow = "stablekernel/cascade-example-artifact-a/.github/workflows/build-shared.yaml@main"
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"region":     "${{ vars.DEPLOY_REGION }}",
+			"dockerfile": "./docker/Dockerfile.prod",
+		}
+		content, err := NewHotfixGenerator(cfg, "").Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n      dockerfile: './docker/Dockerfile.prod'\n      region: '${{ vars.DEPLOY_REGION }}'\n",
+			"a cross-repo build callback must receive the operator-declared inputs, sorted after the standard wiring")
+	})
+
+	t.Run("sorted_order", func(t *testing.T) {
+		// Map iteration order must not leak into the with: block; operator
+		// inputs emit in sorted key order for deterministic generation.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "zeta", "middle", "alpha")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"zeta":   "z",
+			"middle": "m",
+			"alpha":  "a",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n      alpha: 'a'\n      middle: 'm'\n      zeta: 'z'\n",
+			"operator inputs must emit in sorted key order after the standard inputs")
+	})
+
+	t.Run("state_reference_fails_generation_loudly", func(t *testing.T) {
+		// A ${{ state.<env>.* }} reference cannot be resolved for a hotfix
+		// build: the target environment is chosen at run time, so orchestrate's
+		// generation-time resolution does not apply. A callee declaring the
+		// input must fail generation loudly (emitting the raw ref would produce
+		// a workflow GitHub Actions rejects at parse time); a callee that does
+		// not declare it is skipped, exactly as orchestrate skips undeclared
+		// inputs.
+		t.Run("declared_by_callee_fails", func(t *testing.T) {
+			dir := writeHotfixBuildStub(t, "environment", "sha", "prev")
+			cfg := threeEnvHotfixConfig()
+			cfg.Builds[0].Inputs = map[string]interface{}{
+				"prev": "${{ state.prod.sha }}",
+			}
+			_, err := NewHotfixGenerator(cfg, dir).Generate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "state references are not supported on hotfix build inputs",
+				"a declared state reference must fail with the hotfix-specific reason")
+			assert.Contains(t, err.Error(), "prev",
+				"the failing input must be named in the error")
+		})
+
+		t.Run("not_declared_by_callee_skipped", func(t *testing.T) {
+			dir := writeHotfixBuildStub(t, "environment", "sha")
+			cfg := threeEnvHotfixConfig()
+			cfg.Builds[0].Inputs = map[string]interface{}{
+				"prev": "${{ state.prod.sha }}",
+			}
+			content, err := NewHotfixGenerator(cfg, dir).Generate()
+			require.NoError(t, err,
+				"an undeclared state reference is skipped like any undeclared input and must not fail generation")
+			assert.NotContains(t, content, "state.prod.sha",
+				"the skipped state reference must not survive into the emitted workflow")
+		})
+	})
+}

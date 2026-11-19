@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -196,7 +197,9 @@ func (g *HotfixGenerator) Generate() (string, error) {
 	g.writeTriggers(&sb)
 	g.writePermissions(&sb)
 	g.writeConcurrency(&sb)
-	g.writeJobs(&sb)
+	if err := g.writeJobs(&sb); err != nil {
+		return "", err
+	}
 
 	return sb.String(), nil
 }
@@ -298,15 +301,18 @@ func (g *HotfixGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
-func (g *HotfixGenerator) writeJobs(sb *strings.Builder) {
+func (g *HotfixGenerator) writeJobs(sb *strings.Builder) error {
 	sb.WriteString("jobs:\n")
 	g.writePlanJob(sb)
 	g.writeApplyJob(sb)
 	g.writeCheckJob(sb)
 	g.writeContextJob(sb)
-	g.writeBuildJobs(sb)
+	if err := g.writeBuildJobs(sb); err != nil {
+		return err
+	}
 	g.writeDeployJobs(sb)
 	g.writeFinalizeJob(sb)
+	return nil
 }
 
 // writePlanJob emits the plan job, run only on manual dispatch. It fetches env
@@ -688,7 +694,7 @@ func mergedHotfixGuard() string {
 // writeBuildJobs emits one build job per configured build, run on the merged
 // hotfix commit. With no builds configured a single no-op build job is emitted so
 // downstream needs: references resolve.
-func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
+func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) error {
 	if len(g.config.Builds) == 0 {
 		sb.WriteString("  build:\n")
 		sb.WriteString("    name: Build Hotfix (no-op)\n")
@@ -698,7 +704,7 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("    steps:\n")
 		sb.WriteString("      - name: No builds configured\n")
 		sb.WriteString("        run: echo \"No builds configured; skipping build stage\"\n")
-		return
+		return nil
 	}
 
 	for _, b := range g.config.Builds {
@@ -728,6 +734,17 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 			if declared["target_env"] {
 				withLines = append(withLines, "      target_env: ${{ needs.context.outputs.target_env }}")
 			}
+			// Operator-authored inputs from the manifest (inputs:), threaded under
+			// the same rules as orchestrate's writeWithInputs: only inputs the
+			// callee declares, after the standard inputs above (which win and are
+			// not duplicated), rendered by the shared operator-input helper, in
+			// sorted order. See hotfixBuildOperatorInputLines for what is
+			// deliberately left out.
+			operatorLines, err := hotfixBuildOperatorInputLines(&b, declared, seen(withLines))
+			if err != nil {
+				return err
+			}
+			withLines = append(withLines, operatorLines...)
 			if len(withLines) > 0 {
 				sb.WriteString("    with:\n")
 				for _, line := range withLines {
@@ -751,6 +768,44 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("        run: |\n")
 		fmt.Fprintf(sb, "          echo \"build %s\"\n", b.Name)
 	}
+	return nil
+}
+
+// hotfixBuildOperatorInputLines renders a hotfix build's manifest-declared
+// inputs (inputs:) through the shared operator-input rules
+// (renderOperatorInputs, the same helper orchestrate's writeWithInputs uses):
+// only inputs the callee declares, standard inputs already emitted by the
+// caller win and are not duplicated, passthrough ${{ ... }} expressions and
+// literals render identically to orchestrate, and output is sorted.
+//
+// Per-environment inputs (env_inputs:) and ${{ state.<env>.<field> }}
+// references are deliberately NOT threaded. A hotfix's target environment is
+// chosen only at run time (needs.context.outputs.target_env), and neither
+// existing per-environment mechanism applies: orchestrate resolves state refs
+// at generation time against the environment named in the ref, and promote
+// keys env_inputs off its promotion-result matrix, a shape a single
+// reusable-workflow with: block cannot carry. Orchestrate's own build
+// callbacks do not emit env_inputs either, so ignoring them here matches the
+// surface being mirrored. A state reference the callee declares fails
+// generation loudly rather than being silently dropped (its previous behavior)
+// or emitting a dead ref GitHub Actions rejects at parse time; a state
+// reference the callee does not declare is skipped, exactly as orchestrate
+// skips undeclared inputs. Both gaps await a deliberate design decision.
+func hotfixBuildOperatorInputLines(b *config.BuildConfig, declared map[string]bool, skip map[string]struct{}) ([]string, error) {
+	keys := make([]string, 0, len(b.Inputs))
+	for k := range b.Inputs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, dup := skip[k]; dup || !declared[k] {
+			continue
+		}
+		if s, ok := b.Inputs[k].(string); ok && classifyInputValue(s) == inputStateRef {
+			return nil, fmt.Errorf("hotfix build %q declares input %q as a ${{ state.<env>.* }} reference: state references are not supported on hotfix build inputs because the target environment is chosen at run time", b.Name, k)
+		}
+	}
+	return renderOperatorInputs(b.Inputs, func(name string) bool { return declared[name] }, skip, nil, "hotfix build "+b.Name)
 }
 
 // declaredCallbackInputs returns the set of workflow_call inputs a hotfix build
