@@ -19,6 +19,11 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** The hotfix workflow's build jobs now pass
+  `environment: ${{ needs.context.outputs.target_env }}` to build callbacks
+  that declare the standard `environment` input, so a callback declaring it as
+  required no longer fails the reusable-workflow dispatch on a merged hotfix.
+
 - **generate:** A dry-run `orchestrate` dispatch (`dry_run: true`) no longer
   mutates real state in the `finalize` job. The `Manage Release` step now
   forwards `dry_run` to `cascade manage-release --dry-run` (whose existing

@@ -712,9 +712,16 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 			// GitHub Actions rejects a reusable-workflow call that passes an input
 			// the callee does not declare, so gate each with: input on the callback's
 			// declared workflow_call inputs (mirroring the orchestrate writeWithInputs
-			// path). A callee that declares neither input gets no with: block.
+			// path). A callee that declares none of these inputs gets no with: block.
 			declared := g.declaredCallbackInputs(b.Workflow, b.Inputs)
 			var withLines []string
+			// environment threads the resolved target environment, the same input
+			// orchestrate passes to the same callback; a callee that declares it as
+			// required fails the reusable-workflow dispatch without it. Emitted
+			// first so the with: order matches orchestrate's (environment, sha).
+			if declared["environment"] {
+				withLines = append(withLines, "      environment: ${{ needs.context.outputs.target_env }}")
+			}
 			if declared["sha"] {
 				withLines = append(withLines, "      sha: ${{ github.event.pull_request.merge_commit_sha }}")
 			}

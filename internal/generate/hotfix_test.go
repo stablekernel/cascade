@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1002,4 +1003,99 @@ func TestHotfixGenerator_FinalizeFetchesEnvBranches(t *testing.T) {
 		"finalize job must fetch env branches before the env-branch tip cross-check")
 	assert.Contains(t, finalizeJob, "refs/heads/env/*:refs/remotes/origin/env/*",
 		"finalize job must fetch the env/* refs into remote-tracking refs")
+}
+
+// writeHotfixBuildStub writes a reusable build-callback workflow declaring the
+// given input names into a temp repo layout, returning the base directory the
+// hotfix generator reads the callee from. The declared inputs are exactly the
+// with: surface the generator may thread, so each subtest controls what the
+// callee accepts.
+func writeHotfixBuildStub(t *testing.T, inputNames ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	var inputs strings.Builder
+	for _, name := range inputNames {
+		fmt.Fprintf(&inputs, "      %s:\n        required: false\n        type: string\n", name)
+	}
+	stub := fmt.Sprintf(`name: Build
+on:
+  workflow_call:
+    inputs:
+%s
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+`, inputs.String())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "workflows", "build.yaml"), []byte(stub), 0o644))
+	return dir
+}
+
+// TestHotfixGenerator_BuildThreadsEnvironmentInput guards the build-callback
+// `environment` wiring: a hotfix build job must pass
+// `environment: ${{ needs.context.outputs.target_env }}` when the callee
+// declares the standard contract's `environment` input (the same input
+// orchestrate threads to the same callback), or a callee declaring it as
+// required fails the reusable-workflow dispatch at runtime with "Input
+// required and not supplied: environment". The declared-input gating must hold
+// in both directions: a callee declaring only `sha` gets no environment line
+// (GitHub Actions rejects an input the callee does not declare), and a
+// cross-repo callee (unparsable locally, so the standard contract is assumed)
+// receives the standard environment/sha wiring.
+func TestHotfixGenerator_BuildThreadsEnvironmentInput(t *testing.T) {
+	t.Run("declares_environment_gets_it_before_sha", func(t *testing.T) {
+		dir := writeHotfixBuildStub(t, "environment", "sha", "dry_run")
+		content, err := NewHotfixGenerator(threeEnvHotfixConfig(), dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+
+		// Pin the whole with: block so both the wiring and its order are locked:
+		// environment first, then sha, matching orchestrate's writeWithInputs
+		// ordering for the same callback.
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n",
+			"a build callback declaring environment must receive the resolved target_env, ordered before sha like orchestrate")
+
+		// The post-merge build path has no dry-run notion (it runs on the merged
+		// hotfix PR, not a dispatch), so dry_run must not be threaded even though
+		// the callee declares it.
+		assert.NotContains(t, buildJob, "dry_run:",
+			"the hotfix build job has no dry-run source and must not thread dry_run")
+	})
+
+	t.Run("declares_only_sha_omits_environment", func(t *testing.T) {
+		dir := writeHotfixBuildStub(t, "sha")
+		content, err := NewHotfixGenerator(threeEnvHotfixConfig(), dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+
+		assert.Contains(t, buildJob, "      sha: ${{ github.event.pull_request.merge_commit_sha }}",
+			"a build callback declaring sha must still receive the merge commit SHA")
+		assert.NotContains(t, buildJob, "environment:",
+			"a build callback that does not declare environment must not receive it; GitHub Actions rejects an undeclared input")
+	})
+
+	t.Run("cross_repo_callback_gets_standard_wiring", func(t *testing.T) {
+		// A cross-repo callee cannot be parsed locally, so the hotfix generator
+		// seeds its contract from the standard callback inputs
+		// (environment/sha/dry_run); the standard wiring must include environment.
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Workflow = "stablekernel/cascade-example-artifact-a/.github/workflows/build-shared.yaml@main"
+
+		content, err := NewHotfixGenerator(cfg, "").Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      environment: ${{ needs.context.outputs.target_env }}",
+			"a cross-repo build callback must receive the standard contract's environment input")
+		assert.Contains(t, buildJob, "      sha: ${{ github.event.pull_request.merge_commit_sha }}",
+			"a cross-repo build callback must receive the standard contract's sha input")
+	})
 }
