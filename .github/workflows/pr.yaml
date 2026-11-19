@@ -11,13 +11,13 @@
 # protection: it passes when each gated job succeeds or is skipped, and
 # fails when any gated job fails or is cancelled.
 #
-# A draft PR runs no jobs: every job, the gate included, skips while the PR is
-# a draft, so work under review spends no CI time. Marking it ready for review
-# (ready_for_review) runs everything. The same guard is on e2e.yaml,
-# validate.yaml and codeql.yml. GitHub won't merge a draft. The one gap: right
-# after a PR is marked ready, the draft's skipped gate reads as passed until the
-# ready run starts, so a merge in those seconds would skip CI. We accept that
-# window.
+# While a PR is a draft, every job here skips, the gate included, and so does
+# every job in e2e.yaml, validate.yaml and codeql.yml. The drift-comment and
+# pin-reconcile followers still run a short job when this workflow completes.
+# Marking the PR ready for review (ready_for_review) runs everything. GitHub
+# won't merge a draft. The one gap: right after a PR is marked ready, its
+# skipped PR Gate reads as passed until the ready run starts, so a merge in
+# those seconds would skip CI. We accept that window.
 name: PR Validation
 
 on:
