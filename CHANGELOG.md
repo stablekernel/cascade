@@ -19,6 +19,17 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** Callbacks that require an operator input the manifest
+  passes under that callback's `inputs:` no longer fail generation.
+  `validateRequiredInputs` now counts the manifest-wired inputs the
+  generator actually threads through the callback's `with:` block
+  (computed through the same `operatorInputLines` call, with the same
+  standard-input skip set, so only declared inputs whose values really
+  render count), instead of rejecting every required input that is neither
+  a standard input nor a dependency output. A required input that is
+  neither standard, manifest-passed, nor dependency-output still fails with
+  the same message, and emitted workflows are unchanged.
+
 - **generate:** The hotfix workflow's build jobs now pass
   `environment: ${{ needs.context.outputs.target_env }}` to build callbacks
   that declare the standard `environment` input, so a callback declaring it as
