@@ -28,10 +28,10 @@ A `Migration` section is added to any release that bumps `schema_version`.
   operator-declared `inputs:` to the callback under the same rules as
   orchestrate: only inputs the callee declares, after the standard
   `environment`/`sha`/`target_env` inputs (which win and are not duplicated),
-  with identical value rendering and a stable sorted order. `env_inputs:` and
-  `${{ state.<env>.* }}` references remain unthreaded on hotfix builds because
-  the target environment is chosen at run time; a state reference the callee
-  declares now fails generation loudly instead of being silently dropped.
+  with identical value rendering, a stable sorted order, and `{{ state.* }}`
+  references resolved at generation time from the manifest state exactly as
+  orchestrate resolves them (an unresolved reference fails generation).
+  `env_inputs:` remain unthreaded, matching orchestrate's own build callbacks.
 
 - **generate:** A dry-run `orchestrate` dispatch (`dry_run: true`) no longer
   mutates real state in the `finalize` job. The `Manage Release` step now

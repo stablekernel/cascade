@@ -1108,10 +1108,10 @@ func TestHotfixGenerator_BuildThreadsEnvironmentInput(t *testing.T) {
 // of the hotfix build wiring: a manifest build's operator-declared inputs: must
 // reach the callback's with: block under orchestrate's rules (only inputs the
 // callee declares, standard inputs win and are not duplicated, the shared value
-// rendering, sorted order), and the deliberately unsupported shape (a
-// ${{ state.* }} reference) must fail generation loudly rather than emit a dead
-// ref GitHub Actions rejects at parse time. env_inputs are not threaded,
-// matching orchestrate's own build callbacks, which do not emit them either.
+// rendering, sorted order), and ${{ state.<env>.* }} references must resolve at
+// generation time exactly as orchestrate resolves them. env_inputs are not
+// threaded, matching orchestrate's own build callbacks, which do not emit them
+// either.
 func TestHotfixGenerator_BuildThreadsOperatorInputs(t *testing.T) {
 	t.Run("declared_input_emitted_after_standard_inputs", func(t *testing.T) {
 		dir := writeHotfixBuildStub(t, "environment", "sha", "dockerfile")
@@ -1257,39 +1257,70 @@ func TestHotfixGenerator_BuildThreadsOperatorInputs(t *testing.T) {
 			"operator inputs must emit in sorted key order after the standard inputs")
 	})
 
-	t.Run("state_reference_fails_generation_loudly", func(t *testing.T) {
-		// A ${{ state.<env>.* }} reference cannot be resolved for a hotfix
-		// build: the target environment is chosen at run time, so orchestrate's
-		// generation-time resolution does not apply. A callee declaring the
-		// input must fail generation loudly (emitting the raw ref would produce
-		// a workflow GitHub Actions rejects at parse time); a callee that does
-		// not declare it is skipped, exactly as orchestrate skips undeclared
-		// inputs.
-		t.Run("declared_by_callee_fails", func(t *testing.T) {
-			dir := writeHotfixBuildStub(t, "environment", "sha", "prev")
-			cfg := threeEnvHotfixConfig()
-			cfg.Builds[0].Inputs = map[string]interface{}{
-				"prev": "${{ state.prod.sha }}",
-			}
-			_, err := NewHotfixGenerator(cfg, dir).Generate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "state references are not supported on hotfix build inputs",
-				"a declared state reference must fail with the hotfix-specific reason")
-			assert.Contains(t, err.Error(), "prev",
-				"the failing input must be named in the error")
-		})
+	t.Run("state_reference_resolves_like_orchestrate", func(t *testing.T) {
+		// A ${{ state.<env>.* }} reference names its own environment and
+		// resolves at generation time from the manifest state, regardless of
+		// which environment the hotfix targets at run time. The same manifest
+		// build is generated through both surfaces with the same state; the
+		// resolved line must be byte-identical, proving the hotfix path reuses
+		// orchestrate's resolution rather than a hotfix-specific one.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "prev")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"prev": "${{ state.prod.sha }}",
+		}
+		state := map[string]*config.EnvState{
+			"prod": {SHA: "cafef00d"},
+		}
 
-		t.Run("not_declared_by_callee_skipped", func(t *testing.T) {
-			dir := writeHotfixBuildStub(t, "environment", "sha")
-			cfg := threeEnvHotfixConfig()
-			cfg.Builds[0].Inputs = map[string]interface{}{
-				"prev": "${{ state.prod.sha }}",
-			}
-			content, err := NewHotfixGenerator(cfg, dir).Generate()
-			require.NoError(t, err,
-				"an undeclared state reference is skipped like any undeclared input and must not fail generation")
-			assert.NotContains(t, content, "state.prod.sha",
-				"the skipped state reference must not survive into the emitted workflow")
-		})
+		hotfixGen := NewHotfixGenerator(cfg, dir)
+		hotfixGen.SetState(state)
+		content, err := hotfixGen.Generate()
+		require.NoError(t, err)
+		hotfixJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, hotfixJob, "hotfix build job section should be present")
+
+		// Orchestrate needs only the build (no deploys) so the same callee stub
+		// satisfies its workflow reads.
+		orchestrateCfg := &config.TrunkConfig{
+			TrunkBranch:  cfg.TrunkBranch,
+			Environments: cfg.Environments,
+			Builds:       cfg.Builds,
+		}
+		orchestrateGen := NewGenerator(orchestrateCfg, dir)
+		orchestrateGen.SetState(state)
+		orchestrate, err := orchestrateGen.Generate()
+		require.NoError(t, err)
+		orchestrateJob := extractJobSection(t, orchestrate, "build-app:")
+		require.NotEmpty(t, orchestrateJob, "orchestrate build job section should be present")
+
+		assert.Contains(t, hotfixJob, "      prev: 'cafef00d'",
+			"the hotfix build job must resolve the state reference to its manifest value")
+		assert.Contains(t, orchestrateJob, "      prev: 'cafef00d'",
+			"the orchestrate build job must render the same resolved value (oracle for the hotfix resolution)")
+		assert.NotContains(t, hotfixJob, "state.prod.sha",
+			"the raw state reference must not survive into the emitted hotfix workflow")
+	})
+
+	t.Run("unresolved_state_reference_fails_like_orchestrate", func(t *testing.T) {
+		// A state reference with no matching value in the manifest state fails
+		// generation with orchestrate's existing error, per the resolveInputValue
+		// contract: state is not a GitHub Actions runtime context, so emitting
+		// the dead ref would produce a workflow GitHub Actions rejects at parse
+		// time. The hotfix surface inherits the same failure instead of a
+		// hotfix-specific one.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "prev")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"prev": "${{ state.prod.sha }}",
+		}
+		hotfixGen := NewHotfixGenerator(cfg, dir)
+		hotfixGen.SetState(map[string]*config.EnvState{})
+		_, err := hotfixGen.Generate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unresolved prior-state reference",
+			"an unresolved state reference must fail with orchestrate's existing error")
+		assert.Contains(t, err.Error(), "prev",
+			"the failing input must be named in the error")
 	})
 }

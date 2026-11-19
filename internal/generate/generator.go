@@ -1573,9 +1573,8 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 // already present in skip (standard inputs) are omitted; they take precedence
 // and are not duplicated. Passthrough expressions survive verbatim;
 // ${{ state.* }} references resolve at generation time against state (a nil
-// state fails loudly, per the resolveInputValue contract, so callers that
-// cannot resolve state refs must reject them before delegating here);
-// literals emit as-is. Output is sorted for deterministic generation. owner
+// state fails loudly, per the resolveInputValue contract); literals emit
+// as-is. Output is sorted for deterministic generation. owner
 // names the callback in error messages.
 func renderOperatorInputs(declared map[string]interface{}, declaredByCallee func(string) bool, skip map[string]struct{}, state map[string]*config.EnvState, owner string) ([]string, error) {
 	if len(declared) == 0 {

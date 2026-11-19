@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/stablekernel/cascade/internal/config"
@@ -43,6 +42,10 @@ type HotfixGenerator struct {
 	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
+	// state is the manifest state block, threaded via SetState so
+	// ${{ state.<env>.<field> }} input references resolve at generation time
+	// exactly as orchestrate resolves them.
+	state map[string]*config.EnvState
 
 	// componentName, when non-empty, names the component this hotfix workflow is
 	// scoped to. It suffixes the workflow name, composes the component identity
@@ -77,6 +80,12 @@ func NewHotfixGenerator(cfg *config.TrunkConfig, baseDir string, opts ...HotfixG
 		opt(g)
 	}
 	return g
+}
+
+// SetState threads the manifest state block into the generator so
+// ${{ state.<env>.<field> }} input references resolve at generation time.
+func (g *HotfixGenerator) SetState(state map[string]*config.EnvState) {
+	g.state = state
 }
 
 // writeComponentFlag emits a "--component <name> \" continuation line at the given
@@ -740,7 +749,7 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) error {
 			// not duplicated), rendered by the shared operator-input helper, in
 			// sorted order. See hotfixBuildOperatorInputLines for what is
 			// deliberately left out.
-			operatorLines, err := hotfixBuildOperatorInputLines(&b, declared, seen(withLines))
+			operatorLines, err := hotfixBuildOperatorInputLines(&b, declared, seen(withLines), g.state)
 			if err != nil {
 				return err
 			}
@@ -776,36 +785,16 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) error {
 // (renderOperatorInputs, the same helper orchestrate's writeWithInputs uses):
 // only inputs the callee declares, standard inputs already emitted by the
 // caller win and are not duplicated, passthrough ${{ ... }} expressions and
-// literals render identically to orchestrate, and output is sorted.
+// literals render identically to orchestrate, and output is sorted. A
+// ${{ state.<env>.<field> }} reference resolves at generation time against the
+// environment named in the ref, exactly as orchestrate resolves the same
+// input for the same callback; the hotfix target environment being chosen at
+// run time is irrelevant because the ref names its own environment.
 //
-// Per-environment inputs (env_inputs:) and ${{ state.<env>.<field> }}
-// references are deliberately NOT threaded. A hotfix's target environment is
-// chosen only at run time (needs.context.outputs.target_env), and neither
-// existing per-environment mechanism applies: orchestrate resolves state refs
-// at generation time against the environment named in the ref, and promote
-// keys env_inputs off its promotion-result matrix, a shape a single
-// reusable-workflow with: block cannot carry. Orchestrate's own build
-// callbacks do not emit env_inputs either, so ignoring them here matches the
-// surface being mirrored. A state reference the callee declares fails
-// generation loudly rather than being silently dropped (its previous behavior)
-// or emitting a dead ref GitHub Actions rejects at parse time; a state
-// reference the callee does not declare is skipped, exactly as orchestrate
-// skips undeclared inputs. Both gaps await a deliberate design decision.
-func hotfixBuildOperatorInputLines(b *config.BuildConfig, declared map[string]bool, skip map[string]struct{}) ([]string, error) {
-	keys := make([]string, 0, len(b.Inputs))
-	for k := range b.Inputs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if _, dup := skip[k]; dup || !declared[k] {
-			continue
-		}
-		if s, ok := b.Inputs[k].(string); ok && classifyInputValue(s) == inputStateRef {
-			return nil, fmt.Errorf("hotfix build %q declares input %q as a ${{ state.<env>.* }} reference: state references are not supported on hotfix build inputs because the target environment is chosen at run time", b.Name, k)
-		}
-	}
-	return renderOperatorInputs(b.Inputs, func(name string) bool { return declared[name] }, skip, nil, "hotfix build "+b.Name)
+// Per-environment inputs (env_inputs:) are not threaded, matching
+// orchestrate's own build callbacks, which do not emit env_inputs either.
+func hotfixBuildOperatorInputLines(b *config.BuildConfig, declared map[string]bool, skip map[string]struct{}, state map[string]*config.EnvState) ([]string, error) {
+	return renderOperatorInputs(b.Inputs, func(name string) bool { return declared[name] }, skip, state, "hotfix build "+b.Name)
 }
 
 // declaredCallbackInputs returns the set of workflow_call inputs a hotfix build
