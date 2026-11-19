@@ -793,8 +793,22 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) error {
 //
 // Per-environment inputs (env_inputs:) are not threaded, matching
 // orchestrate's own build callbacks, which do not emit env_inputs either.
+// Matrix-keyed inputs are left out too, per the rule below.
 func hotfixBuildOperatorInputLines(b *config.BuildConfig, declared map[string]bool, skip map[string]struct{}, state map[string]*config.EnvState) ([]string, error) {
-	return renderOperatorInputs(b.Inputs, func(name string) bool { return declared[name] }, skip, state, "hotfix build "+b.Name)
+	// The hotfix build job runs once with no matrix strategy, so a
+	// matrix-keyed input is left out, as main leaves it out, rather than
+	// passed as a reference GitHub resolves to an empty string. Only a
+	// matrix reference inside a `${{ ... }}` expression counts; a literal
+	// that merely contains the text (`ci/matrix.yaml`, `matrix.build`)
+	// still threads.
+	threadable := make(map[string]interface{}, len(b.Inputs))
+	for name, value := range b.Inputs {
+		if s, ok := value.(string); ok && referencesMatrixContext(s) {
+			continue
+		}
+		threadable[name] = value
+	}
+	return renderOperatorInputs(threadable, func(name string) bool { return declared[name] }, skip, state, "hotfix build "+b.Name)
 }
 
 // declaredCallbackInputs returns the set of workflow_call inputs a hotfix build

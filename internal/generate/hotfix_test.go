@@ -1257,6 +1257,53 @@ func TestHotfixGenerator_BuildThreadsOperatorInputs(t *testing.T) {
 			"operator inputs must emit in sorted key order after the standard inputs")
 	})
 
+	t.Run("matrix_keyed_inputs_left_out", func(t *testing.T) {
+		// The hotfix build job runs once with no matrix strategy, so a
+		// matrix-keyed operator input -- a whole ${{ matrix.os }} value, an
+		// embedded one like img-${{ matrix.os }}, or one referenced deeper in an
+		// expression like ${{ format('{0}', matrix.os) }} -- is left out rather
+		// than threaded as a reference GitHub resolves to an empty string, as
+		// main leaves it out. A non-matrix input beside them still threads,
+		// including a plain literal that merely contains the text `matrix.`
+		// (ci/matrix.yaml, matrix.build): the filter matches only a matrix
+		// reference inside a ${{ ... }} expression, not the raw substring. The
+		// callee declares every input here so the omission is proven to come
+		// from the matrix filter, not the declared-input gating.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "os", "image", "region", "config", "artifact", "runner")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"os":       "${{ matrix.os }}",
+			"image":    "img-${{ matrix.os }}",
+			"runner":   "${{ format('{0}', matrix.os) }}",
+			"config":   "ci/matrix.yaml",
+			"artifact": "matrix.build",
+			"region":   "us-east-1",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.NotContains(t, buildJob, "${{ matrix.os }}",
+			"a whole matrix-keyed value must not be threaded; the hotfix build job has no matrix to resolve it")
+		assert.NotContains(t, buildJob, "img-${{ matrix.os }}",
+			"an embedded matrix-keyed value must not be threaded either")
+		assert.NotContains(t, buildJob, "format('{0}', matrix.os)",
+			"a matrix reference deeper inside an expression must not be threaded either")
+		assert.NotContains(t, buildJob, "      os:",
+			"the matrix-keyed os input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      image:",
+			"the matrix-keyed image input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      runner:",
+			"the matrix-keyed runner input must be left out of the with: block entirely")
+		assert.Contains(t, buildJob, "      region: 'us-east-1'",
+			"a non-matrix input beside the matrix-keyed ones must still be threaded")
+		assert.Contains(t, buildJob, "      config: 'ci/matrix.yaml'",
+			"a literal merely containing the text matrix. is not a matrix reference and must thread")
+		assert.Contains(t, buildJob, "      artifact: 'matrix.build'",
+			"a literal merely containing the text matrix. is not a matrix reference and must thread")
+	})
+
 	t.Run("state_reference_resolves_like_orchestrate", func(t *testing.T) {
 		// A ${{ state.<env>.* }} reference names its own environment and
 		// resolves at generation time from the manifest state, regardless of
