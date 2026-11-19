@@ -10,11 +10,20 @@
 # job aggregates their results and is the single check to require in branch
 # protection: it passes when each gated job succeeds or is skipped, and
 # fails when any gated job fails or is cancelled.
+#
+# While a PR is a draft, every job here skips, the gate included, and so does
+# every job in e2e.yaml, validate.yaml and codeql.yml. The drift-comment and
+# pin-reconcile followers still run a short job when this workflow completes.
+# Marking the PR ready for review (ready_for_review) runs everything. GitHub
+# won't merge a draft. The one gap: right after a PR is marked ready, its
+# skipped PR Gate reads as passed until the ready run starts, so a merge in
+# those seconds would skip CI. We accept that window.
 name: PR Validation
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -22,6 +31,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -119,6 +129,7 @@ jobs:
 
   workflow-drift:
     name: Workflow Drift Check
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # contents:read only. This job runs on pull_request, so a fork PR gets a
     # read-only token and no secrets. It cannot post a PR comment itself; it
@@ -232,7 +243,7 @@ jobs:
   pr-gate:
     name: PR Gate
     needs: [unit-tests, lint, workflow-drift, docs-build]
-    if: ${{ always() }}
+    if: ${{ always() && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - name: Verify gated jobs succeeded or were skipped
