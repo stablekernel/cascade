@@ -17,9 +17,9 @@ description: |
   the marker text. A workflow_files contains check would stay green there,
   which is why the assertion targets the job's log line instead.
 
-  The orchestrate lane threads the same inputs through the same callback and
-  is covered by the orchestrate scenarios; this scenario drives only the
-  hotfix lane, whose build jobs are emitted by the hotfix generator.
+  The orchestrate lane threads the same inputs through the same callback;
+  this scenario drives only the hotfix lane, whose build jobs are emitted by
+  the hotfix generator.
 
 config:
   trunk_branch: main
