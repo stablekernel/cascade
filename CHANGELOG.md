@@ -28,7 +28,11 @@ A `Migration` section is added to any release that bumps `schema_version`.
   render count), instead of rejecting every required input that is neither
   a standard input nor a dependency output. A required input that is
   neither standard, manifest-passed, nor dependency-output still fails with
-  the same message, and emitted workflows are unchanged.
+  the same message, and emitted workflows are unchanged. A manifest input
+  whose value references the `matrix` context does not count: main rejects
+  a callback that requires an input satisfied only by a matrix-keyed value,
+  and that behavior is kept (#683 tracks letting an orchestrate matrix leg
+  satisfy one).
 
 - **generate:** The hotfix workflow's build jobs now pass
   `environment: ${{ needs.context.outputs.target_env }}` to build callbacks

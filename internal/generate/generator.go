@@ -645,7 +645,27 @@ func (g *Generator) validateRequiredInputs() error {
 		// the unchanged message.
 		operatorLines, err := g.operatorInputLines(node, seen(g.standardWithInputLines(node)))
 		if err == nil {
+			manifestInputs := g.callbackInputs(node)
 			for name := range seen(operatorLines) {
+				// A manifest input whose value references the matrix context
+				// does not count, preserving main's behavior: a callback that
+				// requires an input satisfied only by a matrix-keyed value
+				// still fails below with the unchanged message, rather than the
+				// manifest-input counting above quietly widening which manifests
+				// generate. The hotfix workflow's build job runs once, matrix-less,
+				// and leaves matrix-keyed inputs out (hotfixBuildOperatorInputLines),
+				// so counting one as providable would admit a manifest whose hotfix
+				// build dispatch then fails at run time for a required input its
+				// with: block never carries. The exclusion applies the hotfix lane's
+				// referencesMatrixContext test, so a plain literal that merely
+				// contains the text (ci/matrix.yaml, matrix.build) still counts.
+				// #683 tracks letting an orchestrate matrix leg satisfy a required
+				// input.
+				if v, ok := manifestInputs[name]; ok {
+					if s, ok := v.(string); ok && referencesMatrixContext(s) {
+						continue
+					}
+				}
 				if _, ok := availableInputs[name]; !ok {
 					availableInputs[name] = "manifest input"
 				}

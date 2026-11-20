@@ -138,6 +138,57 @@ func TestGenerator_ValidateRequiredInputs_CountsManifestInputs(t *testing.T) {
 	})
 }
 
+// TestGenerator_ValidateRequiredInputs_RejectsMatrixKeyedManifestInputs guards
+// the matrix-keyed exclusion in the manifest-input counting: a required input
+// whose manifest value references the matrix context still fails generation
+// with the unchanged message (main's behavior, kept; #683 tracks lifting it),
+// while a plain literal that merely contains the text "matrix" counts as
+// providable exactly like any other manifest-passed input.
+func TestGenerator_ValidateRequiredInputs_RejectsMatrixKeyedManifestInputs(t *testing.T) {
+	t.Run("required_matrix_keyed_manifest_input_fails_with_same_message", func(t *testing.T) {
+		// The manifest passes the required image keyed on the matrix context;
+		// validation must reject it exactly as main does, with the unchanged
+		// message, rather than counting the matrix-keyed value as providable.
+		dir := writeBuildStubRequiredInputs(t, map[string]bool{
+			"environment": true,
+			"image":       true,
+		})
+		cfg := requiredInputManifestConfig(map[string]interface{}{
+			"image": "img-${{ matrix.os }}",
+		})
+
+		_, err := NewGenerator(cfg, dir).Generate()
+		require.Error(t, err,
+			"a required input satisfied only by a matrix-keyed manifest value must fail generation, as on main")
+		assert.Equal(t,
+			"required input validation failed:\n  - Build (app) requires input 'image' but it cannot be provided (not a standard input and no dependency outputs it)",
+			err.Error(),
+			"the matrix-keyed exclusion must fail with the unchanged message")
+	})
+
+	t.Run("required_input_from_literal_containing_matrix_text_passes", func(t *testing.T) {
+		// The manifest passes a plain literal that merely contains the text
+		// "matrix"; it references no matrix context, so it counts as providable
+		// and threads like any other manifest-passed input.
+		dir := writeBuildStubRequiredInputs(t, map[string]bool{
+			"environment": true,
+			"image":       true,
+		})
+		cfg := requiredInputManifestConfig(map[string]interface{}{
+			"image": "ci/matrix.yaml",
+		})
+
+		content, err := NewGenerator(cfg, dir).Generate()
+		require.NoError(t, err,
+			"a manifest-passed literal that merely contains the text 'matrix' must not be mistaken for a matrix-keyed value")
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      image: 'ci/matrix.yaml'",
+			"the literal manifest-passed input must actually be threaded to the callback")
+	})
+}
+
 // TestHotfixGenerator_RequiredManifestBuildInputGenerates guards the hotfix
 // lane for the same manifest: a build callback that requires an operator input
 // the manifest passes must generate (the hotfix build job has no required-input
