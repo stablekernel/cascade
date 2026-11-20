@@ -592,7 +592,9 @@ func (g *Generator) unwrappedExpressionWarnings() []string {
 	return warnings
 }
 
-// validateRequiredInputs checks that all required workflow inputs can be provided
+// validateRequiredInputs checks that all required workflow inputs can be provided:
+// by the generator's standard wiring, by a dependency's outputs, or by a
+// manifest-wired operator input the generator actually threads to the callback.
 func (g *Generator) validateRequiredInputs() error {
 	// Standard inputs always provided by the generator
 	standardInputs := map[string]bool{
@@ -628,6 +630,45 @@ func (g *Generator) validateRequiredInputs() error {
 			depInfo := g.graph.Nodes[depJobID]
 			for _, out := range g.outputs[depInfo.JobID] {
 				availableInputs[out] = fmt.Sprintf("output from %s", depInfo.DisplayName)
+			}
+		}
+
+		// Manifest-wired operator inputs the generator actually threads to this
+		// callback through operatorInputLines count as providable: a callback that
+		// requires an input the manifest passes under its inputs: would otherwise
+		// fail generation even though the with: block carries it. Compute them
+		// through the same call writeWithInputs makes, with the same skip set of
+		// standard-input lines, so only declared inputs whose values really render
+		// are counted -- nothing the generator does not emit. A value that fails to
+		// render (an unresolvable state reference) counts for nothing here; the
+		// input is not emitted, and the existing error below still fails it with
+		// the unchanged message.
+		operatorLines, err := g.operatorInputLines(node, seen(g.standardWithInputLines(node)))
+		if err == nil {
+			manifestInputs := g.callbackInputs(node)
+			for name := range seen(operatorLines) {
+				// A manifest input whose value references the matrix context
+				// does not count, preserving main's behavior: a callback that
+				// requires an input satisfied only by a matrix-keyed value
+				// still fails below with the unchanged message, rather than the
+				// manifest-input counting above quietly widening which manifests
+				// generate. The hotfix workflow's build job runs once, matrix-less,
+				// and leaves matrix-keyed inputs out (hotfixBuildOperatorInputLines),
+				// so counting one as providable would admit a manifest whose hotfix
+				// build dispatch then fails at run time for a required input its
+				// with: block never carries. The exclusion applies the hotfix lane's
+				// referencesMatrixContext test, so a plain literal that merely
+				// contains the text (ci/matrix.yaml, matrix.build) still counts.
+				// #683 tracks letting an orchestrate matrix leg satisfy a required
+				// input.
+				if v, ok := manifestInputs[name]; ok {
+					if s, ok := v.(string); ok && referencesMatrixContext(s) {
+						continue
+					}
+				}
+				if _, ok := availableInputs[name]; !ok {
+					availableInputs[name] = "manifest input"
+				}
 			}
 		}
 
@@ -1408,6 +1449,41 @@ func (g *Generator) jobHasInput(jobID, inputName string) bool {
 }
 
 func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) error {
+	inputs := g.standardWithInputLines(info)
+
+	// Operator-authored inputs from the manifest (inputs:/env_inputs:). These
+	// carry per-callback config. Expression values survive verbatim:
+	//   - passthrough expressions (${{ vars.X }}, ${{ secrets.Y }}, ...) emit
+	//     as-is for GitHub Actions to evaluate at run time.
+	//   - cascade-owned ${{ state.<env>.<field> }} refs resolve at generation
+	//     time from the manifest state.
+	//   - literals emit as-is.
+	// Standard inputs (environment, sha, dependency outputs) already handled
+	// above take precedence and are not duplicated here.
+	operatorLines, err := g.operatorInputLines(info, seen(inputs))
+	if err != nil {
+		return err
+	}
+	inputs = append(inputs, operatorLines...)
+
+	// Only write with: block if there are inputs
+	if len(inputs) > 0 {
+		sb.WriteString("    with:\n")
+		for _, input := range inputs {
+			sb.WriteString(input + "\n")
+		}
+	}
+	return nil
+}
+
+// standardWithInputLines builds the with: lines a callback receives before the
+// manifest-wired operator inputs: the environment contract input, sha when the
+// callee declares it, the dry_run passthrough for callbacks that opted in,
+// declared matrix dimensions, declared dispatch_inputs, and declared outputs of
+// direct dependencies. It is the single source of both the emission in
+// writeWithInputs and the skip set validateRequiredInputs feeds to
+// operatorInputLines, so the two can never drift on which inputs are standard.
+func (g *Generator) standardWithInputLines(info CallbackInfo) []string {
 	deps := g.graph.GetDirectDependencies(info.JobID)
 
 	var inputs []string
@@ -1488,29 +1564,7 @@ func (g *Generator) writeWithInputs(sb *strings.Builder, info CallbackInfo) erro
 		}
 	}
 
-	// Operator-authored inputs from the manifest (inputs:/env_inputs:). These
-	// carry per-callback config. Expression values survive verbatim:
-	//   - passthrough expressions (${{ vars.X }}, ${{ secrets.Y }}, ...) emit
-	//     as-is for GitHub Actions to evaluate at run time.
-	//   - cascade-owned ${{ state.<env>.<field> }} refs resolve at generation
-	//     time from the manifest state.
-	//   - literals emit as-is.
-	// Standard inputs (environment, sha, dependency outputs) already handled
-	// above take precedence and are not duplicated here.
-	operatorLines, err := g.operatorInputLines(info, seen(inputs))
-	if err != nil {
-		return err
-	}
-	inputs = append(inputs, operatorLines...)
-
-	// Only write with: block if there are inputs
-	if len(inputs) > 0 {
-		sb.WriteString("    with:\n")
-		for _, input := range inputs {
-			sb.WriteString(input + "\n")
-		}
-	}
-	return nil
+	return inputs
 }
 
 // seen extracts the set of input keys already present in the given "      key: value"
@@ -1560,7 +1614,23 @@ func (g *Generator) callbackInputs(info CallbackInfo) map[string]interface{} {
 // contract: state is not a GitHub Actions runtime context, so emitting the
 // dead ref would produce a workflow GitHub rejects at parse time.
 func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct{}) ([]string, error) {
-	declared := g.callbackInputs(info)
+	return renderOperatorInputs(g.callbackInputs(info), func(name string) bool {
+		return g.jobHasInput(info.JobID, name)
+	}, skip, g.state, info.JobID)
+}
+
+// renderOperatorInputs builds the "      key: value" with: lines for a
+// callback's manifest-declared inputs, shared by the orchestrate and hotfix
+// generators so the two surfaces cannot drift on the operator-input contract.
+// declaredByCallee gates each input on the callee's declared workflow_call
+// inputs (GitHub Actions rejects an input the callee does not declare). Keys
+// already present in skip (standard inputs) are omitted; they take precedence
+// and are not duplicated. Passthrough expressions survive verbatim;
+// ${{ state.* }} references resolve at generation time against state (a nil
+// state fails loudly, per the resolveInputValue contract); literals emit
+// as-is. Output is sorted for deterministic generation. owner
+// names the callback in error messages.
+func renderOperatorInputs(declared map[string]interface{}, declaredByCallee func(string) bool, skip map[string]struct{}, state map[string]*config.EnvState, owner string) ([]string, error) {
 	if len(declared) == 0 {
 		return nil, nil
 	}
@@ -1575,8 +1645,8 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 		if _, ok := skip[k]; ok {
 			continue
 		}
-		// Only emit inputs the callback actually declares as workflow inputs.
-		if !g.jobHasInput(info.JobID, k) {
+		// Only emit inputs the callee actually declares as workflow inputs.
+		if !declaredByCallee(k) {
 			continue
 		}
 		s, ok := declared[k].(string)
@@ -1584,9 +1654,9 @@ func (g *Generator) operatorInputLines(info CallbackInfo, skip map[string]struct
 			lines = append(lines, fmt.Sprintf("      %s: %v", k, declared[k]))
 			continue
 		}
-		val, err := resolveInputValue(s, g.state)
+		val, err := resolveInputValue(s, state)
 		if err != nil {
-			return nil, fmt.Errorf("input %q of %s: %w", k, info.JobID, err)
+			return nil, fmt.Errorf("input %q of %s: %w", k, owner, err)
 		}
 		// Single-quote string values so freeform content (apostrophes, colons,
 		// JSON snippets) cannot restructure the with: mapping. Quoting is

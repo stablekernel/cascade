@@ -1,0 +1,150 @@
+name: "Hotfix Build Callback Inputs"
+description: |
+  Verifies, as a runtime outcome, that the merged-hotfix build stage threads
+  its callback contract through to the build callback: the resolved target
+  environment name (the `environment` input) and an operator-authored input
+  the manifest declares under the build's `inputs:`.
+
+  The build callback declares both `environment` and `release_channel` as
+  REQUIRED workflow_call inputs and echoes them on one dedicated log line.
+  The hotfix_merged step's expect_log asserts that line, carrying the
+  run-time-resolved target environment name and the manifest's input value,
+  appears in the running build job's logs. This is the assertion a reviewer
+  turns red by reverting the with: threading alone: a caller that drops
+  either input either fails the reusable-workflow dispatch (the callback
+  declares both required) or logs an empty value, and in both cases the
+  expect_log line goes red while the emitted workflow source still carries
+  the marker text. A workflow_files contains check would stay green there,
+  which is why the assertion targets the job's log line instead.
+
+  The orchestrate lane threads the same inputs through the same callback;
+  this scenario drives only the hotfix lane, whose build jobs are emitted by
+  the hotfix generator.
+
+config:
+  trunk_branch: main
+  environments: [dev, test, prod]
+  builds:
+    - name: app
+      workflow: build.yaml
+      triggers: ["src/**"]
+      inputs:
+        release_channel: canary
+  deploys:
+    - name: deploy-dev
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-test
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+    - name: deploy-prod
+      workflow: deploy.yaml
+      triggers: ["src/**"]
+
+# The build callback declares the two inputs under test as required, so a
+# generated caller that drops either one fails the reusable-workflow dispatch
+# rather than silently logging an empty value. It echoes both values on a
+# single dedicated line so the expect_log assertion proves both arrived in one
+# substring: the target environment name and the operator input's value.
+setup_workflows:
+  ".github/workflows/build.yaml": |
+    name: build
+    on:
+      workflow_call:
+        inputs:
+          environment:
+            required: true
+            type: string
+          sha:
+            required: false
+            type: string
+          release_channel:
+            required: true
+            type: string
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - run: echo "hotfix build callback environment=${{ inputs.environment }} release_channel=${{ inputs.release_channel }}"
+
+steps:
+  - name: "Initial app commit"
+    action: commit
+    commit:
+      message: "feat: initial app"
+      files:
+        src/app.go: |
+          package main
+          func main() {}
+
+  - name: "Orchestrate dev at commit1"
+    action: orchestrate
+    expect:
+      state:
+        dev:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+
+  - name: "Promote dev to test"
+    action: promote
+    promote:
+      mode: default
+    expect:
+      state:
+        test:
+          sha: commit1
+          version: "v0.1.0-rc.0"
+        dev:
+          sha: commit1
+
+  - name: "Hotfix commit"
+    action: commit
+    commit:
+      message: "fix: apply critical patch"
+      files:
+        src/fix.go: |
+          package main
+          // patch applied
+
+  - name: "Plan hotfix for test at commit2"
+    action: hotfix_plan
+    hotfix_plan:
+      commit_ref: commit2
+      target_env: test
+      dry_run: true
+
+  - name: "Apply hotfix to test"
+    action: hotfix_apply
+    hotfix_apply:
+      target_env: test
+      commit_ref: commit2
+    expect:
+      branches:
+        exist: ["env/test"]
+      prs:
+        open_with_label: "cascade-hotfix"
+
+  - name: "Merge hotfix PR"
+    action: merge_pr
+    merge_pr:
+      label: "cascade-hotfix"
+
+  - name: "Finalize hotfix for test; assert the build callback logged its inputs"
+    action: hotfix_merged
+    hotfix_merged:
+      target_env: test
+    expect:
+      # The running hotfix build job invoked the callback with both the
+      # run-time-resolved target environment and the manifest's operator
+      # input. The marker line is emitted by the callback itself, so the
+      # assertion is red the moment either value stops being threaded, even
+      # though the emitted workflow source still contains the marker text.
+      expect_log: "hotfix build callback environment=test release_channel=canary"
+      state:
+        test:
+          ref: "env/test"
+          base_sha: commit1
+          patches: [commit2]
+          version: "v0.1.0-rc.0.hotfix.1"
+        dev:
+          sha: commit1

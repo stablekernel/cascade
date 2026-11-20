@@ -59,6 +59,7 @@ kinds:
     scenarios:
       - hotfix/hotfix-multi-env-clean.yaml
       - hotfix/hotfix-clean-apply.yaml
+      - hotfix/hotfix-build-callback-inputs.yaml
       - 53-component-hotfix-rollback-fanout.yaml
 
   cascade-rollback:

@@ -42,6 +42,10 @@ type HotfixGenerator struct {
 	installModeHolder
 	config  *config.TrunkConfig
 	baseDir string
+	// state is the manifest state block, threaded via SetState so
+	// ${{ state.<env>.<field> }} input references resolve at generation time
+	// exactly as orchestrate resolves them.
+	state map[string]*config.EnvState
 
 	// componentName, when non-empty, names the component this hotfix workflow is
 	// scoped to. It suffixes the workflow name, composes the component identity
@@ -76,6 +80,12 @@ func NewHotfixGenerator(cfg *config.TrunkConfig, baseDir string, opts ...HotfixG
 		opt(g)
 	}
 	return g
+}
+
+// SetState threads the manifest state block into the generator so
+// ${{ state.<env>.<field> }} input references resolve at generation time.
+func (g *HotfixGenerator) SetState(state map[string]*config.EnvState) {
+	g.state = state
 }
 
 // writeComponentFlag emits a "--component <name> \" continuation line at the given
@@ -196,7 +206,9 @@ func (g *HotfixGenerator) Generate() (string, error) {
 	g.writeTriggers(&sb)
 	g.writePermissions(&sb)
 	g.writeConcurrency(&sb)
-	g.writeJobs(&sb)
+	if err := g.writeJobs(&sb); err != nil {
+		return "", err
+	}
 
 	return sb.String(), nil
 }
@@ -298,15 +310,18 @@ func (g *HotfixGenerator) writeConcurrency(sb *strings.Builder) {
 	sb.WriteString("\n")
 }
 
-func (g *HotfixGenerator) writeJobs(sb *strings.Builder) {
+func (g *HotfixGenerator) writeJobs(sb *strings.Builder) error {
 	sb.WriteString("jobs:\n")
 	g.writePlanJob(sb)
 	g.writeApplyJob(sb)
 	g.writeCheckJob(sb)
 	g.writeContextJob(sb)
-	g.writeBuildJobs(sb)
+	if err := g.writeBuildJobs(sb); err != nil {
+		return err
+	}
 	g.writeDeployJobs(sb)
 	g.writeFinalizeJob(sb)
+	return nil
 }
 
 // writePlanJob emits the plan job, run only on manual dispatch. It fetches env
@@ -688,7 +703,7 @@ func mergedHotfixGuard() string {
 // writeBuildJobs emits one build job per configured build, run on the merged
 // hotfix commit. With no builds configured a single no-op build job is emitted so
 // downstream needs: references resolve.
-func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
+func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) error {
 	if len(g.config.Builds) == 0 {
 		sb.WriteString("  build:\n")
 		sb.WriteString("    name: Build Hotfix (no-op)\n")
@@ -698,7 +713,7 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("    steps:\n")
 		sb.WriteString("      - name: No builds configured\n")
 		sb.WriteString("        run: echo \"No builds configured; skipping build stage\"\n")
-		return
+		return nil
 	}
 
 	for _, b := range g.config.Builds {
@@ -712,15 +727,33 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 			// GitHub Actions rejects a reusable-workflow call that passes an input
 			// the callee does not declare, so gate each with: input on the callback's
 			// declared workflow_call inputs (mirroring the orchestrate writeWithInputs
-			// path). A callee that declares neither input gets no with: block.
+			// path). A callee that declares none of these inputs gets no with: block.
 			declared := g.declaredCallbackInputs(b.Workflow, b.Inputs)
 			var withLines []string
+			// environment threads the resolved target environment, the same input
+			// orchestrate passes to the same callback; a callee that declares it as
+			// required fails the reusable-workflow dispatch without it. Emitted
+			// first so the with: order matches orchestrate's (environment, sha).
+			if declared["environment"] {
+				withLines = append(withLines, "      environment: ${{ needs.context.outputs.target_env }}")
+			}
 			if declared["sha"] {
 				withLines = append(withLines, "      sha: ${{ github.event.pull_request.merge_commit_sha }}")
 			}
 			if declared["target_env"] {
 				withLines = append(withLines, "      target_env: ${{ needs.context.outputs.target_env }}")
 			}
+			// Operator-authored inputs from the manifest (inputs:), threaded under
+			// the same rules as orchestrate's writeWithInputs: only inputs the
+			// callee declares, after the standard inputs above (which win and are
+			// not duplicated), rendered by the shared operator-input helper, in
+			// sorted order. See hotfixBuildOperatorInputLines for what is
+			// deliberately left out.
+			operatorLines, err := hotfixBuildOperatorInputLines(&b, declared, seen(withLines), g.state)
+			if err != nil {
+				return err
+			}
+			withLines = append(withLines, operatorLines...)
 			if len(withLines) > 0 {
 				sb.WriteString("    with:\n")
 				for _, line := range withLines {
@@ -744,6 +777,38 @@ func (g *HotfixGenerator) writeBuildJobs(sb *strings.Builder) {
 		sb.WriteString("        run: |\n")
 		fmt.Fprintf(sb, "          echo \"build %s\"\n", b.Name)
 	}
+	return nil
+}
+
+// hotfixBuildOperatorInputLines renders a hotfix build's manifest-declared
+// inputs (inputs:) through the shared operator-input rules
+// (renderOperatorInputs, the same helper orchestrate's writeWithInputs uses):
+// only inputs the callee declares, standard inputs already emitted by the
+// caller win and are not duplicated, passthrough ${{ ... }} expressions and
+// literals render identically to orchestrate, and output is sorted. A
+// ${{ state.<env>.<field> }} reference resolves at generation time against the
+// environment named in the ref, exactly as orchestrate resolves the same
+// input for the same callback; the hotfix target environment being chosen at
+// run time is irrelevant because the ref names its own environment.
+//
+// Per-environment inputs (env_inputs:) are not threaded, matching
+// orchestrate's own build callbacks, which do not emit env_inputs either.
+// Matrix-keyed inputs are left out too, per the rule below.
+func hotfixBuildOperatorInputLines(b *config.BuildConfig, declared map[string]bool, skip map[string]struct{}, state map[string]*config.EnvState) ([]string, error) {
+	// The hotfix build job runs once with no matrix strategy, so a
+	// matrix-keyed input is left out, as main leaves it out, rather than
+	// passed as a reference GitHub resolves to an empty string. Only a
+	// matrix reference inside a `${{ ... }}` expression counts; a literal
+	// that merely contains the text (`ci/matrix.yaml`, `matrix.build`)
+	// still threads.
+	threadable := make(map[string]interface{}, len(b.Inputs))
+	for name, value := range b.Inputs {
+		if s, ok := value.(string); ok && referencesMatrixContext(s) {
+			continue
+		}
+		threadable[name] = value
+	}
+	return renderOperatorInputs(threadable, func(name string) bool { return declared[name] }, skip, state, "hotfix build "+b.Name)
 }
 
 // declaredCallbackInputs returns the set of workflow_call inputs a hotfix build

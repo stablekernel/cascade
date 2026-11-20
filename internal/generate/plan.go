@@ -197,7 +197,7 @@ func Plan(opts PlanOptions) ([]PlannedFile, error) {
 	// 6. hotfix -> cascade-hotfix.yaml when enabled, or one path-scoped
 	//    cascade-hotfix-<name>.yaml per component when the manifest declares
 	//    components:.
-	hfTargets, err := hotfixTargets(cfg, baseDir)
+	hfTargets, err := hotfixTargets(cfg, baseDir, manifestState)
 	if err != nil {
 		return nil, err
 	}
@@ -437,13 +437,16 @@ type hotfixTarget struct {
 // hotfix workflow (sorted by name) and no repo-wide hotfix file, each generated
 // from the resolved per-component config and scoped with --component so plan and
 // finalize record state under that component's subtree. Both the generate command
-// and Plan call this, so they can never disagree on the hotfix file set.
-func hotfixTargets(cfg *config.TrunkConfig, baseDir string) ([]hotfixTarget, error) {
+// and Plan call this, so they can never disagree on the hotfix file set. state is
+// threaded into every generator so ${{ state.* }} input references resolve
+// identically on both call paths.
+func hotfixTargets(cfg *config.TrunkConfig, baseDir string, state map[string]*config.EnvState) ([]hotfixTarget, error) {
 	if !cfg.HasComponents() {
 		gen := NewHotfixGenerator(cfg, baseDir)
 		if !gen.Enabled() {
 			return nil, nil
 		}
+		gen.SetState(state)
 		return []hotfixTarget{{Path: hotfixWorkflowPath, Gen: gen}}, nil
 	}
 
@@ -463,6 +466,7 @@ func hotfixTargets(cfg *config.TrunkConfig, baseDir string) ([]hotfixTarget, err
 		if !gen.Enabled() {
 			continue
 		}
+		gen.SetState(state)
 		targets = append(targets, hotfixTarget{Path: hotfixComponentWorkflowPath(name), Gen: gen})
 	}
 	return targets, nil
