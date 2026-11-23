@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -823,15 +824,64 @@ func TestHotfixGenerator_Actionlint(t *testing.T) {
 	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
 }
 
+// TestHotfixGenerator_ActionlintNonContextNeedsInputDropped runs actionlint
+// over a generated hotfix workflow carrying the PR #681 review example: a
+// manifest build input `upstream: ${{ needs.setup.outputs.head_sha }}` whose
+// callee declares `upstream`. The hotfix build job's only need is `context`,
+// so threading the reference would emit a job id the job cannot resolve and
+// actionlint rejects; with the needs filter in place the input is dropped and
+// the emitted workflow must be actionlint-clean. The callee stub declares
+// `upstream` (and the threaded inputs) so the reference really would render
+// absent the drop, keeping the guard falsifiable: reverting the filter turns
+// this red on actionlint's unresolved-needs report.
+func TestHotfixGenerator_ActionlintNonContextNeedsInputDropped(t *testing.T) {
+	bin, err := exec.LookPath("actionlint")
+	if err != nil {
+		t.Skip("actionlint not installed")
+	}
+
+	// The same directory serves as both the callee the generator reads and
+	// the actionlint project root, so the real stub (not a generic one)
+	// validates the with: block under full strictness.
+	dir := writeHotfixBuildStub(t, "environment", "sha", "upstream", "region")
+	cfg := threeEnvHotfixConfig()
+	cfg.Builds[0].Inputs = map[string]interface{}{
+		"upstream": "${{ needs.setup.outputs.head_sha }}",
+		"region":   "us-east-1",
+	}
+	gen := NewHotfixGenerator(cfg, dir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	wfPath := filepath.Join(dir, ".github", "workflows", "cascade-hotfix.yaml")
+	require.NoError(t, os.WriteFile(wfPath, []byte(content), 0644))
+
+	// Initialize the temp dir as its own git repository so actionlint's
+	// reusable-workflow resolution stays scoped to it (t.TempDir() can sit
+	// inside this repository otherwise).
+	gitInit := exec.Command("git", "init", "-q")
+	gitInit.Dir = dir
+	require.NoError(t, gitInit.Run(), "git init for actionlint project root")
+
+	cmd := exec.Command(bin, wfPath)
+	cmd.Dir = dir
+	out, runErr := cmd.CombinedOutput()
+	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
+}
+
 // reusableWorkflowStub is a minimal valid workflow_call reusable workflow that
 // satisfies actionlint's resolution of local `uses: ./...` references. It
 // declares the inputs the hotfix generator passes to a reusable build workflow
-// (sha, target_env) so actionlint can validate the call site's `with:` block
-// against the called workflow's declared inputs under full strictness.
+// (environment, sha, target_env) so actionlint can validate the call site's
+// `with:` block against the called workflow's declared inputs under full
+// strictness.
 const reusableWorkflowStub = `name: Stub
 on:
   workflow_call:
     inputs:
+      environment:
+        required: false
+        type: string
       sha:
         required: false
         type: string
@@ -1002,4 +1052,437 @@ func TestHotfixGenerator_FinalizeFetchesEnvBranches(t *testing.T) {
 		"finalize job must fetch env branches before the env-branch tip cross-check")
 	assert.Contains(t, finalizeJob, "refs/heads/env/*:refs/remotes/origin/env/*",
 		"finalize job must fetch the env/* refs into remote-tracking refs")
+}
+
+// writeHotfixBuildStub writes a reusable build-callback workflow declaring the
+// given input names into a temp repo layout, returning the base directory the
+// hotfix generator reads the callee from. The declared inputs are exactly the
+// with: surface the generator may thread, so each subtest controls what the
+// callee accepts.
+func writeHotfixBuildStub(t *testing.T, inputNames ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755))
+	var inputs strings.Builder
+	for _, name := range inputNames {
+		fmt.Fprintf(&inputs, "      %s:\n        required: false\n        type: string\n", name)
+	}
+	stub := fmt.Sprintf(`name: Build
+on:
+  workflow_call:
+    inputs:
+%s
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+`, inputs.String())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".github", "workflows", "build.yaml"), []byte(stub), 0o644))
+	return dir
+}
+
+// TestHotfixGenerator_BuildThreadsEnvironmentInput guards the build-callback
+// `environment` wiring: a hotfix build job must pass
+// `environment: ${{ needs.context.outputs.target_env }}` when the callee
+// declares the standard contract's `environment` input (the same input
+// orchestrate threads to the same callback), or a callee declaring it as
+// required fails the reusable-workflow dispatch at runtime with "Input
+// required and not supplied: environment". The declared-input gating must hold
+// in both directions: a callee declaring only `sha` gets no environment line
+// (GitHub Actions rejects an input the callee does not declare), and a
+// cross-repo callee (unparsable locally, so the standard contract is assumed)
+// receives the standard environment/sha wiring.
+func TestHotfixGenerator_BuildThreadsEnvironmentInput(t *testing.T) {
+	t.Run("declares_environment_gets_it_before_sha", func(t *testing.T) {
+		dir := writeHotfixBuildStub(t, "environment", "sha", "dry_run")
+		content, err := NewHotfixGenerator(threeEnvHotfixConfig(), dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+
+		// Pin the whole with: block so both the wiring and its order are locked:
+		// environment first, then sha, matching orchestrate's writeWithInputs
+		// ordering for the same callback.
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n",
+			"a build callback declaring environment must receive the resolved target_env, ordered before sha like orchestrate")
+
+		// The post-merge build path has no dry-run notion (it runs on the merged
+		// hotfix PR, not a dispatch), so dry_run must not be threaded even though
+		// the callee declares it.
+		assert.NotContains(t, buildJob, "dry_run:",
+			"the hotfix build job has no dry-run source and must not thread dry_run")
+	})
+
+	t.Run("declares_only_sha_omits_environment", func(t *testing.T) {
+		dir := writeHotfixBuildStub(t, "sha")
+		content, err := NewHotfixGenerator(threeEnvHotfixConfig(), dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+
+		assert.Contains(t, buildJob, "      sha: ${{ github.event.pull_request.merge_commit_sha }}",
+			"a build callback declaring sha must still receive the merge commit SHA")
+		assert.NotContains(t, buildJob, "environment:",
+			"a build callback that does not declare environment must not receive it; GitHub Actions rejects an undeclared input")
+	})
+
+	t.Run("cross_repo_callback_gets_standard_wiring", func(t *testing.T) {
+		// A cross-repo callee cannot be parsed locally, so the hotfix generator
+		// seeds its contract from the standard callback inputs
+		// (environment/sha/dry_run); the standard wiring must include environment.
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Workflow = "stablekernel/cascade-example-artifact-a/.github/workflows/build-shared.yaml@main"
+
+		content, err := NewHotfixGenerator(cfg, "").Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      environment: ${{ needs.context.outputs.target_env }}",
+			"a cross-repo build callback must receive the standard contract's environment input")
+		assert.Contains(t, buildJob, "      sha: ${{ github.event.pull_request.merge_commit_sha }}",
+			"a cross-repo build callback must receive the standard contract's sha input")
+	})
+}
+
+// TestHotfixGenerator_BuildThreadsOperatorInputs guards the operator-input half
+// of the hotfix build wiring: a manifest build's operator-declared inputs: must
+// reach the callback's with: block under orchestrate's rules (only inputs the
+// callee declares, standard inputs win and are not duplicated, the shared value
+// rendering, sorted order), and ${{ state.<env>.* }} references must resolve at
+// generation time exactly as orchestrate resolves them. env_inputs are not
+// threaded, matching orchestrate's own build callbacks, which do not emit them
+// either.
+func TestHotfixGenerator_BuildThreadsOperatorInputs(t *testing.T) {
+	t.Run("declared_input_emitted_after_standard_inputs", func(t *testing.T) {
+		dir := writeHotfixBuildStub(t, "environment", "sha", "dockerfile")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"dockerfile": "./docker/Dockerfile.prod",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+
+		// Pin the whole with: block so the operator input lands after the
+		// standard inputs, matching orchestrate's writeWithInputs ordering.
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n      dockerfile: './docker/Dockerfile.prod'\n",
+			"a declared operator input must be threaded after the standard inputs, single-quoted like orchestrate's rendering")
+	})
+
+	t.Run("undeclared_input_not_emitted", func(t *testing.T) {
+		// GitHub Actions rejects a reusable-workflow call that passes an input
+		// the callee does not declare, so an operator input absent from the
+		// callee's workflow_call inputs must be dropped, not threaded.
+		dir := writeHotfixBuildStub(t, "environment", "sha")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"dockerfile": "./docker/Dockerfile.prod",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.NotContains(t, buildJob, "dockerfile:",
+			"an operator input the callee does not declare must not be threaded; GitHub Actions rejects undeclared inputs")
+	})
+
+	t.Run("operator_input_named_like_standard_not_duplicated", func(t *testing.T) {
+		// A standard input (sha) always wins: the operator's same-named input
+		// must not duplicate or override it, mirroring orchestrate's seen() skip.
+		dir := writeHotfixBuildStub(t, "environment", "sha")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"sha": "operators-own-sha",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      sha: ${{ github.event.pull_request.merge_commit_sha }}",
+			"the standard sha wiring must survive an operator input with the same name")
+		assert.NotContains(t, buildJob, "operators-own-sha",
+			"an operator input sharing a standard input's name must not duplicate it")
+		assert.Equal(t, 1, strings.Count(buildJob, "      sha:"),
+			"the sha input must appear exactly once in the with: block")
+	})
+
+	t.Run("expression_and_literal_render_like_orchestrate", func(t *testing.T) {
+		// The same manifest build is generated through both surfaces; the
+		// operator-input lines must be byte-identical, proving the hotfix path
+		// reuses orchestrate's rendering (passthrough expressions verbatim,
+		// literals single-quoted, non-strings via %v) rather than diverging.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "region", "dockerfile", "replicas")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"region":     "${{ vars.DEPLOY_REGION }}",
+			"dockerfile": "./docker/Dockerfile.prod",
+			"replicas":   3,
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		hotfixJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, hotfixJob, "hotfix build job section should be present")
+
+		// Orchestrate needs only the build (no deploys) so the same callee stub
+		// satisfies its workflow reads.
+		orchestrateCfg := &config.TrunkConfig{
+			TrunkBranch:  cfg.TrunkBranch,
+			Environments: cfg.Environments,
+			Builds:       cfg.Builds,
+		}
+		orchestrate, err := NewGenerator(orchestrateCfg, dir).Generate()
+		require.NoError(t, err)
+		orchestrateJob := extractJobSection(t, orchestrate, "build-app:")
+		require.NotEmpty(t, orchestrateJob, "orchestrate build job section should be present")
+
+		for _, line := range []string{
+			"      dockerfile: './docker/Dockerfile.prod'",
+			// Passthrough expressions emit single-quoted like literals; quoting is
+			// transparent to ${{ }} expressions, which GitHub evaluates inside
+			// quoted scalars.
+			"      region: '${{ vars.DEPLOY_REGION }}'",
+			"      replicas: 3",
+		} {
+			assert.Contains(t, hotfixJob, line,
+				"the hotfix build job must render %q exactly like orchestrate", line)
+			assert.Contains(t, orchestrateJob, line,
+				"the orchestrate build job must render %q (oracle for the hotfix rendering)", line)
+		}
+	})
+
+	t.Run("cross_repo_callee_receives_operator_inputs", func(t *testing.T) {
+		// A cross-repo callee cannot be parsed locally, so its contract is
+		// seeded from the standard inputs plus the operator-declared inputs
+		// (mirroring orchestrate's crossRepoInputs); the operator inputs must
+		// be threaded, sorted after the standard wiring.
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Workflow = "stablekernel/cascade-example-artifact-a/.github/workflows/build-shared.yaml@main"
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"region":     "${{ vars.DEPLOY_REGION }}",
+			"dockerfile": "./docker/Dockerfile.prod",
+		}
+		content, err := NewHotfixGenerator(cfg, "").Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n      dockerfile: './docker/Dockerfile.prod'\n      region: '${{ vars.DEPLOY_REGION }}'\n",
+			"a cross-repo build callback must receive the operator-declared inputs, sorted after the standard wiring")
+	})
+
+	t.Run("sorted_order", func(t *testing.T) {
+		// Map iteration order must not leak into the with: block; operator
+		// inputs emit in sorted key order for deterministic generation.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "zeta", "middle", "alpha")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"zeta":   "z",
+			"middle": "m",
+			"alpha":  "a",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob,
+			"    with:\n      environment: ${{ needs.context.outputs.target_env }}\n      sha: ${{ github.event.pull_request.merge_commit_sha }}\n      alpha: 'a'\n      middle: 'm'\n      zeta: 'z'\n",
+			"operator inputs must emit in sorted key order after the standard inputs")
+	})
+
+	t.Run("matrix_keyed_inputs_left_out", func(t *testing.T) {
+		// The hotfix build job runs once with no matrix strategy, so a
+		// matrix-keyed operator input -- a whole ${{ matrix.os }} value, an
+		// embedded one like img-${{ matrix.os }}, or one referenced deeper in an
+		// expression like ${{ format('{0}', matrix.os) }} -- is left out rather
+		// than threaded as a reference GitHub resolves to an empty string, as
+		// main leaves it out. A non-matrix input beside them still threads,
+		// including a plain literal that merely contains the text `matrix.`
+		// (ci/matrix.yaml, matrix.build): the filter matches only a matrix
+		// reference inside a ${{ ... }} expression, not the raw substring. The
+		// callee declares every input here so the omission is proven to come
+		// from the matrix filter, not the declared-input gating.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "os", "image", "region", "config", "artifact", "runner")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"os":       "${{ matrix.os }}",
+			"image":    "img-${{ matrix.os }}",
+			"runner":   "${{ format('{0}', matrix.os) }}",
+			"config":   "ci/matrix.yaml",
+			"artifact": "matrix.build",
+			"region":   "us-east-1",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.NotContains(t, buildJob, "${{ matrix.os }}",
+			"a whole matrix-keyed value must not be threaded; the hotfix build job has no matrix to resolve it")
+		assert.NotContains(t, buildJob, "img-${{ matrix.os }}",
+			"an embedded matrix-keyed value must not be threaded either")
+		assert.NotContains(t, buildJob, "format('{0}', matrix.os)",
+			"a matrix reference deeper inside an expression must not be threaded either")
+		assert.NotContains(t, buildJob, "      os:",
+			"the matrix-keyed os input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      image:",
+			"the matrix-keyed image input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      runner:",
+			"the matrix-keyed runner input must be left out of the with: block entirely")
+		assert.Contains(t, buildJob, "      region: 'us-east-1'",
+			"a non-matrix input beside the matrix-keyed ones must still be threaded")
+		assert.Contains(t, buildJob, "      config: 'ci/matrix.yaml'",
+			"a literal merely containing the text matrix. is not a matrix reference and must thread")
+		assert.Contains(t, buildJob, "      artifact: 'matrix.build'",
+			"a literal merely containing the text matrix. is not a matrix reference and must thread")
+	})
+
+	t.Run("non_context_needs_inputs_left_out", func(t *testing.T) {
+		// The hotfix build job's only need is `context`, so a `needs.<job>.*`
+		// reference other than `needs.context.*` -- a whole
+		// ${{ needs.setup.outputs.head_sha }} value, an embedded one like
+		// sha-${{ needs.setup.outputs.head_sha }}, or one referenced deeper in
+		// an expression like ${{ format('{0}', needs.setup.outputs.head_sha) }}
+		// -- is left out rather than threaded as a job id the build job cannot
+		// resolve (actionlint rejects the reference there), as main leaves it
+		// out and lets the callee's default apply. A `needs.context.*`
+		// reference still threads: `context` is the build job's need, so GitHub
+		// resolves it. A non-needs input beside them still threads, including a
+		// plain literal that merely contains the text `needs.setup`: the filter
+		// matches only a needs reference inside a ${{ ... }} expression, not the
+		// raw substring. The callee declares every input here so the omission
+		// is proven to come from the needs filter, not the declared-input
+		// gating.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "upstream", "fix", "runner", "note", "region")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"upstream": "${{ needs.setup.outputs.head_sha }}",
+			"fix":      "sha-${{ needs.setup.outputs.fix_sha }}",
+			"runner":   "${{ format('{0}', needs.setup.outputs.head_sha) }}",
+			"note":     "needs.setup",
+			"region":   "us-east-1",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.NotContains(t, buildJob, "${{ needs.setup.outputs.head_sha }}",
+			"a whole needs.setup reference must not be threaded; the hotfix build job's only need is context, so actionlint rejects it")
+		assert.NotContains(t, buildJob, "sha-${{ needs.setup.outputs.fix_sha }}",
+			"an embedded needs.setup reference must not be threaded either")
+		assert.NotContains(t, buildJob, "format('{0}', needs.setup.outputs.head_sha)",
+			"a needs.setup reference deeper inside an expression must not be threaded either")
+		assert.NotContains(t, buildJob, "      upstream:",
+			"the needs-referencing upstream input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      fix:",
+			"the needs-referencing fix input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      runner:",
+			"the needs-referencing runner input must be left out of the with: block entirely")
+		assert.Contains(t, buildJob, "      note: 'needs.setup'",
+			"a literal merely containing the text needs.setup is not a needs reference and must thread")
+		assert.Contains(t, buildJob, "      region: 'us-east-1'",
+			"a non-needs input beside the needs-referencing ones must still be threaded")
+	})
+
+	t.Run("needs_context_references_still_thread", func(t *testing.T) {
+		// `context` is the hotfix build job's only need, so a `needs.context.*`
+		// reference threads like any other passthrough expression -- whole or
+		// embedded -- and GitHub resolves it at run time against the context
+		// job's real outputs (fix_sha is one).
+		dir := writeHotfixBuildStub(t, "environment", "sha", "fix", "tag")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"fix": "${{ needs.context.outputs.fix_sha }}",
+			"tag": "v${{ needs.context.outputs.base_sha }}",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      fix: '${{ needs.context.outputs.fix_sha }}'",
+			"a whole needs.context reference must still thread; context is the hotfix build job's need")
+		assert.Contains(t, buildJob, "      tag: 'v${{ needs.context.outputs.base_sha }}'",
+			"an embedded needs.context reference must still thread too")
+	})
+
+	t.Run("state_reference_resolves_like_orchestrate", func(t *testing.T) {
+		// A ${{ state.<env>.* }} reference names its own environment and
+		// resolves at generation time from the manifest state, regardless of
+		// which environment the hotfix targets at run time. The same manifest
+		// build is generated through both surfaces with the same state; the
+		// resolved line must be byte-identical, proving the hotfix path reuses
+		// orchestrate's resolution rather than a hotfix-specific one.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "prev")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"prev": "${{ state.prod.sha }}",
+		}
+		state := map[string]*config.EnvState{
+			"prod": {SHA: "cafef00d"},
+		}
+
+		hotfixGen := NewHotfixGenerator(cfg, dir)
+		hotfixGen.SetState(state)
+		content, err := hotfixGen.Generate()
+		require.NoError(t, err)
+		hotfixJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, hotfixJob, "hotfix build job section should be present")
+
+		// Orchestrate needs only the build (no deploys) so the same callee stub
+		// satisfies its workflow reads.
+		orchestrateCfg := &config.TrunkConfig{
+			TrunkBranch:  cfg.TrunkBranch,
+			Environments: cfg.Environments,
+			Builds:       cfg.Builds,
+		}
+		orchestrateGen := NewGenerator(orchestrateCfg, dir)
+		orchestrateGen.SetState(state)
+		orchestrate, err := orchestrateGen.Generate()
+		require.NoError(t, err)
+		orchestrateJob := extractJobSection(t, orchestrate, "build-app:")
+		require.NotEmpty(t, orchestrateJob, "orchestrate build job section should be present")
+
+		assert.Contains(t, hotfixJob, "      prev: 'cafef00d'",
+			"the hotfix build job must resolve the state reference to its manifest value")
+		assert.Contains(t, orchestrateJob, "      prev: 'cafef00d'",
+			"the orchestrate build job must render the same resolved value (oracle for the hotfix resolution)")
+		assert.NotContains(t, hotfixJob, "state.prod.sha",
+			"the raw state reference must not survive into the emitted hotfix workflow")
+	})
+
+	t.Run("unresolved_state_reference_fails_like_orchestrate", func(t *testing.T) {
+		// A state reference with no matching value in the manifest state fails
+		// generation with orchestrate's existing error, per the resolveInputValue
+		// contract: state is not a GitHub Actions runtime context, so emitting
+		// the dead ref would produce a workflow GitHub Actions rejects at parse
+		// time. The hotfix surface inherits the same failure instead of a
+		// hotfix-specific one.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "prev")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"prev": "${{ state.prod.sha }}",
+		}
+		hotfixGen := NewHotfixGenerator(cfg, dir)
+		hotfixGen.SetState(map[string]*config.EnvState{})
+		_, err := hotfixGen.Generate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unresolved prior-state reference",
+			"an unresolved state reference must fail with orchestrate's existing error")
+		assert.Contains(t, err.Error(), "prev",
+			"the failing input must be named in the error")
+	})
 }

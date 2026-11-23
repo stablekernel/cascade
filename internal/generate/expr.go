@@ -54,6 +54,75 @@ func isWholeExpression(value string) (body string, ok bool) {
 	return m[1], true
 }
 
+// exprSpanPattern matches a single `${{ ... }}` expression span anywhere in
+// a value, capturing the inner expression body. Unlike exprPattern (a whole-
+// value match), a span may be embedded in surrounding literal text (e.g.
+// `img-${{ matrix.os }}`), and a value may contain several spans. The
+// non-greedy body cannot span past the first closing `}}`, matching the same
+// limitation exprPattern already accepts.
+var exprSpanPattern = regexp.MustCompile(`\$\{\{\s*(.*?)\s*\}\}`)
+
+// matrixContextPattern matches a reference to the GitHub Actions `matrix`
+// context as a standalone token inside an expression body: `matrix` at the
+// start of the body or preceded only by a delimiter that can open an operand
+// in expression syntax -- whitespace, an argument separator, or an operator
+// (so `format('{0}', matrix.os)` matches while `inputs.matrix.x`,
+// `xmatrix.os`, and a string literal like `'ci/matrix.yaml'` do not, since
+// `.`, identifier characters, and in-string punctuation cannot introduce the
+// context) -- and not followed by an identifier character (so `matrix.os`
+// and a bare `matrix` do, while `matrix-foo` does not).
+var matrixContextPattern = regexp.MustCompile(`(^|[\s(,!&|?:=<>+*])matrix([^A-Za-z0-9_-]|$)`)
+
+// referencesMatrixContext reports whether value references the GitHub
+// Actions `matrix` context inside any `${{ ... }}` expression span, whether
+// the value is a whole expression (`${{ matrix.os }}`,
+// `${{ format('{0}', matrix.os) }}`) or an embedded one (`img-${{ matrix.os }}`).
+// A reference must live inside an expression GitHub evaluates, so neither a
+// plain literal that merely contains the text (`ci/matrix.yaml`,
+// `matrix.build`) nor an in-expression string literal quoting it
+// (`${{ 'ci/matrix.yaml' }}`) matches.
+func referencesMatrixContext(value string) bool {
+	for _, span := range exprSpanPattern.FindAllStringSubmatch(value, -1) {
+		if matrixContextPattern.MatchString(span[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// needsContextPattern matches a reference to the GitHub Actions `needs`
+// context as a standalone token inside an expression body, mirroring
+// matrixContextPattern's operand-opening delimiters, and captures the job
+// name the token is qualified with when there is one (`needs.setup.outputs.x`
+// captures `setup`; a bare `needs` captures none). The same delimiter rules
+// as matrixContextPattern apply, so `inputs.needs.x`, `xneeds.setup`, and a
+// string literal like `'needs.setup'` do not match, and a job name must end
+// at a non-identifier character, so `needs.setup.outputs.x` captures exactly
+// `setup`.
+var needsContextPattern = regexp.MustCompile(`(^|[\s(,!&|?:=<>+*])needs(\.([A-Za-z0-9_-]+))?([^A-Za-z0-9_-]|$)`)
+
+// referencesNeedsContextExcept reports whether value references the GitHub
+// Actions `needs` context for any job other than keepJob inside any
+// `${{ ... }}` expression span, whether the value is a whole expression
+// (`${{ needs.setup.outputs.head_sha }}`) or an embedded one
+// (`sha-${{ needs.setup.outputs.head_sha }}`). A reference must live inside
+// an expression GitHub evaluates, so neither a plain literal that merely
+// contains the text (`needs.setup`) nor an in-expression string literal
+// quoting it (`${{ 'needs.setup' }}`) matches. A bare `needs` token matches
+// (it references the whole context, every job at once, not just keepJob's
+// entry). The hotfix lane passes "context", the hotfix build job's only
+// need, so the references it can still resolve do not match.
+func referencesNeedsContextExcept(value, keepJob string) bool {
+	for _, span := range exprSpanPattern.FindAllStringSubmatch(value, -1) {
+		for _, m := range needsContextPattern.FindAllStringSubmatch(span[1], -1) {
+			if m[3] != keepJob {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isStateExpression reports whether body (the inner text of a `${{ }}`
 // expression) is a cascade-owned `state.*` reference.
 func isStateExpression(body string) bool {

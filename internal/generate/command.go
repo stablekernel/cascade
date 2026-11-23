@@ -328,7 +328,7 @@ func runGenerateWorkflow(opts generateOptions) error {
 	// Generate the hotfix workflow when two or more environments are configured. A
 	// manifest declaring components: fans out to one cascade-hotfix-<name>.yaml per
 	// component; otherwise a single cascade-hotfix.yaml, byte-identical to today.
-	hfTargets, err := hotfixTargets(cfg, baseDir)
+	hfTargets, err := hotfixTargets(cfg, baseDir, manifestState)
 	if err != nil {
 		return fmt.Errorf("planning hotfix workflow: %w", err)
 	}

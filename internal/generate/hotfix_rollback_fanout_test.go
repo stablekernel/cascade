@@ -28,7 +28,7 @@ func lifecycleMultiComponentConfig() *config.TrunkConfig {
 func TestHotfixTargets_SingleComponent_ByteIdentical(t *testing.T) {
 	cfg := &config.TrunkConfig{TrunkBranch: "main", Environments: config.EnvNames("dev", "prod")}
 
-	targets, err := hotfixTargets(cfg, "")
+	targets, err := hotfixTargets(cfg, "", nil)
 	if err != nil {
 		t.Fatalf("hotfixTargets: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestHotfixTargets_SingleComponent_ByteIdentical(t *testing.T) {
 func TestHotfixTargets_Components_FanOut(t *testing.T) {
 	cfg := lifecycleMultiComponentConfig()
 
-	targets, err := hotfixTargets(cfg, "")
+	targets, err := hotfixTargets(cfg, "", nil)
 	if err != nil {
 		t.Fatalf("hotfixTargets: %v", err)
 	}

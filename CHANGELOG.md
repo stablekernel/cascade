@@ -19,6 +19,50 @@ A `Migration` section is added to any release that bumps `schema_version`.
 
 ### Fixed
 
+- **generate:** Callbacks that require an operator input the manifest
+  passes under that callback's `inputs:` no longer fail generation.
+  `validateRequiredInputs` now counts the manifest-wired inputs the
+  generator actually threads through the callback's `with:` block
+  (computed through the same `operatorInputLines` call, with the same
+  standard-input skip set, so only declared inputs whose values really
+  render count), instead of rejecting every required input that is neither
+  a standard input nor a dependency output. A required input that is
+  neither standard, manifest-passed, nor dependency-output still fails with
+  the same message, and emitted workflows are unchanged. A manifest input
+  whose value references the `matrix` context does not count: main rejects
+  a callback that requires an input satisfied only by a matrix-keyed value,
+  and that behavior is kept (#683 tracks letting an orchestrate matrix leg
+  satisfy one).
+
+- **generate:** The hotfix workflow's build jobs now pass
+  `environment: ${{ needs.context.outputs.target_env }}` to build callbacks
+  that declare the standard `environment` input, so a callback declaring it as
+  required no longer fails the reusable-workflow dispatch on a merged hotfix.
+
+- **generate:** The hotfix workflow's build jobs now thread a manifest build's
+  operator-declared `inputs:` to the callback under the same rules as
+  orchestrate: only inputs the callee declares, after the standard
+  `environment`/`sha`/`target_env` inputs (which win and are not duplicated),
+  with identical value rendering, a stable sorted order, and `{{ state.* }}`
+  references resolved at generation time from the manifest state exactly as
+  orchestrate resolves them (an unresolved reference fails generation).
+  `env_inputs:` remain unthreaded, matching orchestrate's own build callbacks,
+  and matrix-keyed inputs are left out of hotfix builds, which run once with
+  no matrix strategy. `needs.*` references other than `needs.context.*` are
+  left out too: the hotfix build job's only need is `context`, so such a
+  reference renders as a job the build job cannot resolve (actionlint rejects
+  it), where on main the input was not passed and the callee's default
+  applied.
+- **generate:** A required callback input satisfied only by a manifest value
+  referencing `needs.<job>.*` (other than `needs.context.*`) no longer counts
+  as providable: `validateRequiredInputs` leaves such a value out of the
+  manifest-input count, mirroring the hotfix lane's drop of the same
+  references, so validation agrees with what hotfix emits and a manifest
+  whose hotfix build dispatch would fail at run time for a missing required
+  input is rejected at generation. A `needs.context.*` value and a literal
+  that merely contains the text still count, and the failure message is
+  unchanged.
+
 - **generate:** A dry-run `orchestrate` dispatch (`dry_run: true`) no longer
   mutates real state in the `finalize` job. The `Manage Release` step now
   forwards `dry_run` to `cascade manage-release --dry-run` (whose existing
