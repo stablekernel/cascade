@@ -824,6 +824,51 @@ func TestHotfixGenerator_Actionlint(t *testing.T) {
 	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
 }
 
+// TestHotfixGenerator_ActionlintNonContextNeedsInputDropped runs actionlint
+// over a generated hotfix workflow carrying the PR #681 review example: a
+// manifest build input `upstream: ${{ needs.setup.outputs.head_sha }}` whose
+// callee declares `upstream`. The hotfix build job's only need is `context`,
+// so threading the reference would emit a job id the job cannot resolve and
+// actionlint rejects; with the needs filter in place the input is dropped and
+// the emitted workflow must be actionlint-clean. The callee stub declares
+// `upstream` (and the threaded inputs) so the reference really would render
+// absent the drop, keeping the guard falsifiable: reverting the filter turns
+// this red on actionlint's unresolved-needs report.
+func TestHotfixGenerator_ActionlintNonContextNeedsInputDropped(t *testing.T) {
+	bin, err := exec.LookPath("actionlint")
+	if err != nil {
+		t.Skip("actionlint not installed")
+	}
+
+	// The same directory serves as both the callee the generator reads and
+	// the actionlint project root, so the real stub (not a generic one)
+	// validates the with: block under full strictness.
+	dir := writeHotfixBuildStub(t, "environment", "sha", "upstream", "region")
+	cfg := threeEnvHotfixConfig()
+	cfg.Builds[0].Inputs = map[string]interface{}{
+		"upstream": "${{ needs.setup.outputs.head_sha }}",
+		"region":   "us-east-1",
+	}
+	gen := NewHotfixGenerator(cfg, dir)
+	content, err := gen.Generate()
+	require.NoError(t, err)
+
+	wfPath := filepath.Join(dir, ".github", "workflows", "cascade-hotfix.yaml")
+	require.NoError(t, os.WriteFile(wfPath, []byte(content), 0644))
+
+	// Initialize the temp dir as its own git repository so actionlint's
+	// reusable-workflow resolution stays scoped to it (t.TempDir() can sit
+	// inside this repository otherwise).
+	gitInit := exec.Command("git", "init", "-q")
+	gitInit.Dir = dir
+	require.NoError(t, gitInit.Run(), "git init for actionlint project root")
+
+	cmd := exec.Command(bin, wfPath)
+	cmd.Dir = dir
+	out, runErr := cmd.CombinedOutput()
+	assert.NoError(t, runErr, "actionlint reported issues:\n%s", string(out))
+}
+
 // reusableWorkflowStub is a minimal valid workflow_call reusable workflow that
 // satisfies actionlint's resolution of local `uses: ./...` references. It
 // declares the inputs the hotfix generator passes to a reusable build workflow
@@ -1302,6 +1347,76 @@ func TestHotfixGenerator_BuildThreadsOperatorInputs(t *testing.T) {
 			"a literal merely containing the text matrix. is not a matrix reference and must thread")
 		assert.Contains(t, buildJob, "      artifact: 'matrix.build'",
 			"a literal merely containing the text matrix. is not a matrix reference and must thread")
+	})
+
+	t.Run("non_context_needs_inputs_left_out", func(t *testing.T) {
+		// The hotfix build job's only need is `context`, so a `needs.<job>.*`
+		// reference other than `needs.context.*` -- a whole
+		// ${{ needs.setup.outputs.head_sha }} value, an embedded one like
+		// sha-${{ needs.setup.outputs.head_sha }}, or one referenced deeper in
+		// an expression like ${{ format('{0}', needs.setup.outputs.head_sha) }}
+		// -- is left out rather than threaded as a job id the build job cannot
+		// resolve (actionlint rejects the reference there), as main leaves it
+		// out and lets the callee's default apply. A `needs.context.*`
+		// reference still threads: `context` is the build job's need, so GitHub
+		// resolves it. A non-needs input beside them still threads, including a
+		// plain literal that merely contains the text `needs.setup`: the filter
+		// matches only a needs reference inside a ${{ ... }} expression, not the
+		// raw substring. The callee declares every input here so the omission
+		// is proven to come from the needs filter, not the declared-input
+		// gating.
+		dir := writeHotfixBuildStub(t, "environment", "sha", "upstream", "fix", "runner", "note", "region")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"upstream": "${{ needs.setup.outputs.head_sha }}",
+			"fix":      "sha-${{ needs.setup.outputs.fix_sha }}",
+			"runner":   "${{ format('{0}', needs.setup.outputs.head_sha) }}",
+			"note":     "needs.setup",
+			"region":   "us-east-1",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.NotContains(t, buildJob, "${{ needs.setup.outputs.head_sha }}",
+			"a whole needs.setup reference must not be threaded; the hotfix build job's only need is context, so actionlint rejects it")
+		assert.NotContains(t, buildJob, "sha-${{ needs.setup.outputs.fix_sha }}",
+			"an embedded needs.setup reference must not be threaded either")
+		assert.NotContains(t, buildJob, "format('{0}', needs.setup.outputs.head_sha)",
+			"a needs.setup reference deeper inside an expression must not be threaded either")
+		assert.NotContains(t, buildJob, "      upstream:",
+			"the needs-referencing upstream input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      fix:",
+			"the needs-referencing fix input must be left out of the with: block entirely")
+		assert.NotContains(t, buildJob, "      runner:",
+			"the needs-referencing runner input must be left out of the with: block entirely")
+		assert.Contains(t, buildJob, "      note: 'needs.setup'",
+			"a literal merely containing the text needs.setup is not a needs reference and must thread")
+		assert.Contains(t, buildJob, "      region: 'us-east-1'",
+			"a non-needs input beside the needs-referencing ones must still be threaded")
+	})
+
+	t.Run("needs_context_references_still_thread", func(t *testing.T) {
+		// `context` is the hotfix build job's only need, so a `needs.context.*`
+		// reference threads like any other passthrough expression -- whole or
+		// embedded -- and GitHub resolves it at run time against the context
+		// job's real outputs (fix_sha is one).
+		dir := writeHotfixBuildStub(t, "environment", "sha", "fix", "tag")
+		cfg := threeEnvHotfixConfig()
+		cfg.Builds[0].Inputs = map[string]interface{}{
+			"fix": "${{ needs.context.outputs.fix_sha }}",
+			"tag": "v${{ needs.context.outputs.base_sha }}",
+		}
+		content, err := NewHotfixGenerator(cfg, dir).Generate()
+		require.NoError(t, err)
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      fix: '${{ needs.context.outputs.fix_sha }}'",
+			"a whole needs.context reference must still thread; context is the hotfix build job's need")
+		assert.Contains(t, buildJob, "      tag: 'v${{ needs.context.outputs.base_sha }}'",
+			"an embedded needs.context reference must still thread too")
 	})
 
 	t.Run("state_reference_resolves_like_orchestrate", func(t *testing.T) {

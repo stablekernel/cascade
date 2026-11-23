@@ -665,6 +665,19 @@ func (g *Generator) validateRequiredInputs() error {
 					if s, ok := v.(string); ok && referencesMatrixContext(s) {
 						continue
 					}
+					// A `needs.<job>.*` reference other than `needs.context.*`
+					// does not count either, mirroring the hotfix lane's drop of
+					// the same references (hotfixBuildOperatorInputLines): the
+					// hotfix build job's only need is `context`, so counting one
+					// as providable would admit a manifest whose hotfix build
+					// dispatch then fails at run time for a required input its
+					// with: block never carries. The same
+					// referencesNeedsContextExcept test applies, so a plain
+					// literal that merely contains the text (needs.setup) still
+					// counts and threads.
+					if s, ok := v.(string); ok && referencesNeedsContextExcept(s, "context") {
+						continue
+					}
 				}
 				if _, ok := availableInputs[name]; !ok {
 					availableInputs[name] = "manifest input"

@@ -48,7 +48,20 @@ A `Migration` section is added to any release that bumps `schema_version`.
   orchestrate resolves them (an unresolved reference fails generation).
   `env_inputs:` remain unthreaded, matching orchestrate's own build callbacks,
   and matrix-keyed inputs are left out of hotfix builds, which run once with
-  no matrix strategy.
+  no matrix strategy. `needs.*` references other than `needs.context.*` are
+  left out too: the hotfix build job's only need is `context`, so such a
+  reference renders as a job the build job cannot resolve (actionlint rejects
+  it), where on main the input was not passed and the callee's default
+  applied.
+- **generate:** A required callback input satisfied only by a manifest value
+  referencing `needs.<job>.*` (other than `needs.context.*`) no longer counts
+  as providable: `validateRequiredInputs` leaves such a value out of the
+  manifest-input count, mirroring the hotfix lane's drop of the same
+  references, so validation agrees with what hotfix emits and a manifest
+  whose hotfix build dispatch would fail at run time for a missing required
+  input is rejected at generation. A `needs.context.*` value and a literal
+  that merely contains the text still count, and the failure message is
+  unchanged.
 
 - **generate:** A dry-run `orchestrate` dispatch (`dry_run: true`) no longer
   mutates real state in the `finalize` job. The `Manage Release` step now

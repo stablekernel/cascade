@@ -189,6 +189,83 @@ func TestGenerator_ValidateRequiredInputs_RejectsMatrixKeyedManifestInputs(t *te
 	})
 }
 
+// TestGenerator_ValidateRequiredInputs_RejectsNonContextNeedsManifestInputs
+// guards the needs exclusion in the manifest-input counting: a required input
+// whose manifest value references `needs.<job>.*` other than `needs.context.*`
+// still fails generation with the unchanged message, mirroring the hotfix
+// lane's drop of the same references (the hotfix build job's only need is
+// `context`, so its with: block never carries the input and the dispatch
+// would fail at run time for the missing required input), while a
+// `needs.context.*` value and a plain literal that merely contains the text
+// count as providable exactly like any other manifest-passed input.
+func TestGenerator_ValidateRequiredInputs_RejectsNonContextNeedsManifestInputs(t *testing.T) {
+	t.Run("required_non_context_needs_manifest_input_fails_with_same_message", func(t *testing.T) {
+		// The manifest passes the required upstream input as a needs.setup
+		// reference; validation must reject it with the unchanged message,
+		// because the hotfix build job (needs: context only) leaves the
+		// reference out of its with: block.
+		dir := writeBuildStubRequiredInputs(t, map[string]bool{
+			"environment": true,
+			"upstream":    true,
+		})
+		cfg := requiredInputManifestConfig(map[string]interface{}{
+			"upstream": "${{ needs.setup.outputs.head_sha }}",
+		})
+
+		_, err := NewGenerator(cfg, dir).Generate()
+		require.Error(t, err,
+			"a required input satisfied only by a non-context needs manifest value must fail generation")
+		assert.Equal(t,
+			"required input validation failed:\n  - Build (app) requires input 'upstream' but it cannot be provided (not a standard input and no dependency outputs it)",
+			err.Error(),
+			"the needs exclusion must fail with the unchanged message")
+	})
+
+	t.Run("required_needs_context_manifest_input_counts", func(t *testing.T) {
+		// `needs.context.*` threads in the hotfix build job (context is its
+		// only need), so it counts as providable and threads like any other
+		// manifest-passed input.
+		dir := writeBuildStubRequiredInputs(t, map[string]bool{
+			"environment": true,
+			"fix":         true,
+		})
+		cfg := requiredInputManifestConfig(map[string]interface{}{
+			"fix": "${{ needs.context.outputs.fix_sha }}",
+		})
+
+		content, err := NewGenerator(cfg, dir).Generate()
+		require.NoError(t, err,
+			"a required input passed as a needs.context manifest value is providable and must not fail generation")
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      fix: '${{ needs.context.outputs.fix_sha }}'",
+			"the needs.context manifest-passed input must actually be threaded to the callback")
+	})
+
+	t.Run("required_input_from_literal_containing_needs_text_passes", func(t *testing.T) {
+		// The manifest passes a plain literal that merely contains the text
+		// "needs.setup"; it references no needs context, so it counts as
+		// providable and threads like any other manifest-passed input.
+		dir := writeBuildStubRequiredInputs(t, map[string]bool{
+			"environment": true,
+			"upstream":    true,
+		})
+		cfg := requiredInputManifestConfig(map[string]interface{}{
+			"upstream": "needs.setup",
+		})
+
+		content, err := NewGenerator(cfg, dir).Generate()
+		require.NoError(t, err,
+			"a manifest-passed literal that merely contains the text 'needs.setup' must not be mistaken for a needs reference")
+
+		buildJob := extractJobSection(t, content, "build-app:")
+		require.NotEmpty(t, buildJob, "build job section should be present")
+		assert.Contains(t, buildJob, "      upstream: 'needs.setup'",
+			"the literal manifest-passed input must actually be threaded to the callback")
+	})
+}
+
 // TestHotfixGenerator_RequiredManifestBuildInputGenerates guards the hotfix
 // lane for the same manifest: a build callback that requires an operator input
 // the manifest passes must generate (the hotfix build job has no required-input
